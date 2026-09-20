@@ -1,0 +1,1158 @@
+{
+  "format": "orgward-work-package-draft-v1",
+  "taskId": "T-122",
+  "sliceId": "T-122-boundary-draft-01",
+  "title": "Field-level dependencies and constraint impact fixed point",
+  "actor": "enterprise designer",
+  "trigger": "Authorized actor initiates ComputeImpact in SC-24; task story: As enterprise designer, I want to deliver field-level dependencies and constraint impact fixed point so the enterprise can be represented, operated and changed with verified authority and knowledge consistency.",
+  "observableOutcome": "Satisfy the unchanged source acceptance for T-122; primary boundary ComputeImpact reaches computed only after actual domain validation. Acknowledged jobs are not completed work.",
+  "reviewStatus": "pending",
+  "author": "codex",
+  "reviewer": null,
+  "implementationReady": false,
+  "independentReview": "Pending real independent review; no review, dependency proof or product execution is asserted.",
+  "sourceTaskHash": "94e86ef6a2be951398bc4e25013aaf8d76fdf1e49c28a95d3d290ca66ac04e5e",
+  "sourceRequirements": [
+    {
+      "id": "T-122-AC1",
+      "scenario": "Given a material authority edit, reverse traversal reaches dependent lineage, tests, approvals and plans with explainable paths and precise affected fields.",
+      "sourceKind": "positive"
+    },
+    {
+      "id": "T-122-AC2",
+      "scenario": "Given a harmless layout or unrelated field edit, unaffected protected contexts remain valid according to declared sensitivity.",
+      "sourceKind": "negative"
+    },
+    {
+      "id": "T-122-AC3",
+      "scenario": "Given a dependency cycle or traversal budget exhaustion, visited-state traversal terminates or reports incomplete impact and blocks protected publication.",
+      "sourceKind": "recovery"
+    },
+    {
+      "id": "T-122-AC4",
+      "scenario": "Given a derived result with undisclosed dynamic inputs, it is untracked and cannot support current mandatory evaluation or approval.",
+      "sourceKind": "cross_boundary"
+    }
+  ],
+  "acceptanceIds": [
+    "T-122-AC1",
+    "T-122-AC2",
+    "T-122-AC3",
+    "T-122-AC4"
+  ],
+  "dependencyReceipts": [],
+  "dependencies": [
+    "T-121",
+    "T-61",
+    "T-90"
+  ],
+  "module": "studio",
+  "operationKind": "diagnostic",
+  "ownership": "Enterprise model, baseline, process and operating work; shared canonical object/revision identities, not a per-screen graph store.",
+  "recordMeaning": "impact_manifest is a boundary payload/result view, not permission to create an independent authoritative store. Resolve its fields into the canonical aggregate family in A-05/C-01.",
+  "requiredOperations": [
+    "RegisterDependency",
+    "ComputeImpact",
+    "EvaluateConstraint",
+    "ResolveImpactConflict"
+  ],
+  "uncoveredOperations": [
+    "RegisterDependency",
+    "EvaluateConstraint",
+    "ResolveImpactConflict"
+  ],
+  "openDecisions": [
+    {
+      "id": "T-122-D01",
+      "owner": "independent-domain-and-security-reviewer",
+      "blocks": "implementation_start",
+      "decision": "Review this primary boundary against every original scenario; author concrete domain datasets and independent output oracles, not assertions derived from the implementation.",
+      "closure": "Approved bounded slices with executable negative/recovery fixtures for T-122-AC1, T-122-AC2, T-122-AC3, T-122-AC4 and a legitimate independent review receipt."
+    },
+    {
+      "id": "T-122-OP1",
+      "owner": "studio-maintainer",
+      "blocks": "parent_task_completion",
+      "decision": "Specify RegisterDependency request/result/state/permission contract in a separately reviewed bounded slice; primary operation ComputeImpact does not implement it.",
+      "closure": "Linked approved packet and passing command/UI/API fixtures for RegisterDependency."
+    },
+    {
+      "id": "T-122-OP2",
+      "owner": "studio-maintainer",
+      "blocks": "parent_task_completion",
+      "decision": "Specify EvaluateConstraint request/result/state/permission contract in a separately reviewed bounded slice; primary operation ComputeImpact does not implement it.",
+      "closure": "Linked approved packet and passing command/UI/API fixtures for EvaluateConstraint."
+    },
+    {
+      "id": "T-122-OP3",
+      "owner": "studio-maintainer",
+      "blocks": "parent_task_completion",
+      "decision": "Specify ResolveImpactConflict request/result/state/permission contract in a separately reviewed bounded slice; primary operation ComputeImpact does not implement it.",
+      "closure": "Linked approved packet and passing command/UI/API fixtures for ResolveImpactConflict."
+    }
+  ],
+  "schemas": [
+    {
+      "id": "ComputeImpactRequest",
+      "definition": {
+        "type": "object",
+        "properties": {
+          "commandId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operation": {
+            "const": "ComputeImpact"
+          },
+          "expectedHead": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "context": {
+            "type": "object",
+            "properties": {
+              "workspaceId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "branchId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "effectiveAt": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "workspaceId",
+              "branchId",
+              "effectiveAt"
+            ],
+            "additionalProperties": false
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "changedObject": {
+                "type": "string",
+                "minLength": 1
+              },
+              "fieldPaths": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "uniqueItems": true
+              },
+              "candidateDigest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "dependencyGeneration": {
+                "type": "number",
+                "minimum": 0
+              },
+              "traversalBudget": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "changedObject",
+              "fieldPaths",
+              "candidateDigest",
+              "dependencyGeneration",
+              "traversalBudget"
+            ],
+            "additionalProperties": false
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "commandId",
+          "operation",
+          "expectedHead",
+          "expectedVersion",
+          "context",
+          "payload",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "ComputeImpactResult",
+      "definition": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "ComputeImpact"
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "completed"
+            ]
+          },
+          "targetState": {
+            "type": "string",
+            "minLength": 1
+          },
+          "commandId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "resultRef": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "authoritativeGeneration": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "projectionWatermark": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "jobId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "operation",
+          "status",
+          "targetState",
+          "commandId",
+          "resultRef",
+          "version",
+          "authoritativeGeneration",
+          "projectionWatermark",
+          "partial",
+          "jobId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "SafeError",
+      "definition": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          },
+          "fieldErrors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "field",
+                "message"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "correlationId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "currentVersion": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "recoveryActions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "fieldErrors",
+          "correlationId",
+          "retryable",
+          "currentVersion",
+          "recoveryActions"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "operations": [
+    {
+      "name": "ComputeImpact",
+      "transport": "POST /api/v1/commands",
+      "requestSchema": "ComputeImpactRequest",
+      "resultSchema": "ComputeImpactResult",
+      "errorSchema": "SafeError",
+      "requestExample": {
+        "commandId": "fixture-t-122-1",
+        "operation": "ComputeImpact",
+        "expectedHead": 7,
+        "expectedVersion": 7,
+        "context": {
+          "workspaceId": "workspace-a",
+          "branchId": "branch-1",
+          "effectiveAt": "2026-09-19T00:00:00Z"
+        },
+        "payload": {
+          "changedObject": "CustomerEmail",
+          "fieldPaths": [
+            "authority"
+          ],
+          "candidateDigest": "sha256:d87ded04f14425424f7997d0bbf567ea9bca9e3ed3149242c73bde0f1d6fbeb4",
+          "dependencyGeneration": 12,
+          "traversalBudget": 10000
+        },
+        "reason": "Exercise T-122 boundary"
+      },
+      "successExample": {
+        "operation": "ComputeImpact",
+        "status": "completed",
+        "targetState": "computed",
+        "commandId": "fixture-t-122-1",
+        "resultRef": "impact_manifest-1",
+        "version": 8,
+        "authoritativeGeneration": 12,
+        "projectionWatermark": 12,
+        "partial": false,
+        "jobId": null
+      },
+      "errorExample": {
+        "code": "VERSION_CONFLICT",
+        "message": "The selected revision changed; reload and review the retained draft.",
+        "fieldErrors": [],
+        "correlationId": "trace-t-122-1",
+        "retryable": false,
+        "currentVersion": 8,
+        "recoveryActions": [
+          "reload",
+          "compare",
+          "rebase"
+        ]
+      },
+      "permission": "studio.ComputeImpact: authenticated scoped membership plus current action grant; viewer may query authorized metadata only. Visible resource denial is 403; hidden or foreign resource is indistinguishable 404. No UI role selector or payload actor grants authority.",
+      "exampleMeaning": "Reserved synthetic IDs; digest strings are hashes of fixture labels, not claims about real artifacts. Missing referenced records must fail validation.",
+      "acknowledgement": "Return only computed/readback result; never a static success sample."
+    }
+  ],
+  "permissionRule": "studio.ComputeImpact: authenticated scoped membership plus current action grant; viewer may query authorized metadata only. Visible resource denial is 403; hidden or foreign resource is indistinguishable 404. No UI role selector or payload actor grants authority.",
+  "transactionBoundary": "One tenant-scoped PostgreSQL transaction checks identity/policy/version and commits domain revision, command result, audit intent and outbox. No network/provider call inside this transaction. Protected remote effects use a separately fenced durable broker intent.",
+  "idempotencyRule": "Unique (tenantId, operation, commandId) with canonical request hash. Equal replay returns original result; unequal payload returns 409. expectedVersion fences aggregate; expectedHead fences branch baseline. Neither may be inferred from stale UI.",
+  "invalidationRule": "Use CHANGE-PROTOCOL dependency kinds/field paths. Semantic accepted publication atomically advances the authoritative invalidation generation. A view-only change does not invalidate evidence. Projection lag is visible; protected effects revalidate current identity/policy/context/cell epoch.",
+  "migrationRecovery": "Expand/read-compatible schema first; backfill with stable IDs and source hashes, quarantine failures, reconcile counts and only then cut over. Restart uses command status and durable cursors. Unknown remote effects reconcile before retry; irreversible outcomes require forward recovery, not history deletion.",
+  "persistence": {
+    "authoritative": true,
+    "tenantBoundary": "Session-derived tenant/workspace; composite references and tenant-leading indices. A payload target tenant is a checked selector only.",
+    "indices": [
+      "UNIQUE (tenant_id, operation, command_id)",
+      "(tenant_id, aggregate_id, version)",
+      "(tenant_id, workspace_id, state, updated_at, id)"
+    ],
+    "immutable": [
+      "published revisions",
+      "accepted evidence",
+      "prior attempts"
+    ],
+    "layoutStorage": "per-principal view preference; no semantic write"
+  },
+  "events": [
+    {
+      "type": "ComputeImpactRecorded",
+      "meaning": "Draft event name to reconcile with canonical registered events before approval; emitted only after durable commit.",
+      "envelopeFields": [
+        "eventId",
+        "schemaVersion",
+        "tenantId",
+        "workspaceId",
+        "aggregateId",
+        "version",
+        "type",
+        "actor",
+        "occurredAt",
+        "correlationId",
+        "causationId",
+        "data",
+        "evidenceRefs"
+      ],
+      "consumers": [
+        "ledger-audit",
+        "authorized-read-projection"
+      ],
+      "delivery": "Outbox at least once; deduplicate eventId, reject obsolete head promotion."
+    }
+  ],
+  "requiredEvents": [
+    "DependencyRegistered",
+    "ImpactComputed",
+    "ConstraintFailed"
+  ],
+  "transitions": [
+    {
+      "from": "requested",
+      "command": "ComputeImpact",
+      "to": "computed",
+      "precondition": "Valid schema, authorized actor, current version and domain conditions in the source scenario; async acceptance alone does not reach terminal state.",
+      "failureRecovery": "Retain draft and prior evidence; show safe error and permitted recovery. Resolve command status before retry."
+    },
+    {
+      "from": "requested",
+      "command": "ComputeImpact:invalid-or-denied",
+      "to": "requested",
+      "precondition": "Invalid payload, hidden object, stale context, unmet checkpoint or expired permission.",
+      "failureRecovery": "No domain/effect transition; disclose no hidden object data. Rebase or obtain legitimate new authority."
+    }
+  ],
+  "ui": {
+    "screens": [
+      "SC-24"
+    ],
+    "source": "docs/product/SCREEN-CONTRACTS.md + PORTFOLIO-UX.md + MIGRATION-AND-COVERAGE.md",
+    "controls": [
+      {
+        "field": "changedObject",
+        "control": "text-or-authorized-reference",
+        "required": true,
+        "valueSource": "server-validated record or retained user draft",
+        "validation": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      {
+        "field": "fieldPaths",
+        "control": "typed-reference-list",
+        "required": true,
+        "valueSource": "server-validated record or retained user draft",
+        "validation": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      {
+        "field": "candidateDigest",
+        "control": "text-or-authorized-reference",
+        "required": true,
+        "valueSource": "server-validated record or retained user draft",
+        "validation": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      },
+      {
+        "field": "dependencyGeneration",
+        "control": "numeric-input",
+        "required": true,
+        "valueSource": "server-validated record or retained user draft",
+        "validation": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      {
+        "field": "traversalBudget",
+        "control": "numeric-input",
+        "required": true,
+        "valueSource": "server-validated record or retained user draft",
+        "validation": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    ],
+    "primaryAction": "ComputeImpact",
+    "permissionVisibility": "Explain disabled visible actions; omit inaccessible resources. Server repeats authorization.",
+    "keyboard": "Tab reaches all controls in reading order; visible focus, labeled errors, focus first invalid field. Escape closes dialog and restores trigger focus; graph has list/table alternative.",
+    "reload": "Use durable result ID and pinned baseline, then restore selection/filter. Never replay a mutation just because the page reloads.",
+    "legacyException": null
+  },
+  "uiStates": [
+    {
+      "state": "loading",
+      "behavior": "Show pending request and retain selection; disable duplicate submission without blocking unrelated navigation."
+    },
+    {
+      "state": "empty",
+      "behavior": "Show zero only after successful authorized empty response; offer the relevant create/import action if allowed."
+    },
+    {
+      "state": "stale",
+      "behavior": "Show source timestamp and baseline/watermark mismatch; allow inspect/refresh but prevent protected stale action."
+    },
+    {
+      "state": "conflict",
+      "behavior": "Keep unsaved values, show changed fields/current version, and require compare/rebase before new submission."
+    },
+    {
+      "state": "failed",
+      "behavior": "Display safe error, trace ID and retry eligibility; do not replace data with successful example values."
+    },
+    {
+      "state": "denied",
+      "behavior": "Explain denied action only on a visible resource; hide foreign resource details and purge revoked cached data."
+    },
+    {
+      "state": "success",
+      "behavior": "Render actual server readback and explicit proposed/accepted/enabled/evidenced state; a queued job is still queued."
+    },
+    {
+      "state": "recovery",
+      "behavior": "Inspect command/job outcome and unresolved effects; offer only permitted retry, resume, reconciliation or reviewed compensation."
+    }
+  ],
+  "fixtures": [
+    {
+      "id": "T-122-FX-1",
+      "kind": "positive",
+      "acceptanceIds": [
+        "T-122-AC1",
+        "T-122-AC2",
+        "T-122-AC3",
+        "T-122-AC4"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-122-1",
+          "operation": "ComputeImpact",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "changedObject": "CustomerEmail",
+            "fieldPaths": [
+              "authority"
+            ],
+            "candidateDigest": "sha256:d87ded04f14425424f7997d0bbf567ea9bca9e3ed3149242c73bde0f1d6fbeb4",
+            "dependencyGeneration": 12,
+            "traversalBudget": 10000
+          },
+          "reason": "Exercise T-122 boundary"
+        },
+        "actor": "authorized-actor-a",
+        "tenant": "tenant-a",
+        "initialState": "requested",
+        "currentVersion": 7
+      },
+      "expectedPersistedResult": {
+        "domainRevisionDelta": 1,
+        "externalDispatchCount": 0,
+        "resultState": "computed",
+        "requiredSourceCriterion": "T-122-AC1",
+        "note": "Domain-specific result assertions must satisfy the linked original acceptance scenario."
+      },
+      "testPath": "tests/acceptance/t-122.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-122-FX-2",
+      "kind": "negative",
+      "acceptanceIds": [
+        "T-122-AC1",
+        "T-122-AC2",
+        "T-122-AC3",
+        "T-122-AC4"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-122-1",
+          "operation": "ComputeImpact",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "changedObject": "CustomerEmail",
+            "fieldPaths": [
+              "authority"
+            ],
+            "candidateDigest": "sha256:d87ded04f14425424f7997d0bbf567ea9bca9e3ed3149242c73bde0f1d6fbeb4",
+            "dependencyGeneration": 12,
+            "traversalBudget": 10000
+          },
+          "reason": "Exercise T-122 boundary",
+          "unexpectedAuthority": "admin"
+        },
+        "actor": "viewer-a",
+        "tenant": "tenant-a"
+      },
+      "expectedPersistedResult": {
+        "status": 400,
+        "code": "INVALID_SCHEMA",
+        "domainRevisionDelta": 0,
+        "externalDispatchCount": 0
+      },
+      "testPath": "tests/acceptance/t-122.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-122-FX-3",
+      "kind": "concurrent",
+      "acceptanceIds": [
+        "T-122-AC1",
+        "T-122-AC2",
+        "T-122-AC3",
+        "T-122-AC4"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-122-1",
+          "operation": "ComputeImpact",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "changedObject": "CustomerEmail",
+            "fieldPaths": [
+              "authority"
+            ],
+            "candidateDigest": "sha256:d87ded04f14425424f7997d0bbf567ea9bca9e3ed3149242c73bde0f1d6fbeb4",
+            "dependencyGeneration": 12,
+            "traversalBudget": 10000
+          },
+          "reason": "Exercise T-122 boundary"
+        },
+        "requests": 2,
+        "sameCommandId": true,
+        "interleave": [
+          "first.accept",
+          "second.accept",
+          "first.respond"
+        ]
+      },
+      "expectedPersistedResult": {
+        "durableResultCount": 1,
+        "duplicateExternalDispatchCount": 0,
+        "conflictingPayloadStatus": 409
+      },
+      "testPath": "tests/acceptance/t-122.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-122-FX-4",
+      "kind": "recovery",
+      "acceptanceIds": [
+        "T-122-AC1",
+        "T-122-AC2",
+        "T-122-AC3",
+        "T-122-AC4"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-122-1",
+          "operation": "ComputeImpact",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "changedObject": "CustomerEmail",
+            "fieldPaths": [
+              "authority"
+            ],
+            "candidateDigest": "sha256:d87ded04f14425424f7997d0bbf567ea9bca9e3ed3149242c73bde0f1d6fbeb4",
+            "dependencyGeneration": 12,
+            "traversalBudget": 10000
+          },
+          "reason": "Exercise T-122 boundary"
+        },
+        "failpoint": "after-commit-before-response",
+        "restart": true
+      },
+      "expectedPersistedResult": {
+        "lostAcceptedResults": 0,
+        "duplicateExternalDispatchCount": 0,
+        "unresolvedRemoteResult": "not_applicable"
+      },
+      "testPath": "tests/acceptance/t-122.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-122-FX-5",
+      "kind": "isolation",
+      "acceptanceIds": [
+        "T-122-AC1",
+        "T-122-AC2",
+        "T-122-AC3",
+        "T-122-AC4"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-122-1",
+          "operation": "ComputeImpact",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "changedObject": "CustomerEmail",
+            "fieldPaths": [
+              "authority"
+            ],
+            "candidateDigest": "sha256:d87ded04f14425424f7997d0bbf567ea9bca9e3ed3149242c73bde0f1d6fbeb4",
+            "dependencyGeneration": 12,
+            "traversalBudget": 10000
+          },
+          "reason": "Exercise T-122 boundary"
+        },
+        "authenticatedTenant": "tenant-b",
+        "targetOwner": "tenant-a",
+        "payloadTenantOverride": "tenant-a"
+      },
+      "expectedPersistedResult": {
+        "status": 404,
+        "leakedRecords": 0,
+        "leakedCounts": 0,
+        "leakedEventIds": 0,
+        "externalDispatchCount": 0
+      },
+      "testPath": "tests/acceptance/t-122.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-122-FX-6",
+      "kind": "end_to_end",
+      "acceptanceIds": [
+        "T-122-AC1",
+        "T-122-AC2",
+        "T-122-AC3",
+        "T-122-AC4"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-122-1",
+          "operation": "ComputeImpact",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "changedObject": "CustomerEmail",
+            "fieldPaths": [
+              "authority"
+            ],
+            "candidateDigest": "sha256:d87ded04f14425424f7997d0bbf567ea9bca9e3ed3149242c73bde0f1d6fbeb4",
+            "dependencyGeneration": 12,
+            "traversalBudget": 10000
+          },
+          "reason": "Exercise T-122 boundary"
+        },
+        "actor": "authorized-actor-a",
+        "screens": [
+          "SC-24"
+        ],
+        "actions": [
+          "open",
+          "inspect-source",
+          "edit-or-select",
+          "submit",
+          "reload",
+          "inspect-durable-result"
+        ]
+      },
+      "expectedPersistedResult": {
+        "fakeSuccessCount": 0,
+        "selectionRetained": true,
+        "unauthorizedControlsExecutable": false,
+        "originalAcceptanceRequired": [
+          "T-122-AC1",
+          "T-122-AC2",
+          "T-122-AC3",
+          "T-122-AC4"
+        ]
+      },
+      "testPath": "tests/acceptance/t-122.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-122-FX-7",
+      "kind": "cross_boundary",
+      "acceptanceIds": [
+        "T-122-AC1",
+        "T-122-AC2",
+        "T-122-AC3",
+        "T-122-AC4"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-122-1",
+          "operation": "ComputeImpact",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "changedObject": "CustomerEmail",
+            "fieldPaths": [
+              "authority"
+            ],
+            "candidateDigest": "sha256:d87ded04f14425424f7997d0bbf567ea9bca9e3ed3149242c73bde0f1d6fbeb4",
+            "dependencyGeneration": 12,
+            "traversalBudget": 10000
+          },
+          "reason": "Exercise T-122 boundary"
+        },
+        "initialGeneration": 12,
+        "currentGeneration": 13,
+        "projectionWatermark": 12,
+        "revokedGrant": true
+      },
+      "expectedPersistedResult": {
+        "protectedDispatchCount": 0,
+        "freshness": "stale",
+        "recoveryActions": [
+          "refresh-authority",
+          "recompute-context",
+          "review-again"
+        ],
+        "historicalEvidenceOverwritten": false
+      },
+      "testPath": "tests/acceptance/t-122.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-122-AC1-DOMAIN",
+      "kind": "positive",
+      "acceptanceIds": [
+        "T-122-AC1"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-122-1",
+          "operation": "ComputeImpact",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "changedObject": "CustomerEmail",
+            "fieldPaths": [
+              "authority"
+            ],
+            "candidateDigest": "sha256:d87ded04f14425424f7997d0bbf567ea9bca9e3ed3149242c73bde0f1d6fbeb4",
+            "dependencyGeneration": 12,
+            "traversalBudget": 10000
+          },
+          "reason": "Exercise T-122 boundary"
+        },
+        "sourceScenarioId": "T-122-AC1",
+        "sourceScenarioHash": "4990d37ee34b9bb8e6b78b7813053880ee1196802b0ba9207fe70a0e66034589"
+      },
+      "expectedPersistedResult": {
+        "sourceScenarioId": "T-122-AC1",
+        "mustAssertOriginalScenario": true,
+        "cannotSubstituteBoundaryFixture": true
+      },
+      "testPath": "tests/acceptance/t-122.test.mjs",
+      "status": "not_run",
+      "scope": "domain_oracle_requires_review"
+    },
+    {
+      "id": "T-122-AC2-DOMAIN",
+      "kind": "negative",
+      "acceptanceIds": [
+        "T-122-AC2"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-122-1",
+          "operation": "ComputeImpact",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "changedObject": "CustomerEmail",
+            "fieldPaths": [
+              "authority"
+            ],
+            "candidateDigest": "sha256:d87ded04f14425424f7997d0bbf567ea9bca9e3ed3149242c73bde0f1d6fbeb4",
+            "dependencyGeneration": 12,
+            "traversalBudget": 10000
+          },
+          "reason": "Exercise T-122 boundary"
+        },
+        "sourceScenarioId": "T-122-AC2",
+        "sourceScenarioHash": "2dc8df7b7ebaf415c0f06915b0e22176de173f972a4d5ddf2c3990562946e633"
+      },
+      "expectedPersistedResult": {
+        "sourceScenarioId": "T-122-AC2",
+        "mustAssertOriginalScenario": true,
+        "cannotSubstituteBoundaryFixture": true
+      },
+      "testPath": "tests/acceptance/t-122.test.mjs",
+      "status": "not_run",
+      "scope": "domain_oracle_requires_review"
+    },
+    {
+      "id": "T-122-AC3-DOMAIN",
+      "kind": "recovery",
+      "acceptanceIds": [
+        "T-122-AC3"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-122-1",
+          "operation": "ComputeImpact",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "changedObject": "CustomerEmail",
+            "fieldPaths": [
+              "authority"
+            ],
+            "candidateDigest": "sha256:d87ded04f14425424f7997d0bbf567ea9bca9e3ed3149242c73bde0f1d6fbeb4",
+            "dependencyGeneration": 12,
+            "traversalBudget": 10000
+          },
+          "reason": "Exercise T-122 boundary"
+        },
+        "sourceScenarioId": "T-122-AC3",
+        "sourceScenarioHash": "13ff5b284d8939ba9a661e25031d03c119eedf359d402701fe25cb0f67f86bf1"
+      },
+      "expectedPersistedResult": {
+        "sourceScenarioId": "T-122-AC3",
+        "mustAssertOriginalScenario": true,
+        "cannotSubstituteBoundaryFixture": true
+      },
+      "testPath": "tests/acceptance/t-122.test.mjs",
+      "status": "not_run",
+      "scope": "domain_oracle_requires_review"
+    },
+    {
+      "id": "T-122-AC4-DOMAIN",
+      "kind": "cross_boundary",
+      "acceptanceIds": [
+        "T-122-AC4"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-122-1",
+          "operation": "ComputeImpact",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "changedObject": "CustomerEmail",
+            "fieldPaths": [
+              "authority"
+            ],
+            "candidateDigest": "sha256:d87ded04f14425424f7997d0bbf567ea9bca9e3ed3149242c73bde0f1d6fbeb4",
+            "dependencyGeneration": 12,
+            "traversalBudget": 10000
+          },
+          "reason": "Exercise T-122 boundary"
+        },
+        "sourceScenarioId": "T-122-AC4",
+        "sourceScenarioHash": "7d4cbc215b7402d50c0a1325fdf781edd1275e0b3c77ca68c1d9536459d0ff07"
+      },
+      "expectedPersistedResult": {
+        "sourceScenarioId": "T-122-AC4",
+        "mustAssertOriginalScenario": true,
+        "cannotSubstituteBoundaryFixture": true
+      },
+      "testPath": "tests/acceptance/t-122.test.mjs",
+      "status": "not_run",
+      "scope": "domain_oracle_requires_review"
+    }
+  ],
+  "domainCounterexamples": [
+    "Cycle A→B→C→A terminates with visited-set closure; exceeding traversal budget marks impact incomplete and blocks protected publication.",
+    "Changing a layout coordinate affects view_only consumers; changing property authority invalidates authorization/evaluation consumers transitively."
+  ],
+  "targetFiles": [
+    "contracts/enterprise/t-122.schema.json",
+    "src/modules/studio/t-122.mjs",
+    "tests/acceptance/t-122.test.mjs",
+    "migrations/t-122.sql"
+  ],
+  "fileStatus": "intended paths, not implementation evidence",
+  "slices": [
+    {
+      "id": "T-122-contract",
+      "dependsOn": [],
+      "covers": [
+        "T-122-AC1",
+        "T-122-AC2",
+        "T-122-AC3",
+        "T-122-AC4"
+      ],
+      "exit": "Resolve open decisions, concrete domain oracles and independent review; schemas and examples must validate."
+    },
+    {
+      "id": "T-122-domain",
+      "dependsOn": [
+        "T-122-contract",
+        "T-121",
+        "T-61",
+        "T-90"
+      ],
+      "covers": [
+        "T-122-AC1",
+        "T-122-AC2",
+        "T-122-AC3",
+        "T-122-AC4"
+      ],
+      "exit": "Actual state, permission, concurrency and restart tests; no mock substituted for required real provider."
+    },
+    {
+      "id": "T-122-experience",
+      "dependsOn": [
+        "T-122-domain"
+      ],
+      "covers": [
+        "T-122-AC1",
+        "T-122-AC2",
+        "T-122-AC3",
+        "T-122-AC4"
+      ],
+      "exit": "Working role journey across all listed screens/states with keyboard and reload checks."
+    },
+    {
+      "id": "T-122-qualification",
+      "dependsOn": [
+        "T-122-experience"
+      ],
+      "covers": [
+        "T-122-AC1",
+        "T-122-AC2",
+        "T-122-AC3",
+        "T-122-AC4"
+      ],
+      "exit": "Independent revision-bound evidence for every original criterion and integration obligation; reconcile all child slices before parent closure."
+    }
+  ],
+  "observability": "Record correlation/command/job IDs, operation, authorized scope, version/generation/fence and safe error code. Redact content, credentials and foreign identifiers. Metrics include rejection, conflict, lag and unknown-effect counts; tenant labels are authorized and bounded.",
+  "sourceDecisions": [
+    "docs/production/SOLUTION-ARCHITECTURE.md",
+    "docs/production/CHANGE-PROTOCOL.md",
+    "docs/production/DELIVERY-CONTRACTS.md",
+    "docs/production/IMPLEMENTATION-HANDOFF.md",
+    "docs/production/IMPLEMENTATION-BACKLOG.json"
+  ],
+  "nonGoals": [
+    "No implementation or independent approval claimed by this draft.",
+    "No public deployment, new authority, real transaction or customer-specific policy inferred.",
+    "Do not replace existing IDs, task dependencies, domain scenarios or source rule IDs with generated boundary checks."
+  ],
+  "evidence": {
+    "status": "not_run",
+    "receipts": [],
+    "commands": [
+      "node --test tests/acceptance/t-122.test.mjs",
+      "npm run check",
+      "node ops/check-spec.mjs --self-test --verify-sources"
+    ],
+    "required": [
+      "revision",
+      "fixture manifest",
+      "actual storage/event/effect assertions",
+      "role journey",
+      "environment/provider versions",
+      "raw results",
+      "unresolved findings",
+      "independent review"
+    ]
+  }
+}

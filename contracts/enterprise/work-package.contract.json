@@ -1,0 +1,92 @@
+{
+  "format": "orgward-work-package-v1",
+  "version": 1,
+  "meaning": "Readiness contract for bounded implementation; validation is not product acceptance.",
+  "required_text": [
+    "taskId",
+    "sliceId",
+    "actor",
+    "trigger",
+    "observableOutcome",
+    "transactionBoundary",
+    "permissionRule",
+    "idempotencyRule",
+    "invalidationRule",
+    "migrationRecovery",
+    "observability",
+    "independentReview"
+  ],
+  "required_arrays": [
+    "acceptanceIds",
+    "dependencyReceipts",
+    "schemas",
+    "operations",
+    "events",
+    "transitions",
+    "uiStates",
+    "fixtures",
+    "sourceDecisions",
+    "nonGoals"
+  ],
+  "nonempty_arrays": [
+    "acceptanceIds",
+    "schemas",
+    "operations",
+    "events",
+    "transitions",
+    "uiStates",
+    "fixtures",
+    "sourceDecisions",
+    "nonGoals"
+  ],
+  "required_ui_states": [
+    "loading",
+    "empty",
+    "stale",
+    "conflict",
+    "failed",
+    "denied",
+    "success",
+    "recovery"
+  ],
+  "fixture_kinds": [
+    "positive",
+    "negative",
+    "concurrent",
+    "recovery",
+    "isolation",
+    "end_to_end",
+    "cross_boundary"
+  ],
+  "operation_fields": [
+    "name",
+    "requestExample",
+    "successExample",
+    "errorExample",
+    "permission"
+  ],
+  "transition_fields": [
+    "from",
+    "command",
+    "to",
+    "precondition",
+    "failureRecovery"
+  ],
+  "fixture_fields": [
+    "id",
+    "kind",
+    "acceptanceIds",
+    "input",
+    "expectedPersistedResult",
+    "testPath"
+  ],
+  "forbidden_placeholders": [
+    "TBD",
+    "TODO",
+    "FIXME",
+    "placeholder",
+    "implement later"
+  ],
+  "required_receipt_prefix": "ops/checks/",
+  "status_contract": "All tasks may remain planned without packets. in_progress/complete tasks require a valid bounded packet and complete dependency receipts. Completion still requires actual task acceptance and independent review."
+}

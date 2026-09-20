@@ -1,0 +1,1202 @@
+{
+  "format": "orgward-task-packet-blueprints-v1",
+  "columns": [
+    "taskNumber",
+    "module",
+    "primaryOperation",
+    "record",
+    "fieldsAndExamples",
+    "stateTransition",
+    "operationKind"
+  ],
+  "rows": [
+    [
+      1,
+      "platform",
+      "ValidateContractPackage",
+      "contract_package",
+      "packageVersion=schema-v1; schemaIds[]=workspace,object,command,event; compatibilityBase=legacy-v0.1",
+      "draft>validated",
+      "diagnostic"
+    ],
+    [
+      2,
+      "platform",
+      "ResolveSurfaceState",
+      "surface_state",
+      "datasetMode!=live|sample; sourceStatus!=empty|fresh|stale|unavailable; executionEnabled?=false; observedCount#=0",
+      "loading>resolved",
+      "read"
+    ],
+    [
+      3,
+      "platform",
+      "RestoreNavigation",
+      "navigation_draft",
+      "objectId=capability-1; selectedTab=details; searchText=onboarding; dirty?=true",
+      "editing>restored",
+      "read"
+    ],
+    [
+      4,
+      "platform",
+      "CommitVersionedCommand",
+      "command_commit",
+      "aggregateId=object-1; expectedVersion#=7; mutationDigest=sha256:change-a; importManifestId=import-1",
+      "received>committed",
+      "write"
+    ],
+    [
+      5,
+      "platform",
+      "BindIdentity",
+      "identity_binding",
+      "issuerRef=idp-1; audience=orgward; subjectRef=subject-1; membershipId=member-1; nonceRef=nonce-1",
+      "pending>bound",
+      "security"
+    ],
+    [
+      6,
+      "platform",
+      "EvaluateAuthorization",
+      "authorization_check",
+      "resourceId=object-1; action=object.edit; policyVersion=policy-3; delegationId=grant-1",
+      "requested>decided",
+      "security"
+    ],
+    [
+      7,
+      "platform",
+      "RotateSecretBinding",
+      "secret_binding",
+      "secretRef=vault-ref-1; providerId=provider-1; credentialVersion#=2; allowedTarget=repo-1",
+      "staged>active",
+      "effect"
+    ],
+    [
+      8,
+      "platform",
+      "InitializeInstallation",
+      "installation_job",
+      "releaseDigest=sha256:release-a; configRef=config-1; identityBindingId=idp-1; storageRef=storage-1",
+      "preflight>initialized",
+      "effect"
+    ],
+    [
+      9,
+      "studio",
+      "CreateEnterpriseObject",
+      "enterprise_object",
+      "objectType!=capability|process|role|system; name=Customer onboarding; area=capabilities_processes; ownerRef=role-1; provenanceRefs[]=source-1",
+      "draft>saved",
+      "write"
+    ],
+    [
+      10,
+      "studio",
+      "AcceptBriefRevision",
+      "brief_revision",
+      "conversationId=conversation-1; briefId=brief-1; facts[]=Repair service; assumptions[]=Demand unmeasured; unknowns[]=Supplier capacity",
+      "draft>accepted",
+      "publish"
+    ],
+    [
+      11,
+      "studio",
+      "GenerateEnterpriseProposal",
+      "proposal_job",
+      "briefRevision=brief-1@2; modelProfile=bounded-design; sourceRefs[]=source-1; outputSchema=enterprise-v1; tokenLimit#=8000",
+      "queued>proposed",
+      "effect"
+    ],
+    [
+      12,
+      "studio",
+      "AssessReadiness",
+      "readiness_assessment",
+      "scopeRevision=scope-1@2; requirementIds[]=ownership,process-ports; evidenceRefs[]=evidence-1; assessmentAt=2026-09-19T00:00:00Z",
+      "requested>assessed",
+      "write"
+    ],
+    [
+      13,
+      "studio",
+      "PublishBaseline",
+      "baseline_candidate",
+      "branchId=branch-1; baseRevision=baseline-7; candidateDigest=sha256:candidate-a; reviewId=review-1",
+      "reviewed>published",
+      "publish"
+    ],
+    [
+      14,
+      "studio",
+      "QueryNeighborhood",
+      "graph_view",
+      "selectedId=capability-1; lens=capability; baselineId=baseline-7; depth#=2; cursor=page-1",
+      "loading>visible",
+      "read"
+    ],
+    [
+      15,
+      "studio",
+      "CalculateEconomicScenario",
+      "economic_scenario",
+      "currency=USD; unit=service; quantity#=10; unitPrice#=100; variableCost#=40; fixedCost#=200; period=2026-09",
+      "draft>calculated",
+      "write"
+    ],
+    [
+      16,
+      "studio",
+      "ReserveCapacity",
+      "resource_reservation",
+      "resourceId=team-1; calendarVersion=calendar-1; units#=2; unit=person-hour; runId=run-1",
+      "requested>reserved",
+      "write"
+    ],
+    [
+      17,
+      "studio",
+      "EnableAssignment",
+      "role_assignment",
+      "principalRef=person-1; roleRef=role-1; authorityScope=unit-a; instructionVersion=instruction-1; expiresAt=2026-10-01T00:00:00Z",
+      "proposed>enabled",
+      "security"
+    ],
+    [
+      18,
+      "studio",
+      "PublishInstruction",
+      "instruction_revision",
+      "assignmentId=assignment-1; objective=Prepare service proposal; inputSchema=brief-v1; outputSchema=proposal-v1; prohibitedActions[]=external-payment; checkpointIds[]=human-review",
+      "draft>published",
+      "publish"
+    ],
+    [
+      19,
+      "studio",
+      "PublishProcess",
+      "process_definition",
+      "processId=process-1; nodeIds[]=collect,draft,review; edgeIds[]=collect-draft,draft-review; requiredCheckpoint=review; outputSchema=proposal-v1",
+      "draft>published",
+      "publish"
+    ],
+    [
+      20,
+      "platform",
+      "AcquireTaskLease",
+      "task_lease",
+      "runId=run-1; taskId=task-1; attempt#=1; leaseSeconds#=30; fencingToken#=5",
+      "queued>leased",
+      "write"
+    ],
+    [
+      21,
+      "platform",
+      "LaunchIsolatedAttempt",
+      "worker_profile",
+      "attemptId=attempt-1; imageDigest=sha256:worker-a; cpuLimit#=1; memoryMiB#=512; timeoutSeconds#=120; egressTargets[]=provider-1",
+      "authorized>running",
+      "effect"
+    ],
+    [
+      22,
+      "overseer",
+      "ExecuteBoundedModelTask",
+      "model_attempt",
+      "profileId=model-1; contextDigest=sha256:context-a; tokenBudget#=8000; toolBudget#=4; outputSchema=proposal-v1; evaluationSuite=rubric-1",
+      "authorized>evaluated",
+      "effect"
+    ],
+    [
+      23,
+      "studio",
+      "PauseRun",
+      "run_intervention",
+      "runId=run-1; checkpointId=review-1; instructionVersion=instruction-2; boundary=next-tool-call; reason=Revise customer scope",
+      "running>pause_requested",
+      "effect"
+    ],
+    [
+      24,
+      "studio",
+      "RunBusinessJourney",
+      "operating_journey",
+      "businessFixture=circular-furniture; baselineId=baseline-7; processId=process-1; humanCheckpoint=review-1; outputSchema=proposal-v1",
+      "prepared>qualified",
+      "qualification"
+    ],
+    [
+      25,
+      "sdlc",
+      "FreezeChangeContext",
+      "change_context",
+      "changeId=change-1; intent=Add customer consent validation; baselineId=baseline-7; affectedIds[]=system-1,process-1; sourceRefs[]=source-1",
+      "discovered>frozen",
+      "write"
+    ],
+    [
+      26,
+      "sdlc",
+      "AcceptRequirement",
+      "requirement_revision",
+      "changeId=change-1; requirementId=req-1; statement=Reject absent consent; sourceRefs[]=policy-1; acceptanceScenarioIds[]=consent-present,consent-absent",
+      "draft>accepted",
+      "publish"
+    ],
+    [
+      27,
+      "sdlc",
+      "AcceptArchitectureDelta",
+      "architecture_delta",
+      "changeId=change-1; baseDesign=system-1@3; targetDesign=system-1@4; affectedInterfaces[]=api-1; migrationPlan=migration-1; recoveryPlan=recovery-1",
+      "proposed>accepted",
+      "approve"
+    ],
+    [
+      28,
+      "sdlc",
+      "PublishChangePlan",
+      "change_work_plan",
+      "changeId=change-1; requirementRefs[]=req-1@1; architectureRef=architecture-1@2; tasks[]=implement,test,review; checkpointIds[]=review",
+      "draft>published",
+      "publish"
+    ],
+    [
+      29,
+      "sdlc",
+      "OnboardRepository",
+      "repository_binding",
+      "providerRef=scm-1; installationRef=scm-install-1; repositoryRef=org/service; allowedBranch=orgward/change-1; baseCommit=commit-a",
+      "requested>bound",
+      "effect"
+    ],
+    [
+      30,
+      "sdlc",
+      "ProposeCodeChange",
+      "code_change",
+      "changeId=change-1; repositoryId=repo-1; baseCommit=commit-a; branch=orgward/change-1; requirementRefs[]=req-1@1; attemptLimit#=3",
+      "planned>review_pending",
+      "effect"
+    ],
+    [
+      31,
+      "sdlc",
+      "BuildCandidate",
+      "build_candidate",
+      "sourceCommit=commit-b; recipeDigest=sha256:recipe-a; requiredChecks[]=unit,security,requirements; builderProfile=isolated-build",
+      "requested>verified",
+      "effect"
+    ],
+    [
+      32,
+      "sdlc",
+      "SignCandidate",
+      "artifact_manifest",
+      "candidateDigest=sha256:candidate-a; sbomRef=sbom-1; provenanceRef=provenance-1; keyRef=signing-key-1",
+      "verified>signed",
+      "effect"
+    ],
+    [
+      33,
+      "arbiter",
+      "ApproveRelease",
+      "release_decision",
+      "candidateDigest=sha256:candidate-a; environmentId=stage-1; configVersion=config-3; evidenceDigest=sha256:evidence-a; expiresAt=2026-09-20T00:00:00Z",
+      "requested>approved",
+      "approve"
+    ],
+    [
+      34,
+      "sdlc",
+      "DeployCandidate",
+      "deployment_operation",
+      "approvalId=approval-1; candidateDigest=sha256:candidate-a; targetId=stage-1; effectKey=deploy-1; configVersion=config-3",
+      "authorized>deploying",
+      "effect"
+    ],
+    [
+      35,
+      "sdlc",
+      "RollbackDeployment",
+      "rollback_operation",
+      "deploymentId=deployment-1; previousDigest=sha256:candidate-old; schemaCompatibility=compatible; recoveryPlanId=recovery-1",
+      "requested>rolling_back",
+      "effect"
+    ],
+    [
+      36,
+      "studio",
+      "AssessOutcome",
+      "outcome_measure",
+      "measureId=measure-1; formulaVersion=formula-1; unit=percent; observationRefs[]=observation-1; minimumSamples#=30; window=2026-09",
+      "collecting>assessed",
+      "write"
+    ],
+    [
+      37,
+      "studio",
+      "AcceptLearning",
+      "corrective_proposal",
+      "assessmentId=assessment-1; baselineId=baseline-7; proposedChange=Revise review capacity; evidenceRefs[]=observation-1; reason=Outcome below target",
+      "proposed>accepted",
+      "publish"
+    ],
+    [
+      38,
+      "platform",
+      "AcknowledgeWorkItem",
+      "work_notification",
+      "workItemId=work-1; sourceEventId=event-1; assigneeRef=person-1; dueAt=2026-09-20T00:00:00Z",
+      "unread>acknowledged",
+      "write"
+    ],
+    [
+      39,
+      "ledger",
+      "ExportAuditScope",
+      "audit_export",
+      "scopeId=workspace-1; from=2026-09-01T00:00:00Z; until=2026-09-19T00:00:00Z; redactionProfile=auditor-safe; format=manifest-json",
+      "requested>exported",
+      "effect"
+    ],
+    [
+      40,
+      "platform",
+      "ApplyConfiguration",
+      "configuration_revision",
+      "section=quotas; expectedConfigVersion#=3; quotaUnits#=100; providerRef=provider-1; retentionPolicy=retention-1",
+      "draft>active",
+      "publish"
+    ],
+    [
+      41,
+      "platform",
+      "RestoreBackup",
+      "backup_manifest",
+      "backupDigest=sha256:backup-a; targetCell=cell-recovery; keyRef=restore-key-1; restoreScope=tenant-1",
+      "validated>restoring",
+      "effect"
+    ],
+    [
+      42,
+      "platform",
+      "ApplyUpgrade",
+      "upgrade_plan",
+      "fromRelease=release-1; toRelease=release-2; migrationDigest=sha256:migration-a; backupId=backup-1; drainPolicy=finish-safe-attempts",
+      "preflight>upgrading",
+      "effect"
+    ],
+    [
+      43,
+      "platform",
+      "OpenOperationalIncident",
+      "incident_record",
+      "signalRef=signal-1; affectedService=worker-pool; severity=high; runbookId=runbook-1; correlationId=correlation-1",
+      "detected>triaged",
+      "write"
+    ],
+    [
+      44,
+      "platform",
+      "ValidateApiCompatibility",
+      "api_profile",
+      "profileVersion=api-v1; consumerVersion=client-1; schemaRefs[]=command,object,event; adapterRef=adapter-1",
+      "proposed>validated",
+      "diagnostic"
+    ],
+    [
+      45,
+      "platform",
+      "RecordUsabilityRun",
+      "usability_report",
+      "roleCohort=process-owner; journeyId=Q-06; browserProfile=laptop-keyboard; fixtureRevision=fixture-1; recordingRef=recording-1",
+      "scheduled>assessed",
+      "qualification"
+    ],
+    [
+      46,
+      "platform",
+      "RecordSecurityAssessment",
+      "security_report",
+      "releaseDigest=sha256:release-a; threatModelVersion=threat-1; scopeRefs[]=api,worker,artifact; findingsRefs[]=finding-1",
+      "scheduled>assessed",
+      "qualification"
+    ],
+    [
+      47,
+      "platform",
+      "RecordResilienceRun",
+      "load_report",
+      "topologyId=redundant-1; concurrentUsers#=100; queuedTasks#=1000; workerTasks#=10; durationHours#=24",
+      "scheduled>assessed",
+      "qualification"
+    ],
+    [
+      48,
+      "platform",
+      "AdjudicateCoreRelease",
+      "core_release_report",
+      "releaseDigest=sha256:release-a; qualificationIds[]=Q-01,Q-02,Q-03,Q-04,Q-05,Q-06,Q-07; gateLedgerRevision=ledger-1",
+      "candidate>adjudicated",
+      "qualification"
+    ],
+    [
+      49,
+      "studio",
+      "CreateScopedRevision",
+      "scoped_revision",
+      "objectId=customer-1; objectType=entity; validFrom=2026-10-01T00:00:00Z; recordedAt=2026-09-19T00:00:00Z; legalScope=entity-a; baselineId=baseline-7",
+      "draft>recorded",
+      "write"
+    ],
+    [
+      50,
+      "studio",
+      "PublishOrganisationScope",
+      "organisation_scope",
+      "organisationId=group-1; legalEntityId=entity-a; parentUnit=group-root; sharedServiceId=service-1; agreementId=agreement-1",
+      "draft>published",
+      "publish"
+    ],
+    [
+      51,
+      "studio",
+      "QueryCrossPerspective",
+      "lens_query",
+      "selectedId=capability-1; primaryLens=L-03; secondaryLens=L-08; detailLevel=D2; baselineId=baseline-7; maxDepth#=3",
+      "loading>projected",
+      "read"
+    ],
+    [
+      52,
+      "studio",
+      "PublishCaseDefinition",
+      "case_definition",
+      "caseId=case-1; parallelTasks[]=identity-check,capacity-check; joinPolicy=all-required; loopLimit#=3; compensationRef=compensate-1; calendarTimezone=UTC",
+      "draft>published",
+      "publish"
+    ],
+    [
+      53,
+      "studio",
+      "MergeBranch",
+      "merge_proposal",
+      "branchId=proposal-1; baseRevision=baseline-7; currentRevision=baseline-8; proposedRevision=draft-9; conflictPolicy=explicit-review",
+      "draft>review_pending",
+      "publish"
+    ],
+    [
+      54,
+      "studio",
+      "CreateRefinement",
+      "refinement_link",
+      "parentId=capability-1; childId=system-1; fromLevel=D2; toLevel=D3; relation=realizes; requirementId=req-1; realizationMode!=manual|existing-system|new-system",
+      "draft>linked",
+      "write"
+    ],
+    [
+      55,
+      "studio",
+      "ExportEnterpriseModel",
+      "interchange_manifest",
+      "baselineId=baseline-7; format!=studio-lossless|oadl-v0.1; extensionVersions[]=commitment-v1; preserveIds?=true",
+      "requested>exported",
+      "effect"
+    ],
+    [
+      56,
+      "studio",
+      "RecordCommitment",
+      "commitment_revision",
+      "promisorRef=unit-a; promiseeRef=customer-1; deliverable=Repair chair; dueAt=2026-10-01T00:00:00Z; reciprocalRef=payment-obligation-1; currency=USD; amount#=100",
+      "offered>agreed",
+      "publish"
+    ],
+    [
+      57,
+      "studio",
+      "ReserveWorkforce",
+      "capacity_plan",
+      "skillRef=repair-qualified; resourceRef=team-1; supplierRef=supplier-1; calendarVersion=calendar-1; quantity#=2; unit=person-hour",
+      "planned>reserved",
+      "write"
+    ],
+    [
+      58,
+      "studio",
+      "PublishOfferingJourney",
+      "value_stream",
+      "segmentId=segment-1; need=Repair furniture; offeringId=service-1; journeySteps[]=request,quote,deliver; capabilityRefs[]=capability-1; measureRef=measure-1",
+      "draft>published",
+      "publish"
+    ],
+    [
+      59,
+      "studio",
+      "AcceptControlInterpretation",
+      "control_assessment",
+      "riskId=risk-1; obligationSource=source-1@3; applicabilityScope=entity-a; reviewerRef=reviewer-1; controlId=control-1; testEvidence=evidence-1",
+      "proposed>accepted",
+      "approve"
+    ],
+    [
+      60,
+      "studio",
+      "RunBusinessSimulation",
+      "simulation_manifest",
+      "goalId=goal-1; assumptionRefs[]=demand-1,price-1; formulaVersion=formula-1; randomSeed#=42; horizonDays#=90; scenarioId=scenario-a",
+      "configured>simulated",
+      "diagnostic"
+    ],
+    [
+      61,
+      "studio",
+      "MapSystemRealization",
+      "architecture_mapping",
+      "logicalServiceId=service-1; componentIds[]=component-a,component-b; repositoryIds[]=repo-a,repo-b; deploymentIds[]=stage-1,prod-1; propertyId=CustomerEmail",
+      "draft>mapped",
+      "write"
+    ],
+    [
+      62,
+      "studio",
+      "PublishPhysicalProfile",
+      "physical_activity_profile",
+      "assetRef=asset-1; locationRef=location-1; activity=Inspect repair; performerMode!=human|certified-adapter; qualificationRef=qualification-1; evidenceMode=human-attestation",
+      "draft>published",
+      "publish"
+    ],
+    [
+      63,
+      "studio",
+      "ApplyBulkChange",
+      "bulk_change",
+      "baseRevision=baseline-7; targetIds[]=process-1,process-2; field=ownerRef; value=role-2; batchMode!=atomic|explicit-partial",
+      "previewed>committed",
+      "write"
+    ],
+    [
+      64,
+      "studio",
+      "AssessBusinessAxes",
+      "coverage_matrix",
+      "scopeId=scope-1; inventoryVersion=inventory-3; axes[]=design,enablement,evidence,outcome; evidenceAsOf=2026-09-19T00:00:00Z",
+      "requested>assessed",
+      "write"
+    ],
+    [
+      65,
+      "sentinel",
+      "IngestSourceRevision",
+      "ingestion_manifest",
+      "sourceRef=repo-1; immutableRevision=commit-a; allowedPath=docs/architecture; formats[]=markdown,yaml,mermaid; maxBytes#=1000000; classification=internal",
+      "queued>ingested",
+      "effect"
+    ],
+    [
+      66,
+      "sentinel",
+      "ExtractClaims",
+      "claim_proposal",
+      "sourceRevision=source-1@3; extractorVersion=extractor-1; claimType=AUTHORITY; subjectRef=system-1; objectRef=entity-1; excerpt=Identity service owns customer email; confidence#=0.8",
+      "extracting>proposed",
+      "effect"
+    ],
+    [
+      67,
+      "sentinel",
+      "AcceptClaim",
+      "claim_review",
+      "claimId=claim-1; expectedClaimVersion#=1; rationale=Verified architecture decision; evidenceRefs[]=adr-1@3; authorityScope=entity-a",
+      "proposed>accepted",
+      "approve"
+    ],
+    [
+      68,
+      "sentinel",
+      "CompileAcceptedClaims",
+      "compile_manifest",
+      "acceptedSetDigest=sha256:claims-a; compilerVersion=compiler-1; oadlProfile=oadl-v0.1; ruleProfile=base-v1; priorSnapshot=snapshot-1",
+      "queued>published",
+      "diagnostic"
+    ],
+    [
+      69,
+      "sentinel",
+      "ProjectIntegrityGraph",
+      "graph_projection",
+      "snapshotId=snapshot-1; scopeMode!=global|explicit|unknown; semanticPredicate=TRANSFERS; fromId=service-a; toId=service-b; transferredEntityId=Customer",
+      "compiled>projected",
+      "read"
+    ],
+    [
+      70,
+      "sentinel",
+      "EvaluateBaseRules",
+      "rule_profile",
+      "snapshotId=snapshot-1; ruleIds[]=R-01,R-02,R-03,R-04,R-05,R-06,R-07,R-08,R-09,R-10,R-11,R-12,R-13,R-14,R-15; applicabilityProfile=enterprise-base",
+      "compiled>evaluated",
+      "diagnostic"
+    ],
+    [
+      71,
+      "sentinel",
+      "EvaluateLineageRules",
+      "lineage_evaluation",
+      "snapshotId=snapshot-1; extensionProfile=property-process-v1; propertyId=CustomerEmail; declaredSource=identity-service; observedSource=crm-replica; processId=onboarding; evidenceRef=read-1",
+      "observed>evaluated",
+      "diagnostic"
+    ],
+    [
+      72,
+      "sentinel",
+      "ProposeFindingRepair",
+      "finding_work_item",
+      "findingId=finding-1; repairMode!=supersede|scope-split|reclassify|exception-request; claimRefs[]=claim-1; ownerRef=reviewer-1",
+      "open>repair_proposed",
+      "write"
+    ],
+    [
+      73,
+      "arbiter",
+      "ApproveIntegrityException",
+      "exception_decision",
+      "findingId=finding-1; scopeRef=entity-a; reason=Timeboxed migration; compensatingControl=control-2; reviewAt=2026-09-25T00:00:00Z; expiresAt=2026-10-01T00:00:00Z",
+      "requested>approved",
+      "approve"
+    ],
+    [
+      74,
+      "sentinel",
+      "CompareSnapshots",
+      "drift_delta",
+      "beforeSnapshot=snapshot-1; afterSnapshot=snapshot-2; sourceCoverageDigest=sha256:coverage-a; thresholdProfile=drift-1",
+      "requested>compared",
+      "diagnostic"
+    ],
+    [
+      75,
+      "sentinel",
+      "QualifySentinel",
+      "sentinel_qualification",
+      "releaseDigest=sha256:release-a; ruleProfile=base-and-property; sourceAcceptanceRange=AT-01:AT-33; findingSample#=30; reviewerRefs[]=architect-a,architect-b",
+      "candidate>assessed",
+      "qualification"
+    ],
+    [
+      76,
+      "warden",
+      "ActivatePolicyPackage",
+      "policy_package",
+      "policyVersion=policy-3; strategicRef=strategy-policy-1; domainScope=domain-a; actionClass=release.deploy; denyRule=missing-approval; interpreterVersion=policy-v1",
+      "reviewed>active",
+      "publish"
+    ],
+    [
+      77,
+      "warden",
+      "DispatchEffect",
+      "effect_intent",
+      "requestDigest=sha256:request-a; approvalId=approval-1; capabilityId=grant-1; contextGeneration#=12; policyVersion=policy-3; effectKey=effect-1; targetId=stage-1",
+      "authorized>dispatched",
+      "effect"
+    ],
+    [
+      78,
+      "warden",
+      "SimulatePolicyChange",
+      "policy_rollout",
+      "draftPolicy=policy-4; baselinePolicy=policy-3; recordedRequests[]=request-a,request-b; rolloutScope=workspace-1",
+      "draft>simulated",
+      "diagnostic"
+    ],
+    [
+      79,
+      "arbiter",
+      "GrantDelegation",
+      "decision_right",
+      "grantorRef=owner-1; granteeRef=reviewer-1; actionClass=release.approve; scopeId=entity-a; expiresAt=2026-10-01T00:00:00Z; quorum#=2",
+      "proposed>granted",
+      "security"
+    ],
+    [
+      80,
+      "arbiter",
+      "CastDecisionVote",
+      "decision_vote",
+      "decisionId=decision-1; requestDigest=sha256:request-a; evidenceDigest=sha256:evidence-a; vote!=approve|reject|abstain|recuse; rationale=Evidence checked",
+      "open>voted",
+      "approve"
+    ],
+    [
+      81,
+      "arbiter",
+      "ResolveAuthorityConflict",
+      "authority_conflict_case",
+      "conflictingClaims[]=claim-a,claim-b; resolutionMode!=scope-split|supersede|escalate|emergency; governedScope=entity-a; expiry=2026-09-20T00:00:00Z",
+      "disputed>reviewed",
+      "approve"
+    ],
+    [
+      82,
+      "steward",
+      "AcceptOwnershipHandover",
+      "semantic_definition",
+      "canonicalId=CustomerEmail; aliases[]=customer_email,email; ownerRef=domain-a; custodianRef=team-a; classification=confidential; handoverRef=handover-1",
+      "proposed>accepted",
+      "approve"
+    ],
+    [
+      83,
+      "steward",
+      "AssessDataQuality",
+      "quality_assessment",
+      "propertyId=CustomerEmail; qualityRule=email-validity-v1; sampleScope=source-a; observationWindow=2026-09; retentionPolicy=retention-1; holdRef=hold-1",
+      "measured>assessed",
+      "write"
+    ],
+    [
+      84,
+      "steward",
+      "PublishDataContract",
+      "data_contract_revision",
+      "propertyId=CustomerEmail; producerService=identity-service; consumerRefs[]=onboarding; schemaVersion=data-v2; authorityMode!=explicit|inherited; inheritanceDecision=decision-1",
+      "reviewed>published",
+      "publish"
+    ],
+    [
+      85,
+      "ledger",
+      "AppendGovernanceEvent",
+      "governance_event",
+      "aggregateRef=effect-1@1; commandId=command-1; causationId=event-0; correlationId=change-1; evidenceDigest=sha256:evidence-a; previousCheckpoint=checkpoint-1",
+      "committed>recorded",
+      "write"
+    ],
+    [
+      86,
+      "ledger",
+      "VerifyEvidenceExport",
+      "portable_evidence_bundle",
+      "manifestDigest=sha256:manifest-a; trustProfile=trust-1; scopeId=workspace-1; keyVersions[]=key-1,key-2; redactionProfile=auditor-safe",
+      "exported>verified",
+      "diagnostic"
+    ],
+    [
+      87,
+      "overseer",
+      "EnableAgentProfile",
+      "autonomy_envelope",
+      "agentVersion=agent-1@3; evaluationRef=eval-1; instructionVersion=instruction-2; allowedTools[]=repository.read; allowedTargets[]=repo-1; tokenBudget#=8000",
+      "evaluated>enabled",
+      "security"
+    ],
+    [
+      88,
+      "overseer",
+      "DelegateAgentWork",
+      "agent_handoff",
+      "parentAttempt=attempt-1; childProfile=agent-2@1; artifactDigest=sha256:output-a; contextDigest=sha256:context-a; sharedBudgetId=budget-1; maxDepth#=2",
+      "reviewed>delegated",
+      "effect"
+    ],
+    [
+      89,
+      "overseer",
+      "EvaluateAgentProfile",
+      "agent_evaluation",
+      "agentVersion=agent-1@3; providerVersion=provider-1; suiteVersion=adversarial-1; canaryRef=canary-1; requirementRefs[]=req-1",
+      "candidate>evaluated",
+      "qualification"
+    ],
+    [
+      90,
+      "sdlc",
+      "PinDesignIntegrityContext",
+      "context_manifest",
+      "changeId=change-1; enterpriseBaseline=baseline-7; sentinelSnapshot=snapshot-2; policyVersion=policy-3; assumptionRefs[]=assumption-1; coverageDigest=sha256:coverage-a",
+      "assembled>pinned",
+      "write"
+    ],
+    [
+      91,
+      "sdlc",
+      "AcceptIntentEvaluation",
+      "acceptance_contract",
+      "requirementId=req-1; outcomeRef=goal-1; processRef=onboarding; riskRef=risk-1; positiveCase=consent-present; negativeCase=consent-absent; recoveryCase=provider-retry",
+      "draft>accepted",
+      "publish"
+    ],
+    [
+      92,
+      "sdlc",
+      "PlanMultiRepositoryChange",
+      "repository_release_set",
+      "repositoryBases[]=service@commit-a,client@commit-c; releaseOrder[]=service,client; schemaStrategy=expand-contract; recoveryRef=recovery-1",
+      "proposed>planned",
+      "publish"
+    ],
+    [
+      93,
+      "sdlc",
+      "AcceptDesignAlternative",
+      "design_alternative",
+      "changeId=change-1; alternativeIds[]=reuse-service,new-service; selectedId=reuse-service; tradeoffRefs[]=cost-1,risk-1; humanOwnedPaths[]=src/policy.mjs",
+      "proposed>accepted",
+      "approve"
+    ],
+    [
+      94,
+      "sdlc",
+      "PromoteEnvironment",
+      "promotion_plan",
+      "candidateDigest=sha256:candidate-a; fromEnvironment=dev-1; toEnvironment=stage-1; configVersion=config-3; strategy=canary; healthWindowSeconds#=300",
+      "approved>observing",
+      "effect"
+    ],
+    [
+      95,
+      "sdlc",
+      "OpenDesignCorrection",
+      "corrective_change",
+      "incidentId=incident-1; deployedDigest=sha256:candidate-a; propertyRef=CustomerEmail; evidenceRefs[]=read-1; correctiveIntent=Restore canonical-source read",
+      "detected>proposed",
+      "write"
+    ],
+    [
+      96,
+      "studio",
+      "DispatchBusinessAction",
+      "business_effect",
+      "processRun=run-1; commitmentRef=commitment-1; capacityReservation=reservation-1; adapterRef=procurement-sandbox; approvalRef=approval-1; effectKey=order-1",
+      "approved>dispatched",
+      "effect"
+    ],
+    [
+      97,
+      "platform",
+      "ActivateConnector",
+      "connector_manifest",
+      "adapterVersion=adapter-1; sourceScope=repo-docs; permissionScopes[]=read-documents; credentialRef=secret-ref-1; cursor=source-cursor-1; webhookProfile=signed-v1",
+      "tested>active",
+      "security"
+    ],
+    [
+      98,
+      "platform",
+      "ResolveRoleHome",
+      "role_workspace",
+      "role=process-owner; workspaceId=workspace-1; baselineId=baseline-7; query=onboarding; accessibilityMode=keyboard",
+      "loading>visible",
+      "read"
+    ],
+    [
+      99,
+      "platform",
+      "InstallModuleSet",
+      "module_release_manifest",
+      "releaseDigest=sha256:release-a; enabledModules[]=studio,sentinel; dependencyProfile=core-v1; deploymentMode!=self-host|managed|disconnected; mirrorRef=mirror-1",
+      "preflight>installed",
+      "effect"
+    ],
+    [
+      100,
+      "platform",
+      "ActivateDomainPack",
+      "domain_pack",
+      "namespace=example-domain; packVersion=1.0; applicability=declared-scope-a; sourceRefs[]=source-1@3; interpretationRef=interpretation-1; reviewAt=2026-10-01T00:00:00Z",
+      "reviewed>active",
+      "publish"
+    ],
+    [
+      101,
+      "studio",
+      "SimulateCaseException",
+      "operating_scenario",
+      "processId=repair-1; demandAssumption=demand-1; capacityVersion=calendar-1; exceptionCase=partial-delivery; randomSeed#=42",
+      "configured>simulated",
+      "diagnostic"
+    ],
+    [
+      102,
+      "studio",
+      "ActivateContinuityPlan",
+      "continuity_plan",
+      "processId=repair-1; failedResource=supplier-1; substituteRef=supplier-2; eligibilityEvidence=qualification-2; temporaryGrant=grant-2; exerciseId=drill-1",
+      "reviewed>active",
+      "effect"
+    ],
+    [
+      103,
+      "platform",
+      "QualifyPortfolioSecurity",
+      "portfolio_security_report",
+      "releaseDigest=sha256:release-a; boundaryIds[]=PC-01,PC-04,PC-06,PC-10; attackProfile=cross-module-v1; evidenceRefs[]=scan-1",
+      "candidate>assessed",
+      "qualification"
+    ],
+    [
+      104,
+      "platform",
+      "QualifyPortfolioLoad",
+      "portfolio_load_report",
+      "claimCount#=100000; objectCount#=10000; edgeCount#=50000; concurrentUsers#=100; compileBudgetSeconds#=120; soakHours#=24",
+      "candidate>assessed",
+      "qualification"
+    ],
+    [
+      105,
+      "platform",
+      "QualifyCustomerInstallation",
+      "customer_acceptance_report",
+      "releaseDigest=sha256:release-a; topologyId=customer-self-host; journeyIds[]=PQ-01,PQ-02,PQ-10; businessFixtures[]=repair,software-subscription",
+      "candidate>assessed",
+      "qualification"
+    ],
+    [
+      106,
+      "platform",
+      "AdjudicatePortfolioBaseline",
+      "portfolio_release_report",
+      "releaseDigest=sha256:release-a; requirementRange=PF-49:PF-108; taskRange=T-01:T-108; journeyRange=PQ-01:PQ-12",
+      "candidate>adjudicated",
+      "qualification"
+    ],
+    [
+      107,
+      "platform",
+      "CertifyExtension",
+      "extension_certification",
+      "namespace=example-domain; packageDigest=sha256:pack-a; requestedCapabilities[]=model.extend; schemaVersions[]=domain-v1; migrationRef=migration-1",
+      "submitted>certified",
+      "qualification"
+    ],
+    [
+      108,
+      "studio",
+      "RetireEnterpriseScope",
+      "retirement_plan",
+      "scopeId=unit-a; activeRunPolicy=drain; obligationTransfer=handover-1; exportManifest=export-1; retentionPolicy=retention-1; sourceEpoch#=3",
+      "approved>draining",
+      "effect"
+    ],
+    [
+      109,
+      "studio",
+      "AcceptInventory",
+      "inventory_manifest",
+      "scopeId=scope-1; sourceManifest=inventory-3; activityIds[]=quote,repair,invoice; requiredFacets[]=owner,inputs,outputs,constraints,execution; criticalUnknowns#=0",
+      "proposed>accepted",
+      "publish"
+    ],
+    [
+      110,
+      "platform",
+      "ProvisionTenant",
+      "provisioning_job",
+      "tenantRequestId=request-1; region=region-a; cellId=cell-a; identityProfile=idp-1; moduleIds[]=studio,sentinel; deploymentMode=managed",
+      "requested>provisioning",
+      "effect"
+    ],
+    [
+      111,
+      "platform",
+      "BindIdentityProvider",
+      "identity_binding",
+      "verifiedDomain=example.invalid; providerRef=idp-1; groupMappings[]=designers,reviewers; ownerRef=person-1; securityEpoch#=3",
+      "verified>bound",
+      "security"
+    ],
+    [
+      112,
+      "platform",
+      "ConfigureEntitlement",
+      "entitlement_revision",
+      "subscriptionRef=contract-1; moduleIds[]=studio,sentinel; quotaUnits#=100; usageEventId=usage-1; gracePolicy=read-and-reconcile",
+      "draft>active",
+      "publish"
+    ],
+    [
+      113,
+      "platform",
+      "GrantSupportAccess",
+      "support_grant",
+      "supportCaseId=support-1; allowedResourceIds[]=health-worker; customerConsent=consent-1; expiresAt=2026-09-20T00:00:00Z; redactionProfile=support-safe",
+      "requested>granted",
+      "approve"
+    ],
+    [
+      114,
+      "platform",
+      "PrepareRelocation",
+      "relocation_plan",
+      "tenantId=tenant-a; sourceCell=cell-a; targetCell=cell-b; allowedRegion=region-a; keyRef=key-2; sourceEpoch#=4",
+      "requested>prepared",
+      "effect"
+    ],
+    [
+      115,
+      "studio",
+      "DiscoverSources",
+      "source_inventory",
+      "sourceIds[]=repo-docs,process-catalog; scopeIds[]=unit-a,unit-b; cursor=cursor-1; classification=internal; discoveryWindow=2026-09",
+      "queued>discovered",
+      "effect"
+    ],
+    [
+      116,
+      "steward",
+      "StageBatch",
+      "staged_batch",
+      "migrationId=migration-1; mappingVersion=mapping-2; sourceRevision=source-1@4; batchId=batch-1; expectedCount#=100; transformDigest=sha256:transform-a",
+      "mapped>staged",
+      "write"
+    ],
+    [
+      117,
+      "steward",
+      "SetSourceAuthority",
+      "source_authority_matrix",
+      "migrationId=migration-1; objectType=customer; fieldPath=email; legalScope=entity-a; currentWriter=identity-service; targetWriter=identity-service; phase=shadow",
+      "proposed>accepted",
+      "publish"
+    ],
+    [
+      118,
+      "studio",
+      "RehearseCutover",
+      "rehearsal_result",
+      "migrationId=migration-1; validationManifest=validation-1; sourceCount#=100; stagedCount#=100; workDisposition=drain; recoveryPlan=recovery-1",
+      "validated>rehearsed",
+      "qualification"
+    ],
+    [
+      119,
+      "studio",
+      "CommitCutover",
+      "cutover_request",
+      "migrationId=migration-1; sourceWatermark=cursor-7; mappingDigest=sha256:mapping-a; targetBaseline=baseline-9; sourceEpoch#=4; targetEpoch#=5; approvalId=approval-1",
+      "approved>cutover",
+      "effect"
+    ],
+    [
+      120,
+      "studio",
+      "AcceptMigratedScope",
+      "scope_acceptance",
+      "scopeId=scope-1; inventoryVersion=inventory-3; migrationReport=migration-1; operatingEvidence[]=run-1,control-test-1; reviewerRef=owner-1",
+      "validated>accepted",
+      "approve"
+    ],
+    [
+      121,
+      "platform",
+      "SubmitChange",
+      "change_proposal",
+      "operationName=EditProcess; branchId=branch-1; expectedHead#=7; candidateDigest=sha256:change-a; sourceEntryPoint!=conversation|form|graph|matrix|bulk|api|connector|migration|workflow_result|accepted_learning",
+      "draft>submitted",
+      "write"
+    ],
+    [
+      122,
+      "studio",
+      "ComputeImpact",
+      "impact_manifest",
+      "changedObject=CustomerEmail; fieldPaths[]=authority; candidateDigest=sha256:change-a; dependencyGeneration#=12; traversalBudget#=10000",
+      "requested>computed",
+      "diagnostic"
+    ],
+    [
+      123,
+      "studio",
+      "PublishChange",
+      "publication_barrier",
+      "candidateDigest=sha256:change-a; impactDigest=sha256:impact-a; expectedHead#=7; expectedGeneration#=12; approvalId=approval-1",
+      "approved>committed",
+      "publish"
+    ],
+    [
+      124,
+      "sentinel",
+      "ReconcileSource",
+      "reconciliation_run",
+      "sourceId=identity-service; sourceCursor=cursor-7; acceptedBaseline=baseline-7; freshnessSeconds#=3600; observedAt=2026-09-19T00:00:00Z",
+      "requested>reconciled",
+      "diagnostic"
+    ],
+    [
+      125,
+      "studio",
+      "RegisterDomainType",
+      "domain_schema",
+      "namespace=repair; typeName=RepairOrder; schemaVersion=1.0; fieldNames[]=assetId,ownerId,dueAt; predicates[]=repairs,assignedTo; actionTemplate=inspect-order",
+      "reviewed>registered",
+      "publish"
+    ],
+    [
+      126,
+      "studio",
+      "SubmitHumanTask",
+      "human_result",
+      "caseId=repair-1; taskId=inspection-1; formVersion=inspection-v1; outputRefs[]=inspection-report-1; attestationMode=human; checkpointId=quality-review",
+      "assigned>submitted",
+      "write"
+    ],
+    [
+      127,
+      "studio",
+      "InstantiateTemplate",
+      "template_instance",
+      "templateVersion=repair-business@1; targetScope=scope-1; reviewedAssumptions[]=demand,capacity; trainingProfile=sandbox; autonomyTier=proposed-only",
+      "selected>instantiated",
+      "write"
+    ],
+    [
+      128,
+      "platform",
+      "GenerateQualificationMatrix",
+      "variation_matrix",
+      "releaseProfile=release-1; scenarioIds[]=ES-01,ES-04,ES-10,ES-18; seed#=42; mandatoryIntersections[]=X-01,X-04; constrainedPairs?=true",
+      "configured>generated",
+      "diagnostic"
+    ],
+    [
+      129,
+      "platform",
+      "RunTenantIsolationSuite",
+      "saas_qualification_result",
+      "releaseDigest=sha256:release-a; tenantCount#=10; workloadProfiles[]=idle,interactive,import,compile,agent; topologyId=cell-test-a; supportAccessProfile=scoped",
+      "candidate>assessed",
+      "qualification"
+    ],
+    [
+      130,
+      "platform",
+      "RunConsistencyRaceSuite",
+      "consistency_qualification",
+      "releaseDigest=sha256:release-a; migrationFixtures[]=repair-estate,software-estate; entryPoints[]=conversation,form,graph,matrix,bulk,api,connector,migration,workflow_result,accepted_learning; faultSchedule=publish-dispatch-race",
+      "candidate>assessed",
+      "qualification"
+    ],
+    [
+      131,
+      "platform",
+      "ValidateWorkPackage",
+      "work_package",
+      "taskRef=T-01; packetDigest=sha256:packet-a; requiredFixtureKinds[]=positive,negative,concurrent,recovery,isolation,end_to_end,cross_boundary; reviewStatus=pending",
+      "draft>validated",
+      "diagnostic"
+    ],
+    [
+      132,
+      "platform",
+      "AdjudicateEnterpriseSaasRelease",
+      "enterprise_saas_release_evidence",
+      "releaseDigest=sha256:release-a; taskRange=T-01:T-132; originalGateLedger=ledger-1; portfolioReport=portfolio-1; saasJourneys[]=SQ-01,SQ-02,SQ-03,SQ-04,SQ-05,SQ-06,SQ-07,SQ-08",
+      "candidate>adjudicated",
+      "qualification"
+    ]
+  ]
+}

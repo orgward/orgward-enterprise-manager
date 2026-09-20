@@ -1,0 +1,143 @@
+{
+  "revision": 3,
+  "captured_at": "2026-09-19",
+  "method": "Local read-only corpus reuse; no new external research missions; source hashes pin reviewed inputs, not current product implementation.",
+  "authority": "Source responsibilities and disagreements are interpreted explicitly in PORTFOLIO-CONTRACT. Warden/Arbiter/Steward/Ledger/Overseer detailed behavior is proposed elaboration of the taxonomy. Research primitive semantics remain provisional.",
+  "sources": [
+    {
+      "id": "brief",
+      "file": "../orgward-research/PRODUCT-BRIEF.md",
+      "sha256": "7c38477c1f2f11e5c11dcbf74a55bebf9935b020213b3daa782fa0b2008ef5de"
+    },
+    {
+      "id": "delivery",
+      "file": "../orgward-research/DELIVERY-PLAN.md",
+      "sha256": "fbc64e42ac7f395320683ddbe2834ddd3e1e2407e2fb07a2bde0c6dd3b9bafd9"
+    },
+    {
+      "id": "gates",
+      "file": "../orgward-research/RELEASE-GATES.md",
+      "sha256": "8ecd0c7b85bba01d8c4f963dfa0ae0bf9c9b9a22ee0f382321e99a00eeeda444"
+    },
+    {
+      "id": "oadl-scope",
+      "file": "../orgward-research/DECISIONS/0002-oadl-is-integrity-slice.md",
+      "sha256": "16fcb9d16bdad4850e46e81e0fa8b33383b38fdfb63a32efbae6ae888394771a"
+    },
+    {
+      "id": "primitives",
+      "file": "../orgward-research/THEORY/universal-primitives-v0.1.md",
+      "sha256": "0bddce7fb16a71ff905020d9e0a7d9a88876efe1c7ed8d2edd865edf0449fa85"
+    },
+    {
+      "id": "commitments",
+      "file": "../orgward-research/THEORY/commitment-primitive-v0.1.md",
+      "sha256": "731b38448323918524a0d060d5b8ea6ba713e2f5851c8b0459680ec91ad1679a"
+    },
+    {
+      "id": "economic-ledger",
+      "file": "../orgward-research/THEORY/ledger-primitive-v0.1.md",
+      "sha256": "83650996718934397eb5bee103bc5e933d1abdbadcceabd15a0e379e2e12b372"
+    },
+    {
+      "id": "constitution",
+      "file": "../orgward-platform/docs/00-overview/constitution.md",
+      "sha256": "0a886751e889fc3befcec6b56eacc5a54e3577c95c59bc0d9b59232bc6c55f93"
+    },
+    {
+      "id": "non-goals",
+      "file": "../orgward-platform/docs/00-overview/non-goals-and-invariants.md",
+      "sha256": "3836ae15c4e4a3270f88bbd67c9860df58c7c0edf4ebffd0d3be1a69f251a723"
+    },
+    {
+      "id": "taxonomy",
+      "file": "../orgward-platform/docs/01-brand/product-taxonomy.md",
+      "sha256": "4e00e98a09035b0372a0562c8a1bcf08910f4fa5439ef12696315475ecc62fc2"
+    },
+    {
+      "id": "sentinel-prd",
+      "file": "../orgward-platform/docs/02-product/sentinel-prd.md",
+      "sha256": "36e802558a305fd8f4201e2b06441a23257d777d15bf1baffece9136b76290f5"
+    },
+    {
+      "id": "sentinel-criteria",
+      "file": "../orgward-platform/docs/02-product/sentinel-v1-acceptance-criteria.md",
+      "sha256": "73a3489db73d6d86013453c7f9b23d7bb7aa13e85ad6042905dfcf683937ef1a"
+    },
+    {
+      "id": "sentinel-tests",
+      "file": "../orgward-platform/docs/02-product/sentinel-v1-acceptance-tests.md",
+      "sha256": "a80ed530d25cec2cacbc211e4d61801eb803ab613e572e580776647fef80037a"
+    },
+    {
+      "id": "compiler",
+      "file": "../orgward-platform/docs/03-architecture/claim-lifecycle-and-compiler-contract.md",
+      "sha256": "1a73903a68651a3597de49463e5ea6ca1dc8ca9bd02156c388c5937ad178a143"
+    },
+    {
+      "id": "mapping",
+      "file": "../orgward-platform/docs/03-architecture/claim-to-graph-mapping.md",
+      "sha256": "7ec6847c298127e9dfc06f473368529367d3f3b108783fca1f860f2b402906c8"
+    },
+    {
+      "id": "claim-model",
+      "file": "../orgward-platform/docs/03-architecture/claim-model.md",
+      "sha256": "f03eae6f78d1c46e1d0f78505f7241fad6287e7aeea0fe1bfa4e489ad2b6d92a"
+    },
+    {
+      "id": "rules",
+      "file": "../orgward-platform/docs/03-architecture/integrity-rule-catalog-v1.md",
+      "sha256": "07a00bf895d3fdd28bbff8fb8934c38d8d920d806e378bc8f4321ca94463eff2"
+    },
+    {
+      "id": "runtime-boundary",
+      "file": "../orgward-platform/docs/03-architecture/compile-time-vs-run-time.md",
+      "sha256": "e18e426c6f3b4e81636b5248f46c5108aaee698d429245656e9367e150fbf306"
+    },
+    {
+      "id": "semantic-lineage",
+      "file": "../orgward-platform/docs/03-architecture/semantic-lineage-ai-governance-use-cases.md",
+      "sha256": "dbd59d6b30f43d08ac97907cd9b89b17e109ee90aea2efa365a32d3afa793e7e"
+    },
+    {
+      "id": "oadl",
+      "file": "../orgward-platform/docs/04-oadl/oadl-v0.1-spec.md",
+      "sha256": "6bcb474672550388a2aaf04b0a1bcae202b883c7072607bafde6a9e0188ecaf3"
+    },
+    {
+      "id": "semantic-constitution",
+      "file": "../orgward-platform/docs/04-oadl/semantic-constitution.md",
+      "sha256": "0c10f0398aceb52eed26c4930afc63eb0909b94f2d3e0faec269a0d7b033c5c9"
+    },
+    {
+      "id": "rfc",
+      "file": "../orgward-platform/docs/04-oadl/oadl-governance-rfc-process.md",
+      "sha256": "a7312547483adbb2d5dca0128cbb4ae6c64c6eb80f8cf5181177a31b377e435d"
+    },
+    {
+      "id": "framework",
+      "file": "../orgward-orgward-framework-book/manuscript/chapters/02-the-orgward-framework-model.md",
+      "sha256": "be6cf5b2a979ecb445b0ad6a915538fcb1ea1fee11c97724620b9840b862e916"
+    },
+    {
+      "id": "policy-layers",
+      "file": "../orgward-orgward-framework-book/manuscript/chapters/03-policy-layers-for-autonomous-execution.md",
+      "sha256": "cc9b18984398bd960fb55e59c6a7661337113801b1269ca36a51f6ae9c851011"
+    },
+    {
+      "id": "lineage-controls",
+      "file": "../orgward-orgward-framework-book/manuscript/chapters/06-semantic-lineage-and-integrity-controls.md",
+      "sha256": "b221315e589c8f97ed0ff395f02016eae46047c67be74343f445e1194f44b604"
+    },
+    {
+      "id": "sdlc-reference",
+      "file": "docs/sdlc/IMPLEMENTATION-PLAN.md",
+      "sha256": "2b66cd88279f3490998a2bb6d5c29729d3c0331e2773bd140cc74a528baeb345"
+    },
+    {
+      "id": "sdlc-threats",
+      "file": "docs/sdlc/THREAT-MODEL.md",
+      "sha256": "11b99fba6cf7325d306d867efe528f8c158801a2c5216cce9d9857e497f9b45c"
+    }
+  ]
+}

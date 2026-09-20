@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0d1217">
+    <title>Synthetic SDLC reference · OrgWard Enterprise Studio</title>
+    <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="/sdlc.css">
+  </head>
+  <body class="sdlc-body">
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="OrgWard Enterprise Studio home">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span>OrgWard <small>Enterprise Studio</small></span>
+        </a>
+        <nav class="product-nav" aria-label="Product areas">
+          <a href="/">Enterprise design</a>
+          <a href="/platform.html">Platform specification</a>
+          <a href="/sdlc.html" aria-current="page">SDLC reference</a>
+          <a href="/execution.html">Execution</a>
+        </nav>
+        <span class="privacy"><span></span> Private reference environment</span>
+      </header>
+      <main class="sdlc-layout">
+        <aside class="case-sidebar">
+          <div class="sidebar-head">
+            <span class="eyebrow">Synthetic SDLC reference</span>
+            <h1>Change cases</h1>
+            <button id="new-case" class="button primary" type="button">New governed change</button>
+          </div>
+          <div id="case-list" class="case-list" aria-label="Change cases"></div>
+          <div class="sidebar-note"><b>Reference boundary</b><p>Synthetic bank context. No customer data, credentials, deployment, or legal interpretation.</p></div>
+        </aside>
+        <section id="sdlc-app" class="sdlc-main" aria-live="polite"></section>
+      </main>
+    </div>
+
+    <template id="sdlc-welcome">
+      <section class="sdlc-welcome">
+        <div class="welcome-copy">
+          <span class="eyebrow">Intent → evidence → outcome</span>
+          <h2>Govern the change.<br><em>Prove every step.</em></h2>
+          <p>Turn ambiguous business intent into an evaluated, authorized, observable enterprise change—without letting an agent invent authority or certainty.</p>
+        </div>
+        <form id="case-form" class="scenario-builder">
+          <div class="form-heading"><span>Reference scenario</span><strong>Digital beneficial-owner maintenance</strong></div>
+          <label>Business intent<textarea name="rawIntent" rows="3">Allow corporate customers to update beneficial-owner information digitally while preserving KYC/AML controls, data integrity, authorization, auditability, and downstream consistency.</textarea></label>
+          <label>Scenario condition<select name="mutation" id="mutation-select"></select></label>
+          <div id="mutation-expectation" class="mutation-expectation"></div>
+          <button class="button primary wide" type="submit">Create change case <span>→</span></button>
+          <small>The clean case can complete. Mutated cases prove the intended gate fails safely.</small>
+        </form>
+        <div class="proof-strip">
+          <div><strong>12</strong><span>Governed stages</span></div><div><strong>11</strong><span>Evidence gates</span></div><div><strong>12</strong><span>Assurance dimensions</span></div><div><strong>0</strong><span>Production effects</span></div>
+        </div>
+      </section>
+    </template>
+
+    <template id="case-workspace">
+      <div class="case-workspace">
+        <header class="case-header">
+          <div><span id="case-kicker" class="eyebrow"></span><h2 id="case-title"></h2><p id="case-intent"></p></div>
+          <div class="case-head-actions"><span id="case-status" class="status-pill"></span><button id="step-case" class="button ghost" type="button">Run one stage</button><button id="run-case" class="button primary" type="button">Run to checkpoint</button></div>
+        </header>
+        <div id="stage-rail" class="stage-rail" aria-label="SDLC stages"></div>
+        <nav id="case-tabs" class="case-tabs" aria-label="Change case views">
+          <button data-tab="overview" aria-selected="true">Overview</button>
+          <button data-tab="context">Context</button>
+          <button data-tab="impact">Impact</button>
+          <button data-tab="requirements">Requirements</button>
+          <button data-tab="architecture">Architecture</button>
+          <button data-tab="delivery">Delivery</button>
+          <button data-tab="assurance">Assurance</button>
+          <button data-tab="evidence">Evidence</button>
+        </nav>
+        <div class="case-content-grid"><section id="case-content" class="case-content"></section><aside id="checkpoint-panel" class="checkpoint-panel"></aside></div>
+      </div>
+    </template>
+
+    <div id="sdlc-toast" class="toast" role="status" hidden></div>
+    <script type="module" src="/sdlc.js"></script>
+  </body>
+</html>

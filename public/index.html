@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#101714">
+    <title>OrgWard Enterprise Studio</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="OrgWard Enterprise Studio home">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span>OrgWard <small>Enterprise Studio</small></span>
+        </a>
+        <nav class="product-nav" aria-label="Product areas">
+          <a href="/" aria-current="page">Enterprise design</a>
+          <a href="/platform.html">Platform specification</a>
+          <a href="/sdlc.html">SDLC reference</a>
+          <a href="/execution.html">Execution</a>
+        </nav>
+        <div class="top-actions">
+          <span class="privacy"><span></span> Private workspace</span>
+          <label class="project-switcher">
+            <span class="sr-only">Current project</span>
+            <select id="project-select" aria-label="Current project"></select>
+          </label>
+          <button id="new-project" class="button ghost" type="button">New project</button>
+        </div>
+      </header>
+
+      <main id="app" aria-live="polite"></main>
+    </div>
+
+    <template id="welcome-template">
+      <section class="welcome">
+        <div class="eyebrow">Design an enterprise that can explain itself</div>
+        <h1>Begin with the business.<br><em>Reveal the organisation.</em></h1>
+        <p>Describe what you want to build. The studio will ask four focused questions, save the scope, and shape it into a linked organisational blueprint.</p>
+        <form id="create-form" class="create-card">
+          <label for="project-name">Name this workspace</label>
+          <div class="create-row">
+            <input id="project-name" name="name" maxlength="80" placeholder="e.g. Northstar Circular Foods" autocomplete="off" required>
+            <button class="button primary" type="submit">Start designing <span aria-hidden="true">→</span></button>
+          </div>
+          <small>Stored on this private server. No external action is enabled.</small>
+        </form>
+        <div class="promise-grid">
+          <article><span>01</span><h2>Describe</h2><p>Capture purpose, customers, economics, boundaries, and automation intent in plain language.</p></article>
+          <article><span>02</span><h2>Structure</h2><p>Turn intent into linked capabilities, processes, roles, systems, controls, and measures.</p></article>
+          <article><span>03</span><h2>Explore</h2><p>Trace the design in a navigable map while unknowns and evidence gaps stay visible.</p></article>
+        </div>
+      </section>
+    </template>
+
+    <template id="studio-template">
+      <div class="studio">
+        <aside class="conversation-panel">
+          <div class="panel-heading">
+            <span class="eyebrow">Founder dialogue</span>
+            <h1 id="project-title"></h1>
+            <div class="discovery-progress" aria-label="Discovery progress"><i></i><i></i><i></i><i></i></div>
+          </div>
+          <div id="conversation" class="conversation" aria-label="Business design conversation"></div>
+          <form id="message-form" class="message-form">
+            <label for="message-input" class="sr-only">Your answer</label>
+            <textarea id="message-input" rows="3" maxlength="2000" placeholder="Describe your business in your own words…" required></textarea>
+            <div><small><span id="question-count">Question 1 of 4</span> · Your answers become traceable design evidence.</small><button class="send-button" type="submit" aria-label="Send answer">↑</button></div>
+          </form>
+        </aside>
+
+        <section class="workspace-panel">
+          <div id="workspace-empty" class="workspace-empty">
+            <div class="orbit" aria-hidden="true"><span></span><span></span><span></span><i></i></div>
+            <h2>Your blueprint will take shape here</h2>
+            <p>Answer the focused questions. OrgWard keeps assumptions and unknowns explicit while it connects the operating design.</p>
+          </div>
+          <div id="blueprint-workspace" class="blueprint-workspace" hidden>
+            <div class="workspace-head">
+              <div>
+                <span class="eyebrow">Proposed organisational design</span>
+                <h2 id="blueprint-title"></h2>
+              </div>
+              <div class="version-badge"><span>Saved</span> Version <strong id="blueprint-version"></strong></div>
+            </div>
+            <nav class="view-tabs" aria-label="Blueprint views">
+              <button type="button" data-view="blueprint" aria-selected="true">Blueprint</button>
+              <button type="button" data-view="map" aria-selected="false">Interactive map</button>
+            </nav>
+            <div id="blueprint-view"></div>
+            <div id="map-view" hidden>
+              <div class="map-toolbar">
+                <div id="type-filters" class="type-filters" aria-label="Filter map by object type"></div>
+                <div class="map-actions">
+                  <div class="segmented" aria-label="Map display mode">
+                    <button id="graph-mode" type="button" aria-pressed="true">Graph</button>
+                    <button id="list-mode" type="button" aria-pressed="false">List</button>
+                  </div>
+                  <button id="zoom-out" type="button" aria-label="Zoom out">−</button>
+                  <button id="zoom-reset" type="button" aria-label="Reset map">⌖</button>
+                  <button id="zoom-in" type="button" aria-label="Zoom in">+</button>
+                </div>
+              </div>
+              <div class="map-stage">
+                <div id="graph-canvas" class="graph-canvas" aria-label="Interactive organisational map"></div>
+                <div id="list-canvas" class="list-canvas" hidden></div>
+                <aside id="object-detail" class="object-detail"></aside>
+              </div>
+              <p class="map-hint">Scroll to zoom · drag the canvas to pan · select any object to inspect its evidence and connections.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </template>
+
+    <div id="toast" class="toast" role="status" hidden></div>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

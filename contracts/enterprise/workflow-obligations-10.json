@@ -1,0 +1,328 @@
+{
+  "format": "orgward-configurable-workflow-obligations-v1",
+  "status": "required_not_implemented",
+  "decision": "docs/production/ADR-010-CONFIGURABLE-WORKFLOW.md",
+  "ux": "docs/product/CONFIGURABLE-WORKFLOWS.md",
+  "architecture": {
+    "semanticAuthority": "orgward-workflow-profile",
+    "diagramAdapter": "bpmn-js",
+    "runtimeAdapter": "temporal-typescript",
+    "agentGraph": "optional-langgraph-action-adapter",
+    "domainAuthority": "postgresql",
+    "defaultStages": "editable-template-not-fixed-runtime"
+  },
+  "requirements": [
+    {
+      "id": "WF-01",
+      "taskIds": [
+        "T-19",
+        "T-28",
+        "T-52"
+      ],
+      "title": "Editable SDLC is data, not a fixed stage array",
+      "scenario": "Given the shipped SDLC profile, insert a privacy review, split implementation into substeps and reorder permitted work in diagram and form; publish and execute without editing application code.",
+      "checks": [
+        "same semantic digest in both editors",
+        "stable node IDs after reorder",
+        "new enabled run uses new digest",
+        "old run retains old digest"
+      ],
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {}
+    },
+    {
+      "id": "WF-02",
+      "taskIds": [
+        "T-03",
+        "T-19",
+        "T-51",
+        "T-63",
+        "T-45"
+      ],
+      "title": "Diagram and structured editor are equivalent",
+      "scenario": "Given keyboard-only and pointer users, every supported insertion, binding, branch, loop and criterion edit round-trips between outline/form/diagram after reload with undo and conflict recovery.",
+      "checks": [
+        "no diagram-only required command",
+        "no semantic field loss",
+        "focus and selection restored",
+        "failed save preserves draft"
+      ],
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {}
+    },
+    {
+      "id": "WF-03",
+      "taskIds": [
+        "T-01",
+        "T-19",
+        "T-52"
+      ],
+      "title": "Versioned typed workflow contract",
+      "scenario": "Given human, agent, action, evaluation, choice, parallel, repeat, subprocess and wait nodes, registry/schema validation rejects unknown actions, invalid ports and incompatible versions at exact field paths.",
+      "checks": [
+        "all node kinds exercised",
+        "invalid inputs cannot enable",
+        "typed reference scope enforced",
+        "schema migration preserves history"
+      ],
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {}
+    },
+    {
+      "id": "WF-04",
+      "taskIds": [
+        "T-19",
+        "T-28",
+        "T-52"
+      ],
+      "title": "Bounded loops and shared nested budgets",
+      "scenario": "Given a repair loop capped at three iterations and a shared budget, repeated failure exhausts at three with human escalation; nesting/fan-out/retry cannot reset counters or multiply reserved funds.",
+      "checks": [
+        "three body invocations maximum",
+        "distinct iteration lineage",
+        "parent budget never exceeded",
+        "unknown effect never blindly retried"
+      ],
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {}
+    },
+    {
+      "id": "WF-05",
+      "taskIds": [
+        "T-19",
+        "T-52"
+      ],
+      "title": "Branches parallel joins and subprocesses",
+      "scenario": "Given parallel security/performance evaluation and conditional review, runtime and simulation select identical next nodes; ambiguous choice, token mismatch or missing mandatory path blocks publication.",
+      "checks": [
+        "join-all waits for both",
+        "first-success reconciles losers",
+        "subprocess version pinned",
+        "unreachable or bypassed required check blocked"
+      ],
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {}
+    },
+    {
+      "id": "WF-06",
+      "taskIds": [
+        "T-19",
+        "T-28",
+        "T-52",
+        "T-76"
+      ],
+      "title": "Safe criteria and unknown semantics",
+      "scenario": "Given typed all/any/not criteria over evidence and units, missing evidence yields unknown and protects effects; script/network injection, incompatible units and stale evaluation cannot authorize.",
+      "checks": [
+        "no eval or arbitrary code",
+        "criterion inputs explainable",
+        "unknown never grants protected action",
+        "criteria change invalidates dependent results"
+      ],
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {}
+    },
+    {
+      "id": "WF-07",
+      "taskIds": [
+        "T-21",
+        "T-28",
+        "T-77",
+        "T-89"
+      ],
+      "title": "Action registry is not new authority",
+      "scenario": "Given a configured action or agent adapter, parameter changes respect the registered schema, current grants, data/target scope and independent checks; renamed nodes cannot bypass mandatory policy.",
+      "checks": [
+        "unregistered action denied",
+        "no secret values in definitions",
+        "agent self-approval denied",
+        "effect checked outside workflow library"
+      ],
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {}
+    },
+    {
+      "id": "WF-08",
+      "taskIds": [
+        "T-13",
+        "T-53",
+        "T-121",
+        "T-123"
+      ],
+      "title": "Immutable versions inheritance and enablement",
+      "scenario": "Given a tenant override of a pinned template, template upgrade produces a reviewed three-way diff; layout-only edits do not invalidate semantics and publication does not imply enabled execution.",
+      "checks": [
+        "old snapshots unchanged",
+        "conflicting overrides retained",
+        "enablement separate",
+        "expected-head conflict never last-write-wins"
+      ],
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {}
+    },
+    {
+      "id": "WF-09",
+      "taskIds": [
+        "T-20",
+        "T-23",
+        "T-52",
+        "T-123"
+      ],
+      "title": "Explicit safe active-run migration",
+      "scenario": "Given a paused v1 run and edited v2 profile, approved compatible mapping creates a fenced linked successor; unknown external effect, missing input or incompatible state blocks transfer.",
+      "checks": [
+        "one active owner",
+        "completed effects not repeated",
+        "old approvals not inherited as current",
+        "original run remains inspectable"
+      ],
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {}
+    },
+    {
+      "id": "WF-10",
+      "taskIds": [
+        "T-20",
+        "T-28",
+        "T-52"
+      ],
+      "title": "Durable runtime bridge and replay",
+      "scenario": "Given crashes after start intent, domain result and provider acceptance, Temporal bridge reconciles identical run/effect IDs; runtime history replay and domain outbox cannot duplicate accepted effects.",
+      "checks": [
+        "start dispatched once logically",
+        "domain result replay stable",
+        "no competing schedulers",
+        "runtime outage cannot silently downgrade"
+      ],
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {}
+    },
+    {
+      "id": "WF-11",
+      "taskIds": [
+        "T-19",
+        "T-38",
+        "T-52"
+      ],
+      "title": "Timers events and correlated human decisions",
+      "scenario": "Given timezone/DST/misfire waits and duplicated or wrong-run decision messages, exactly the eligible logical trigger resumes; revocation and expiry deny stale human authority.",
+      "checks": [
+        "calendar policy explicit",
+        "wrong node or iteration decision rejected",
+        "duplicate event deduplicated",
+        "notification read is not approval"
+      ],
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {}
+    },
+    {
+      "id": "WF-12",
+      "taskIds": [
+        "T-20",
+        "T-35",
+        "T-52"
+      ],
+      "title": "Failure and compensation are separate effects",
+      "scenario": "Given partial parallel effects and compensation timeout, record completed/unknown operations and recovery-pending until independent provider evidence; compensation requires current authority.",
+      "checks": [
+        "original effect never erased",
+        "compensation order respects dependencies",
+        "unknown compensation reconciled",
+        "no fictitious rollback success"
+      ],
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {}
+    },
+    {
+      "id": "WF-13",
+      "taskIds": [
+        "T-19",
+        "T-28",
+        "T-52",
+        "T-45"
+      ],
+      "title": "Simulation is useful but cannot impersonate execution",
+      "scenario": "Given pass/fail/unknown/timeout/denial/loop-exhaustion fixtures, simulation previews eligible paths without effects; the real runtime agrees on recorded inputs and UI labels simulations explicitly.",
+      "checks": [
+        "no provider calls in simulation",
+        "all required paths covered",
+        "eligibility agreement measured",
+        "simulated evidence cannot promote gates"
+      ],
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {}
+    },
+    {
+      "id": "WF-14",
+      "taskIds": [
+        "T-55",
+        "T-100"
+      ],
+      "title": "Portable loss-aware workflow interchange",
+      "scenario": "Given OrgWard profile export/import and supported BPMN mapping, definitions and provenance round-trip; unsupported constructs or missing extensions report exact loss and cannot activate silently.",
+      "checks": [
+        "no opaque dropped fields",
+        "layout separate from semantics",
+        "secrets and grants not imported",
+        "same manifest replay no duplicate activation"
+      ],
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {}
+    },
+    {
+      "id": "WF-15",
+      "taskIds": [
+        "T-08",
+        "T-41",
+        "T-42",
+        "T-43",
+        "T-47"
+      ],
+      "title": "Customer-owned runtime installation and recovery",
+      "scenario": "Given pinned self-host release, independently install, upgrade interpreter/runtime and restore both domain and orchestration state; old workers are fenced, histories replay and no accepted effect repeats.",
+      "checks": [
+        "exact runtime versions recorded",
+        "measured RPO/RTO includes history",
+        "independent diagnostics possible",
+        "no hidden cloud dependency or unapproved fallback"
+      ],
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {}
+    },
+    {
+      "id": "WF-16",
+      "taskIds": [
+        "T-45",
+        "T-48",
+        "T-106",
+        "T-132"
+      ],
+      "title": "Changed workflow works end to end for real users",
+      "scenario": "Given one pinned release, representative users edit SDLC in diagram and structured forms, execute versions with actual isolated model/repository/deployment adapters and prove the policy, failure and migration counterexamples.",
+      "checks": [
+        "actual browser API persistence and effects evidence",
+        "independent review identity recorded",
+        "no synthetic-only qualification",
+        "no hard-coded stage rail controls eligibility"
+      ],
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {}
+    }
+  ]
+}

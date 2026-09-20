@@ -1,0 +1,1199 @@
+{
+  "format": "orgward-work-package-draft-v1",
+  "taskId": "T-126",
+  "sliceId": "T-126-boundary-draft-01",
+  "title": "Unified business workbench and executable activity forms",
+  "actor": "enterprise designer",
+  "trigger": "Authorized actor initiates SubmitHumanTask in SC-06, SC-23; task story: As enterprise designer, I want to deliver unified business workbench and executable activity forms so the enterprise can be represented, operated and changed with verified authority and knowledge consistency.",
+  "observableOutcome": "Satisfy the unchanged source acceptance for T-126; primary boundary SubmitHumanTask reaches submitted only after actual domain validation. Acknowledged jobs are not completed work.",
+  "reviewStatus": "pending",
+  "author": "codex",
+  "reviewer": null,
+  "implementationReady": false,
+  "independentReview": "Pending real independent review; no review, dependency proof or product execution is asserted.",
+  "sourceTaskHash": "f504622c4c8a2e09e51e03b54c885b62d2b5b4fb0e3ce3f9600dffdfefa311c5",
+  "sourceRequirements": [
+    {
+      "id": "T-126-AC1",
+      "scenario": "Given an inventoried activity, workers execute validated forms, human/agent/external steps, deadlines, checkpoints and outputs linked to the accepted process.",
+      "sourceKind": "positive"
+    },
+    {
+      "id": "T-126-AC2",
+      "scenario": "Given a missing performer, unsupported physical adapter or incomplete required output, the task remains blocked rather than complete by acknowledgment.",
+      "sourceKind": "negative"
+    },
+    {
+      "id": "T-126-AC3",
+      "scenario": "Given duplicate human submission, timezone timer replay or worker restart, one legal result/trigger survives with recoverable pending work.",
+      "sourceKind": "recovery"
+    },
+    {
+      "id": "T-126-AC4",
+      "scenario": "Given a physical/manual result, provenance identifies human attestation and control tests remain separate from sensor or independent outcome evidence.",
+      "sourceKind": "cross_boundary"
+    }
+  ],
+  "acceptanceIds": [
+    "T-126-AC1",
+    "T-126-AC2",
+    "T-126-AC3",
+    "T-126-AC4"
+  ],
+  "dependencyReceipts": [],
+  "dependencies": [
+    "T-52",
+    "T-96",
+    "T-125",
+    "T-88"
+  ],
+  "module": "studio",
+  "operationKind": "write",
+  "ownership": "Enterprise model, baseline, process and operating work; shared canonical object/revision identities, not a per-screen graph store.",
+  "recordMeaning": "human_result is a boundary payload/result view, not permission to create an independent authoritative store. Resolve its fields into the canonical aggregate family in A-05/C-01.",
+  "requiredOperations": [
+    "PublishActivityForm",
+    "StartCase",
+    "SubmitHumanTask",
+    "ScheduleActivity",
+    "RecordPhysicalResult"
+  ],
+  "uncoveredOperations": [
+    "PublishActivityForm",
+    "StartCase",
+    "ScheduleActivity",
+    "RecordPhysicalResult"
+  ],
+  "openDecisions": [
+    {
+      "id": "T-126-D01",
+      "owner": "independent-domain-and-security-reviewer",
+      "blocks": "implementation_start",
+      "decision": "Review this primary boundary against every original scenario; author concrete domain datasets and independent output oracles, not assertions derived from the implementation.",
+      "closure": "Approved bounded slices with executable negative/recovery fixtures for T-126-AC1, T-126-AC2, T-126-AC3, T-126-AC4 and a legitimate independent review receipt."
+    },
+    {
+      "id": "T-126-OP1",
+      "owner": "studio-maintainer",
+      "blocks": "parent_task_completion",
+      "decision": "Specify PublishActivityForm request/result/state/permission contract in a separately reviewed bounded slice; primary operation SubmitHumanTask does not implement it.",
+      "closure": "Linked approved packet and passing command/UI/API fixtures for PublishActivityForm."
+    },
+    {
+      "id": "T-126-OP2",
+      "owner": "studio-maintainer",
+      "blocks": "parent_task_completion",
+      "decision": "Specify StartCase request/result/state/permission contract in a separately reviewed bounded slice; primary operation SubmitHumanTask does not implement it.",
+      "closure": "Linked approved packet and passing command/UI/API fixtures for StartCase."
+    },
+    {
+      "id": "T-126-OP3",
+      "owner": "studio-maintainer",
+      "blocks": "parent_task_completion",
+      "decision": "Specify ScheduleActivity request/result/state/permission contract in a separately reviewed bounded slice; primary operation SubmitHumanTask does not implement it.",
+      "closure": "Linked approved packet and passing command/UI/API fixtures for ScheduleActivity."
+    },
+    {
+      "id": "T-126-OP4",
+      "owner": "studio-maintainer",
+      "blocks": "parent_task_completion",
+      "decision": "Specify RecordPhysicalResult request/result/state/permission contract in a separately reviewed bounded slice; primary operation SubmitHumanTask does not implement it.",
+      "closure": "Linked approved packet and passing command/UI/API fixtures for RecordPhysicalResult."
+    }
+  ],
+  "schemas": [
+    {
+      "id": "SubmitHumanTaskRequest",
+      "definition": {
+        "type": "object",
+        "properties": {
+          "commandId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operation": {
+            "const": "SubmitHumanTask"
+          },
+          "expectedHead": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "context": {
+            "type": "object",
+            "properties": {
+              "workspaceId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "branchId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "effectiveAt": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "workspaceId",
+              "branchId",
+              "effectiveAt"
+            ],
+            "additionalProperties": false
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "caseId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "taskId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "formVersion": {
+                "type": "string",
+                "minLength": 1
+              },
+              "outputRefs": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "uniqueItems": true
+              },
+              "attestationMode": {
+                "type": "string",
+                "minLength": 1
+              },
+              "checkpointId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "caseId",
+              "taskId",
+              "formVersion",
+              "outputRefs",
+              "attestationMode",
+              "checkpointId"
+            ],
+            "additionalProperties": false
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "commandId",
+          "operation",
+          "expectedHead",
+          "expectedVersion",
+          "context",
+          "payload",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "SubmitHumanTaskResult",
+      "definition": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "SubmitHumanTask"
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "completed"
+            ]
+          },
+          "targetState": {
+            "type": "string",
+            "minLength": 1
+          },
+          "commandId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "resultRef": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "authoritativeGeneration": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "projectionWatermark": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "jobId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "operation",
+          "status",
+          "targetState",
+          "commandId",
+          "resultRef",
+          "version",
+          "authoritativeGeneration",
+          "projectionWatermark",
+          "partial",
+          "jobId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "SafeError",
+      "definition": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          },
+          "fieldErrors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "field",
+                "message"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "correlationId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "currentVersion": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "recoveryActions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "fieldErrors",
+          "correlationId",
+          "retryable",
+          "currentVersion",
+          "recoveryActions"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "operations": [
+    {
+      "name": "SubmitHumanTask",
+      "transport": "POST /api/v1/commands",
+      "requestSchema": "SubmitHumanTaskRequest",
+      "resultSchema": "SubmitHumanTaskResult",
+      "errorSchema": "SafeError",
+      "requestExample": {
+        "commandId": "fixture-t-126-1",
+        "operation": "SubmitHumanTask",
+        "expectedHead": 7,
+        "expectedVersion": 7,
+        "context": {
+          "workspaceId": "workspace-a",
+          "branchId": "branch-1",
+          "effectiveAt": "2026-09-19T00:00:00Z"
+        },
+        "payload": {
+          "caseId": "repair-1",
+          "taskId": "inspection-1",
+          "formVersion": "inspection-v1",
+          "outputRefs": [
+            "inspection-report-1"
+          ],
+          "attestationMode": "human",
+          "checkpointId": "quality-review"
+        },
+        "reason": "Exercise T-126 boundary"
+      },
+      "successExample": {
+        "operation": "SubmitHumanTask",
+        "status": "completed",
+        "targetState": "submitted",
+        "commandId": "fixture-t-126-1",
+        "resultRef": "human_result-1",
+        "version": 8,
+        "authoritativeGeneration": 12,
+        "projectionWatermark": 12,
+        "partial": false,
+        "jobId": null
+      },
+      "errorExample": {
+        "code": "VERSION_CONFLICT",
+        "message": "The selected revision changed; reload and review the retained draft.",
+        "fieldErrors": [],
+        "correlationId": "trace-t-126-1",
+        "retryable": false,
+        "currentVersion": 8,
+        "recoveryActions": [
+          "reload",
+          "compare",
+          "rebase"
+        ]
+      },
+      "permission": "studio.SubmitHumanTask: authenticated scoped membership plus current action grant; viewer may query authorized metadata only. Visible resource denial is 403; hidden or foreign resource is indistinguishable 404. No UI role selector or payload actor grants authority.",
+      "exampleMeaning": "Reserved synthetic IDs; digest strings are hashes of fixture labels, not claims about real artifacts. Missing referenced records must fail validation.",
+      "acknowledgement": "Return only computed/readback result; never a static success sample."
+    }
+  ],
+  "permissionRule": "studio.SubmitHumanTask: authenticated scoped membership plus current action grant; viewer may query authorized metadata only. Visible resource denial is 403; hidden or foreign resource is indistinguishable 404. No UI role selector or payload actor grants authority.",
+  "transactionBoundary": "One tenant-scoped PostgreSQL transaction checks identity/policy/version and commits domain revision, command result, audit intent and outbox. No network/provider call inside this transaction. Protected remote effects use a separately fenced durable broker intent.",
+  "idempotencyRule": "Unique (tenantId, operation, commandId) with canonical request hash. Equal replay returns original result; unequal payload returns 409. expectedVersion fences aggregate; expectedHead fences branch baseline. Neither may be inferred from stale UI.",
+  "invalidationRule": "Use CHANGE-PROTOCOL dependency kinds/field paths. Semantic accepted publication atomically advances the authoritative invalidation generation. A view-only change does not invalidate evidence. Projection lag is visible; protected effects revalidate current identity/policy/context/cell epoch.",
+  "migrationRecovery": "Expand/read-compatible schema first; backfill with stable IDs and source hashes, quarantine failures, reconcile counts and only then cut over. Restart uses command status and durable cursors. Unknown remote effects reconcile before retry; irreversible outcomes require forward recovery, not history deletion.",
+  "persistence": {
+    "authoritative": true,
+    "tenantBoundary": "Session-derived tenant/workspace; composite references and tenant-leading indices. A payload target tenant is a checked selector only.",
+    "indices": [
+      "UNIQUE (tenant_id, operation, command_id)",
+      "(tenant_id, aggregate_id, version)",
+      "(tenant_id, workspace_id, state, updated_at, id)"
+    ],
+    "immutable": [
+      "published revisions",
+      "accepted evidence",
+      "prior attempts"
+    ],
+    "layoutStorage": "per-principal view preference; no semantic write"
+  },
+  "events": [
+    {
+      "type": "SubmitHumanTaskRecorded",
+      "meaning": "Draft event name to reconcile with canonical registered events before approval; emitted only after durable commit.",
+      "envelopeFields": [
+        "eventId",
+        "schemaVersion",
+        "tenantId",
+        "workspaceId",
+        "aggregateId",
+        "version",
+        "type",
+        "actor",
+        "occurredAt",
+        "correlationId",
+        "causationId",
+        "data",
+        "evidenceRefs"
+      ],
+      "consumers": [
+        "ledger-audit",
+        "authorized-read-projection"
+      ],
+      "delivery": "Outbox at least once; deduplicate eventId, reject obsolete head promotion."
+    }
+  ],
+  "requiredEvents": [
+    "CaseStarted",
+    "HumanTaskSubmitted",
+    "ScheduleChanged",
+    "PhysicalResultAttested"
+  ],
+  "transitions": [
+    {
+      "from": "assigned",
+      "command": "SubmitHumanTask",
+      "to": "submitted",
+      "precondition": "Valid schema, authorized actor, current version and domain conditions in the source scenario; async acceptance alone does not reach terminal state.",
+      "failureRecovery": "Retain draft and prior evidence; show safe error and permitted recovery. Resolve command status before retry."
+    },
+    {
+      "from": "assigned",
+      "command": "SubmitHumanTask:invalid-or-denied",
+      "to": "assigned",
+      "precondition": "Invalid payload, hidden object, stale context, unmet checkpoint or expired permission.",
+      "failureRecovery": "No domain/effect transition; disclose no hidden object data. Rebase or obtain legitimate new authority."
+    }
+  ],
+  "ui": {
+    "screens": [
+      "SC-06",
+      "SC-23"
+    ],
+    "source": "docs/product/SCREEN-CONTRACTS.md + PORTFOLIO-UX.md + MIGRATION-AND-COVERAGE.md",
+    "controls": [
+      {
+        "field": "caseId",
+        "control": "text-or-authorized-reference",
+        "required": true,
+        "valueSource": "server-validated record or retained user draft",
+        "validation": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      {
+        "field": "taskId",
+        "control": "text-or-authorized-reference",
+        "required": true,
+        "valueSource": "server-validated record or retained user draft",
+        "validation": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      {
+        "field": "formVersion",
+        "control": "text-or-authorized-reference",
+        "required": true,
+        "valueSource": "server-validated record or retained user draft",
+        "validation": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      {
+        "field": "outputRefs",
+        "control": "typed-reference-list",
+        "required": true,
+        "valueSource": "server-validated record or retained user draft",
+        "validation": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      {
+        "field": "attestationMode",
+        "control": "text-or-authorized-reference",
+        "required": true,
+        "valueSource": "server-validated record or retained user draft",
+        "validation": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      {
+        "field": "checkpointId",
+        "control": "text-or-authorized-reference",
+        "required": true,
+        "valueSource": "server-validated record or retained user draft",
+        "validation": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    ],
+    "primaryAction": "SubmitHumanTask",
+    "permissionVisibility": "Explain disabled visible actions; omit inaccessible resources. Server repeats authorization.",
+    "keyboard": "Tab reaches all controls in reading order; visible focus, labeled errors, focus first invalid field. Escape closes dialog and restores trigger focus; graph has list/table alternative.",
+    "reload": "Use durable result ID and pinned baseline, then restore selection/filter. Never replay a mutation just because the page reloads.",
+    "legacyException": null
+  },
+  "uiStates": [
+    {
+      "state": "loading",
+      "behavior": "Show pending request and retain selection; disable duplicate submission without blocking unrelated navigation."
+    },
+    {
+      "state": "empty",
+      "behavior": "Show zero only after successful authorized empty response; offer the relevant create/import action if allowed."
+    },
+    {
+      "state": "stale",
+      "behavior": "Show source timestamp and baseline/watermark mismatch; allow inspect/refresh but prevent protected stale action."
+    },
+    {
+      "state": "conflict",
+      "behavior": "Keep unsaved values, show changed fields/current version, and require compare/rebase before new submission."
+    },
+    {
+      "state": "failed",
+      "behavior": "Display safe error, trace ID and retry eligibility; do not replace data with successful example values."
+    },
+    {
+      "state": "denied",
+      "behavior": "Explain denied action only on a visible resource; hide foreign resource details and purge revoked cached data."
+    },
+    {
+      "state": "success",
+      "behavior": "Render actual server readback and explicit proposed/accepted/enabled/evidenced state; a queued job is still queued."
+    },
+    {
+      "state": "recovery",
+      "behavior": "Inspect command/job outcome and unresolved effects; offer only permitted retry, resume, reconciliation or reviewed compensation."
+    }
+  ],
+  "fixtures": [
+    {
+      "id": "T-126-FX-1",
+      "kind": "positive",
+      "acceptanceIds": [
+        "T-126-AC1",
+        "T-126-AC2",
+        "T-126-AC3",
+        "T-126-AC4"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-126-1",
+          "operation": "SubmitHumanTask",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "caseId": "repair-1",
+            "taskId": "inspection-1",
+            "formVersion": "inspection-v1",
+            "outputRefs": [
+              "inspection-report-1"
+            ],
+            "attestationMode": "human",
+            "checkpointId": "quality-review"
+          },
+          "reason": "Exercise T-126 boundary"
+        },
+        "actor": "authorized-actor-a",
+        "tenant": "tenant-a",
+        "initialState": "assigned",
+        "currentVersion": 7
+      },
+      "expectedPersistedResult": {
+        "domainRevisionDelta": 1,
+        "externalDispatchCount": 0,
+        "resultState": "submitted",
+        "requiredSourceCriterion": "T-126-AC1",
+        "note": "Domain-specific result assertions must satisfy the linked original acceptance scenario."
+      },
+      "testPath": "tests/acceptance/t-126.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-126-FX-2",
+      "kind": "negative",
+      "acceptanceIds": [
+        "T-126-AC1",
+        "T-126-AC2",
+        "T-126-AC3",
+        "T-126-AC4"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-126-1",
+          "operation": "SubmitHumanTask",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "caseId": "repair-1",
+            "taskId": "inspection-1",
+            "formVersion": "inspection-v1",
+            "outputRefs": [
+              "inspection-report-1"
+            ],
+            "attestationMode": "human",
+            "checkpointId": "quality-review"
+          },
+          "reason": "Exercise T-126 boundary",
+          "unexpectedAuthority": "admin"
+        },
+        "actor": "viewer-a",
+        "tenant": "tenant-a"
+      },
+      "expectedPersistedResult": {
+        "status": 400,
+        "code": "INVALID_SCHEMA",
+        "domainRevisionDelta": 0,
+        "externalDispatchCount": 0
+      },
+      "testPath": "tests/acceptance/t-126.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-126-FX-3",
+      "kind": "concurrent",
+      "acceptanceIds": [
+        "T-126-AC1",
+        "T-126-AC2",
+        "T-126-AC3",
+        "T-126-AC4"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-126-1",
+          "operation": "SubmitHumanTask",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "caseId": "repair-1",
+            "taskId": "inspection-1",
+            "formVersion": "inspection-v1",
+            "outputRefs": [
+              "inspection-report-1"
+            ],
+            "attestationMode": "human",
+            "checkpointId": "quality-review"
+          },
+          "reason": "Exercise T-126 boundary"
+        },
+        "requests": 2,
+        "sameCommandId": true,
+        "interleave": [
+          "first.accept",
+          "second.accept",
+          "first.respond"
+        ]
+      },
+      "expectedPersistedResult": {
+        "durableResultCount": 1,
+        "duplicateExternalDispatchCount": 0,
+        "conflictingPayloadStatus": 409
+      },
+      "testPath": "tests/acceptance/t-126.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-126-FX-4",
+      "kind": "recovery",
+      "acceptanceIds": [
+        "T-126-AC1",
+        "T-126-AC2",
+        "T-126-AC3",
+        "T-126-AC4"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-126-1",
+          "operation": "SubmitHumanTask",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "caseId": "repair-1",
+            "taskId": "inspection-1",
+            "formVersion": "inspection-v1",
+            "outputRefs": [
+              "inspection-report-1"
+            ],
+            "attestationMode": "human",
+            "checkpointId": "quality-review"
+          },
+          "reason": "Exercise T-126 boundary"
+        },
+        "failpoint": "after-commit-before-response",
+        "restart": true
+      },
+      "expectedPersistedResult": {
+        "lostAcceptedResults": 0,
+        "duplicateExternalDispatchCount": 0,
+        "unresolvedRemoteResult": "not_applicable"
+      },
+      "testPath": "tests/acceptance/t-126.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-126-FX-5",
+      "kind": "isolation",
+      "acceptanceIds": [
+        "T-126-AC1",
+        "T-126-AC2",
+        "T-126-AC3",
+        "T-126-AC4"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-126-1",
+          "operation": "SubmitHumanTask",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "caseId": "repair-1",
+            "taskId": "inspection-1",
+            "formVersion": "inspection-v1",
+            "outputRefs": [
+              "inspection-report-1"
+            ],
+            "attestationMode": "human",
+            "checkpointId": "quality-review"
+          },
+          "reason": "Exercise T-126 boundary"
+        },
+        "authenticatedTenant": "tenant-b",
+        "targetOwner": "tenant-a",
+        "payloadTenantOverride": "tenant-a"
+      },
+      "expectedPersistedResult": {
+        "status": 404,
+        "leakedRecords": 0,
+        "leakedCounts": 0,
+        "leakedEventIds": 0,
+        "externalDispatchCount": 0
+      },
+      "testPath": "tests/acceptance/t-126.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-126-FX-6",
+      "kind": "end_to_end",
+      "acceptanceIds": [
+        "T-126-AC1",
+        "T-126-AC2",
+        "T-126-AC3",
+        "T-126-AC4"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-126-1",
+          "operation": "SubmitHumanTask",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "caseId": "repair-1",
+            "taskId": "inspection-1",
+            "formVersion": "inspection-v1",
+            "outputRefs": [
+              "inspection-report-1"
+            ],
+            "attestationMode": "human",
+            "checkpointId": "quality-review"
+          },
+          "reason": "Exercise T-126 boundary"
+        },
+        "actor": "authorized-actor-a",
+        "screens": [
+          "SC-06",
+          "SC-23"
+        ],
+        "actions": [
+          "open",
+          "inspect-source",
+          "edit-or-select",
+          "submit",
+          "reload",
+          "inspect-durable-result"
+        ]
+      },
+      "expectedPersistedResult": {
+        "fakeSuccessCount": 0,
+        "selectionRetained": true,
+        "unauthorizedControlsExecutable": false,
+        "originalAcceptanceRequired": [
+          "T-126-AC1",
+          "T-126-AC2",
+          "T-126-AC3",
+          "T-126-AC4"
+        ]
+      },
+      "testPath": "tests/acceptance/t-126.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-126-FX-7",
+      "kind": "cross_boundary",
+      "acceptanceIds": [
+        "T-126-AC1",
+        "T-126-AC2",
+        "T-126-AC3",
+        "T-126-AC4"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-126-1",
+          "operation": "SubmitHumanTask",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "caseId": "repair-1",
+            "taskId": "inspection-1",
+            "formVersion": "inspection-v1",
+            "outputRefs": [
+              "inspection-report-1"
+            ],
+            "attestationMode": "human",
+            "checkpointId": "quality-review"
+          },
+          "reason": "Exercise T-126 boundary"
+        },
+        "initialGeneration": 12,
+        "currentGeneration": 13,
+        "projectionWatermark": 12,
+        "revokedGrant": true
+      },
+      "expectedPersistedResult": {
+        "protectedDispatchCount": 0,
+        "freshness": "stale",
+        "recoveryActions": [
+          "refresh-authority",
+          "recompute-context",
+          "review-again"
+        ],
+        "historicalEvidenceOverwritten": false
+      },
+      "testPath": "tests/acceptance/t-126.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-126-AC1-DOMAIN",
+      "kind": "positive",
+      "acceptanceIds": [
+        "T-126-AC1"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-126-1",
+          "operation": "SubmitHumanTask",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "caseId": "repair-1",
+            "taskId": "inspection-1",
+            "formVersion": "inspection-v1",
+            "outputRefs": [
+              "inspection-report-1"
+            ],
+            "attestationMode": "human",
+            "checkpointId": "quality-review"
+          },
+          "reason": "Exercise T-126 boundary"
+        },
+        "sourceScenarioId": "T-126-AC1",
+        "sourceScenarioHash": "095f6d664d256ffc27ea03c516adba98e43eb1e5995543706a6946e1427e4ca3"
+      },
+      "expectedPersistedResult": {
+        "sourceScenarioId": "T-126-AC1",
+        "mustAssertOriginalScenario": true,
+        "cannotSubstituteBoundaryFixture": true
+      },
+      "testPath": "tests/acceptance/t-126.test.mjs",
+      "status": "not_run",
+      "scope": "domain_oracle_requires_review"
+    },
+    {
+      "id": "T-126-AC2-DOMAIN",
+      "kind": "negative",
+      "acceptanceIds": [
+        "T-126-AC2"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-126-1",
+          "operation": "SubmitHumanTask",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "caseId": "repair-1",
+            "taskId": "inspection-1",
+            "formVersion": "inspection-v1",
+            "outputRefs": [
+              "inspection-report-1"
+            ],
+            "attestationMode": "human",
+            "checkpointId": "quality-review"
+          },
+          "reason": "Exercise T-126 boundary"
+        },
+        "sourceScenarioId": "T-126-AC2",
+        "sourceScenarioHash": "a0f1e5ef336b0efc86d23690603a594077641284271098c4c684c36c4de15c6f"
+      },
+      "expectedPersistedResult": {
+        "sourceScenarioId": "T-126-AC2",
+        "mustAssertOriginalScenario": true,
+        "cannotSubstituteBoundaryFixture": true
+      },
+      "testPath": "tests/acceptance/t-126.test.mjs",
+      "status": "not_run",
+      "scope": "domain_oracle_requires_review"
+    },
+    {
+      "id": "T-126-AC3-DOMAIN",
+      "kind": "recovery",
+      "acceptanceIds": [
+        "T-126-AC3"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-126-1",
+          "operation": "SubmitHumanTask",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "caseId": "repair-1",
+            "taskId": "inspection-1",
+            "formVersion": "inspection-v1",
+            "outputRefs": [
+              "inspection-report-1"
+            ],
+            "attestationMode": "human",
+            "checkpointId": "quality-review"
+          },
+          "reason": "Exercise T-126 boundary"
+        },
+        "sourceScenarioId": "T-126-AC3",
+        "sourceScenarioHash": "50de74414fed63ffb12e9f9bc395b30493da1bfaf917b244ff05fea203aa5eef"
+      },
+      "expectedPersistedResult": {
+        "sourceScenarioId": "T-126-AC3",
+        "mustAssertOriginalScenario": true,
+        "cannotSubstituteBoundaryFixture": true
+      },
+      "testPath": "tests/acceptance/t-126.test.mjs",
+      "status": "not_run",
+      "scope": "domain_oracle_requires_review"
+    },
+    {
+      "id": "T-126-AC4-DOMAIN",
+      "kind": "cross_boundary",
+      "acceptanceIds": [
+        "T-126-AC4"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-126-1",
+          "operation": "SubmitHumanTask",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "caseId": "repair-1",
+            "taskId": "inspection-1",
+            "formVersion": "inspection-v1",
+            "outputRefs": [
+              "inspection-report-1"
+            ],
+            "attestationMode": "human",
+            "checkpointId": "quality-review"
+          },
+          "reason": "Exercise T-126 boundary"
+        },
+        "sourceScenarioId": "T-126-AC4",
+        "sourceScenarioHash": "e915b2f5d72ce16542b668c1e3a894f7eac60821df9b354ab382b10c9eb150a2"
+      },
+      "expectedPersistedResult": {
+        "sourceScenarioId": "T-126-AC4",
+        "mustAssertOriginalScenario": true,
+        "cannotSubstituteBoundaryFixture": true
+      },
+      "testPath": "tests/acceptance/t-126.test.mjs",
+      "status": "not_run",
+      "scope": "domain_oracle_requires_review"
+    }
+  ],
+  "domainCounterexamples": [
+    "Inspection submission saves typed output and human attestation; mandatory quality-review still blocks process completion.",
+    "A physical task without certified adapter stays human-attested; no fabricated automatic physical effect."
+  ],
+  "targetFiles": [
+    "contracts/enterprise/t-126.schema.json",
+    "src/modules/studio/t-126.mjs",
+    "tests/acceptance/t-126.test.mjs",
+    "migrations/t-126.sql"
+  ],
+  "fileStatus": "intended paths, not implementation evidence",
+  "slices": [
+    {
+      "id": "T-126-contract",
+      "dependsOn": [],
+      "covers": [
+        "T-126-AC1",
+        "T-126-AC2",
+        "T-126-AC3",
+        "T-126-AC4"
+      ],
+      "exit": "Resolve open decisions, concrete domain oracles and independent review; schemas and examples must validate."
+    },
+    {
+      "id": "T-126-domain",
+      "dependsOn": [
+        "T-126-contract",
+        "T-52",
+        "T-96",
+        "T-125",
+        "T-88"
+      ],
+      "covers": [
+        "T-126-AC1",
+        "T-126-AC2",
+        "T-126-AC3",
+        "T-126-AC4"
+      ],
+      "exit": "Actual state, permission, concurrency and restart tests; no mock substituted for required real provider."
+    },
+    {
+      "id": "T-126-experience",
+      "dependsOn": [
+        "T-126-domain"
+      ],
+      "covers": [
+        "T-126-AC1",
+        "T-126-AC2",
+        "T-126-AC3",
+        "T-126-AC4"
+      ],
+      "exit": "Working role journey across all listed screens/states with keyboard and reload checks."
+    },
+    {
+      "id": "T-126-qualification",
+      "dependsOn": [
+        "T-126-experience"
+      ],
+      "covers": [
+        "T-126-AC1",
+        "T-126-AC2",
+        "T-126-AC3",
+        "T-126-AC4"
+      ],
+      "exit": "Independent revision-bound evidence for every original criterion and integration obligation; reconcile all child slices before parent closure."
+    }
+  ],
+  "observability": "Record correlation/command/job IDs, operation, authorized scope, version/generation/fence and safe error code. Redact content, credentials and foreign identifiers. Metrics include rejection, conflict, lag and unknown-effect counts; tenant labels are authorized and bounded.",
+  "sourceDecisions": [
+    "docs/production/SOLUTION-ARCHITECTURE.md",
+    "docs/production/CHANGE-PROTOCOL.md",
+    "docs/production/DELIVERY-CONTRACTS.md",
+    "docs/production/IMPLEMENTATION-HANDOFF.md",
+    "docs/production/IMPLEMENTATION-BACKLOG.json"
+  ],
+  "nonGoals": [
+    "No implementation or independent approval claimed by this draft.",
+    "No public deployment, new authority, real transaction or customer-specific policy inferred.",
+    "Do not replace existing IDs, task dependencies, domain scenarios or source rule IDs with generated boundary checks."
+  ],
+  "evidence": {
+    "status": "not_run",
+    "receipts": [],
+    "commands": [
+      "node --test tests/acceptance/t-126.test.mjs",
+      "npm run check",
+      "node ops/check-spec.mjs --self-test --verify-sources"
+    ],
+    "required": [
+      "revision",
+      "fixture manifest",
+      "actual storage/event/effect assertions",
+      "role journey",
+      "environment/provider versions",
+      "raw results",
+      "unresolved findings",
+      "independent review"
+    ]
+  }
+}

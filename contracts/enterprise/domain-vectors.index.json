@@ -1,0 +1,1326 @@
+{
+  "version": 1,
+  "status": "definitions_not_execution",
+  "batches": [
+    {
+      "id": "domain-vectors-07",
+      "path": "contracts/enterprise/domain-vectors-07.mjs",
+      "count": 38,
+      "vectorDigest": "c19fe138f7bb425c97cad15fb3e6c14b9d8f247e6f69945e818a2cd40351314e",
+      "sources": [
+        {
+          "acceptanceId": "T-02-AC1",
+          "scenarioDigest": "0a2763998fccfe1f731a87da478652d12dce42bb12a2152fab6bc00b7ec08d0d"
+        },
+        {
+          "acceptanceId": "T-02-AC2",
+          "scenarioDigest": "bb9ad70a34ca843120144b7ff9dc50ce01968465104ca47ad05f5a96f7c8648c"
+        },
+        {
+          "acceptanceId": "T-02-AC3",
+          "scenarioDigest": "d345ddb5b1e228789056801ee8c5940312a487993db373a9bbc58dfce5694ddc"
+        },
+        {
+          "acceptanceId": "T-03-AC1",
+          "scenarioDigest": "27564ec03991a539e910e6c52ee880b702d8e7d1f1640cc6311b7f98fbeb6ff9"
+        },
+        {
+          "acceptanceId": "T-03-AC2",
+          "scenarioDigest": "1d259d4664ecc0d39527b7d6696419ed8308666239e90ed4c221295e7f1fc9fb"
+        },
+        {
+          "acceptanceId": "T-03-AC3",
+          "scenarioDigest": "51a71ac357dd71e9354f124f55cfb9eed779f84e02326f0cd62f00f7921a9ea9"
+        },
+        {
+          "acceptanceId": "T-04-AC1",
+          "scenarioDigest": "fc15d7762db5940cf61eeacdabedce148356d8a16b0a9f26f22a522a186a7f0a"
+        },
+        {
+          "acceptanceId": "T-04-AC2",
+          "scenarioDigest": "d0a503c1d93aa780980ebf106cf0210f0e0b633752d5a35230e9b1c3043b24dc"
+        },
+        {
+          "acceptanceId": "T-04-AC3",
+          "scenarioDigest": "cc0fc8260ac001404d4353378a0e7040268f22cd2b086cc5e8d11004a982ac6d"
+        },
+        {
+          "acceptanceId": "T-05-AC1",
+          "scenarioDigest": "332e2a22063ee2dd490025b556dac0fb4241e48bcef52f946cad5a029dfc715c"
+        },
+        {
+          "acceptanceId": "T-05-AC2",
+          "scenarioDigest": "d0353aba3145a345627fb5993afae775e1ce42c9b6531344c651043ecef2b063"
+        },
+        {
+          "acceptanceId": "T-05-AC3",
+          "scenarioDigest": "89bff3596263771abf3374036e55750c651965e721c2c3291b7497c4d0e79e8c"
+        },
+        {
+          "acceptanceId": "T-06-AC1",
+          "scenarioDigest": "5bd24f062ee13b62ac57de8eb6f60908f63d66ed9524fe1c8f8283cff7058351"
+        },
+        {
+          "acceptanceId": "T-06-AC2",
+          "scenarioDigest": "a9e8bad2d5048bb1734f200ff244258e41822065d01387ad74da45cfa05bead0"
+        },
+        {
+          "acceptanceId": "T-06-AC3",
+          "scenarioDigest": "1abe276e7290114185ed1a00a79d33efc8fdd90851bb7da26f35bc15a2056354"
+        },
+        {
+          "acceptanceId": "T-07-AC1",
+          "scenarioDigest": "63e5a8da88e865dc73a92ee5289106683f6b6a40f0e3b259d29746dabf42cda1"
+        },
+        {
+          "acceptanceId": "T-07-AC2",
+          "scenarioDigest": "89eea7c31cc124f9093957c69cc6163561fe24bbf137bd5f3a1663634e19ed0b"
+        },
+        {
+          "acceptanceId": "T-07-AC3",
+          "scenarioDigest": "465868dbe9d02a70c31e5f21c0098bc78b031c39c337417008199230334592be"
+        },
+        {
+          "acceptanceId": "T-49-AC1",
+          "scenarioDigest": "6c5aca61c00a377faf8f1e9523b36985ae8d67a90a2fae0a30325b2781ec1a2a"
+        },
+        {
+          "acceptanceId": "T-49-AC2",
+          "scenarioDigest": "59e5fc903fde67150c89136c691378bb86ed029f3ef1fbd0f74b55d3898b0c9a"
+        },
+        {
+          "acceptanceId": "T-49-AC3",
+          "scenarioDigest": "2268aae2d4d201ab1214ff672d5bd8f9010acd82f21c036f615c77059f44cc15"
+        },
+        {
+          "acceptanceId": "T-49-AC4",
+          "scenarioDigest": "13e9c39725fd76bcc4a06ad270005a478f58061f5a62e76f810c9c46959d8d41"
+        },
+        {
+          "acceptanceId": "T-68-AC1",
+          "scenarioDigest": "6d9370296160b2f9f844c15f9cb93dcb622ef704528a731fd5ce8a35652e38c0"
+        },
+        {
+          "acceptanceId": "T-68-AC2",
+          "scenarioDigest": "5892d7a8a87030a5aae51f3b86c78252f37fed426b5db2422d22f447d9a0eb31"
+        },
+        {
+          "acceptanceId": "T-68-AC3",
+          "scenarioDigest": "50c3d7c3d8a92bfcf86df4728c890318214220c3d6228918da735e92b6bec38d"
+        },
+        {
+          "acceptanceId": "T-68-AC4",
+          "scenarioDigest": "22ac06421e647b963f7371b35548d25d11ba6853ece3eace4784a7fe8dc0ef29"
+        },
+        {
+          "acceptanceId": "T-77-AC1",
+          "scenarioDigest": "8b14a485a880c133f6585a31b349016989e917fc44f254c8668818b6219db3e7"
+        },
+        {
+          "acceptanceId": "T-77-AC2",
+          "scenarioDigest": "829d482fbd772e8c288c05b630e9b6809f169c690a1276c5e0013a98db77321b"
+        },
+        {
+          "acceptanceId": "T-77-AC3",
+          "scenarioDigest": "0ff341396627af2f78e38df205ac37d2d4f33426f1af4a2978ee4b8e8a409463"
+        },
+        {
+          "acceptanceId": "T-77-AC4",
+          "scenarioDigest": "ecdd8b2181be2f0c5e7bf4bd9ca3a5dd878d37ba94daec35a666585d17d2317e"
+        },
+        {
+          "acceptanceId": "T-119-AC1",
+          "scenarioDigest": "7215a6beb4b917d09b56f9e84a7b5960cb154bed224e0dfed64f292bc8b1f259"
+        },
+        {
+          "acceptanceId": "T-119-AC2",
+          "scenarioDigest": "9b2783fc2b9006940749f9497eb1887e7263ef255f1be0bde15de2061ce9eabf"
+        },
+        {
+          "acceptanceId": "T-119-AC3",
+          "scenarioDigest": "18a9e8bc7be62f0c6e4189ca476d8cfa8a989644ee53279bc0c8799a5682e4c7"
+        },
+        {
+          "acceptanceId": "T-119-AC4",
+          "scenarioDigest": "9a7749aa26119b44d8403d6be1d5aa7d3bc4f975d2861b4d97f9575b93d83684"
+        },
+        {
+          "acceptanceId": "T-123-AC1",
+          "scenarioDigest": "b72ae2edb9a61fbd342f420068bb38bde747431b571114d75bbd57e502be3cd6"
+        },
+        {
+          "acceptanceId": "T-123-AC2",
+          "scenarioDigest": "696c9923994f1aef06006973639e325d713246e34d6a46514bb0bfe6d3d73b65"
+        },
+        {
+          "acceptanceId": "T-123-AC3",
+          "scenarioDigest": "f465c9b12a9e840fd8289a569a137b1cc2a257cf2bf19290779d9acb581c4e25"
+        },
+        {
+          "acceptanceId": "T-123-AC4",
+          "scenarioDigest": "4e6fe769e39979b7bd0928b9258d932b8961a3b188097c01b5b90afef80bc78d"
+        }
+      ]
+    },
+    {
+      "id": "domain-vectors-08",
+      "path": "contracts/enterprise/domain-vectors-08.mjs",
+      "count": 54,
+      "vectorDigest": "309e801e7133df4659c32f721c0aaecd37c74fcae89be758c1b3415cbe793c82",
+      "sources": [
+        {
+          "acceptanceId": "T-01-AC1",
+          "scenarioDigest": "9ed75e1955032d8147f79e07f03f67ee575fec354c3063fb3945d90d42bef93d"
+        },
+        {
+          "acceptanceId": "T-01-AC2",
+          "scenarioDigest": "689d83a2c19c39c1117e9b87b7f270ed2646f4b60d18b13efbfa34cb37412821"
+        },
+        {
+          "acceptanceId": "T-01-AC3",
+          "scenarioDigest": "3c44eefe72ad80c279ca85a43f0da2a429a169aea251edf714f5d97ea9b1090c"
+        },
+        {
+          "acceptanceId": "T-08-AC1",
+          "scenarioDigest": "de1c0bc57fe2b308b4dddfceffadae985f0c4259f7b3808b9d6c98499a2d3544"
+        },
+        {
+          "acceptanceId": "T-08-AC2",
+          "scenarioDigest": "4a6c49523b0ab3b224b607357e91058fc4d8500fd337bd36be2c6dfa4a8e03f7"
+        },
+        {
+          "acceptanceId": "T-08-AC3",
+          "scenarioDigest": "8faa09444413039e36cb9f52aa72d27df47731c6b3983eaf62b0f1be661dce8d"
+        },
+        {
+          "acceptanceId": "T-09-AC1",
+          "scenarioDigest": "f93c1696361dba794a047fc80036bd597edcf5ecdb523643fca927d9a24e2fe1"
+        },
+        {
+          "acceptanceId": "T-09-AC2",
+          "scenarioDigest": "bd4cbca706223c6c2e6202210a26b674c74762ddbcb59158fcb4c8a66e101438"
+        },
+        {
+          "acceptanceId": "T-09-AC3",
+          "scenarioDigest": "198aefa6157378ef50bb4faf5dd7c5175af4f26771d7e84233dffe3c5e683d93"
+        },
+        {
+          "acceptanceId": "T-10-AC1",
+          "scenarioDigest": "c8cf54e44d7578048f262ae98a938a66663732cb7998004a4061e9a6eeea2573"
+        },
+        {
+          "acceptanceId": "T-10-AC2",
+          "scenarioDigest": "eeef31c88a18a41012840b7beb490d3ec2145bdedf24984d79ccd7d79f1ce78e"
+        },
+        {
+          "acceptanceId": "T-10-AC3",
+          "scenarioDigest": "bbd5e7ceb50e860651d539ea6e311636bd0d1a68009c5d899745ae5e1f37d1d3"
+        },
+        {
+          "acceptanceId": "T-11-AC1",
+          "scenarioDigest": "15a35f62c006066fce1fd3f070c43b8dd4f0b2d236ebf54be4b47e840100d556"
+        },
+        {
+          "acceptanceId": "T-11-AC2",
+          "scenarioDigest": "6853baa0b195ba48bc39e216fcbd1d95bb7b0084f215a84af3d128c175fb26ee"
+        },
+        {
+          "acceptanceId": "T-11-AC3",
+          "scenarioDigest": "4bab6aacb36e98c908218f668fdc27bafefd30103884e019a94757977483b1e8"
+        },
+        {
+          "acceptanceId": "T-12-AC1",
+          "scenarioDigest": "625c78be134dafb2e6004a3d8486baa5ff8cb2ff1d63131d5cbf35794d540b62"
+        },
+        {
+          "acceptanceId": "T-12-AC2",
+          "scenarioDigest": "298a123b271effdf346119710866b7f6e128be2ffaba460f905d951bdd69b121"
+        },
+        {
+          "acceptanceId": "T-12-AC3",
+          "scenarioDigest": "2ba405427ecd35277e3c3583e678465c80d84f6ca11832be9885508124c0c0b2"
+        },
+        {
+          "acceptanceId": "T-13-AC1",
+          "scenarioDigest": "c3fd1bb73fc6ae0b0dada40ce0e0b55d28e67966dd5b4616035c4e23df703821"
+        },
+        {
+          "acceptanceId": "T-13-AC2",
+          "scenarioDigest": "0c5df84c3d89e5570167df527ec43290c8e3256e5856c342d7e0dd3a26150f0b"
+        },
+        {
+          "acceptanceId": "T-13-AC3",
+          "scenarioDigest": "17c973c78acdf3415dedab4f4e212f60ed52564fd88e883b52a2bee0a78f73a9"
+        },
+        {
+          "acceptanceId": "T-14-AC1",
+          "scenarioDigest": "261fe56a746b58b2254e8bb6a84ad033a4bdceec7f2e98f69fc0743d327924a6"
+        },
+        {
+          "acceptanceId": "T-14-AC2",
+          "scenarioDigest": "f2cd618c400fa12567d84f1eb1aeee806a7bc15526b95e688e264555d8e4328f"
+        },
+        {
+          "acceptanceId": "T-14-AC3",
+          "scenarioDigest": "d21dcbabc03f913079884225cf4c5b0008b174127f837869fae441f0d13f7f99"
+        },
+        {
+          "acceptanceId": "T-15-AC1",
+          "scenarioDigest": "cab3c11b5a3c27317a3b1a72adf1868530929a7e4df4e50d6fa98bc41310f647"
+        },
+        {
+          "acceptanceId": "T-15-AC2",
+          "scenarioDigest": "e156b4c5f426b4e1a6c2b852c95deb38def4bf3a64c007765a21d66c52eba17c"
+        },
+        {
+          "acceptanceId": "T-15-AC3",
+          "scenarioDigest": "f3b334856076779e866560e2c5b0f75ad670c16a9a35e6d9401fb5d949032b3a"
+        },
+        {
+          "acceptanceId": "T-16-AC1",
+          "scenarioDigest": "faec0689c8d2b912d88ac54e97224598dda565f5044d38ecb526437ef6b777de"
+        },
+        {
+          "acceptanceId": "T-16-AC2",
+          "scenarioDigest": "ac820167b6edac3fae998a6403144b595e13317548955f4c4dd5b422582ba6b5"
+        },
+        {
+          "acceptanceId": "T-16-AC3",
+          "scenarioDigest": "fca6ded02df6007aad6ce3cc95d9ae7a311fbbe7a74eb2ef85e2fe77bcb029b3"
+        },
+        {
+          "acceptanceId": "T-17-AC1",
+          "scenarioDigest": "ad21633d2b50087bc2b37e03859dcd3a810adda96d3f971bcfd3befcc6819062"
+        },
+        {
+          "acceptanceId": "T-17-AC2",
+          "scenarioDigest": "0fb6944c7055804e45f1ee0cf3507c47d2113e7b49ace1607c5868e0c57d30d7"
+        },
+        {
+          "acceptanceId": "T-17-AC3",
+          "scenarioDigest": "dad62d157538cee871774fc70cfc61c287d668d2598f7d4e2ab90998060551dd"
+        },
+        {
+          "acceptanceId": "T-18-AC1",
+          "scenarioDigest": "65c45a1d9ce3ccbc4b7757263e14b3f894d067107b5ad46459a4d73dc45d49c0"
+        },
+        {
+          "acceptanceId": "T-18-AC2",
+          "scenarioDigest": "878c69fb3a1e5ffcd25d8aff6ff2bb8dfcddcd3f2ca0648e84083cd6f93943e5"
+        },
+        {
+          "acceptanceId": "T-18-AC3",
+          "scenarioDigest": "1caa2e202d6dc524460f39d465f69f5a65d4032234bb2872d101bf4b54adc13c"
+        },
+        {
+          "acceptanceId": "T-19-AC1",
+          "scenarioDigest": "ce3d31b727b1534048e57aa5182feb2f6cc3133a993b4db6a0bdd730f09ed14f"
+        },
+        {
+          "acceptanceId": "T-19-AC2",
+          "scenarioDigest": "3b312f10e5f49d670504f40bfe738d7096cca5f1be9804937d47e1e354027f29"
+        },
+        {
+          "acceptanceId": "T-19-AC3",
+          "scenarioDigest": "e2efa3d137e590ef3723e010cf2cd42be6a036ec49f3c02af3b8be870ff67d72"
+        },
+        {
+          "acceptanceId": "T-20-AC1",
+          "scenarioDigest": "263e41db469a1446c5340d0048053a7642d06cb7859d1642f2065cb33bd153b9"
+        },
+        {
+          "acceptanceId": "T-20-AC2",
+          "scenarioDigest": "5851cf9c3c983d24c2c9a69595692a8b68fa09a5f51c90c27c4d51e81e97ffe8"
+        },
+        {
+          "acceptanceId": "T-20-AC3",
+          "scenarioDigest": "fb8b4ba44c4b5efd98792be6833e4ce827357922766324f69da4cd1b95760de1"
+        },
+        {
+          "acceptanceId": "T-21-AC1",
+          "scenarioDigest": "ac25de2ef2611c48a005af393dceb58888d3771f0df57f634361c32f618ff32f"
+        },
+        {
+          "acceptanceId": "T-21-AC2",
+          "scenarioDigest": "b94ab8c967a6aaedb279ff4cc19b9d037fcec52ee99617488ce5297432724de7"
+        },
+        {
+          "acceptanceId": "T-21-AC3",
+          "scenarioDigest": "d47270b6f649f11c8b5f88fc5fda95047adecab95fa88d268f4e191c1e415cc8"
+        },
+        {
+          "acceptanceId": "T-22-AC1",
+          "scenarioDigest": "05721d623581828ae05b6e35170872a66d632e7b245e7dbd84fe76d1600ba8fb"
+        },
+        {
+          "acceptanceId": "T-22-AC2",
+          "scenarioDigest": "3b6d49fc6560ada6925d521f4fd71bad2f7c0b613f08c24ac529aa83ba090320"
+        },
+        {
+          "acceptanceId": "T-22-AC3",
+          "scenarioDigest": "868d37eae7409500030c51179642ca1640467e3dbd125d40b86eb0cd8c645fed"
+        },
+        {
+          "acceptanceId": "T-23-AC1",
+          "scenarioDigest": "0f0fa4f4a88d383e54965610feee05c4bde8fe4870f5e60adef63a44c949270d"
+        },
+        {
+          "acceptanceId": "T-23-AC2",
+          "scenarioDigest": "c8bdc27c86663811cdd6039f3e53bee8408267b33c833d3cbe6591fc092e01b5"
+        },
+        {
+          "acceptanceId": "T-23-AC3",
+          "scenarioDigest": "221e949f4323ce511d0d6323474245203c2b1ea1cc4438fd4040e060934f6bed"
+        },
+        {
+          "acceptanceId": "T-24-AC1",
+          "scenarioDigest": "6f71f75f846cc3459aa69814dce1a65319aba29d637831a82fb378ad636f8888"
+        },
+        {
+          "acceptanceId": "T-24-AC2",
+          "scenarioDigest": "c61436d8a4ec05684f75871a68a1b6cf4568d943766dd876a33817586f86dbab"
+        },
+        {
+          "acceptanceId": "T-24-AC3",
+          "scenarioDigest": "1111eae6f49490ffbe8f953b888a1d60b53216d7bdadda0fa52f27b21a686952"
+        }
+      ]
+    },
+    {
+      "id": "domain-vectors-09",
+      "path": "contracts/enterprise/domain-vectors-09.mjs",
+      "count": 72,
+      "vectorDigest": "982711a23b6539c1dba5d3ff745c33ad5d020719b817af580b5f55505ee1cc24",
+      "sources": [
+        {
+          "acceptanceId": "T-25-AC1",
+          "scenarioDigest": "cc5729fcf40a7f912bb321a92352c29e9f879492ae409871a06c551bbf332152"
+        },
+        {
+          "acceptanceId": "T-25-AC2",
+          "scenarioDigest": "f50ead0304c2dbbbd6d88633c6d24e79f64b531a89ac77c5104c62ddf25fd475"
+        },
+        {
+          "acceptanceId": "T-25-AC3",
+          "scenarioDigest": "aa3bdbb7de57fb809d5409fdf096656264ac2d88a722f83931964a8cfc0a0224"
+        },
+        {
+          "acceptanceId": "T-26-AC1",
+          "scenarioDigest": "e894196c6dc722dab1974cb5df198d8650f52f7202e0a4d4f4f0de70e44c32c3"
+        },
+        {
+          "acceptanceId": "T-26-AC2",
+          "scenarioDigest": "2d8b3feda4eb376ce0e9c85eb34354d0c8330e1b8ab6673e2e49f454f4521a59"
+        },
+        {
+          "acceptanceId": "T-26-AC3",
+          "scenarioDigest": "b7df86ac7d6f755fc0f8b4f768ba3a3eea6b51dcfa0ceda02f0c51e4bf5b197d"
+        },
+        {
+          "acceptanceId": "T-27-AC1",
+          "scenarioDigest": "395975e67e0256f5ebb82e85379aaeede462c49212b03e7d7adfefe56a74e94c"
+        },
+        {
+          "acceptanceId": "T-27-AC2",
+          "scenarioDigest": "9495c4a0cf6f0a4cb7d46a257bc51eb3054334d1b9854af075122c31f0172092"
+        },
+        {
+          "acceptanceId": "T-27-AC3",
+          "scenarioDigest": "f349fb9bc4662b403fdd27cc213e49d36be619c886c7e47208e75c22eec80f00"
+        },
+        {
+          "acceptanceId": "T-28-AC1",
+          "scenarioDigest": "553d18219ef995b7de94499eea0bd6557110a84bfb2e637509533385faa2eae7"
+        },
+        {
+          "acceptanceId": "T-28-AC2",
+          "scenarioDigest": "5f4c98f06bec24aa77440c332fcb29cc222ba7d7bb8d7f00ad3bd93ef380c1ad"
+        },
+        {
+          "acceptanceId": "T-28-AC3",
+          "scenarioDigest": "2fa96a406ab52d2e87f2b09173ab08aa573d3811836674781e56156719527afe"
+        },
+        {
+          "acceptanceId": "T-29-AC1",
+          "scenarioDigest": "67075073f05ff1d5e1e9838776c52c4563c093c845a16310896ecdd7db088a7f"
+        },
+        {
+          "acceptanceId": "T-29-AC2",
+          "scenarioDigest": "f891c1e2d5a2500baf94bbe2fce153d741dbce916348f1888954ca0bba455e6a"
+        },
+        {
+          "acceptanceId": "T-29-AC3",
+          "scenarioDigest": "8449b1c790d797f643f2dd657f89d97f5d420dcf5dc5dce7789e73b0259044b8"
+        },
+        {
+          "acceptanceId": "T-30-AC1",
+          "scenarioDigest": "b15f03e40f9403f90d74597860e527a024ae0e9ea466b0cf4c84a7b985cb28bf"
+        },
+        {
+          "acceptanceId": "T-30-AC2",
+          "scenarioDigest": "7e4be886b55a6eba58f7004cab631001fadb8cb843da87744a5af6e7e67eab96"
+        },
+        {
+          "acceptanceId": "T-30-AC3",
+          "scenarioDigest": "890e83ae80ba5bbc76086dae4e3c8826f09c1409d82c5bd66760849659ae934b"
+        },
+        {
+          "acceptanceId": "T-31-AC1",
+          "scenarioDigest": "9e531f1519dd7d71b282679b8a1f252879d648d7a9fd09fd22caaefe18642b82"
+        },
+        {
+          "acceptanceId": "T-31-AC2",
+          "scenarioDigest": "d1f14acf8832d079dc7c7d2b342bcb1dff8edc7329f429b3f9dd8dcacdbb253a"
+        },
+        {
+          "acceptanceId": "T-31-AC3",
+          "scenarioDigest": "2e4554405b7e73de9380456e8c6402c94c3ffd8be12910d2e0cf3a3bfaf7a5c8"
+        },
+        {
+          "acceptanceId": "T-32-AC1",
+          "scenarioDigest": "2100c0b38984536b5c822732bb5ade07e21816030f1a4539fec0c37dd21152eb"
+        },
+        {
+          "acceptanceId": "T-32-AC2",
+          "scenarioDigest": "31a93d1f3094af1bbce77767530f07a92afb49ea2f17cc49d6050ac1f9f2c483"
+        },
+        {
+          "acceptanceId": "T-32-AC3",
+          "scenarioDigest": "080de4bbb57fa9f2636bdc3ae2d07ef18e598f5d06301e0e109f9d757b8112be"
+        },
+        {
+          "acceptanceId": "T-33-AC1",
+          "scenarioDigest": "a4373e9355a301b64f6d14a4d4d4f72c04cf22655a128284d899d73299c946dc"
+        },
+        {
+          "acceptanceId": "T-33-AC2",
+          "scenarioDigest": "97cb6a5042067950b9bc263a7edd316f4842acb3e5437bf67041ea8c3ef18ff8"
+        },
+        {
+          "acceptanceId": "T-33-AC3",
+          "scenarioDigest": "76457581fc848511a268818943a52081019439df4f36602b3d87737be0edf356"
+        },
+        {
+          "acceptanceId": "T-34-AC1",
+          "scenarioDigest": "9a7991f7f232a2f65e3f56d096dd659e652125c2eaa8ec29d623ce78f5d1e679"
+        },
+        {
+          "acceptanceId": "T-34-AC2",
+          "scenarioDigest": "b2b5c65404e20d35935c7326fceb06ac80513b3de74f94d2e0f80cf2778f7bf0"
+        },
+        {
+          "acceptanceId": "T-34-AC3",
+          "scenarioDigest": "7502d641b40d125eb45f07c5428f149c04848af0006fc62dda637a154ef329b3"
+        },
+        {
+          "acceptanceId": "T-35-AC1",
+          "scenarioDigest": "a0c17c4559f9f66b05f2a4165ae33d2b61c8fdbcea81fcc7dfdc325944d59575"
+        },
+        {
+          "acceptanceId": "T-35-AC2",
+          "scenarioDigest": "2b92456d0b7850d6c69f3eb27a8659b28c4fb783c2402968da369aa0d6158dd9"
+        },
+        {
+          "acceptanceId": "T-35-AC3",
+          "scenarioDigest": "7ecbc5741245e1d70cb0123cc42eb63edcdb7ff002aab1ea712fd1240f5d898b"
+        },
+        {
+          "acceptanceId": "T-36-AC1",
+          "scenarioDigest": "5394e04db9da43a67bfd41f896af3b5e3edc02abbb23048fe7ee48b56bf7ce8c"
+        },
+        {
+          "acceptanceId": "T-36-AC2",
+          "scenarioDigest": "4578dad8ed1d77b5149da05038ea97f3a11993a6b78b8b3252cc7c88f0a2c12b"
+        },
+        {
+          "acceptanceId": "T-36-AC3",
+          "scenarioDigest": "7a043da1baaa69c03d8fdd6310c0573337d719d07f3c6ec2ae77a660ee3cdd57"
+        },
+        {
+          "acceptanceId": "T-37-AC1",
+          "scenarioDigest": "ffae640bd6b919baa57115613b8023646027c62b381fceecd9eb734df96b4294"
+        },
+        {
+          "acceptanceId": "T-37-AC2",
+          "scenarioDigest": "d2bf7069e2624814000236ebb72ea08bd0563e5bcb31abe81a8fb4fdb58cf265"
+        },
+        {
+          "acceptanceId": "T-37-AC3",
+          "scenarioDigest": "eaf4e8b0c7647a4be6b68469ba60c8b198819dbd0c7172f18db5c7d575915037"
+        },
+        {
+          "acceptanceId": "T-38-AC1",
+          "scenarioDigest": "640d91d9238c187c3b2fd0263e5e00ce614b963ebeea64c6b9a031934c526c7a"
+        },
+        {
+          "acceptanceId": "T-38-AC2",
+          "scenarioDigest": "d33135cb39bed412fbbfc23835fda537563b2169fdb2ea09ed8aa07b5ef84692"
+        },
+        {
+          "acceptanceId": "T-38-AC3",
+          "scenarioDigest": "e31834d3c1408a7ade912985c910ed291003a0fb08ccf82a826c26c0d39304b8"
+        },
+        {
+          "acceptanceId": "T-39-AC1",
+          "scenarioDigest": "4f117e1de77a2fccad0e49062fecea0ae56e86f913af76f16b077e2c791d84a2"
+        },
+        {
+          "acceptanceId": "T-39-AC2",
+          "scenarioDigest": "eec6fe793f7612cec277f84d5f461e94d71a86d110d81d3b4bf9e8c4f22a4235"
+        },
+        {
+          "acceptanceId": "T-39-AC3",
+          "scenarioDigest": "4081e42d054d39b4d752d695aa6efcc31915690df39cdf631c98214047652cd9"
+        },
+        {
+          "acceptanceId": "T-40-AC1",
+          "scenarioDigest": "1b54a0d47114141bda213fd57f40c583353226962ce8df23259cd21bec9dbe89"
+        },
+        {
+          "acceptanceId": "T-40-AC2",
+          "scenarioDigest": "7889d13ca3918ae99b5093fe3d7b4056e21e65c7178ffed11ff35daa72f0f2a3"
+        },
+        {
+          "acceptanceId": "T-40-AC3",
+          "scenarioDigest": "cb7c95275a9edd4a34c266ae625dd3dd32603da7279cb5e7822bb9ac4767561c"
+        },
+        {
+          "acceptanceId": "T-41-AC1",
+          "scenarioDigest": "b439b8c2c03f7821192c0aaa16123d23ff3d26ea4a4119c30bcfb7e9c701c9db"
+        },
+        {
+          "acceptanceId": "T-41-AC2",
+          "scenarioDigest": "a4b91734faec73bcfd314a6e82782076a89206a8fc6622c88322c168116a2877"
+        },
+        {
+          "acceptanceId": "T-41-AC3",
+          "scenarioDigest": "5e98b5a1f14f2cc4709701bad4859025c5c16a7e55358e297f7aab40598c1e9c"
+        },
+        {
+          "acceptanceId": "T-42-AC1",
+          "scenarioDigest": "75721e26cab1676a9fa334e6caa990488d7a1428cb8c333edbc8a7b75f299199"
+        },
+        {
+          "acceptanceId": "T-42-AC2",
+          "scenarioDigest": "3b5f3dd8e267ef8761aa742302d46a72f00741131716089843c37b2cdd5f0c79"
+        },
+        {
+          "acceptanceId": "T-42-AC3",
+          "scenarioDigest": "2e25e4f3c38035521f5cdff30fcab277b44fb8ea860bf05dad1a4d611b76e7f3"
+        },
+        {
+          "acceptanceId": "T-43-AC1",
+          "scenarioDigest": "5c5ecf256d1796f7c9a6a2ad6853dcf180ec3494f3e34ee8236263131ae15353"
+        },
+        {
+          "acceptanceId": "T-43-AC2",
+          "scenarioDigest": "9aeec27fa198e77f0e86c2638758f9978e8ecf8eef4cef430e68bd3f87251e67"
+        },
+        {
+          "acceptanceId": "T-43-AC3",
+          "scenarioDigest": "1bb921ff5061f288d6c3def13512d5ed445948ea783babb50aedcc9e79fd4e5c"
+        },
+        {
+          "acceptanceId": "T-44-AC1",
+          "scenarioDigest": "a27942bd7640d534596bc8234d824840c2f36034c7b4af8950bc377d2c338c03"
+        },
+        {
+          "acceptanceId": "T-44-AC2",
+          "scenarioDigest": "2ce7edaaeff63d4af0a0f78e3e7528c972ccd52b8d611e9b154911587a3f08fb"
+        },
+        {
+          "acceptanceId": "T-44-AC3",
+          "scenarioDigest": "b0f32c476168ad3c7cbdf8c02ab5eaced668cc59b213979c1446dee4e89708ec"
+        },
+        {
+          "acceptanceId": "T-45-AC1",
+          "scenarioDigest": "0df777999b5e9b716705baa05bc79160794947b0aabba53c73557172b53a08e0"
+        },
+        {
+          "acceptanceId": "T-45-AC2",
+          "scenarioDigest": "0401376f6f4e7904da48f12fe93d4a5cba7aa6abd840aaaf37de4a3be0da5b4d"
+        },
+        {
+          "acceptanceId": "T-45-AC3",
+          "scenarioDigest": "46cc598d0bdc748b4b14d0c96938cdc43e3bbf87a26c62f408ae4e8c332b4206"
+        },
+        {
+          "acceptanceId": "T-46-AC1",
+          "scenarioDigest": "8cdeceebad2fc56b0d48ff8a5a789cd6d28c14795fefa8458294361a6ff545e7"
+        },
+        {
+          "acceptanceId": "T-46-AC2",
+          "scenarioDigest": "0a640e141948c18f9841278c26431ba68d5a1bcadca182bc891e5fa51968cef7"
+        },
+        {
+          "acceptanceId": "T-46-AC3",
+          "scenarioDigest": "21a35cccf5c7181d229b0bfa214bce0597b49fae1e2faa03b6d2e1c31e960705"
+        },
+        {
+          "acceptanceId": "T-47-AC1",
+          "scenarioDigest": "aced77e55f7152714c0ad5e1f596fe4008fdeb7c6ca38fd40fb39a9dae8e351e"
+        },
+        {
+          "acceptanceId": "T-47-AC2",
+          "scenarioDigest": "acdfc2f6b9debedc86dde09ad52c55f1b5dba3b45def98b8a65907aa4af7e07c"
+        },
+        {
+          "acceptanceId": "T-47-AC3",
+          "scenarioDigest": "313df80e53151cc06de9f8e6771c823a36527fb08101c0864ee8edf862f3e7d1"
+        },
+        {
+          "acceptanceId": "T-48-AC1",
+          "scenarioDigest": "ea1a1b7edb83d3c8d2289d72f7a93df0d0d1a9900405e8436fc10d6fbf055d3d"
+        },
+        {
+          "acceptanceId": "T-48-AC2",
+          "scenarioDigest": "bebd8c5dd4db6c21de5fc210c35f96bf2b22f94744a8a7d68b8957ab9ac1992d"
+        },
+        {
+          "acceptanceId": "T-48-AC3",
+          "scenarioDigest": "5f69eb819d5d2268ec81f82e13149d16a5da6d2046a4fdf068e65c4e945c0485"
+        }
+      ]
+    },
+    {
+      "id": "domain-vectors-10",
+      "path": "contracts/enterprise/domain-vectors-10.mjs",
+      "count": 24,
+      "vectorDigest": "ef5be46ecb492c45705e6b4572b7a8db33ab3a4b1821032cf076746ba9c6533c",
+      "sources": [
+        {
+          "acceptanceId": "T-50-AC1",
+          "scenarioDigest": "aeb1c74be57e46ba2ff70b1b47b3d83a29660f11200fd36d384d132bd098959a"
+        },
+        {
+          "acceptanceId": "T-50-AC2",
+          "scenarioDigest": "a52d58f1f4932b0d6435daf48e2220966a61454037802e1eb3f7a708bf263f3b"
+        },
+        {
+          "acceptanceId": "T-50-AC3",
+          "scenarioDigest": "95d98f71c61a48bbb1d1ed49d030620ba6d90d5996cad60f98a55ce029584f68"
+        },
+        {
+          "acceptanceId": "T-50-AC4",
+          "scenarioDigest": "eacd2dfa964bdd8cdc948deb781e778f22bc65036863a38e7e6ae696632c2809"
+        },
+        {
+          "acceptanceId": "T-51-AC1",
+          "scenarioDigest": "8e624e2a6005aacc7bdf3e06ae49a2ab1e5a23281e635a15d416ba1c436ecba5"
+        },
+        {
+          "acceptanceId": "T-51-AC2",
+          "scenarioDigest": "c49c6906aca2df6106a80144b645bbbc58f520b458dfb8cb499dca368d7a7cb8"
+        },
+        {
+          "acceptanceId": "T-51-AC3",
+          "scenarioDigest": "99a74cae3ded6050d2006ac37406ce2afc432e167d6cecb31fe0214627d1dd32"
+        },
+        {
+          "acceptanceId": "T-51-AC4",
+          "scenarioDigest": "7de33363b4bdc2f279d793828354e5d18eace9d00a1f3fb0bb3b52dee3e62dc6"
+        },
+        {
+          "acceptanceId": "T-52-AC1",
+          "scenarioDigest": "7bbe227a8fdad4fbf4b630daf54a5ec556cf094535c124ec99396828fd6311e5"
+        },
+        {
+          "acceptanceId": "T-52-AC2",
+          "scenarioDigest": "20ad828a833f7b4173c2d88b0fbb441c377b7f2d0a86e366c75a2d3dae624959"
+        },
+        {
+          "acceptanceId": "T-52-AC3",
+          "scenarioDigest": "10be46bb13fa6b59b0d162f3aa69be45166d3c22d000d29f5110f82818eaa02b"
+        },
+        {
+          "acceptanceId": "T-52-AC4",
+          "scenarioDigest": "dca5e8eb796f3d32742092babc876eafed811021eb180edbbc31cd93e4646747"
+        },
+        {
+          "acceptanceId": "T-53-AC1",
+          "scenarioDigest": "c817bd1d3a72e86b45c4fbfbc9e1873fbddc09066ceab35c76642c9ad458c731"
+        },
+        {
+          "acceptanceId": "T-53-AC2",
+          "scenarioDigest": "d8dff9a748382ca151652ba04281e64cbd29628305fc0149857c6172fea35bed"
+        },
+        {
+          "acceptanceId": "T-53-AC3",
+          "scenarioDigest": "d1cc25e7820c6e90fa7f9f4e198196eb9be69fe4bfcf3188d02274b83c4812b1"
+        },
+        {
+          "acceptanceId": "T-53-AC4",
+          "scenarioDigest": "11751b840e73b4ea386a150abbe31db1ccd094501d93637b7f1a1ad6675e3ddc"
+        },
+        {
+          "acceptanceId": "T-54-AC1",
+          "scenarioDigest": "0ee4aa5e802c197ba51f36658edf7945a424f4391a4839fcc5bf2ca9308d63e3"
+        },
+        {
+          "acceptanceId": "T-54-AC2",
+          "scenarioDigest": "7b4843c76a94da906db253386575da50ca1fcb810869f6e04e314344ae1b7579"
+        },
+        {
+          "acceptanceId": "T-54-AC3",
+          "scenarioDigest": "86cd6409a500a6f0d38514aa6a9603acbf1b0e887189da294b63eda5b01342dc"
+        },
+        {
+          "acceptanceId": "T-54-AC4",
+          "scenarioDigest": "3f96c0f92d3537f6a717fea717d25fc891796fb3ee4a85bca6f3bcb5ba3fd0ed"
+        },
+        {
+          "acceptanceId": "T-55-AC1",
+          "scenarioDigest": "6f002e82bb13d9fafeaf2ae4929d77a6b75c7f10f5fb6147ffbebf2c50c151e2"
+        },
+        {
+          "acceptanceId": "T-55-AC2",
+          "scenarioDigest": "49d35ee814cdac69c3b3710fcab2e1e6a9dcca973673bb221b8d30adbc6104ac"
+        },
+        {
+          "acceptanceId": "T-55-AC3",
+          "scenarioDigest": "92206ea8edcf80c5e1acde4334845ea42cb063829312bb76a2827a601a2c494d"
+        },
+        {
+          "acceptanceId": "T-55-AC4",
+          "scenarioDigest": "0a81a8855704e5832fd6101a8fee060976a32b98a0777db0eb277d21a0a1ff59"
+        }
+      ]
+    },
+    {
+      "id": "domain-vectors-11",
+      "path": "contracts/enterprise/domain-vectors-11.mjs",
+      "count": 48,
+      "vectorDigest": "7d2a21ce6f673c0f0c7b3fa7fbeac4f740e12e5b8b4167f677015e0a33aaf41c",
+      "sources": [
+        {
+          "acceptanceId": "T-56-AC1",
+          "scenarioDigest": "0555472a7382398a26415db730a3efa519e338f4513a10cfea39b39e4dd078d3"
+        },
+        {
+          "acceptanceId": "T-56-AC2",
+          "scenarioDigest": "f1db64756fcbf44747f3d8d74ea10d634d797f63306a768fa3e57097202778ac"
+        },
+        {
+          "acceptanceId": "T-56-AC3",
+          "scenarioDigest": "e20a521bd8fac633fe7cace90ea9c1ec3d034f28e4b53cb8987505c42ade65f5"
+        },
+        {
+          "acceptanceId": "T-56-AC4",
+          "scenarioDigest": "e883ec1e9ec16ae41fca426ee2c57e84cef63a6e541cf0009057013b951d539b"
+        },
+        {
+          "acceptanceId": "T-57-AC1",
+          "scenarioDigest": "7457d46003da79b80d93a0e53a370d23ab847d86cace994fe04b7f28c4442b81"
+        },
+        {
+          "acceptanceId": "T-57-AC2",
+          "scenarioDigest": "428c10b409b43b72609ec693cc6d9a48f423e4975b6db5106469e8886b23f6a8"
+        },
+        {
+          "acceptanceId": "T-57-AC3",
+          "scenarioDigest": "7a82eeebdcd43c2779ae81e7303d55d38ea3fa4f33592547539e8833d431d09b"
+        },
+        {
+          "acceptanceId": "T-57-AC4",
+          "scenarioDigest": "8c37136583ffbd12013873c7f2e8cf712e619bf6a5e14a0a6d5f441813201e0b"
+        },
+        {
+          "acceptanceId": "T-58-AC1",
+          "scenarioDigest": "1d369b90ce42e6500941ac62e79e7256827fb0311bb5aee2c6827ed3477c9d1c"
+        },
+        {
+          "acceptanceId": "T-58-AC2",
+          "scenarioDigest": "9269abd494fc56e4a1e0777a1b130c16671126e0e278dd0bcf0157b05b7b137d"
+        },
+        {
+          "acceptanceId": "T-58-AC3",
+          "scenarioDigest": "11ea28c101e41a98d8146dbb2ac7bb8ba86ca88b53c553b86767ace4fa7f0e74"
+        },
+        {
+          "acceptanceId": "T-58-AC4",
+          "scenarioDigest": "375146401e5e789f5fa455b08be6a817ca278b3d0938922254230ccf9410b708"
+        },
+        {
+          "acceptanceId": "T-59-AC1",
+          "scenarioDigest": "628ffdc8c0ab87d01b929665cb269c3209b32a5c9efd6ee0f6a9aa24a00b2d27"
+        },
+        {
+          "acceptanceId": "T-59-AC2",
+          "scenarioDigest": "6ab509c1f76b43abadbb2b5ae99348f7238528599a769f0af254676e5ff41cbd"
+        },
+        {
+          "acceptanceId": "T-59-AC3",
+          "scenarioDigest": "0cc16fa90d33d80edad73b3960d655a535f6b36b6ef6ac9474c950db4fe4048c"
+        },
+        {
+          "acceptanceId": "T-59-AC4",
+          "scenarioDigest": "60a12ab221df34c4f6a89b9bbc6c46a2b2037adf3146085fc412628cc70c63d9"
+        },
+        {
+          "acceptanceId": "T-60-AC1",
+          "scenarioDigest": "99104e334034eaeccb48c1888a991a2a658aad7dbdcb6e5a2b0da4eb2bba7b06"
+        },
+        {
+          "acceptanceId": "T-60-AC2",
+          "scenarioDigest": "0b9eb528d39a2f8db896cdc4d91f9a2b2c30e63de6dddee03155ef5f0774f997"
+        },
+        {
+          "acceptanceId": "T-60-AC3",
+          "scenarioDigest": "078d1c9882e0ec08fab91270f7467669730b0a44fe098082fcab669425eb91f5"
+        },
+        {
+          "acceptanceId": "T-60-AC4",
+          "scenarioDigest": "41d93d8ce8c5dac1f562f98ff32df53a6e3a197a82f8f624c5ac036ae00e357c"
+        },
+        {
+          "acceptanceId": "T-61-AC1",
+          "scenarioDigest": "519863cb187f8547e5b726691247cf73cab1dd999e52cc63632267dba00a4570"
+        },
+        {
+          "acceptanceId": "T-61-AC2",
+          "scenarioDigest": "1736f3425e0b85e69f1bc461621fb246b62a58450fa351caa6cddcb64f2e42a0"
+        },
+        {
+          "acceptanceId": "T-61-AC3",
+          "scenarioDigest": "5f9fd571df78a1aa54e7df055fa23a51d44376ba25ec87647a1ccd1f4dc579e9"
+        },
+        {
+          "acceptanceId": "T-61-AC4",
+          "scenarioDigest": "d43d34ca4c624f545da37472138c44824b37842403f4044a57da7436ffa29e6f"
+        },
+        {
+          "acceptanceId": "T-62-AC1",
+          "scenarioDigest": "428198b01871da623e38a40f51e6ad2a0ac96d42d3a99982bddec5e60379b3c2"
+        },
+        {
+          "acceptanceId": "T-62-AC2",
+          "scenarioDigest": "6d6601735ab4913b7dd0346ded6f82eb83713a4ebe9addd05e61402a9b7caa54"
+        },
+        {
+          "acceptanceId": "T-62-AC3",
+          "scenarioDigest": "629bb6cd986d02f4dd7e984f5e7c146465d22d54912e2fc16538ec2ac1896266"
+        },
+        {
+          "acceptanceId": "T-62-AC4",
+          "scenarioDigest": "da90d5d6bc4cc897627b6cc1c1b400c904111e8820225140e7aa52b22e5c67b7"
+        },
+        {
+          "acceptanceId": "T-63-AC1",
+          "scenarioDigest": "51f5d25d6c30e136021d78dbb967735c4748fe58e82b340489e8ac412c3ecde2"
+        },
+        {
+          "acceptanceId": "T-63-AC2",
+          "scenarioDigest": "e0ac273edd00c85b4f6f570543538c9bd9e7f1e74dc069bc2f4710bc84596bfb"
+        },
+        {
+          "acceptanceId": "T-63-AC3",
+          "scenarioDigest": "ad321deb54d102ed26f06a99b14c5f3209205f060d5342a7b5a5b5d82986a743"
+        },
+        {
+          "acceptanceId": "T-63-AC4",
+          "scenarioDigest": "4e626a93b6e310f4dbd979bbc3c64b19d55ca9d8716a73d2c55c516068528bf7"
+        },
+        {
+          "acceptanceId": "T-64-AC1",
+          "scenarioDigest": "43b9ed275b9a7a7a9f2383c59884a5541ba8faa9ea6fbe657ec503de36284b04"
+        },
+        {
+          "acceptanceId": "T-64-AC2",
+          "scenarioDigest": "4cbf58f1d36f6e61ca9b03d71e08c286d7ffa94b6aa42661b0d9c9508e7e16aa"
+        },
+        {
+          "acceptanceId": "T-64-AC3",
+          "scenarioDigest": "93be3765266a3c4a1f63565dae258684c0f3291916764018bd8825521f9fcf6e"
+        },
+        {
+          "acceptanceId": "T-64-AC4",
+          "scenarioDigest": "c9a7f3e02adc58a5a0318ac7a62eade3d5f9553492bd072299b792a7af30666f"
+        },
+        {
+          "acceptanceId": "T-65-AC1",
+          "scenarioDigest": "bdbd2eeac0fa1d8270c96828b82e537e38a4dfc8746cd192b47c59d53760b074"
+        },
+        {
+          "acceptanceId": "T-65-AC2",
+          "scenarioDigest": "10141128e0b73ac8636e6a5a0931fb5f0f491eac2a45d16ab319aac9a9355047"
+        },
+        {
+          "acceptanceId": "T-65-AC3",
+          "scenarioDigest": "cc793d7a16b9dfdd58661783218df110a54f00d329a131f8d2167a0bfca3a376"
+        },
+        {
+          "acceptanceId": "T-65-AC4",
+          "scenarioDigest": "6535bacd31f0ee9725d342e02134a31f366ce926f8459b8a030dbb0f589d537d"
+        },
+        {
+          "acceptanceId": "T-66-AC1",
+          "scenarioDigest": "9b4797ba755e81595aec137195135d60c204d6bf24d1097824fd05f3bf063743"
+        },
+        {
+          "acceptanceId": "T-66-AC2",
+          "scenarioDigest": "9541084ad5dd29117afacb391cb50a81b74b5887693c105525d2aa873ffa7b5c"
+        },
+        {
+          "acceptanceId": "T-66-AC3",
+          "scenarioDigest": "64bf4df048a0c7a0c85cd782fe33c7484e06ef9b8ed8ca20959159c5a098d0cd"
+        },
+        {
+          "acceptanceId": "T-66-AC4",
+          "scenarioDigest": "ac374245520a33a67c83832c4999c04e9706ecdfdd7434958fde781b083ae9e9"
+        },
+        {
+          "acceptanceId": "T-67-AC1",
+          "scenarioDigest": "8fb8e3b3e8112078b572e6603cf46c190b99d17310f286845399a0f389dd1a32"
+        },
+        {
+          "acceptanceId": "T-67-AC2",
+          "scenarioDigest": "ba4ba662399638b1123b31a75f269c62c8aba45322d5520177043ffd570bbf0c"
+        },
+        {
+          "acceptanceId": "T-67-AC3",
+          "scenarioDigest": "936392c60733399dfe138ddd24c98af9163f6b5577ec12aefcbe71ec0a2bd6dc"
+        },
+        {
+          "acceptanceId": "T-67-AC4",
+          "scenarioDigest": "76ed3a5f36cb13c7a7096e09d9969f5d630e450f0b79e4a36e0addf470e746ad"
+        }
+      ]
+    },
+    {
+      "id": "domain-vectors-12",
+      "path": "contracts/enterprise/domain-vectors-12.mjs",
+      "count": 32,
+      "vectorDigest": "0a057c172c24d0c50b1debd46715622fd6a8607f8740014f4e66cc320806d726",
+      "sources": [
+        {
+          "acceptanceId": "T-69-AC1",
+          "scenarioDigest": "b99dffd52ead16e1275fab103dcef47ecc4dc8ae05a70207b220a9400f61e7a7"
+        },
+        {
+          "acceptanceId": "T-69-AC2",
+          "scenarioDigest": "ecf091f0879ff5d8af40bd171cc5f50c5e870fa6ddda570a9a5e7c7b2a9ae418"
+        },
+        {
+          "acceptanceId": "T-69-AC3",
+          "scenarioDigest": "7fb507079c9cc98422c75e2b783e9c17e6603f2e05097c25e1b9299b5710788b"
+        },
+        {
+          "acceptanceId": "T-69-AC4",
+          "scenarioDigest": "eb8ace4ad3681c24bd7eddc722b8ac93d2107ed8e832eface178ffee67d200f2"
+        },
+        {
+          "acceptanceId": "T-70-AC1",
+          "scenarioDigest": "5566d29f1dcbc20e661573ba0b8faec38534bdfcc625c3cf626e4f320deddb4e"
+        },
+        {
+          "acceptanceId": "T-70-AC2",
+          "scenarioDigest": "5e875c4b7f6f0f8248870dcbe8161549d8110b799ec141c42655f24cc7661780"
+        },
+        {
+          "acceptanceId": "T-70-AC3",
+          "scenarioDigest": "e980286ad176b8e5572df2975f104fa6c1c8da2eb1ee12c813e554ca5433218b"
+        },
+        {
+          "acceptanceId": "T-70-AC4",
+          "scenarioDigest": "e6ae9f30f32fe2fcc1901aec9bc135f7f14483fbb638330a34af7af795548a9b"
+        },
+        {
+          "acceptanceId": "T-71-AC1",
+          "scenarioDigest": "193f7404dbc2dcd95cc95e80a1bef9c9d91ed96b7f4fb6ecd91b6b2fe7d74a48"
+        },
+        {
+          "acceptanceId": "T-71-AC2",
+          "scenarioDigest": "82bbea05db27a0377cb209ac26d3777f58db2d58ebf099653871eddc4cacdd0f"
+        },
+        {
+          "acceptanceId": "T-71-AC3",
+          "scenarioDigest": "92f0a675f9e0952dcdcfeaf907690b228d706ba898861abe1de5885f08ee2bd0"
+        },
+        {
+          "acceptanceId": "T-71-AC4",
+          "scenarioDigest": "6906eca6260381a7b83fec2f376dec5a0e05fbf917690ecb32bad04a07f8876a"
+        },
+        {
+          "acceptanceId": "T-72-AC1",
+          "scenarioDigest": "9349b8834a639b2a206daf36def2c5433bfd221344b3f1d790973193a7953369"
+        },
+        {
+          "acceptanceId": "T-72-AC2",
+          "scenarioDigest": "06b21aad36f5ebb1921a72b0af7789f6952259d5ae135dd8505cbd925021af6b"
+        },
+        {
+          "acceptanceId": "T-72-AC3",
+          "scenarioDigest": "aee4888e2d2684c192a10d8def2548934a5a8e43c7719f32af1c7c24c6d5975e"
+        },
+        {
+          "acceptanceId": "T-72-AC4",
+          "scenarioDigest": "fc6de6cfc7a803aa9e55d87b7c2d3963e78c59bc12e7287ad294fe789e02adb0"
+        },
+        {
+          "acceptanceId": "T-73-AC1",
+          "scenarioDigest": "775d14a554d58ce8e6f06b4cc7dc17c0c9458b3c48e3b7559ab288c18f96b333"
+        },
+        {
+          "acceptanceId": "T-73-AC2",
+          "scenarioDigest": "674a2f7a4a4e14b3bb2a163e6248f0b7516cfc8fcb7afff3505074caf12806d2"
+        },
+        {
+          "acceptanceId": "T-73-AC3",
+          "scenarioDigest": "125a7f02c3ec5868b97ac88b2c0969d7064ec0190e3e9b9ce58d6f05746632e0"
+        },
+        {
+          "acceptanceId": "T-73-AC4",
+          "scenarioDigest": "1ad03dbccc0a6fce50da0f81cfc52a3e9cbeec051655abd98f4d0f7044d0c7c3"
+        },
+        {
+          "acceptanceId": "T-74-AC1",
+          "scenarioDigest": "d9a92666d27472e419e5b4a948335e4eace220c0d6beef1691980ca2d87a0a2b"
+        },
+        {
+          "acceptanceId": "T-74-AC2",
+          "scenarioDigest": "8b7eae7b5a63396a15f2f3063c1eabbbc37b12a7d98d201f2e8964c60a52b7dc"
+        },
+        {
+          "acceptanceId": "T-74-AC3",
+          "scenarioDigest": "3c8c90bb89c94240d7b10d6f7c34e368c8f9a7a1890c2b422375bf4eae17068e"
+        },
+        {
+          "acceptanceId": "T-74-AC4",
+          "scenarioDigest": "969ba4ac8d9e153aff57524a4c689a3fcef4882c3d5fa0afe471020c07364e96"
+        },
+        {
+          "acceptanceId": "T-75-AC1",
+          "scenarioDigest": "f574cbb51f2772c3887c2bb4c57efc8063f03f2982c6bfe8a866973941f5d215"
+        },
+        {
+          "acceptanceId": "T-75-AC2",
+          "scenarioDigest": "5ab95ce109eebb68c127f4ab3c8bea6fc17c088c1f645a21a7382271060dc614"
+        },
+        {
+          "acceptanceId": "T-75-AC3",
+          "scenarioDigest": "644af6d2f9b0a74dbd704af87062b773aa88fddb1a59d47123819b721aef23c4"
+        },
+        {
+          "acceptanceId": "T-75-AC4",
+          "scenarioDigest": "720ef4a3f0f857e95f5176af13343b917226ef116013444ee535d0cc500c9951"
+        },
+        {
+          "acceptanceId": "T-76-AC1",
+          "scenarioDigest": "369180b5768ea26602e07259da67b07505a02602270a4d86a2f78326764f4e25"
+        },
+        {
+          "acceptanceId": "T-76-AC2",
+          "scenarioDigest": "02c187d32af7ace146810fc5b6bef7c309d663ad86fecea1a7651d29f4fe272e"
+        },
+        {
+          "acceptanceId": "T-76-AC3",
+          "scenarioDigest": "d0628ee5b1956eaeb3ab98646ec487c079dd6e35aa6ef3cb87e03dc9359ce921"
+        },
+        {
+          "acceptanceId": "T-76-AC4",
+          "scenarioDigest": "5fac0ca07e500cec4aaa465bdccefddfdf38bf279309bf740cede6c2076d4a35"
+        }
+      ]
+    },
+    {
+      "id": "domain-vectors-13",
+      "path": "contracts/enterprise/domain-vectors-13.mjs",
+      "count": 48,
+      "vectorDigest": "6e3ea44f348636b2e56aa00dc995b8f3450440a23839fce9e45cae532b48860b",
+      "sources": [
+        {
+          "acceptanceId": "T-78-AC1",
+          "scenarioDigest": "1e94c19432081fc3768788e27207142179914e8f0d726815d28bf32c9c7d6c4f"
+        },
+        {
+          "acceptanceId": "T-78-AC2",
+          "scenarioDigest": "139f9c8d563864eb1765544909d75d8b8f13a2b0814cab75745c57c34c321cd7"
+        },
+        {
+          "acceptanceId": "T-78-AC3",
+          "scenarioDigest": "733b2ebbe58b03312ebc21eb23249e6056d4cbac80511ef76b686c8b3cdd0820"
+        },
+        {
+          "acceptanceId": "T-78-AC4",
+          "scenarioDigest": "70aaa7e3389f39b763e8cc761375b454bca635f48ce256218bff4b5cd5921a55"
+        },
+        {
+          "acceptanceId": "T-79-AC1",
+          "scenarioDigest": "6c702c663bfc56e5c914dd01823c6bbbbab1f3e5e33e5910acd7a92e6b7fe774"
+        },
+        {
+          "acceptanceId": "T-79-AC2",
+          "scenarioDigest": "47fbbe499cd43c37c0b7f0088f325c2bb1a697367057071fe0370a788c92a9e6"
+        },
+        {
+          "acceptanceId": "T-79-AC3",
+          "scenarioDigest": "8b05db0030b40939b3df0931fe16b327d49058e88a60b69680add4a81a783321"
+        },
+        {
+          "acceptanceId": "T-79-AC4",
+          "scenarioDigest": "cec2f0a392f2fd52f6cb7428ca2c662f8a694585af367c8719d9b79b00373ad8"
+        },
+        {
+          "acceptanceId": "T-80-AC1",
+          "scenarioDigest": "3af2fa1294d72d0063805c0d9f1839ca20f142a31a993aedcf5f1e253a6ef124"
+        },
+        {
+          "acceptanceId": "T-80-AC2",
+          "scenarioDigest": "7d394cb25f1f983430683a1b74b0beede5de5ed6e835ea5e17caa97e573fc8c0"
+        },
+        {
+          "acceptanceId": "T-80-AC3",
+          "scenarioDigest": "9120e36ca5710e32ff0d136801f41dfe2d383a95dd1e370be1e34554aefb44d8"
+        },
+        {
+          "acceptanceId": "T-80-AC4",
+          "scenarioDigest": "ff08f1f4d6f4e02cc91c6b348e1f1bc6d62275be0f5be4403d3be4a469cab75d"
+        },
+        {
+          "acceptanceId": "T-81-AC1",
+          "scenarioDigest": "d1d37b4daef978c9d97ae0fec81042523118abce02a144453727e645b9fc3271"
+        },
+        {
+          "acceptanceId": "T-81-AC2",
+          "scenarioDigest": "82613e5f8d1f779f6f3f0ba7ff6da5b917515326027a4cae6ddc206a68b99216"
+        },
+        {
+          "acceptanceId": "T-81-AC3",
+          "scenarioDigest": "987814fc9c34349c28f903458c80673ada24ca7d279ccdab745df59921e82f00"
+        },
+        {
+          "acceptanceId": "T-81-AC4",
+          "scenarioDigest": "747d852aab921c39f6a153ad8cd17be1afd8f776b921bba49b2b515ddafdc907"
+        },
+        {
+          "acceptanceId": "T-82-AC1",
+          "scenarioDigest": "1336aa45ad764d2ecb1c6a05d4fdd98aa3f08d77df94a40a20fe0ad0ac51c9ba"
+        },
+        {
+          "acceptanceId": "T-82-AC2",
+          "scenarioDigest": "003c079cabc48fbd0e894b3eca1eb7f2d5e59de57d4dd43ec911edf88ca89309"
+        },
+        {
+          "acceptanceId": "T-82-AC3",
+          "scenarioDigest": "e1d057ebff6905b7c762418d41ed300c98b86ec452b116b13ec6e946dd2de949"
+        },
+        {
+          "acceptanceId": "T-82-AC4",
+          "scenarioDigest": "84668471de6b89b86c06e2a7abfd879abcba22a4acb9fd73713c5ee1e5bae314"
+        },
+        {
+          "acceptanceId": "T-83-AC1",
+          "scenarioDigest": "f0957d04c38351eb909b20c3edfebabe8a54553e1467ba52c81818572985f134"
+        },
+        {
+          "acceptanceId": "T-83-AC2",
+          "scenarioDigest": "8506a86fdf57c96ee4a0b7f0bd189d2f08a0f74c5c8ae32fa45d0de4d7280f97"
+        },
+        {
+          "acceptanceId": "T-83-AC3",
+          "scenarioDigest": "ce5f594aaf98edd6e0462edbef1ec21b5172e4a9c320f99dea8316751f777e9b"
+        },
+        {
+          "acceptanceId": "T-83-AC4",
+          "scenarioDigest": "0978be75dabd282cf4a2dd4022571eb94783ab21ca84c3067373a2c2b7d61c25"
+        },
+        {
+          "acceptanceId": "T-84-AC1",
+          "scenarioDigest": "4c7c178a082632e6eaab040af9d69e837e625cc381d75cdc99e9bb5ed5dd20b8"
+        },
+        {
+          "acceptanceId": "T-84-AC2",
+          "scenarioDigest": "6059e4f068772a0cfca84f668da64162677a53f7bbfab0d421cb1545467fe7ed"
+        },
+        {
+          "acceptanceId": "T-84-AC3",
+          "scenarioDigest": "9e7e15251e94dd86a5ac3c1aa28ccbcdeaa238c079c687b66eda9e8e630ecb94"
+        },
+        {
+          "acceptanceId": "T-84-AC4",
+          "scenarioDigest": "81f9d7d32f93f9155947115a34b097b2481ad7050b4210780b10f13dec317838"
+        },
+        {
+          "acceptanceId": "T-85-AC1",
+          "scenarioDigest": "d61f4a701ba192d8fea12b5d00650a234a23d754b105a9c47f1fb32017a43d55"
+        },
+        {
+          "acceptanceId": "T-85-AC2",
+          "scenarioDigest": "c84ce091e8d9b581b0dff8ed6801bfa6fb4bab408789da881e0f8aff5ceaecdb"
+        },
+        {
+          "acceptanceId": "T-85-AC3",
+          "scenarioDigest": "cc8f7be0a0f31fe7cc5346741bc5c4c4b3d7e7b6f1db13828a31bed7758c5971"
+        },
+        {
+          "acceptanceId": "T-85-AC4",
+          "scenarioDigest": "4ba0edd446cbbc508e99d109dec6468b50cbeca898964a3e9e9b5a2105aa49af"
+        },
+        {
+          "acceptanceId": "T-86-AC1",
+          "scenarioDigest": "e7c36e333bbe8813e3cc8ea8bf8bba0b256c0eb0c4139a5984e52c0eaa43bc88"
+        },
+        {
+          "acceptanceId": "T-86-AC2",
+          "scenarioDigest": "d749318c94ae93f27712cebb548053bce09dc8fbb6b7375cc6153136107e9f86"
+        },
+        {
+          "acceptanceId": "T-86-AC3",
+          "scenarioDigest": "52f2b4514d3c4656ee10adfea932741852496db3807ca6bb7d58e7230f4bf4b9"
+        },
+        {
+          "acceptanceId": "T-86-AC4",
+          "scenarioDigest": "5d19dc382c68cffbfd91559fc1257ad4a04077a1712dafd318ed5979031edddf"
+        },
+        {
+          "acceptanceId": "T-87-AC1",
+          "scenarioDigest": "8a36203f4e743919acd19a9965e405acc3eb2fce0577e01b26cc4d46dad62378"
+        },
+        {
+          "acceptanceId": "T-87-AC2",
+          "scenarioDigest": "c1bec2acfc4a065bd24570186e49d7744fc4e6cbdec279fababe95295d3e5773"
+        },
+        {
+          "acceptanceId": "T-87-AC3",
+          "scenarioDigest": "0b36c6fcda9ddc17d9609181968636640543ac278c98399ebce5d92c90f9693e"
+        },
+        {
+          "acceptanceId": "T-87-AC4",
+          "scenarioDigest": "f84aada9c6c6d6f01045e9692afa6e53f9eacae0a5492694e977e046cd7ff904"
+        },
+        {
+          "acceptanceId": "T-88-AC1",
+          "scenarioDigest": "5afdf4bc3931195854fd23756a17982d9f31d57faa4edddaa97da50630071613"
+        },
+        {
+          "acceptanceId": "T-88-AC2",
+          "scenarioDigest": "13b75a5e0b8b012fa802f7650c3f7f12ce3ef30f23100f9ec1ee8e477241153c"
+        },
+        {
+          "acceptanceId": "T-88-AC3",
+          "scenarioDigest": "0ed0c5ee6888ebdb7b3a3e55a6ac9626ccde2110d99075e0cc3bd8ad8fb92d68"
+        },
+        {
+          "acceptanceId": "T-88-AC4",
+          "scenarioDigest": "96e486154755e4cf73f0e14fff798f01dc3c5a61fe96c93d574c78cc0bcdb946"
+        },
+        {
+          "acceptanceId": "T-89-AC1",
+          "scenarioDigest": "e70454affc6fa43482074552aff633fcf30b92c12b59c9a5a0105952d7065b24"
+        },
+        {
+          "acceptanceId": "T-89-AC2",
+          "scenarioDigest": "516ffa8466901c905e8bd829f981838e9e727d7d0c2f96aabb8db3c7957fb451"
+        },
+        {
+          "acceptanceId": "T-89-AC3",
+          "scenarioDigest": "84aa5cd30ac6cc6ff67cb49fcb6b4ea59908e1a8d3281e4c43198beea59cd57e"
+        },
+        {
+          "acceptanceId": "T-89-AC4",
+          "scenarioDigest": "d01953176b66f91f37dc1d668a075b8649dcc1013b61e9e0c8146a93edaf0587"
+        }
+      ]
+    }
+  ]
+}

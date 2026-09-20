@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0a0f16">
+    <title>OrgWard product demonstrator</title>
+    <link rel="stylesheet" href="/platform.css">
+  </head>
+  <body class="platform-body">
+    <div class="platform-shell">
+      <aside class="global-sidebar">
+        <a class="platform-brand" href="/platform.html"><span class="platform-mark"><i></i><i></i><i></i></span><span>OrgWard<small>Enterprise Studio</small></span></a>
+        <button class="workspace-switch" type="button" data-capability="organisation"><span class="workspace-avatar">N</span><span><b>Northstar Bank</b><small>Enterprise workspace</small></span><i>⌄</i></button>
+        <nav class="global-nav" aria-label="Product navigation">
+          <span class="nav-label">Operate</span>
+          <button data-view="command" aria-current="page"><i>⌂</i><span>Command center</span><b id="nav-decisions">3</b></button>
+          <button data-view="enterprise"><i>◇</i><span>Enterprise</span></button>
+          <button data-view="changes"><i>⇄</i><span>Change portfolio</span><b>7</b></button>
+          <button data-view="work"><i>▶</i><span>Work & agents</span><b id="nav-runs">1</b></button>
+          <button data-view="releases"><i>↑</i><span>Releases</span></button>
+          <button data-view="evidence"><i>◎</i><span>Evidence</span></button>
+          <span class="nav-label">Configure</span>
+          <button data-view="administration"><i>⚙</i><span>Administration</span></button>
+        </nav>
+        <div class="sidebar-foot">
+          <div><span class="spec-pulse"></span><b>Interactive specification</b></div>
+          <p>Planned controls explain contracts; they do not perform external effects.</p>
+          <a href="/execution.html">Open live execution foundation →</a>
+        </div>
+      </aside>
+      <div class="platform-main">
+        <header class="platform-topbar">
+          <div class="breadcrumbs"><span>Northstar Bank</span><i>/</i><b id="current-view-label">Command center</b></div>
+          <div class="topbar-actions">
+            <button id="open-search" class="search-trigger" type="button"><span>⌕</span> Search or run a command <kbd>⌘ K</kbd></button>
+            <label class="role-switch"><span>Acting as</span><select id="role-select"><option>Enterprise owner</option><option>Change owner</option><option>Enterprise architect</option><option>Control owner</option><option>Delivery lead</option><option>Release approver</option><option>Platform administrator</option><option>Auditor</option></select></label>
+            <button class="icon-button" type="button" data-capability="notifications" aria-label="Notifications">◔<b>4</b></button>
+            <button class="avatar-button" type="button" data-capability="identity" aria-label="User menu">AK</button>
+          </div>
+        </header>
+        <main id="platform-canvas" class="platform-canvas" tabindex="-1"></main>
+      </div>
+      <aside id="spec-inspector" class="spec-inspector" aria-label="Product specification inspector" hidden>
+        <header><div><span class="micro-label">Capability contract</span><h2 id="inspector-title"></h2></div><button id="close-inspector" type="button" aria-label="Close inspector">×</button></header>
+        <div id="inspector-content"></div>
+      </aside>
+    </div>
+    <dialog id="command-dialog" class="command-dialog">
+      <form method="dialog"><label><span>⌕</span><input id="command-search" autocomplete="off" placeholder="Find a screen, object, action, or capability…"><kbd>Esc</kbd></label><div id="command-results"></div></form>
+    </dialog>
+    <div id="platform-toast" class="platform-toast" role="status" hidden></div>
+    <script type="module" src="/platform.js"></script>
+  </body>
+</html>

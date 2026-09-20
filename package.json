@@ -1,0 +1,15 @@
+{
+  "name": "orgward-enterprise-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "check:spec": "node ops/check-spec.mjs --self-test",
+    "test": "node --test tests/*.test.mjs tests/sdlc/*.test.mjs tests/execution/*.test.mjs",
+    "check": "node --check server.mjs && node --check src/model.mjs && node --check src/store.mjs && node --check src/execution/contracts.mjs && node --check src/execution/store.mjs && node --check src/execution/service.mjs && node --check src/sdlc/contracts.mjs && node --check src/sdlc/fixture.mjs && node --check src/sdlc/engine.mjs && node --check src/sdlc/execution-adapter.mjs && node --check src/sdlc/store.mjs && node --check workers/scaffold-node-service.mjs && node --check public/app.js && node --check public/map-state.js && node --check public/sdlc.js && node --check public/execution.js && node --check public/platform.js && npm test && npm run check:spec"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

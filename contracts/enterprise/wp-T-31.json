@@ -1,0 +1,1059 @@
+{
+  "format": "orgward-work-package-draft-v1",
+  "taskId": "T-31",
+  "sliceId": "T-31-boundary-draft-01",
+  "title": "Build immutable candidates with independent assurance",
+  "actor": "assurance engineer",
+  "trigger": "Authorized actor initiates BuildCandidate in SC-09; task story: As assurance engineer, I want to evaluate the exact built candidate so promotion cannot rely on claimed success.",
+  "observableOutcome": "Satisfy the unchanged source acceptance for T-31; primary boundary BuildCandidate reaches verified only after actual domain validation. Acknowledged jobs are not completed work.",
+  "reviewStatus": "pending",
+  "author": "codex",
+  "reviewer": null,
+  "implementationReady": false,
+  "independentReview": "Pending real independent review; no review, dependency proof or product execution is asserted.",
+  "sourceTaskHash": "c4b78260e1fcf437f8634283da1346a9355bccd30d7d597e9cc8ecf44e749ae4",
+  "sourceRequirements": [
+    {
+      "id": "T-31-AC1",
+      "scenario": "Given immutable source/recipe/dependencies, build produces candidate bytes and required functional/contract/security checks tied to their hashes.",
+      "sourceKind": "unspecified"
+    },
+    {
+      "id": "T-31-AC2",
+      "scenario": "Given missing/skipped/failed required check or mismatched artifact, candidate is blocked; green output text or worker exit zero does not satisfy assurance.",
+      "sourceKind": "unspecified"
+    },
+    {
+      "id": "T-31-AC3",
+      "scenario": "Given repeated clean build, reproducibility is verified or explained deterministic differences are rejected per policy; build failure retains safe logs and repair path.",
+      "sourceKind": "unspecified"
+    }
+  ],
+  "acceptanceIds": [
+    "T-31-AC1",
+    "T-31-AC2",
+    "T-31-AC3"
+  ],
+  "dependencyReceipts": [],
+  "dependencies": [
+    "T-21",
+    "T-30"
+  ],
+  "module": "sdlc",
+  "operationKind": "effect",
+  "ownership": "Change context, requirements, repository/build/release lineage; reference Studio revisions and shared attempts/effects.",
+  "recordMeaning": "build_candidate is a boundary payload/result view, not permission to create an independent authoritative store. Resolve its fields into the canonical aggregate family in A-05/C-01.",
+  "requiredOperations": [
+    "BuildCandidate"
+  ],
+  "uncoveredOperations": [],
+  "openDecisions": [
+    {
+      "id": "T-31-D01",
+      "owner": "independent-domain-and-security-reviewer",
+      "blocks": "implementation_start",
+      "decision": "Review this primary boundary against every original scenario; author concrete domain datasets and independent output oracles, not assertions derived from the implementation.",
+      "closure": "Approved bounded slices with executable negative/recovery fixtures for T-31-AC1, T-31-AC2, T-31-AC3 and a legitimate independent review receipt."
+    }
+  ],
+  "schemas": [
+    {
+      "id": "BuildCandidateRequest",
+      "definition": {
+        "type": "object",
+        "properties": {
+          "commandId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operation": {
+            "const": "BuildCandidate"
+          },
+          "expectedHead": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "context": {
+            "type": "object",
+            "properties": {
+              "workspaceId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "branchId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "effectiveAt": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "workspaceId",
+              "branchId",
+              "effectiveAt"
+            ],
+            "additionalProperties": false
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "sourceCommit": {
+                "type": "string",
+                "minLength": 1
+              },
+              "recipeDigest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "requiredChecks": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "uniqueItems": true
+              },
+              "builderProfile": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "sourceCommit",
+              "recipeDigest",
+              "requiredChecks",
+              "builderProfile"
+            ],
+            "additionalProperties": false
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "commandId",
+          "operation",
+          "expectedHead",
+          "expectedVersion",
+          "context",
+          "payload",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "BuildCandidateResult",
+      "definition": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "BuildCandidate"
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "completed"
+            ]
+          },
+          "targetState": {
+            "type": "string",
+            "minLength": 1
+          },
+          "commandId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "resultRef": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "authoritativeGeneration": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "projectionWatermark": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "jobId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "operation",
+          "status",
+          "targetState",
+          "commandId",
+          "resultRef",
+          "version",
+          "authoritativeGeneration",
+          "projectionWatermark",
+          "partial",
+          "jobId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "SafeError",
+      "definition": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          },
+          "fieldErrors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "field",
+                "message"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "correlationId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "currentVersion": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "recoveryActions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "fieldErrors",
+          "correlationId",
+          "retryable",
+          "currentVersion",
+          "recoveryActions"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "operations": [
+    {
+      "name": "BuildCandidate",
+      "transport": "POST /api/v1/commands",
+      "requestSchema": "BuildCandidateRequest",
+      "resultSchema": "BuildCandidateResult",
+      "errorSchema": "SafeError",
+      "requestExample": {
+        "commandId": "fixture-t-31-1",
+        "operation": "BuildCandidate",
+        "expectedHead": 7,
+        "expectedVersion": 7,
+        "context": {
+          "workspaceId": "workspace-a",
+          "branchId": "branch-1",
+          "effectiveAt": "2026-09-19T00:00:00Z"
+        },
+        "payload": {
+          "sourceCommit": "commit-b",
+          "recipeDigest": "sha256:50c76e799d043ee158b479c5f41b586552e80718af3b40300413f32491499527",
+          "requiredChecks": [
+            "unit",
+            "security",
+            "requirements"
+          ],
+          "builderProfile": "isolated-build"
+        },
+        "reason": "Exercise T-31 boundary"
+      },
+      "successExample": {
+        "operation": "BuildCandidate",
+        "status": "accepted",
+        "targetState": "requested",
+        "commandId": "fixture-t-31-1",
+        "resultRef": "build_candidate-1",
+        "version": 8,
+        "authoritativeGeneration": 12,
+        "projectionWatermark": 12,
+        "partial": false,
+        "jobId": "job-t-31-1"
+      },
+      "errorExample": {
+        "code": "VERSION_CONFLICT",
+        "message": "The selected revision changed; reload and review the retained draft.",
+        "fieldErrors": [],
+        "correlationId": "trace-t-31-1",
+        "retryable": false,
+        "currentVersion": 8,
+        "recoveryActions": [
+          "reload",
+          "compare",
+          "rebase"
+        ]
+      },
+      "permission": "sdlc.BuildCandidate: authenticated scoped membership plus current action grant; viewer may query authorized metadata only. Visible resource denial is 403; hidden or foreign resource is indistinguishable 404. No UI role selector or payload actor grants authority.",
+      "exampleMeaning": "Reserved synthetic IDs; digest strings are hashes of fixture labels, not claims about real artifacts. Missing referenced records must fail validation.",
+      "acknowledgement": "HTTP 202 only after durable job creation; GET /api/v1/commands/{commandId} reports actual progress."
+    }
+  ],
+  "permissionRule": "sdlc.BuildCandidate: authenticated scoped membership plus current action grant; viewer may query authorized metadata only. Visible resource denial is 403; hidden or foreign resource is indistinguishable 404. No UI role selector or payload actor grants authority.",
+  "transactionBoundary": "One tenant-scoped PostgreSQL transaction checks identity/policy/version and commits domain revision, command result, audit intent and outbox. No network/provider call inside this transaction. Protected remote effects use a separately fenced durable broker intent.",
+  "idempotencyRule": "Unique (tenantId, operation, commandId) with canonical request hash. Equal replay returns original result; unequal payload returns 409. expectedVersion fences aggregate; expectedHead fences branch baseline. Neither may be inferred from stale UI.",
+  "invalidationRule": "Use CHANGE-PROTOCOL dependency kinds/field paths. Semantic accepted publication atomically advances the authoritative invalidation generation. A view-only change does not invalidate evidence. Projection lag is visible; protected effects revalidate current identity/policy/context/cell epoch.",
+  "migrationRecovery": "Expand/read-compatible schema first; backfill with stable IDs and source hashes, quarantine failures, reconcile counts and only then cut over. Restart uses command status and durable cursors. Unknown remote effects reconcile before retry; irreversible outcomes require forward recovery, not history deletion.",
+  "persistence": {
+    "authoritative": true,
+    "tenantBoundary": "Session-derived tenant/workspace; composite references and tenant-leading indices. A payload target tenant is a checked selector only.",
+    "indices": [
+      "UNIQUE (tenant_id, operation, command_id)",
+      "(tenant_id, aggregate_id, version)",
+      "(tenant_id, workspace_id, state, updated_at, id)"
+    ],
+    "immutable": [
+      "published revisions",
+      "accepted evidence",
+      "prior attempts"
+    ],
+    "layoutStorage": "per-principal view preference; no semantic write"
+  },
+  "events": [
+    {
+      "type": "BuildCandidateRecorded",
+      "meaning": "Draft event name to reconcile with canonical registered events before approval; emitted only after durable commit.",
+      "envelopeFields": [
+        "eventId",
+        "schemaVersion",
+        "tenantId",
+        "workspaceId",
+        "aggregateId",
+        "version",
+        "type",
+        "actor",
+        "occurredAt",
+        "correlationId",
+        "causationId",
+        "data",
+        "evidenceRefs"
+      ],
+      "consumers": [
+        "ledger-audit",
+        "authorized-read-projection"
+      ],
+      "delivery": "Outbox at least once; deduplicate eventId, reject obsolete head promotion."
+    }
+  ],
+  "requiredEvents": [],
+  "transitions": [
+    {
+      "from": "requested",
+      "command": "BuildCandidate",
+      "to": "verified",
+      "precondition": "Valid schema, authorized actor, current version and domain conditions in the source scenario; async acceptance alone does not reach terminal state.",
+      "failureRecovery": "Retain draft and prior evidence; show safe error and permitted recovery. Resolve command status before retry."
+    },
+    {
+      "from": "requested",
+      "command": "BuildCandidate:invalid-or-denied",
+      "to": "requested",
+      "precondition": "Invalid payload, hidden object, stale context, unmet checkpoint or expired permission.",
+      "failureRecovery": "No domain/effect transition; disclose no hidden object data. Rebase or obtain legitimate new authority."
+    }
+  ],
+  "ui": {
+    "screens": [
+      "SC-09"
+    ],
+    "source": "docs/product/SCREEN-CONTRACTS.md + PORTFOLIO-UX.md + MIGRATION-AND-COVERAGE.md",
+    "controls": [
+      {
+        "field": "sourceCommit",
+        "control": "text-or-authorized-reference",
+        "required": true,
+        "valueSource": "server-validated record or retained user draft",
+        "validation": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      {
+        "field": "recipeDigest",
+        "control": "text-or-authorized-reference",
+        "required": true,
+        "valueSource": "server-validated record or retained user draft",
+        "validation": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      },
+      {
+        "field": "requiredChecks",
+        "control": "typed-reference-list",
+        "required": true,
+        "valueSource": "server-validated record or retained user draft",
+        "validation": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      {
+        "field": "builderProfile",
+        "control": "text-or-authorized-reference",
+        "required": true,
+        "valueSource": "server-validated record or retained user draft",
+        "validation": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    ],
+    "primaryAction": "BuildCandidate",
+    "permissionVisibility": "Explain disabled visible actions; omit inaccessible resources. Server repeats authorization.",
+    "keyboard": "Tab reaches all controls in reading order; visible focus, labeled errors, focus first invalid field. Escape closes dialog and restores trigger focus; graph has list/table alternative.",
+    "reload": "Use durable result ID and pinned baseline, then restore selection/filter. Never replay a mutation just because the page reloads.",
+    "legacyException": null
+  },
+  "uiStates": [
+    {
+      "state": "loading",
+      "behavior": "Show pending request and retain selection; disable duplicate submission without blocking unrelated navigation."
+    },
+    {
+      "state": "empty",
+      "behavior": "Show zero only after successful authorized empty response; offer the relevant create/import action if allowed."
+    },
+    {
+      "state": "stale",
+      "behavior": "Show source timestamp and baseline/watermark mismatch; allow inspect/refresh but prevent protected stale action."
+    },
+    {
+      "state": "conflict",
+      "behavior": "Keep unsaved values, show changed fields/current version, and require compare/rebase before new submission."
+    },
+    {
+      "state": "failed",
+      "behavior": "Display safe error, trace ID and retry eligibility; do not replace data with successful example values."
+    },
+    {
+      "state": "denied",
+      "behavior": "Explain denied action only on a visible resource; hide foreign resource details and purge revoked cached data."
+    },
+    {
+      "state": "success",
+      "behavior": "Render actual server readback and explicit proposed/accepted/enabled/evidenced state; a queued job is still queued."
+    },
+    {
+      "state": "recovery",
+      "behavior": "Inspect command/job outcome and unresolved effects; offer only permitted retry, resume, reconciliation or reviewed compensation."
+    }
+  ],
+  "fixtures": [
+    {
+      "id": "T-31-FX-1",
+      "kind": "positive",
+      "acceptanceIds": [
+        "T-31-AC1",
+        "T-31-AC2",
+        "T-31-AC3"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-31-1",
+          "operation": "BuildCandidate",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "sourceCommit": "commit-b",
+            "recipeDigest": "sha256:50c76e799d043ee158b479c5f41b586552e80718af3b40300413f32491499527",
+            "requiredChecks": [
+              "unit",
+              "security",
+              "requirements"
+            ],
+            "builderProfile": "isolated-build"
+          },
+          "reason": "Exercise T-31 boundary"
+        },
+        "actor": "authorized-actor-a",
+        "tenant": "tenant-a",
+        "initialState": "requested",
+        "currentVersion": 7
+      },
+      "expectedPersistedResult": {
+        "domainRevisionDelta": 1,
+        "externalDispatchCount": 0,
+        "resultState": "requested",
+        "requiredSourceCriterion": "T-31-AC1",
+        "note": "202 acknowledges durable work only, not successful provider effect or qualification."
+      },
+      "testPath": "tests/acceptance/t-31.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-31-FX-2",
+      "kind": "negative",
+      "acceptanceIds": [
+        "T-31-AC1",
+        "T-31-AC2",
+        "T-31-AC3"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-31-1",
+          "operation": "BuildCandidate",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "sourceCommit": "commit-b",
+            "recipeDigest": "sha256:50c76e799d043ee158b479c5f41b586552e80718af3b40300413f32491499527",
+            "requiredChecks": [
+              "unit",
+              "security",
+              "requirements"
+            ],
+            "builderProfile": "isolated-build"
+          },
+          "reason": "Exercise T-31 boundary",
+          "unexpectedAuthority": "admin"
+        },
+        "actor": "viewer-a",
+        "tenant": "tenant-a"
+      },
+      "expectedPersistedResult": {
+        "status": 400,
+        "code": "INVALID_SCHEMA",
+        "domainRevisionDelta": 0,
+        "externalDispatchCount": 0
+      },
+      "testPath": "tests/acceptance/t-31.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-31-FX-3",
+      "kind": "concurrent",
+      "acceptanceIds": [
+        "T-31-AC1",
+        "T-31-AC2",
+        "T-31-AC3"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-31-1",
+          "operation": "BuildCandidate",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "sourceCommit": "commit-b",
+            "recipeDigest": "sha256:50c76e799d043ee158b479c5f41b586552e80718af3b40300413f32491499527",
+            "requiredChecks": [
+              "unit",
+              "security",
+              "requirements"
+            ],
+            "builderProfile": "isolated-build"
+          },
+          "reason": "Exercise T-31 boundary"
+        },
+        "requests": 2,
+        "sameCommandId": true,
+        "interleave": [
+          "first.accept",
+          "second.accept",
+          "first.respond"
+        ]
+      },
+      "expectedPersistedResult": {
+        "durableResultCount": 1,
+        "duplicateExternalDispatchCount": 0,
+        "conflictingPayloadStatus": 409
+      },
+      "testPath": "tests/acceptance/t-31.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-31-FX-4",
+      "kind": "recovery",
+      "acceptanceIds": [
+        "T-31-AC1",
+        "T-31-AC2",
+        "T-31-AC3"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-31-1",
+          "operation": "BuildCandidate",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "sourceCommit": "commit-b",
+            "recipeDigest": "sha256:50c76e799d043ee158b479c5f41b586552e80718af3b40300413f32491499527",
+            "requiredChecks": [
+              "unit",
+              "security",
+              "requirements"
+            ],
+            "builderProfile": "isolated-build"
+          },
+          "reason": "Exercise T-31 boundary"
+        },
+        "failpoint": "after-durable-intent-before-provider-response",
+        "restart": true
+      },
+      "expectedPersistedResult": {
+        "lostAcceptedResults": 0,
+        "duplicateExternalDispatchCount": 0,
+        "unresolvedRemoteResult": "reconciliation_required"
+      },
+      "testPath": "tests/acceptance/t-31.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-31-FX-5",
+      "kind": "isolation",
+      "acceptanceIds": [
+        "T-31-AC1",
+        "T-31-AC2",
+        "T-31-AC3"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-31-1",
+          "operation": "BuildCandidate",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "sourceCommit": "commit-b",
+            "recipeDigest": "sha256:50c76e799d043ee158b479c5f41b586552e80718af3b40300413f32491499527",
+            "requiredChecks": [
+              "unit",
+              "security",
+              "requirements"
+            ],
+            "builderProfile": "isolated-build"
+          },
+          "reason": "Exercise T-31 boundary"
+        },
+        "authenticatedTenant": "tenant-b",
+        "targetOwner": "tenant-a",
+        "payloadTenantOverride": "tenant-a"
+      },
+      "expectedPersistedResult": {
+        "status": 404,
+        "leakedRecords": 0,
+        "leakedCounts": 0,
+        "leakedEventIds": 0,
+        "externalDispatchCount": 0
+      },
+      "testPath": "tests/acceptance/t-31.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-31-FX-6",
+      "kind": "end_to_end",
+      "acceptanceIds": [
+        "T-31-AC1",
+        "T-31-AC2",
+        "T-31-AC3"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-31-1",
+          "operation": "BuildCandidate",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "sourceCommit": "commit-b",
+            "recipeDigest": "sha256:50c76e799d043ee158b479c5f41b586552e80718af3b40300413f32491499527",
+            "requiredChecks": [
+              "unit",
+              "security",
+              "requirements"
+            ],
+            "builderProfile": "isolated-build"
+          },
+          "reason": "Exercise T-31 boundary"
+        },
+        "actor": "authorized-actor-a",
+        "screens": [
+          "SC-09"
+        ],
+        "actions": [
+          "open",
+          "inspect-source",
+          "edit-or-select",
+          "submit",
+          "reload",
+          "inspect-durable-result"
+        ]
+      },
+      "expectedPersistedResult": {
+        "fakeSuccessCount": 0,
+        "selectionRetained": true,
+        "unauthorizedControlsExecutable": false,
+        "originalAcceptanceRequired": [
+          "T-31-AC1",
+          "T-31-AC2",
+          "T-31-AC3"
+        ]
+      },
+      "testPath": "tests/acceptance/t-31.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-31-FX-7",
+      "kind": "cross_boundary",
+      "acceptanceIds": [
+        "T-31-AC1",
+        "T-31-AC2",
+        "T-31-AC3"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-31-1",
+          "operation": "BuildCandidate",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "sourceCommit": "commit-b",
+            "recipeDigest": "sha256:50c76e799d043ee158b479c5f41b586552e80718af3b40300413f32491499527",
+            "requiredChecks": [
+              "unit",
+              "security",
+              "requirements"
+            ],
+            "builderProfile": "isolated-build"
+          },
+          "reason": "Exercise T-31 boundary"
+        },
+        "initialGeneration": 12,
+        "currentGeneration": 13,
+        "projectionWatermark": 12,
+        "revokedGrant": true
+      },
+      "expectedPersistedResult": {
+        "protectedDispatchCount": 0,
+        "freshness": "stale",
+        "recoveryActions": [
+          "refresh-authority",
+          "recompute-context",
+          "review-again"
+        ],
+        "historicalEvidenceOverwritten": false
+      },
+      "testPath": "tests/acceptance/t-31.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-31-AC1-DOMAIN",
+      "kind": "end_to_end",
+      "acceptanceIds": [
+        "T-31-AC1"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-31-1",
+          "operation": "BuildCandidate",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "sourceCommit": "commit-b",
+            "recipeDigest": "sha256:50c76e799d043ee158b479c5f41b586552e80718af3b40300413f32491499527",
+            "requiredChecks": [
+              "unit",
+              "security",
+              "requirements"
+            ],
+            "builderProfile": "isolated-build"
+          },
+          "reason": "Exercise T-31 boundary"
+        },
+        "sourceScenarioId": "T-31-AC1",
+        "sourceScenarioHash": "9e531f1519dd7d71b282679b8a1f252879d648d7a9fd09fd22caaefe18642b82"
+      },
+      "expectedPersistedResult": {
+        "sourceScenarioId": "T-31-AC1",
+        "mustAssertOriginalScenario": true,
+        "cannotSubstituteBoundaryFixture": true
+      },
+      "testPath": "tests/acceptance/t-31.test.mjs",
+      "status": "not_run",
+      "scope": "domain_oracle_requires_review"
+    },
+    {
+      "id": "T-31-AC2-DOMAIN",
+      "kind": "end_to_end",
+      "acceptanceIds": [
+        "T-31-AC2"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-31-1",
+          "operation": "BuildCandidate",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "sourceCommit": "commit-b",
+            "recipeDigest": "sha256:50c76e799d043ee158b479c5f41b586552e80718af3b40300413f32491499527",
+            "requiredChecks": [
+              "unit",
+              "security",
+              "requirements"
+            ],
+            "builderProfile": "isolated-build"
+          },
+          "reason": "Exercise T-31 boundary"
+        },
+        "sourceScenarioId": "T-31-AC2",
+        "sourceScenarioHash": "d1f14acf8832d079dc7c7d2b342bcb1dff8edc7329f429b3f9dd8dcacdbb253a"
+      },
+      "expectedPersistedResult": {
+        "sourceScenarioId": "T-31-AC2",
+        "mustAssertOriginalScenario": true,
+        "cannotSubstituteBoundaryFixture": true
+      },
+      "testPath": "tests/acceptance/t-31.test.mjs",
+      "status": "not_run",
+      "scope": "domain_oracle_requires_review"
+    },
+    {
+      "id": "T-31-AC3-DOMAIN",
+      "kind": "end_to_end",
+      "acceptanceIds": [
+        "T-31-AC3"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-31-1",
+          "operation": "BuildCandidate",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "sourceCommit": "commit-b",
+            "recipeDigest": "sha256:50c76e799d043ee158b479c5f41b586552e80718af3b40300413f32491499527",
+            "requiredChecks": [
+              "unit",
+              "security",
+              "requirements"
+            ],
+            "builderProfile": "isolated-build"
+          },
+          "reason": "Exercise T-31 boundary"
+        },
+        "sourceScenarioId": "T-31-AC3",
+        "sourceScenarioHash": "2e4554405b7e73de9380456e8c6402c94c3ffd8be12910d2e0cf3a3bfaf7a5c8"
+      },
+      "expectedPersistedResult": {
+        "sourceScenarioId": "T-31-AC3",
+        "mustAssertOriginalScenario": true,
+        "cannotSubstituteBoundaryFixture": true
+      },
+      "testPath": "tests/acceptance/t-31.test.mjs",
+      "status": "not_run",
+      "scope": "domain_oracle_requires_review"
+    }
+  ],
+  "domainCounterexamples": [],
+  "targetFiles": [
+    "contracts/enterprise/t-31.schema.json",
+    "src/modules/sdlc/t-31.mjs",
+    "tests/acceptance/t-31.test.mjs",
+    "migrations/t-31.sql"
+  ],
+  "fileStatus": "intended paths, not implementation evidence",
+  "slices": [
+    {
+      "id": "T-31-contract",
+      "dependsOn": [],
+      "covers": [
+        "T-31-AC1",
+        "T-31-AC2",
+        "T-31-AC3"
+      ],
+      "exit": "Resolve open decisions, concrete domain oracles and independent review; schemas and examples must validate."
+    },
+    {
+      "id": "T-31-domain",
+      "dependsOn": [
+        "T-31-contract",
+        "T-21",
+        "T-30"
+      ],
+      "covers": [
+        "T-31-AC1",
+        "T-31-AC2",
+        "T-31-AC3"
+      ],
+      "exit": "Actual state, permission, concurrency and restart tests; no mock substituted for required real provider."
+    },
+    {
+      "id": "T-31-experience",
+      "dependsOn": [
+        "T-31-domain"
+      ],
+      "covers": [
+        "T-31-AC1",
+        "T-31-AC2",
+        "T-31-AC3"
+      ],
+      "exit": "Working role journey across all listed screens/states with keyboard and reload checks."
+    },
+    {
+      "id": "T-31-qualification",
+      "dependsOn": [
+        "T-31-experience"
+      ],
+      "covers": [
+        "T-31-AC1",
+        "T-31-AC2",
+        "T-31-AC3"
+      ],
+      "exit": "Independent revision-bound evidence for every original criterion and integration obligation; reconcile all child slices before parent closure."
+    }
+  ],
+  "observability": "Record correlation/command/job IDs, operation, authorized scope, version/generation/fence and safe error code. Redact content, credentials and foreign identifiers. Metrics include rejection, conflict, lag and unknown-effect counts; tenant labels are authorized and bounded.",
+  "sourceDecisions": [
+    "docs/production/SOLUTION-ARCHITECTURE.md",
+    "docs/production/CHANGE-PROTOCOL.md",
+    "docs/production/DELIVERY-CONTRACTS.md",
+    "docs/production/IMPLEMENTATION-HANDOFF.md",
+    "docs/production/IMPLEMENTATION-BACKLOG.json"
+  ],
+  "nonGoals": [
+    "No implementation or independent approval claimed by this draft.",
+    "No public deployment, new authority, real transaction or customer-specific policy inferred.",
+    "Do not replace existing IDs, task dependencies, domain scenarios or source rule IDs with generated boundary checks."
+  ],
+  "evidence": {
+    "status": "not_run",
+    "receipts": [],
+    "commands": [
+      "node --test tests/acceptance/t-31.test.mjs",
+      "npm run check",
+      "node ops/check-spec.mjs --self-test --verify-sources"
+    ],
+    "required": [
+      "revision",
+      "fixture manifest",
+      "actual storage/event/effect assertions",
+      "role journey",
+      "environment/provider versions",
+      "raw results",
+      "unresolved findings",
+      "independent review"
+    ]
+  }
+}

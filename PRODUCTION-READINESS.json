@@ -1,0 +1,361 @@
+{
+  "domain_fixture_elaboration_13": {
+    "id": "domain-vectors-13",
+    "status": "definitions_saved_not_product_execution",
+    "checked_at": "2026-09-20 07:42:45 UTC",
+    "contract": "contracts/enterprise/domain-vectors-13.mjs",
+    "registry": "contracts/enterprise/domain-vectors.index.json",
+    "handoff": "docs/production/DOMAIN-FIXTURE-HANDOFF-13.md",
+    "user_journey": "docs/product/GOVERNANCE-AGENT-INTERACTIONS-13.md",
+    "receipt": "ops/checks/domain-vectors-13-2026-09-20.md",
+    "added_scenario_vectors": 48,
+    "concrete_scenario_vectors": 316,
+    "expected_observations": 1778,
+    "tasks_with_vectors": 91,
+    "tasks_without_vectors": 41,
+    "scenarios_without_vectors": 164,
+    "actual_product_acceptance_runs": 0,
+    "independent_reviews": 0,
+    "note": "Policy lifecycle, Arbiter, Steward, Ledger and Overseer definitions; no runtime/UI implementation, new research or gate promotion. All sixteen additional WF obligations remain unrun."
+  },
+  "domain_fixture_elaboration_12": {
+    "id": "domain-vectors-12",
+    "status": "definitions_saved_not_product_execution",
+    "checked_at": "2026-09-20 06:36:49 UTC",
+    "contract": "contracts/enterprise/domain-vectors-12.mjs",
+    "registry": "contracts/enterprise/domain-vectors.index.json",
+    "rule_fixtures": "contracts/enterprise/sentinel-rule-fixtures-12.mjs",
+    "handoff": "docs/production/DOMAIN-FIXTURE-HANDOFF-12.md",
+    "user_journey": "docs/product/SENTINEL-WARDEN-INTERACTIONS-12.md",
+    "receipt": "ops/checks/domain-vectors-12-2026-09-20.md",
+    "added_scenario_vectors": 32,
+    "concrete_scenario_vectors": 268,
+    "expected_observations": 1538,
+    "tasks_with_vectors": 79,
+    "tasks_without_vectors": 53,
+    "scenarios_without_vectors": 212,
+    "sentinel_rule_fixture_pairs": 28,
+    "actual_product_acceptance_runs": 0,
+    "independent_reviews": 0,
+    "note": "Sentinel graph/rules/remediation/qualification and Warden policy definitions only. No engine/UI implementation, research missions or gate promotion; sixteen WF obligations remain additional and unrun."
+  },
+  "domain_fixture_elaboration_11": {
+    "id": "domain-vectors-11",
+    "status": "definitions_saved_not_product_execution",
+    "checked_at": "2026-09-20 06:18:55 UTC",
+    "contract": "contracts/enterprise/domain-vectors-11.mjs",
+    "registry": "contracts/enterprise/domain-vectors.index.json",
+    "handoff": "docs/production/DOMAIN-FIXTURE-HANDOFF-11.md",
+    "user_journey": "docs/product/BUSINESS-SENTINEL-INTERACTIONS-11.md",
+    "receipt": "ops/checks/domain-vectors-11-2026-09-20.md",
+    "added_scenario_vectors": 48,
+    "concrete_scenario_vectors": 236,
+    "expected_observations": 1293,
+    "tasks_with_vectors": 71,
+    "tasks_without_vectors": 61,
+    "scenarios_without_vectors": 244,
+    "actual_product_acceptance_runs": 0,
+    "independent_reviews": 0,
+    "note": "Business-domain and Sentinel intake/review definitions only. No runtime/UI changes, deployments, research missions or gate promotions. Sixteen additional mandatory WF obligations remain unrun."
+  },
+  "configurable_workflow_10": {
+    "id": "configurable-workflow-10",
+    "status": "required_design_and_unrun_definitions_saved",
+    "checked_at": "2026-09-20 00:03:32 UTC",
+    "decision": "docs/production/ADR-010-CONFIGURABLE-WORKFLOW.md",
+    "user_contract": "docs/product/CONFIGURABLE-WORKFLOWS.md",
+    "handoff": "docs/production/DOMAIN-FIXTURE-HANDOFF-10.md",
+    "workflow_obligations": "contracts/enterprise/workflow-obligations-10.json",
+    "receipt": "ops/checks/configurable-workflow-10-2026-09-20.md",
+    "additional_mandatory_workflow_obligations": 16,
+    "workflow_obligations_passed": 0,
+    "added_original_scenario_vectors": 24,
+    "original_scenario_vectors": 188,
+    "original_scenarios_without_vectors": 292,
+    "tasks_with_vectors": 59,
+    "actual_new_domain_acceptance_runs": 0,
+    "independent_packet_reviews": 0,
+    "note": "Planned Temporal adapter and bpmn-js diagram/form architecture; no runtime install, UI feature implementation, provider effects or gate promotions."
+  },
+  "domain_fixture_elaboration_09": {
+    "id": "domain-vectors-09",
+    "status": "definitions_saved_not_product_execution",
+    "checked_at": "2026-09-19 23:41:04 UTC",
+    "contract": "contracts/enterprise/domain-vectors-09.mjs",
+    "registry": "contracts/enterprise/domain-vectors.index.json",
+    "handoff": "docs/production/DOMAIN-FIXTURE-HANDOFF-09.md",
+    "user_journey": "docs/product/SDLC-INTERACTIONS-09.md",
+    "receipt": "ops/checks/domain-vectors-09-2026-09-19.md",
+    "added_scenario_vectors": 72,
+    "concrete_scenario_vectors": 164,
+    "expected_observations": 929,
+    "tasks_with_vectors": 53,
+    "tasks_without_vectors": 79,
+    "scenarios_without_vectors": 316,
+    "actual_product_acceptance_runs": 0,
+    "independent_reviews": 0,
+    "note": "SDLC user interactions and domain expectations elaborated; no application implementation, remote writes, deployment or gate promotion. Full schemas/seeds/adapters and independent review remain required."
+  },
+  "domain_fixture_elaboration_08": {
+    "id": "domain-vectors-08",
+    "status": "definitions_saved_not_product_execution",
+    "checked_at": "2026-09-19 15:59:13 UTC",
+    "contract": "contracts/enterprise/domain-vectors-08.mjs",
+    "registry": "contracts/enterprise/domain-vectors.index.json",
+    "handoff": "docs/production/DOMAIN-FIXTURE-HANDOFF-08.md",
+    "receipt": "ops/checks/domain-vectors-08-2026-09-19.md",
+    "added_scenario_vectors": 54,
+    "concrete_scenario_vectors": 92,
+    "expected_observations": 565,
+    "tasks_with_vectors": 29,
+    "tasks_without_vectors": 103,
+    "scenarios_without_vectors": 388,
+    "actual_product_acceptance_runs": 0,
+    "independent_reviews": 0,
+    "note": "Definition elaboration only; schema seed materialization, actual adapters and independently reviewed packets remain required. Original gates/task statuses unchanged."
+  },
+  "domain_fixture_elaboration": {
+    "id": "domain-vectors-07",
+    "status": "definitions_saved_not_product_execution",
+    "checked_at": "2026-09-19 15:08:14 UTC",
+    "contract": "contracts/enterprise/domain-vectors-07.mjs",
+    "handoff": "docs/production/DOMAIN-FIXTURE-HANDOFF-07.md",
+    "receipt": "ops/checks/domain-vectors-07-2026-09-19.md",
+    "concrete_scenario_vectors": 38,
+    "expected_observations": 226,
+    "tasks_with_vectors": 11,
+    "tasks_without_vectors": 121,
+    "scenarios_without_vectors": 442,
+    "actual_product_acceptance_runs": 0,
+    "independent_reviews": 0,
+    "note": "Concrete expected observations and comparator validation only. All original task/gate statuses and independent review requirements remain unchanged."
+  },
+  "engineering_decisions": {
+    "id": "engineering-decisions-06",
+    "status": "specified_pending_independent_review",
+    "checked_at": "2026-09-19T08:43:39Z",
+    "intent": "docs/product/PRODUCT-INTENT.md",
+    "decisions": "docs/production/ENGINEERING-DECISIONS-06.md",
+    "assignment_policy": "contracts/enterprise/agent-assignment-policy.json",
+    "operation_catalogue": "contracts/enterprise/additional-operation-decisions.mjs",
+    "receipt": "ops/checks/engineering-decisions-06-2026-09-19.md",
+    "additional_operations_specified": 73,
+    "additional_operation_schema_examples": 219,
+    "abstract_transition_cases": 438,
+    "negative_schema_or_type_checks": 365,
+    "assigned_parent_tasks": 132,
+    "domain_oracle_review_bundles_remaining": 132,
+    "approved_packets": 0,
+    "product_tasks_completed": 0,
+    "note": "Ordinary engineering choices fixed and 73 secondary command definitions supplied; not a claim that 132 domain-oracle/review bundles or 480 product acceptance cases are complete. Model assignments are recommendations, not changed configuration or delegation."
+  },
+  "packet_elaboration": {
+    "id": "work-package-drafts-05",
+    "status": "drafts_saved_not_approved",
+    "checked_at": "2026-09-19T08:07:47Z",
+    "register": "docs/production/WORK-PACKAGE-INDEX.md",
+    "review": "docs/production/WORK-PACKAGE-REVIEW.md",
+    "receipt": "ops/checks/work-package-drafts-05-2026-09-19.md",
+    "boundary_drafts": 132,
+    "preserved_acceptance_scenarios": 480,
+    "schema_examples": 396,
+    "fixture_obligations_not_executed": 1404,
+    "open_decisions": 205,
+    "additional_operations_needing_contracts": 73,
+    "approved_packets": 0,
+    "product_tasks_completed": 0,
+    "production_gates_completed": 0,
+    "note": "Boundary draft validation is not implementation readiness or product acceptance. All source scenarios and task statuses preserved; legitimate independent review and domain/operation elaboration remain mandatory."
+  },
+  "product": "OrgWard Enterprise Studio and Autonomous Delivery Platform",
+  "objective": "Self-hostable enterprise operating and software-delivery platform with governed real execution and system creation",
+  "contract": "docs/production/ROADMAP.md",
+  "maturity": "development_foundation",
+  "production_ready": false,
+  "total_gates": 16,
+  "verified_completed_gates": 0,
+  "remaining_gates": 16,
+  "percent_complete": 0,
+  "current_increment": {
+    "id": "product-ux-spec-01",
+    "title": "Unified reviewable product experience and backend contract",
+    "status": "complete",
+    "checked_at": "2026-09-18T20:41:42Z",
+    "revision": "tree-sha256:3f759ffcacacdfe19d4963a6f4cf72309a6ed24963f6d2829952c8ef8f5de2b5",
+    "receipt": "ops/checks/product-ux-spec-01-2026-09-18.md",
+    "note": "Historical catalogue increment and smoke checks completed. Review revision 2 found the experience incomplete and sample/live maturity ambiguous; see specification_review. This historical receipt completes zero production gates."
+  },
+  "specification_review": {
+    "id": "architecture-review-04",
+    "status": "documented",
+    "contract_revision": 4,
+    "review": "docs/product/ARCHITECTURE-REVIEW-04.md",
+    "architecture": "docs/production/SOLUTION-ARCHITECTURE.md",
+    "backlog": "docs/production/IMPLEMENTATION-BACKLOG.json",
+    "receipt": "ops/checks/architecture-review-04-2026-09-19.md",
+    "planned_stories": 132,
+    "task_acceptance_scenarios": 480,
+    "architecture_invariants": 18,
+    "saas_qualification_journeys": 8,
+    "implementation_ready_packets": 0,
+    "implemented_by_this_review": 0,
+    "note": "Architecture and readiness guards strengthened; all planned task acceptance remains unrun. 18 abstract protocol cases are design validation, not live safety proof. Historical production gate states unchanged."
+  },
+  "completed_increments": [
+    {
+      "id": "production-foundation-01",
+      "title": "Truthful maturity model and controlled local execution",
+      "checked_at": "2026-09-18T20:09:02Z",
+      "revision": "tree-sha256:614f918fded05480adfccfd83b27864ccb3910488792d349826253aab5d37fd8",
+      "receipt": "ops/checks/production-foundation-01-2026-09-18.md"
+    }
+  ],
+  "gates": [
+    {
+      "id": "E-01",
+      "title": "Supported self-host installation and upgrades",
+      "status": "pending",
+      "receipts": []
+    },
+    {
+      "id": "E-02",
+      "title": "Enterprise authentication, identities and authorization",
+      "status": "pending",
+      "receipts": []
+    },
+    {
+      "id": "E-03",
+      "title": "Tenant, project and data isolation",
+      "status": "pending",
+      "receipts": []
+    },
+    {
+      "id": "E-04",
+      "title": "Transactional persistence, migrations and concurrency",
+      "status": "pending",
+      "receipts": []
+    },
+    {
+      "id": "E-05",
+      "title": "Secrets, keys and credential lifecycle",
+      "status": "pending",
+      "receipts": []
+    },
+    {
+      "id": "E-06",
+      "title": "Real SCM and repository lifecycle",
+      "status": "pending",
+      "receipts": []
+    },
+    {
+      "id": "E-07",
+      "title": "Isolated durable worker execution",
+      "status": "in_progress",
+      "receipts": [
+        "ops/checks/production-foundation-01-2026-09-18.md"
+      ],
+      "note": "Local allowlisted execution, approval, persistence, restart interruption handling and artifact evidence pass; durable queues, cancellation and hardened container/microVM isolation remain missing."
+    },
+    {
+      "id": "E-08",
+      "title": "Real agent and model-provider execution",
+      "status": "pending",
+      "receipts": []
+    },
+    {
+      "id": "E-09",
+      "title": "Build assurance, provenance, SBOM and signed artifacts",
+      "status": "pending",
+      "receipts": []
+    },
+    {
+      "id": "E-10",
+      "title": "Governed environments, deployment and rollback",
+      "status": "pending",
+      "receipts": []
+    },
+    {
+      "id": "E-11",
+      "title": "Observability, audit export and incident operations",
+      "status": "pending",
+      "receipts": []
+    },
+    {
+      "id": "E-12",
+      "title": "Backup, restore and disaster recovery",
+      "status": "pending",
+      "receipts": []
+    },
+    {
+      "id": "E-13",
+      "title": "Enterprise administration, policy and quotas",
+      "status": "pending",
+      "receipts": []
+    },
+    {
+      "id": "E-14",
+      "title": "Secure SDLC and compliance evidence",
+      "status": "pending",
+      "receipts": []
+    },
+    {
+      "id": "E-15",
+      "title": "Production UX, accessibility and integration API",
+      "status": "in_progress",
+      "receipts": [
+        "ops/checks/product-ux-spec-01-2026-09-18.md"
+      ],
+      "review_findings": "docs/product/UX-REVIEW-02.md",
+      "note": "Historical navigation/viewport smoke checks passed, not complete workflows or accessibility. Revision 2 records 24 open findings, including misleading sample/live state, absent editors and keyboard defects. Expanded contracts await implementation, accessibility/browser qualification and pilot usability."
+    },
+    {
+      "id": "E-16",
+      "title": "Scale, resilience, security review and real pilot",
+      "status": "pending",
+      "receipts": []
+    }
+  ],
+  "subordinate_ledgers": [
+    {
+      "file": "DELIVERY-STATUS.json",
+      "meaning": "Original private first-release workflow; not production readiness"
+    },
+    {
+      "file": "SDLC-DELIVERY-STATUS.json",
+      "meaning": "Synthetic reference-contract completion; not production readiness"
+    }
+  ],
+  "specification_review_history": [
+    {
+      "id": "ux-review-02",
+      "status": "documented",
+      "contract_revision": 2,
+      "review": "docs/product/UX-REVIEW-02.md",
+      "backlog": "docs/production/IMPLEMENTATION-BACKLOG.json",
+      "receipt": "ops/checks/ux-review-02-2026-09-18.md",
+      "findings": 24,
+      "planned_stories": 48,
+      "task_acceptance_scenarios": 144,
+      "implemented_by_this_review": 0,
+      "note": "The specification was strengthened; UI defects and production implementation remain open. Structural validation is not product qualification."
+    },
+    {
+      "id": "ux-review-03",
+      "status": "documented",
+      "contract_revision": 3,
+      "review": "docs/product/UX-REVIEW-03.md",
+      "roadmap": "docs/production/PORTFOLIO-ROADMAP.md",
+      "backlog": "docs/production/IMPLEMENTATION-BACKLOG.json",
+      "coverage": "docs/production/PORTFOLIO-COVERAGE.json",
+      "receipt": "ops/checks/ux-review-03-2026-09-19.md",
+      "findings": 14,
+      "prior_open_ui_findings": 24,
+      "planned_stories": 108,
+      "task_acceptance_scenarios": 384,
+      "portfolio_requirements": 60,
+      "enterprise_scenarios": 24,
+      "implemented_by_this_review": 0,
+      "note": "All expanded task and portfolio acceptance is unrun. Coverage/validation does not establish production readiness; original gate states and denominators are preserved."
+    }
+  ]
+}

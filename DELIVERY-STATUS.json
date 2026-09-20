@@ -1,0 +1,308 @@
+{
+  "domain_fixture_elaboration_13": {
+    "id": "domain-vectors-13",
+    "status": "definitions_saved_not_product_execution",
+    "checked_at": "2026-09-20 07:42:45 UTC",
+    "contract": "contracts/enterprise/domain-vectors-13.mjs",
+    "registry": "contracts/enterprise/domain-vectors.index.json",
+    "handoff": "docs/production/DOMAIN-FIXTURE-HANDOFF-13.md",
+    "user_journey": "docs/product/GOVERNANCE-AGENT-INTERACTIONS-13.md",
+    "receipt": "ops/checks/domain-vectors-13-2026-09-20.md",
+    "added_scenario_vectors": 48,
+    "concrete_scenario_vectors": 316,
+    "expected_observations": 1778,
+    "tasks_with_vectors": 91,
+    "tasks_without_vectors": 41,
+    "scenarios_without_vectors": 164,
+    "actual_product_acceptance_runs": 0,
+    "independent_reviews": 0,
+    "note": "Policy lifecycle, Arbiter, Steward, Ledger and Overseer definitions; no runtime/UI implementation, new research or gate promotion. All sixteen additional WF obligations remain unrun."
+  },
+  "domain_fixture_elaboration_12": {
+    "id": "domain-vectors-12",
+    "status": "definitions_saved_not_product_execution",
+    "checked_at": "2026-09-20 06:36:49 UTC",
+    "contract": "contracts/enterprise/domain-vectors-12.mjs",
+    "registry": "contracts/enterprise/domain-vectors.index.json",
+    "rule_fixtures": "contracts/enterprise/sentinel-rule-fixtures-12.mjs",
+    "handoff": "docs/production/DOMAIN-FIXTURE-HANDOFF-12.md",
+    "user_journey": "docs/product/SENTINEL-WARDEN-INTERACTIONS-12.md",
+    "receipt": "ops/checks/domain-vectors-12-2026-09-20.md",
+    "added_scenario_vectors": 32,
+    "concrete_scenario_vectors": 268,
+    "expected_observations": 1538,
+    "tasks_with_vectors": 79,
+    "tasks_without_vectors": 53,
+    "scenarios_without_vectors": 212,
+    "sentinel_rule_fixture_pairs": 28,
+    "actual_product_acceptance_runs": 0,
+    "independent_reviews": 0,
+    "note": "Sentinel graph/rules/remediation/qualification and Warden policy definitions only. No engine/UI implementation, research missions or gate promotion; sixteen WF obligations remain additional and unrun."
+  },
+  "domain_fixture_elaboration_11": {
+    "id": "domain-vectors-11",
+    "status": "definitions_saved_not_product_execution",
+    "checked_at": "2026-09-20 06:18:55 UTC",
+    "contract": "contracts/enterprise/domain-vectors-11.mjs",
+    "registry": "contracts/enterprise/domain-vectors.index.json",
+    "handoff": "docs/production/DOMAIN-FIXTURE-HANDOFF-11.md",
+    "user_journey": "docs/product/BUSINESS-SENTINEL-INTERACTIONS-11.md",
+    "receipt": "ops/checks/domain-vectors-11-2026-09-20.md",
+    "added_scenario_vectors": 48,
+    "concrete_scenario_vectors": 236,
+    "expected_observations": 1293,
+    "tasks_with_vectors": 71,
+    "tasks_without_vectors": 61,
+    "scenarios_without_vectors": 244,
+    "actual_product_acceptance_runs": 0,
+    "independent_reviews": 0,
+    "note": "Business-domain and Sentinel intake/review definitions only. No runtime/UI changes, deployments, research missions or gate promotions. Sixteen additional mandatory WF obligations remain unrun."
+  },
+  "configurable_workflow_10": {
+    "id": "configurable-workflow-10",
+    "status": "required_design_and_unrun_definitions_saved",
+    "checked_at": "2026-09-20 00:03:32 UTC",
+    "decision": "docs/production/ADR-010-CONFIGURABLE-WORKFLOW.md",
+    "user_contract": "docs/product/CONFIGURABLE-WORKFLOWS.md",
+    "handoff": "docs/production/DOMAIN-FIXTURE-HANDOFF-10.md",
+    "workflow_obligations": "contracts/enterprise/workflow-obligations-10.json",
+    "receipt": "ops/checks/configurable-workflow-10-2026-09-20.md",
+    "additional_mandatory_workflow_obligations": 16,
+    "workflow_obligations_passed": 0,
+    "added_original_scenario_vectors": 24,
+    "original_scenario_vectors": 188,
+    "original_scenarios_without_vectors": 292,
+    "tasks_with_vectors": 59,
+    "actual_new_domain_acceptance_runs": 0,
+    "independent_packet_reviews": 0,
+    "note": "Planned Temporal adapter and bpmn-js diagram/form architecture; no runtime install, UI feature implementation, provider effects or gate promotions."
+  },
+  "domain_fixture_elaboration_09": {
+    "id": "domain-vectors-09",
+    "status": "definitions_saved_not_product_execution",
+    "checked_at": "2026-09-19 23:41:04 UTC",
+    "contract": "contracts/enterprise/domain-vectors-09.mjs",
+    "registry": "contracts/enterprise/domain-vectors.index.json",
+    "handoff": "docs/production/DOMAIN-FIXTURE-HANDOFF-09.md",
+    "user_journey": "docs/product/SDLC-INTERACTIONS-09.md",
+    "receipt": "ops/checks/domain-vectors-09-2026-09-19.md",
+    "added_scenario_vectors": 72,
+    "concrete_scenario_vectors": 164,
+    "expected_observations": 929,
+    "tasks_with_vectors": 53,
+    "tasks_without_vectors": 79,
+    "scenarios_without_vectors": 316,
+    "actual_product_acceptance_runs": 0,
+    "independent_reviews": 0,
+    "note": "SDLC user interactions and domain expectations elaborated; no application implementation, remote writes, deployment or gate promotion. Full schemas/seeds/adapters and independent review remain required."
+  },
+  "domain_fixture_elaboration_08": {
+    "id": "domain-vectors-08",
+    "status": "definitions_saved_not_product_execution",
+    "checked_at": "2026-09-19 15:59:13 UTC",
+    "contract": "contracts/enterprise/domain-vectors-08.mjs",
+    "registry": "contracts/enterprise/domain-vectors.index.json",
+    "handoff": "docs/production/DOMAIN-FIXTURE-HANDOFF-08.md",
+    "receipt": "ops/checks/domain-vectors-08-2026-09-19.md",
+    "added_scenario_vectors": 54,
+    "concrete_scenario_vectors": 92,
+    "expected_observations": 565,
+    "tasks_with_vectors": 29,
+    "tasks_without_vectors": 103,
+    "scenarios_without_vectors": 388,
+    "actual_product_acceptance_runs": 0,
+    "independent_reviews": 0,
+    "note": "Definition elaboration only; schema seed materialization, actual adapters and independently reviewed packets remain required. Original gates/task statuses unchanged."
+  },
+  "domain_fixture_elaboration": {
+    "id": "domain-vectors-07",
+    "status": "definitions_saved_not_product_execution",
+    "checked_at": "2026-09-19 15:08:14 UTC",
+    "contract": "contracts/enterprise/domain-vectors-07.mjs",
+    "handoff": "docs/production/DOMAIN-FIXTURE-HANDOFF-07.md",
+    "receipt": "ops/checks/domain-vectors-07-2026-09-19.md",
+    "concrete_scenario_vectors": 38,
+    "expected_observations": 226,
+    "tasks_with_vectors": 11,
+    "tasks_without_vectors": 121,
+    "scenarios_without_vectors": 442,
+    "actual_product_acceptance_runs": 0,
+    "independent_reviews": 0,
+    "note": "Concrete expected observations and comparator validation only. All original task/gate statuses and independent review requirements remain unchanged."
+  },
+  "engineering_decisions": {
+    "id": "engineering-decisions-06",
+    "status": "specified_pending_independent_review",
+    "checked_at": "2026-09-19T08:43:39Z",
+    "intent": "docs/product/PRODUCT-INTENT.md",
+    "decisions": "docs/production/ENGINEERING-DECISIONS-06.md",
+    "assignment_policy": "contracts/enterprise/agent-assignment-policy.json",
+    "operation_catalogue": "contracts/enterprise/additional-operation-decisions.mjs",
+    "receipt": "ops/checks/engineering-decisions-06-2026-09-19.md",
+    "additional_operations_specified": 73,
+    "additional_operation_schema_examples": 219,
+    "abstract_transition_cases": 438,
+    "negative_schema_or_type_checks": 365,
+    "assigned_parent_tasks": 132,
+    "domain_oracle_review_bundles_remaining": 132,
+    "approved_packets": 0,
+    "product_tasks_completed": 0,
+    "note": "Ordinary engineering choices fixed and 73 secondary command definitions supplied; not a claim that 132 domain-oracle/review bundles or 480 product acceptance cases are complete. Model assignments are recommendations, not changed configuration or delegation."
+  },
+  "packet_elaboration": {
+    "id": "work-package-drafts-05",
+    "status": "drafts_saved_not_approved",
+    "checked_at": "2026-09-19T08:07:47Z",
+    "register": "docs/production/WORK-PACKAGE-INDEX.md",
+    "review": "docs/production/WORK-PACKAGE-REVIEW.md",
+    "receipt": "ops/checks/work-package-drafts-05-2026-09-19.md",
+    "boundary_drafts": 132,
+    "preserved_acceptance_scenarios": 480,
+    "schema_examples": 396,
+    "fixture_obligations_not_executed": 1404,
+    "open_decisions": 205,
+    "additional_operations_needing_contracts": 73,
+    "approved_packets": 0,
+    "product_tasks_completed": 0,
+    "production_gates_completed": 0,
+    "note": "Boundary draft validation is not implementation readiness or product acceptance. All source scenarios and task statuses preserved; legitimate independent review and domain/operation elaboration remain mandatory."
+  },
+  "product": "OrgWard Enterprise Studio (working name)",
+  "release_contract": "../orgward-research/RELEASE-GATES.md",
+  "total_gates": 12,
+  "verified_completed_gates": 4,
+  "remaining_gates": 8,
+  "percent_complete": 33.33,
+  "current_increment": {
+    "id": "increment-01",
+    "scope": "business chat -> saved blueprint -> interactive map",
+    "status": "complete",
+    "checked_at": "2026-09-18T19:38:41Z",
+    "revision": "tree-sha256:e33ecde676fb6e112c9b3c3e06fa4670cbbfb27e8a868a7812bba3a00c1a599f",
+    "receipt": "ops/checks/increment-01-2026-09-18.md",
+    "follow_up_receipts": [
+      "ops/checks/mobile-ui-regression-2026-09-18.md"
+    ]
+  },
+  "release_research": {
+    "mission_limit": 5,
+    "started_missions": 1,
+    "completed_missions": 1,
+    "remaining_allowance": 4,
+    "mission_records": [{"id":"RM-WORKFLOW-10","status":"completed","started_at":"2026-09-19T23:49:55Z","completed_at":"2026-09-20T00:02:28Z","tasks":["T-19","T-20","T-28","T-52"],"gates":["P-07","P-08","E-07"],"question":"Select durable execution and visual modeling boundaries for the explicitly requested configurable SDLC workflow.","receipt":"ops/checks/workflow-framework-research-10.md"}],
+    "note": "One shared-allowance mission reserved locally before browsing. Sibling research ledger is read-only and still has zero entries; reconcile RM-WORKFLOW-10 by ID, never reset allowance or double-count. All earlier increments reused sources."
+  },
+  "gates": [
+    {
+      "id": "P-01",
+      "title": "Business-design conversation",
+      "status": "verified",
+      "receipts": [
+        "ops/checks/increment-01-2026-09-18.md",
+        "ops/checks/mobile-ui-regression-2026-09-18.md"
+      ]
+    },
+    {
+      "id": "P-02",
+      "title": "Structured organisational blueprint",
+      "status": "verified",
+      "receipts": [
+        "ops/checks/increment-01-2026-09-18.md",
+        "ops/checks/mobile-ui-regression-2026-09-18.md"
+      ]
+    },
+    {
+      "id": "P-03",
+      "title": "Blueprint integrity checks",
+      "status": "verified",
+      "receipts": [
+        "ops/checks/increment-01-2026-09-18.md"
+      ]
+    },
+    {
+      "id": "P-04",
+      "title": "Interactive organisational maps",
+      "status": "verified",
+      "receipts": [
+        "ops/checks/increment-01-2026-09-18.md",
+        "ops/checks/mobile-ui-regression-2026-09-18.md"
+      ]
+    },
+    {
+      "id": "P-05",
+      "title": "Editable design and version history",
+      "status": "pending",
+      "receipts": []
+    },
+    {
+      "id": "P-06",
+      "title": "Human and agent responsibility/instructions",
+      "status": "pending",
+      "receipts": []
+    },
+    {
+      "id": "P-07",
+      "title": "Runnable process/task plan",
+      "status": "pending",
+      "receipts": []
+    },
+    {
+      "id": "P-08",
+      "title": "Human intervention controls",
+      "status": "pending",
+      "receipts": []
+    },
+    {
+      "id": "P-09",
+      "title": "Bounded internal agent execution",
+      "status": "pending",
+      "receipts": []
+    },
+    {
+      "id": "P-10",
+      "title": "Persistent enterprise workspace",
+      "status": "pending",
+      "receipts": [],
+      "note": "Project, chat, brief, blueprint, audit history, restart persistence, and isolation pass in this slice; instructions, task runs, and artifacts are not implemented yet."
+    },
+    {
+      "id": "P-11",
+      "title": "Coverage and readiness dashboard",
+      "status": "pending",
+      "receipts": [],
+      "note": "The blueprint exposes area status and actionable gaps, but the full readiness dashboard is not implemented."
+    },
+    {
+      "id": "P-12",
+      "title": "Runnable private product and end-to-end demo",
+      "status": "pending",
+      "receipts": [],
+      "note": "The private increment-01 workflow runs; the complete release workflow through edit, assignment, agent task, human checkpoint, and saved result remains pending."
+    }
+  ],
+  "deferred_additions": [],
+  "latest_review": {
+    "id": "architecture-review-04",
+    "document": "docs/product/ARCHITECTURE-REVIEW-04.md",
+    "receipt": "ops/checks/architecture-review-04-2026-09-19.md",
+    "gate_changes": 0,
+    "note": "Managed SaaS/migration/change-consistency architecture specified. No new production behavior or gate completion."
+  },
+  "note": "Historical increment-01 verification remains 4/12. Later specification reviews do not promote gates; only linked actual passing product results count.",
+  "review_history": [
+    {
+      "id": "ux-review-02",
+      "document": "docs/product/UX-REVIEW-02.md",
+      "receipt": "ops/checks/ux-review-02-2026-09-18.md",
+      "gate_changes": 0,
+      "note": "Revision-2 stories cover all 12 original gates within the broader enterprise roadmap; no new implementation acceptance is claimed."
+    },
+    {
+      "id": "ux-review-03",
+      "document": "docs/product/UX-REVIEW-03.md",
+      "receipt": "ops/checks/ux-review-03-2026-09-19.md",
+      "gate_changes": 0,
+      "note": "Full-portfolio specification expanded and structurally validated; no new feature or release gate passed."
+    }
+  ]
+}

@@ -1,0 +1,4036 @@
+{
+  "schema_version": "1.0",
+  "revision": 4,
+  "status": "specified_not_implemented",
+  "qualifier_task": "T-132",
+  "scope": "Full portfolio target; fixed P/E denominators remain unchanged. Coverage links are obligations, not passing product evidence.",
+  "products": [
+    "STUDIO",
+    "SDLC",
+    "SENTINEL",
+    "WARDEN",
+    "ARBITER",
+    "STEWARD",
+    "LEDGER",
+    "OVERSEER",
+    "PLATFORM"
+  ],
+  "lenses": [
+    "L-01",
+    "L-02",
+    "L-03",
+    "L-04",
+    "L-05",
+    "L-06",
+    "L-07",
+    "L-08",
+    "L-09",
+    "L-10",
+    "L-11",
+    "L-12",
+    "L-13",
+    "L-14",
+    "L-15",
+    "L-16"
+  ],
+  "requirements": [
+    {
+      "id": "PF-49",
+      "title": "Canonical scoped and temporal enterprise model",
+      "task_ids": [
+        "T-49"
+      ],
+      "products": [
+        "STUDIO",
+        "PLATFORM"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15"
+      ],
+      "acceptance_ids": [
+        "T-49-AC1",
+        "T-49-AC2",
+        "T-49-AC3",
+        "T-49-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-50",
+      "title": "Organisation, legal entity and federation scopes",
+      "task_ids": [
+        "T-50"
+      ],
+      "products": [
+        "STUDIO",
+        "ARBITER"
+      ],
+      "lenses": [
+        "L-05",
+        "L-15"
+      ],
+      "acceptance_ids": [
+        "T-50-AC1",
+        "T-50-AC2",
+        "T-50-AC3",
+        "T-50-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-51",
+      "title": "Sixteen synchronized lens projections and cross-lens queries",
+      "task_ids": [
+        "T-51"
+      ],
+      "products": [
+        "STUDIO"
+      ],
+      "lenses": [
+        "L-01",
+        "L-02",
+        "L-03",
+        "L-04",
+        "L-05",
+        "L-06",
+        "L-07",
+        "L-08",
+        "L-09",
+        "L-10",
+        "L-11",
+        "L-12",
+        "L-13",
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-51-AC1",
+        "T-51-AC2",
+        "T-51-AC3",
+        "T-51-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-52",
+      "title": "Advanced process, case and decision modeling",
+      "task_ids": [
+        "T-52"
+      ],
+      "products": [
+        "STUDIO"
+      ],
+      "lenses": [
+        "L-04",
+        "L-05",
+        "L-12"
+      ],
+      "acceptance_ids": [
+        "T-52-AC1",
+        "T-52-AC2",
+        "T-52-AC3",
+        "T-52-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-53",
+      "title": "Branching, temporal baselines and semantic three-way merge",
+      "task_ids": [
+        "T-53"
+      ],
+      "products": [
+        "STUDIO"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15"
+      ],
+      "acceptance_ids": [
+        "T-53-AC1",
+        "T-53-AC2",
+        "T-53-AC3",
+        "T-53-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-54",
+      "title": "Progressive business-to-system refinement and reverse trace",
+      "task_ids": [
+        "T-54"
+      ],
+      "products": [
+        "STUDIO",
+        "SDLC"
+      ],
+      "lenses": [
+        "L-03",
+        "L-04",
+        "L-08",
+        "L-11"
+      ],
+      "acceptance_ids": [
+        "T-54-AC1",
+        "T-54-AC2",
+        "T-54-AC3",
+        "T-54-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-55",
+      "title": "Loss-aware interchange and versioned extension schema",
+      "task_ids": [
+        "T-55"
+      ],
+      "products": [
+        "STUDIO",
+        "SENTINEL",
+        "PLATFORM"
+      ],
+      "lenses": [
+        "L-07",
+        "L-08",
+        "L-14"
+      ],
+      "acceptance_ids": [
+        "T-55-AC1",
+        "T-55-AC2",
+        "T-55-AC3",
+        "T-55-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-56",
+      "title": "Commitments, contracts and economic scenario semantics",
+      "task_ids": [
+        "T-56"
+      ],
+      "products": [
+        "STUDIO"
+      ],
+      "lenses": [
+        "L-02",
+        "L-06",
+        "L-09"
+      ],
+      "acceptance_ids": [
+        "T-56-AC1",
+        "T-56-AC2",
+        "T-56-AC3",
+        "T-56-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-57",
+      "title": "Workforce, suppliers and resource capacity planning",
+      "task_ids": [
+        "T-57"
+      ],
+      "products": [
+        "STUDIO"
+      ],
+      "lenses": [
+        "L-05",
+        "L-06",
+        "L-12"
+      ],
+      "acceptance_ids": [
+        "T-57-AC1",
+        "T-57-AC2",
+        "T-57-AC3",
+        "T-57-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-58",
+      "title": "Customer, offering and value-stream lifecycle",
+      "task_ids": [
+        "T-58"
+      ],
+      "products": [
+        "STUDIO"
+      ],
+      "lenses": [
+        "L-01",
+        "L-02",
+        "L-03"
+      ],
+      "acceptance_ids": [
+        "T-58-AC1",
+        "T-58-AC2",
+        "T-58-AC3",
+        "T-58-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-59",
+      "title": "Risk, obligation interpretation and control effectiveness",
+      "task_ids": [
+        "T-59"
+      ],
+      "products": [
+        "STUDIO",
+        "WARDEN"
+      ],
+      "lenses": [
+        "L-09",
+        "L-13"
+      ],
+      "acceptance_ids": [
+        "T-59-AC1",
+        "T-59-AC2",
+        "T-59-AC3",
+        "T-59-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-60",
+      "title": "Strategy, outcome hypotheses and safe simulation",
+      "task_ids": [
+        "T-60"
+      ],
+      "products": [
+        "STUDIO"
+      ],
+      "lenses": [
+        "L-01",
+        "L-06",
+        "L-09"
+      ],
+      "acceptance_ids": [
+        "T-60-AC1",
+        "T-60-AC2",
+        "T-60-AC3",
+        "T-60-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-61",
+      "title": "Semantic information and system architecture refinement",
+      "task_ids": [
+        "T-61"
+      ],
+      "products": [
+        "STUDIO",
+        "STEWARD",
+        "SDLC"
+      ],
+      "lenses": [
+        "L-07",
+        "L-08",
+        "L-11"
+      ],
+      "acceptance_ids": [
+        "T-61-AC1",
+        "T-61-AC2",
+        "T-61-AC3",
+        "T-61-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-62",
+      "title": "Physical, service and non-digital extension profiles",
+      "task_ids": [
+        "T-62"
+      ],
+      "products": [
+        "STUDIO",
+        "PLATFORM"
+      ],
+      "lenses": [
+        "L-04",
+        "L-06",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-62-AC1",
+        "T-62-AC2",
+        "T-62-AC3",
+        "T-62-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-63",
+      "title": "Bulk editing, collaboration and migration conflict workbench",
+      "task_ids": [
+        "T-63"
+      ],
+      "products": [
+        "STUDIO",
+        "PLATFORM"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15"
+      ],
+      "acceptance_ids": [
+        "T-63-AC1",
+        "T-63-AC2",
+        "T-63-AC3",
+        "T-63-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-64",
+      "title": "Explainable multi-axis business and module readiness",
+      "task_ids": [
+        "T-64"
+      ],
+      "products": [
+        "STUDIO",
+        "PLATFORM"
+      ],
+      "lenses": [
+        "L-01",
+        "L-09",
+        "L-13",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-64-AC1",
+        "T-64-AC2",
+        "T-64-AC3",
+        "T-64-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-65",
+      "title": "Sentinel source onboarding and safe ingestion",
+      "task_ids": [
+        "T-65"
+      ],
+      "products": [
+        "SENTINEL",
+        "PLATFORM"
+      ],
+      "lenses": [
+        "L-13"
+      ],
+      "acceptance_ids": [
+        "T-65-AC1",
+        "T-65-AC2",
+        "T-65-AC3",
+        "T-65-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-66",
+      "title": "Evidence-backed claim extraction and identity proposals",
+      "task_ids": [
+        "T-66"
+      ],
+      "products": [
+        "SENTINEL"
+      ],
+      "lenses": [
+        "L-07",
+        "L-13"
+      ],
+      "acceptance_ids": [
+        "T-66-AC1",
+        "T-66-AC2",
+        "T-66-AC3",
+        "T-66-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-67",
+      "title": "Scoped claim review and lifecycle commands",
+      "task_ids": [
+        "T-67"
+      ],
+      "products": [
+        "SENTINEL",
+        "STEWARD"
+      ],
+      "lenses": [
+        "L-13",
+        "L-15"
+      ],
+      "acceptance_ids": [
+        "T-67-AC1",
+        "T-67-AC2",
+        "T-67-AC3",
+        "T-67-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-68",
+      "title": "Deterministic claim compiler and atomic snapshot publication",
+      "task_ids": [
+        "T-68"
+      ],
+      "products": [
+        "SENTINEL"
+      ],
+      "lenses": [
+        "L-13",
+        "L-14"
+      ],
+      "acceptance_ids": [
+        "T-68-AC1",
+        "T-68-AC2",
+        "T-68-AC3",
+        "T-68-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-69",
+      "title": "Typed integrity graph and compatible OADL projection",
+      "task_ids": [
+        "T-69"
+      ],
+      "products": [
+        "SENTINEL",
+        "STUDIO"
+      ],
+      "lenses": [
+        "L-07",
+        "L-08",
+        "L-13"
+      ],
+      "acceptance_ids": [
+        "T-69-AC1",
+        "T-69-AC2",
+        "T-69-AC3",
+        "T-69-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-70",
+      "title": "Sentinel base authority, governance and coverage rules",
+      "task_ids": [
+        "T-70"
+      ],
+      "products": [
+        "SENTINEL"
+      ],
+      "lenses": [
+        "L-07",
+        "L-09",
+        "L-13"
+      ],
+      "acceptance_ids": [
+        "T-70-AC1",
+        "T-70-AC2",
+        "T-70-AC3",
+        "T-70-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-71",
+      "title": "Property/process lineage and advanced Sentinel rules",
+      "task_ids": [
+        "T-71"
+      ],
+      "products": [
+        "SENTINEL",
+        "STEWARD",
+        "OVERSEER"
+      ],
+      "lenses": [
+        "L-04",
+        "L-07",
+        "L-10",
+        "L-13"
+      ],
+      "acceptance_ids": [
+        "T-71-AC1",
+        "T-71-AC2",
+        "T-71-AC3",
+        "T-71-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-72",
+      "title": "Actionable Sentinel inbox and remediation UX",
+      "task_ids": [
+        "T-72"
+      ],
+      "products": [
+        "SENTINEL",
+        "ARBITER"
+      ],
+      "lenses": [
+        "L-09",
+        "L-13",
+        "L-14"
+      ],
+      "acceptance_ids": [
+        "T-72-AC1",
+        "T-72-AC2",
+        "T-72-AC3",
+        "T-72-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-73",
+      "title": "Governed Sentinel exceptions and expiry",
+      "task_ids": [
+        "T-73"
+      ],
+      "products": [
+        "SENTINEL",
+        "ARBITER",
+        "WARDEN"
+      ],
+      "lenses": [
+        "L-09",
+        "L-13"
+      ],
+      "acceptance_ids": [
+        "T-73-AC1",
+        "T-73-AC2",
+        "T-73-AC3",
+        "T-73-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-74",
+      "title": "Semantic drift, source coverage and impact feedback",
+      "task_ids": [
+        "T-74"
+      ],
+      "products": [
+        "SENTINEL",
+        "STUDIO",
+        "SDLC"
+      ],
+      "lenses": [
+        "L-13",
+        "L-14",
+        "L-11"
+      ],
+      "acceptance_ids": [
+        "T-74-AC1",
+        "T-74-AC2",
+        "T-74-AC3",
+        "T-74-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-75",
+      "title": "Qualify Sentinel source acceptance and first-session value",
+      "task_ids": [
+        "T-75"
+      ],
+      "products": [
+        "SENTINEL",
+        "PLATFORM"
+      ],
+      "lenses": [
+        "L-13",
+        "L-14"
+      ],
+      "acceptance_ids": [
+        "T-75-AC1",
+        "T-75-AC2",
+        "T-75-AC3",
+        "T-75-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-76",
+      "title": "Warden versioned policy model and deterministic decisions",
+      "task_ids": [
+        "T-76"
+      ],
+      "products": [
+        "WARDEN"
+      ],
+      "lenses": [
+        "L-09",
+        "L-05"
+      ],
+      "acceptance_ids": [
+        "T-76-AC1",
+        "T-76-AC2",
+        "T-76-AC3",
+        "T-76-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-77",
+      "title": "Warden enforcement, capability revocation and effect reconciliation",
+      "task_ids": [
+        "T-77"
+      ],
+      "products": [
+        "WARDEN",
+        "OVERSEER",
+        "PLATFORM"
+      ],
+      "lenses": [
+        "L-10",
+        "L-12"
+      ],
+      "acceptance_ids": [
+        "T-77-AC1",
+        "T-77-AC2",
+        "T-77-AC3",
+        "T-77-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-78",
+      "title": "Warden simulation, rollout and operational controls",
+      "task_ids": [
+        "T-78"
+      ],
+      "products": [
+        "WARDEN",
+        "PLATFORM"
+      ],
+      "lenses": [
+        "L-09",
+        "L-14",
+        "L-12"
+      ],
+      "acceptance_ids": [
+        "T-78-AC1",
+        "T-78-AC2",
+        "T-78-AC3",
+        "T-78-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-79",
+      "title": "Arbiter decision rights and bounded delegation",
+      "task_ids": [
+        "T-79"
+      ],
+      "products": [
+        "ARBITER"
+      ],
+      "lenses": [
+        "L-05",
+        "L-09",
+        "L-15"
+      ],
+      "acceptance_ids": [
+        "T-79-AC1",
+        "T-79-AC2",
+        "T-79-AC3",
+        "T-79-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-80",
+      "title": "Arbiter version-bound reviews, appeals and decisions",
+      "task_ids": [
+        "T-80"
+      ],
+      "products": [
+        "ARBITER",
+        "WARDEN"
+      ],
+      "lenses": [
+        "L-05",
+        "L-09"
+      ],
+      "acceptance_ids": [
+        "T-80-AC1",
+        "T-80-AC2",
+        "T-80-AC3",
+        "T-80-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-81",
+      "title": "Arbiter authority conflicts and constrained emergency access",
+      "task_ids": [
+        "T-81"
+      ],
+      "products": [
+        "ARBITER",
+        "SENTINEL",
+        "WARDEN"
+      ],
+      "lenses": [
+        "L-05",
+        "L-09",
+        "L-13"
+      ],
+      "acceptance_ids": [
+        "T-81-AC1",
+        "T-81-AC2",
+        "T-81-AC3",
+        "T-81-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-82",
+      "title": "Steward semantic catalogue and ownership handover",
+      "task_ids": [
+        "T-82"
+      ],
+      "products": [
+        "STEWARD",
+        "STUDIO"
+      ],
+      "lenses": [
+        "L-07",
+        "L-05",
+        "L-15"
+      ],
+      "acceptance_ids": [
+        "T-82-AC1",
+        "T-82-AC2",
+        "T-82-AC3",
+        "T-82-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-83",
+      "title": "Steward quality, retention and remediation lifecycle",
+      "task_ids": [
+        "T-83"
+      ],
+      "products": [
+        "STEWARD",
+        "LEDGER"
+      ],
+      "lenses": [
+        "L-07",
+        "L-09",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-83-AC1",
+        "T-83-AC2",
+        "T-83-AC3",
+        "T-83-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-84",
+      "title": "Steward data contracts and semantic execution lineage",
+      "task_ids": [
+        "T-84"
+      ],
+      "products": [
+        "STEWARD",
+        "SENTINEL",
+        "SDLC"
+      ],
+      "lenses": [
+        "L-07",
+        "L-04",
+        "L-11"
+      ],
+      "acceptance_ids": [
+        "T-84-AC1",
+        "T-84-AC2",
+        "T-84-AC3",
+        "T-84-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-85",
+      "title": "Ledger durable governance event chain and reconciliation",
+      "task_ids": [
+        "T-85"
+      ],
+      "products": [
+        "LEDGER",
+        "PLATFORM"
+      ],
+      "lenses": [
+        "L-13",
+        "L-12"
+      ],
+      "acceptance_ids": [
+        "T-85-AC1",
+        "T-85-AC2",
+        "T-85-AC3",
+        "T-85-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-86",
+      "title": "Ledger independently verifiable exports, holds and key lifecycle",
+      "task_ids": [
+        "T-86"
+      ],
+      "products": [
+        "LEDGER",
+        "PLATFORM"
+      ],
+      "lenses": [
+        "L-13",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-86-AC1",
+        "T-86-AC2",
+        "T-86-AC3",
+        "T-86-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-87",
+      "title": "Overseer agent identity and autonomy envelopes",
+      "task_ids": [
+        "T-87"
+      ],
+      "products": [
+        "OVERSEER",
+        "WARDEN"
+      ],
+      "lenses": [
+        "L-10",
+        "L-05"
+      ],
+      "acceptance_ids": [
+        "T-87-AC1",
+        "T-87-AC2",
+        "T-87-AC3",
+        "T-87-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-88",
+      "title": "Overseer multi-agent handoff and shared-budget supervision",
+      "task_ids": [
+        "T-88"
+      ],
+      "products": [
+        "OVERSEER",
+        "STUDIO",
+        "SDLC"
+      ],
+      "lenses": [
+        "L-10",
+        "L-12"
+      ],
+      "acceptance_ids": [
+        "T-88-AC1",
+        "T-88-AC2",
+        "T-88-AC3",
+        "T-88-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-89",
+      "title": "Overseer independent evaluations and adversarial qualification",
+      "task_ids": [
+        "T-89"
+      ],
+      "products": [
+        "OVERSEER",
+        "SDLC"
+      ],
+      "lenses": [
+        "L-10",
+        "L-11",
+        "L-13"
+      ],
+      "acceptance_ids": [
+        "T-89-AC1",
+        "T-89-AC2",
+        "T-89-AC3",
+        "T-89-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-90",
+      "title": "Bidirectional design, integrity and SDLC context pinning",
+      "task_ids": [
+        "T-90"
+      ],
+      "products": [
+        "SDLC",
+        "STUDIO",
+        "SENTINEL"
+      ],
+      "lenses": [
+        "L-08",
+        "L-11",
+        "L-13",
+        "L-14"
+      ],
+      "acceptance_ids": [
+        "T-90-AC1",
+        "T-90-AC2",
+        "T-90-AC3",
+        "T-90-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-91",
+      "title": "Intent-derived requirements, evaluations and trace completeness",
+      "task_ids": [
+        "T-91"
+      ],
+      "products": [
+        "SDLC",
+        "STUDIO"
+      ],
+      "lenses": [
+        "L-01",
+        "L-04",
+        "L-09",
+        "L-11"
+      ],
+      "acceptance_ids": [
+        "T-91-AC1",
+        "T-91-AC2",
+        "T-91-AC3",
+        "T-91-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-92",
+      "title": "Multi-repository, legacy and data-migration delivery",
+      "task_ids": [
+        "T-92"
+      ],
+      "products": [
+        "SDLC",
+        "PLATFORM"
+      ],
+      "lenses": [
+        "L-08",
+        "L-11",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-92-AC1",
+        "T-92-AC2",
+        "T-92-AC3",
+        "T-92-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-93",
+      "title": "Architecture alternatives and governed regeneration",
+      "task_ids": [
+        "T-93"
+      ],
+      "products": [
+        "SDLC",
+        "STUDIO"
+      ],
+      "lenses": [
+        "L-08",
+        "L-11",
+        "L-14"
+      ],
+      "acceptance_ids": [
+        "T-93-AC1",
+        "T-93-AC2",
+        "T-93-AC3",
+        "T-93-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-94",
+      "title": "Environment promotion, progressive delivery and operational acceptance",
+      "task_ids": [
+        "T-94"
+      ],
+      "products": [
+        "SDLC",
+        "WARDEN",
+        "LEDGER"
+      ],
+      "lenses": [
+        "L-11",
+        "L-12",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-94-AC1",
+        "T-94-AC2",
+        "T-94-AC3",
+        "T-94-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-95",
+      "title": "Software incidents and governed design feedback",
+      "task_ids": [
+        "T-95"
+      ],
+      "products": [
+        "SDLC",
+        "STUDIO",
+        "SENTINEL"
+      ],
+      "lenses": [
+        "L-11",
+        "L-12",
+        "L-13",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-95-AC1",
+        "T-95-AC2",
+        "T-95-AC3",
+        "T-95-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-96",
+      "title": "Governed enterprise transactions and long-running operations",
+      "task_ids": [
+        "T-96"
+      ],
+      "products": [
+        "STUDIO",
+        "WARDEN",
+        "ARBITER",
+        "LEDGER"
+      ],
+      "lenses": [
+        "L-02",
+        "L-04",
+        "L-06",
+        "L-12"
+      ],
+      "acceptance_ids": [
+        "T-96-AC1",
+        "T-96-AC2",
+        "T-96-AC3",
+        "T-96-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-97",
+      "title": "Connector catalogue and resilient integration lifecycle",
+      "task_ids": [
+        "T-97"
+      ],
+      "products": [
+        "PLATFORM",
+        "STUDIO",
+        "SENTINEL",
+        "SDLC"
+      ],
+      "lenses": [
+        "L-07",
+        "L-12",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-97-AC1",
+        "T-97-AC2",
+        "T-97-AC3",
+        "T-97-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-98",
+      "title": "Role-based portfolio shell, search and accessible interaction",
+      "task_ids": [
+        "T-98"
+      ],
+      "products": [
+        "STUDIO",
+        "PLATFORM",
+        "SENTINEL",
+        "WARDEN",
+        "ARBITER",
+        "STEWARD",
+        "OVERSEER"
+      ],
+      "lenses": [
+        "L-01",
+        "L-04",
+        "L-05",
+        "L-07",
+        "L-10",
+        "L-13"
+      ],
+      "acceptance_ids": [
+        "T-98-AC1",
+        "T-98-AC2",
+        "T-98-AC3",
+        "T-98-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-99",
+      "title": "Modular self-host packaging and customer-controlled operations",
+      "task_ids": [
+        "T-99"
+      ],
+      "products": [
+        "PLATFORM"
+      ],
+      "lenses": [
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-99-AC1",
+        "T-99-AC2",
+        "T-99-AC3",
+        "T-99-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-100",
+      "title": "Industry and jurisdiction packs with scoped interpretation",
+      "task_ids": [
+        "T-100"
+      ],
+      "products": [
+        "PLATFORM",
+        "STUDIO",
+        "WARDEN"
+      ],
+      "lenses": [
+        "L-09",
+        "L-15"
+      ],
+      "acceptance_ids": [
+        "T-100-AC1",
+        "T-100-AC2",
+        "T-100-AC3",
+        "T-100-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-101",
+      "title": "Organisation simulation, case exceptions and operating learning",
+      "task_ids": [
+        "T-101"
+      ],
+      "products": [
+        "STUDIO"
+      ],
+      "lenses": [
+        "L-01",
+        "L-04",
+        "L-06",
+        "L-12"
+      ],
+      "acceptance_ids": [
+        "T-101-AC1",
+        "T-101-AC2",
+        "T-101-AC3",
+        "T-101-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-102",
+      "title": "Enterprise continuity, handover and supplier failure",
+      "task_ids": [
+        "T-102"
+      ],
+      "products": [
+        "STUDIO",
+        "ARBITER",
+        "PLATFORM"
+      ],
+      "lenses": [
+        "L-05",
+        "L-06",
+        "L-12",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-102-AC1",
+        "T-102-AC2",
+        "T-102-AC3",
+        "T-102-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-103",
+      "title": "Cross-module security, privacy and authority qualification",
+      "task_ids": [
+        "T-103"
+      ],
+      "products": [
+        "PLATFORM",
+        "SENTINEL",
+        "WARDEN",
+        "ARBITER",
+        "STEWARD",
+        "LEDGER",
+        "OVERSEER"
+      ],
+      "lenses": [
+        "L-09",
+        "L-10",
+        "L-13",
+        "L-15"
+      ],
+      "acceptance_ids": [
+        "T-103-AC1",
+        "T-103-AC2",
+        "T-103-AC3",
+        "T-103-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-104",
+      "title": "Portfolio load, compiler scale and failure qualification",
+      "task_ids": [
+        "T-104"
+      ],
+      "products": [
+        "PLATFORM",
+        "SENTINEL",
+        "SDLC",
+        "LEDGER"
+      ],
+      "lenses": [
+        "L-12",
+        "L-13",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-104-AC1",
+        "T-104-AC2",
+        "T-104-AC3",
+        "T-104-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-105",
+      "title": "Independent customer installation and portfolio user acceptance",
+      "task_ids": [
+        "T-105"
+      ],
+      "products": [
+        "PLATFORM",
+        "STUDIO"
+      ],
+      "lenses": [
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-105-AC1",
+        "T-105-AC2",
+        "T-105-AC3",
+        "T-105-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-106",
+      "title": "Integrated portfolio round-trip release qualification",
+      "task_ids": [
+        "T-106"
+      ],
+      "products": [
+        "STUDIO",
+        "SDLC",
+        "SENTINEL",
+        "WARDEN",
+        "ARBITER",
+        "STEWARD",
+        "LEDGER",
+        "OVERSEER",
+        "PLATFORM"
+      ],
+      "lenses": [
+        "L-01",
+        "L-02",
+        "L-03",
+        "L-04",
+        "L-05",
+        "L-06",
+        "L-07",
+        "L-08",
+        "L-09",
+        "L-10",
+        "L-11",
+        "L-12",
+        "L-13",
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-106-AC1",
+        "T-106-AC2",
+        "T-106-AC3",
+        "T-106-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-107",
+      "title": "Extension certification and compatibility laboratory",
+      "task_ids": [
+        "T-107"
+      ],
+      "products": [
+        "PLATFORM"
+      ],
+      "lenses": [
+        "L-08",
+        "L-09",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-107-AC1",
+        "T-107-AC2",
+        "T-107-AC3",
+        "T-107-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-108",
+      "title": "Portfolio retirement, portability and structural reorganisation",
+      "task_ids": [
+        "T-108"
+      ],
+      "products": [
+        "STUDIO",
+        "PLATFORM",
+        "LEDGER"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-108-AC1",
+        "T-108-AC2",
+        "T-108-AC3",
+        "T-108-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    }
+  ],
+  "saas_requirements": [
+    {
+      "id": "PF-109",
+      "title": "Scoped whole-business inventory and completeness certification",
+      "task_ids": [
+        "T-109"
+      ],
+      "products": [
+        "STUDIO",
+        "PLATFORM"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-109-AC1",
+        "T-109-AC2",
+        "T-109-AC3",
+        "T-109-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-110",
+      "title": "Managed SaaS tenant provisioning and regional placement",
+      "task_ids": [
+        "T-110"
+      ],
+      "products": [
+        "PLATFORM"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-110-AC1",
+        "T-110-AC2",
+        "T-110-AC3",
+        "T-110-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-111",
+      "title": "Enterprise identity onboarding and SaaS access lifecycle",
+      "task_ids": [
+        "T-111"
+      ],
+      "products": [
+        "PLATFORM",
+        "ARBITER"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-111-AC1",
+        "T-111-AC2",
+        "T-111-AC3",
+        "T-111-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-112",
+      "title": "SaaS entitlements, metering, quotas and safe subscription lifecycle",
+      "task_ids": [
+        "T-112"
+      ],
+      "products": [
+        "PLATFORM",
+        "WARDEN"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-112-AC1",
+        "T-112-AC2",
+        "T-112-AC3",
+        "T-112-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-113",
+      "title": "SaaS operator plane and customer-controlled support access",
+      "task_ids": [
+        "T-113"
+      ],
+      "products": [
+        "PLATFORM",
+        "LEDGER"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-113-AC1",
+        "T-113-AC2",
+        "T-113-AC3",
+        "T-113-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-114",
+      "title": "Residency, encryption ownership and tenant cell relocation",
+      "task_ids": [
+        "T-114"
+      ],
+      "products": [
+        "PLATFORM",
+        "LEDGER"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-114-AC1",
+        "T-114-AC2",
+        "T-114-AC3",
+        "T-114-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-115",
+      "title": "Existing-enterprise discovery and source inventory",
+      "task_ids": [
+        "T-115"
+      ],
+      "products": [
+        "STUDIO",
+        "SENTINEL"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-115-AC1",
+        "T-115-AC2",
+        "T-115-AC3",
+        "T-115-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-116",
+      "title": "Migration identity mapping, transformations and staging",
+      "task_ids": [
+        "T-116"
+      ],
+      "products": [
+        "STUDIO",
+        "STEWARD"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-116-AC1",
+        "T-116-AC2",
+        "T-116-AC3",
+        "T-116-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-117",
+      "title": "Source-of-record ownership and incremental coexistence",
+      "task_ids": [
+        "T-117"
+      ],
+      "products": [
+        "STUDIO",
+        "STEWARD",
+        "PLATFORM"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-117-AC1",
+        "T-117-AC2",
+        "T-117-AC3",
+        "T-117-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-118",
+      "title": "Migration validation, shadow operation and rehearsal",
+      "task_ids": [
+        "T-118"
+      ],
+      "products": [
+        "STUDIO",
+        "PLATFORM"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-118-AC1",
+        "T-118-AC2",
+        "T-118-AC3",
+        "T-118-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-119",
+      "title": "Fenced cutover, rollback and migration hypercare",
+      "task_ids": [
+        "T-119"
+      ],
+      "products": [
+        "STUDIO",
+        "PLATFORM",
+        "WARDEN"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-119-AC1",
+        "T-119-AC2",
+        "T-119-AC3",
+        "T-119-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-120",
+      "title": "New and migrated enterprise activation and scope sign-off",
+      "task_ids": [
+        "T-120"
+      ],
+      "products": [
+        "STUDIO",
+        "PLATFORM"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-120-AC1",
+        "T-120-AC2",
+        "T-120-AC3",
+        "T-120-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-121",
+      "title": "Unified semantic command registry for every edit surface",
+      "task_ids": [
+        "T-121"
+      ],
+      "products": [
+        "STUDIO",
+        "PLATFORM"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-121-AC1",
+        "T-121-AC2",
+        "T-121-AC3",
+        "T-121-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-122",
+      "title": "Field-level dependencies and constraint impact fixed point",
+      "task_ids": [
+        "T-122"
+      ],
+      "products": [
+        "STUDIO",
+        "SENTINEL",
+        "SDLC"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-122-AC1",
+        "T-122-AC2",
+        "T-122-AC3",
+        "T-122-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-123",
+      "title": "Atomic publication barriers and consistent projection watermarks",
+      "task_ids": [
+        "T-123"
+      ],
+      "products": [
+        "STUDIO",
+        "PLATFORM",
+        "WARDEN"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-123-AC1",
+        "T-123-AC2",
+        "T-123-AC3",
+        "T-123-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-124",
+      "title": "Continuous knowledge reconciliation and explicit truth states",
+      "task_ids": [
+        "T-124"
+      ],
+      "products": [
+        "STUDIO",
+        "SENTINEL",
+        "STEWARD"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-124-AC1",
+        "T-124-AC2",
+        "T-124-AC3",
+        "T-124-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-125",
+      "title": "Customer-defined concepts, constraints and governed actions",
+      "task_ids": [
+        "T-125"
+      ],
+      "products": [
+        "STUDIO",
+        "PLATFORM"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-125-AC1",
+        "T-125-AC2",
+        "T-125-AC3",
+        "T-125-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-126",
+      "title": "Unified business workbench and executable activity forms",
+      "task_ids": [
+        "T-126"
+      ],
+      "products": [
+        "STUDIO",
+        "OVERSEER"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-126-AC1",
+        "T-126-AC2",
+        "T-126-AC3",
+        "T-126-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-127",
+      "title": "Role adoption, safe templates and graduated autonomy",
+      "task_ids": [
+        "T-127"
+      ],
+      "products": [
+        "STUDIO",
+        "PLATFORM",
+        "OVERSEER"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-127-AC1",
+        "T-127-AC2",
+        "T-127-AC3",
+        "T-127-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-128",
+      "title": "Generated enterprise variation matrix and architectural conformance",
+      "task_ids": [
+        "T-128"
+      ],
+      "products": [
+        "PLATFORM",
+        "STUDIO"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-128-AC1",
+        "T-128-AC2",
+        "T-128-AC3",
+        "T-128-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-129",
+      "title": "SaaS isolation, fairness, public-edge and service qualification",
+      "task_ids": [
+        "T-129"
+      ],
+      "products": [
+        "PLATFORM",
+        "WARDEN"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-129-AC1",
+        "T-129-AC2",
+        "T-129-AC3",
+        "T-129-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-130",
+      "title": "Migration and cross-perspective consistency qualification",
+      "task_ids": [
+        "T-130"
+      ],
+      "products": [
+        "STUDIO",
+        "PLATFORM",
+        "SENTINEL",
+        "SDLC"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-130-AC1",
+        "T-130-AC2",
+        "T-130-AC3",
+        "T-130-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-131",
+      "title": "Enforce complete bounded implementation packets",
+      "task_ids": [
+        "T-131"
+      ],
+      "products": [
+        "PLATFORM"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-131-AC1",
+        "T-131-AC2",
+        "T-131-AC3",
+        "T-131-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PF-132",
+      "title": "Full enterprise SaaS and migration release qualification",
+      "task_ids": [
+        "T-132"
+      ],
+      "products": [
+        "PLATFORM",
+        "STUDIO",
+        "SDLC",
+        "SENTINEL",
+        "WARDEN",
+        "ARBITER",
+        "STEWARD",
+        "LEDGER",
+        "OVERSEER"
+      ],
+      "lenses": [
+        "L-14",
+        "L-15",
+        "L-16"
+      ],
+      "acceptance_ids": [
+        "T-132-AC1",
+        "T-132-AC2",
+        "T-132-AC3",
+        "T-132-AC4"
+      ],
+      "status": "not_run",
+      "evidence": []
+    }
+  ],
+  "source_rules": [
+    {
+      "id": "R-01",
+      "title": "Single canonical authority",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "profile": "base-v1",
+      "test_path": "tests/portfolio/sentinel/r-01.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-02",
+      "title": "Authoritative system kind",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "profile": "base-v1",
+      "test_path": "tests/portfolio/sentinel/r-02.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-03",
+      "title": "Evidence or justified assertion",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "profile": "base-v1",
+      "test_path": "tests/portfolio/sentinel/r-03.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-04",
+      "title": "Capability ownership collision",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "profile": "base-v1",
+      "test_path": "tests/portfolio/sentinel/r-04.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-05",
+      "title": "Entity governance collision",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "profile": "base-v1",
+      "test_path": "tests/portfolio/sentinel/r-05.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-06",
+      "title": "Canonical entity missing governor",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "profile": "base-v1",
+      "test_path": "tests/portfolio/sentinel/r-06.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-07",
+      "title": "Decision missing governed scope",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "profile": "base-v1",
+      "test_path": "tests/portfolio/sentinel/r-07.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-08",
+      "title": "Decision versus behavior contradiction",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "profile": "base-v1",
+      "test_path": "tests/portfolio/sentinel/r-08.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-09",
+      "title": "Single-source policy severity lock",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "profile": "base-v1",
+      "test_path": "tests/portfolio/sentinel/r-09.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-10",
+      "title": "Unknown classification hotspot",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "profile": "base-v1",
+      "test_path": "tests/portfolio/sentinel/r-10.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-11",
+      "title": "Unknown system kind hotspot",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "profile": "base-v1",
+      "test_path": "tests/portfolio/sentinel/r-11.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-12",
+      "title": "Cross-domain transfer governance gap",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "profile": "base-v1",
+      "test_path": "tests/portfolio/sentinel/r-12.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-13",
+      "title": "Transfer missing entity",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "profile": "base-v1",
+      "test_path": "tests/portfolio/sentinel/r-13.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-14",
+      "title": "Capability realization gap with manual applicability",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "profile": "base-v1",
+      "test_path": "tests/portfolio/sentinel/r-14.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-15",
+      "title": "Orphan system",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "profile": "base-v1",
+      "test_path": "tests/portfolio/sentinel/r-15.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-16",
+      "title": "Authority leakage heuristic",
+      "task_ids": [
+        "T-71",
+        "T-75"
+      ],
+      "profile": "heuristic-v1",
+      "test_path": "tests/portfolio/sentinel/r-16.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-17",
+      "title": "Conflicting classifications",
+      "task_ids": [
+        "T-71",
+        "T-75"
+      ],
+      "profile": "base-v1",
+      "test_path": "tests/portfolio/sentinel/r-17.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-18",
+      "title": "Conflicting system kinds",
+      "task_ids": [
+        "T-71",
+        "T-75"
+      ],
+      "profile": "base-v1",
+      "test_path": "tests/portfolio/sentinel/r-18.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-19",
+      "title": "Exception review/expiry quality",
+      "task_ids": [
+        "T-71",
+        "T-75"
+      ],
+      "profile": "base-v1",
+      "test_path": "tests/portfolio/sentinel/r-19.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-20",
+      "title": "Exception governance evidence",
+      "task_ids": [
+        "T-71",
+        "T-75"
+      ],
+      "profile": "base-v1",
+      "test_path": "tests/portfolio/sentinel/r-20.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-21",
+      "title": "Drift spike",
+      "task_ids": [
+        "T-71",
+        "T-75"
+      ],
+      "profile": "base-v1",
+      "test_path": "tests/portfolio/sentinel/r-21.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-22",
+      "title": "Decision coverage of entity and authoritative system",
+      "task_ids": [
+        "T-71",
+        "T-75"
+      ],
+      "profile": "base-v1",
+      "test_path": "tests/portfolio/sentinel/r-22.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-23",
+      "title": "Stale evidence",
+      "task_ids": [
+        "T-71",
+        "T-75"
+      ],
+      "profile": "base-v1",
+      "test_path": "tests/portfolio/sentinel/r-23.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-24",
+      "title": "Duplicate canonical typed IDs",
+      "task_ids": [
+        "T-68",
+        "T-75"
+      ],
+      "profile": "base-v1",
+      "test_path": "tests/portfolio/sentinel/r-24.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-25",
+      "title": "Unknown/unscoped overlap",
+      "task_ids": [
+        "T-69",
+        "T-75"
+      ],
+      "profile": "base-v1",
+      "test_path": "tests/portfolio/sentinel/r-25.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-26",
+      "title": "Property source authority bypass",
+      "task_ids": [
+        "T-71",
+        "T-75"
+      ],
+      "profile": "property-process-extension-v1",
+      "test_path": "tests/portfolio/sentinel/r-26.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-27",
+      "title": "Property authority or explicit inheritance gap",
+      "task_ids": [
+        "T-71",
+        "T-75"
+      ],
+      "profile": "property-process-extension-v1",
+      "test_path": "tests/portfolio/sentinel/r-27.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "R-28",
+      "title": "Cross-domain process property divergence",
+      "task_ids": [
+        "T-71",
+        "T-75"
+      ],
+      "profile": "property-process-extension-v1",
+      "test_path": "tests/portfolio/sentinel/r-28.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    }
+  ],
+  "source_acceptance": [
+    {
+      "id": "AT-01",
+      "title": "Accepted authority yields edge and provenance",
+      "task_ids": [
+        "T-69",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-01.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-02",
+      "title": "Rejected claim yields no edge",
+      "task_ids": [
+        "T-67",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-02.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-03",
+      "title": "Relation deduplication retains all evidence",
+      "task_ids": [
+        "T-68",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-03.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-04",
+      "title": "Domain owns capability mapping",
+      "task_ids": [
+        "T-69",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-04.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-05",
+      "title": "Domain governs entity mapping",
+      "task_ids": [
+        "T-69",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-05.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-06",
+      "title": "Realization mapping",
+      "task_ids": [
+        "T-69",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-06.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-07",
+      "title": "Transfer identity includes transferred entity",
+      "task_ids": [
+        "T-69",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-07.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-08",
+      "title": "Classification with provenance",
+      "task_ids": [
+        "T-69",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-08.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-09",
+      "title": "Idempotent compile",
+      "task_ids": [
+        "T-68",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-09.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-10",
+      "title": "Duplicate canonical IDs fail without partial commit",
+      "task_ids": [
+        "T-68",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-10.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-11",
+      "title": "R-01 dual-authority contradiction",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-11.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-12",
+      "title": "R-02 authority system kind",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-12.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-13",
+      "title": "R-03 evidence/assertion requirement",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-13.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-14",
+      "title": "R-04/R-05 ownership collisions",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-14.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-15",
+      "title": "R-06 missing governor",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-15.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-16",
+      "title": "R-07 missing decision scope",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-16.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-17",
+      "title": "R-09 mandatory policy severity",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-17.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-18",
+      "title": "R-10/R-11 unknown hotspots",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-18.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-19",
+      "title": "R-12 cross-domain governance",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-19.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-20",
+      "title": "R-13 missing transfer entity",
+      "task_ids": [
+        "T-70",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-20.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-21",
+      "title": "R-17/R-18 classification/kind conflicts",
+      "task_ids": [
+        "T-71",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-21.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-22",
+      "title": "R-19/R-20 exception quality",
+      "task_ids": [
+        "T-73",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-22.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-23",
+      "title": "R-23 stale evidence",
+      "task_ids": [
+        "T-74",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-23.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-24",
+      "title": "R-25 unknown scope overlap",
+      "task_ids": [
+        "T-69",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-24.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-25",
+      "title": "Finding rule/reason/evidence explanation",
+      "task_ids": [
+        "T-72",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-25.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-26",
+      "title": "Supersession resolves on next compile",
+      "task_ids": [
+        "T-67",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-26.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-27",
+      "title": "Legal-entity scope split",
+      "task_ids": [
+        "T-69",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-27.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-28",
+      "title": "Exception lifecycle and expiry",
+      "task_ids": [
+        "T-73",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-28.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-29",
+      "title": "Drift spike detection",
+      "task_ids": [
+        "T-74",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-29.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-30",
+      "title": "Deterministic rerun IDs/severity",
+      "task_ids": [
+        "T-68",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-30.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-31",
+      "title": "Bounded measured compile performance",
+      "task_ids": [
+        "T-104"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-31.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-32",
+      "title": "Audit export source/version/time",
+      "task_ids": [
+        "T-86"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-32.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AT-33",
+      "title": "Hard failure preserves last-good snapshot",
+      "task_ids": [
+        "T-68",
+        "T-75"
+      ],
+      "test_path": "tests/portfolio/sentinel/at-33.test.mjs",
+      "status": "not_run",
+      "evidence": []
+    }
+  ],
+  "scenario_families": [
+    {
+      "id": "F-01",
+      "title": "Enterprise/business variations",
+      "variants": [
+        "services",
+        "software",
+        "goods/supply chain",
+        "public/nonprofit",
+        "financial reference",
+        "human-only",
+        "mixed physical/digital"
+      ],
+      "task_ids": [
+        "T-58",
+        "T-62",
+        "T-100",
+        "T-101",
+        "T-105"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "F-02",
+      "title": "Identity and isolation",
+      "variants": [
+        "human/workload",
+        "tenant/project/field",
+        "observer/reviewer/admin",
+        "revoked/expired",
+        "denial without disclosure"
+      ],
+      "task_ids": [
+        "T-49",
+        "T-50",
+        "T-77",
+        "T-79",
+        "T-82",
+        "T-103"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "F-03",
+      "title": "Concurrency and replay",
+      "variants": [
+        "parallel edit",
+        "authority conflict",
+        "duplicate command/webhook/vote",
+        "budget race"
+      ],
+      "task_ids": [
+        "T-53",
+        "T-63",
+        "T-67",
+        "T-68",
+        "T-77",
+        "T-80"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "F-04",
+      "title": "Failure and recovery",
+      "variants": [
+        "restart",
+        "network partition",
+        "worker crash",
+        "partial commit",
+        "provider timeout",
+        "reconciliation"
+      ],
+      "task_ids": [
+        "T-65",
+        "T-68",
+        "T-77",
+        "T-85",
+        "T-94",
+        "T-97",
+        "T-104"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "F-05",
+      "title": "Time and lifecycle",
+      "variants": [
+        "future-effective",
+        "late evidence",
+        "retrospective query",
+        "expiry",
+        "DST",
+        "retirement"
+      ],
+      "task_ids": [
+        "T-49",
+        "T-52",
+        "T-53",
+        "T-73",
+        "T-108"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "F-06",
+      "title": "Scale and usability",
+      "variants": [
+        "empty",
+        "sparse",
+        "dense graph",
+        "deep refinement",
+        "bounded query",
+        "keyboard/screen reader",
+        "laptop/reflow"
+      ],
+      "task_ids": [
+        "T-51",
+        "T-64",
+        "T-98",
+        "T-104",
+        "T-105"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "F-07",
+      "title": "Truth and uncertainty",
+      "variants": [
+        "proposed/accepted/observed",
+        "missing coverage",
+        "contradictory evidence",
+        "stale evaluation",
+        "unjustified assertion"
+      ],
+      "task_ids": [
+        "T-64",
+        "T-66",
+        "T-67",
+        "T-70",
+        "T-71",
+        "T-74",
+        "T-90"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "F-08",
+      "title": "External effects",
+      "variants": [
+        "read/write/deploy",
+        "idempotency",
+        "unknown result",
+        "partial irreversible action",
+        "compensation"
+      ],
+      "task_ids": [
+        "T-77",
+        "T-94",
+        "T-96",
+        "T-97"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "F-09",
+      "title": "Scope and federation",
+      "variants": [
+        "single unit",
+        "multi-entity",
+        "shared service",
+        "partner",
+        "unknown/overlapping jurisdiction",
+        "merger/split"
+      ],
+      "task_ids": [
+        "T-50",
+        "T-55",
+        "T-69",
+        "T-79",
+        "T-100",
+        "T-108"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "F-10",
+      "title": "Agent threats",
+      "variants": [
+        "prompt injection",
+        "poisoned retrieval",
+        "tool escalation",
+        "recursive delegation",
+        "self-approval",
+        "aggregate budget"
+      ],
+      "task_ids": [
+        "T-66",
+        "T-87",
+        "T-88",
+        "T-89",
+        "T-103"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "F-11",
+      "title": "Data and evidence trust",
+      "variants": [
+        "sensitive fields",
+        "retention/hold",
+        "redaction",
+        "missing event",
+        "tamper",
+        "key rotation",
+        "evidence age"
+      ],
+      "task_ids": [
+        "T-71",
+        "T-82",
+        "T-83",
+        "T-84",
+        "T-85",
+        "T-86",
+        "T-103"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "F-12",
+      "title": "Delivery variations",
+      "variants": [
+        "greenfield/brownfield",
+        "single/multi-repo",
+        "infrastructure",
+        "data migration",
+        "canary",
+        "rollback"
+      ],
+      "task_ids": [
+        "T-90",
+        "T-91",
+        "T-92",
+        "T-93",
+        "T-94",
+        "T-95"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "F-13",
+      "title": "Authority and exceptions",
+      "variants": [
+        "quorum",
+        "conflicting rights",
+        "recusal",
+        "appeal",
+        "emergency",
+        "expiry",
+        "non-overridable deny"
+      ],
+      "task_ids": [
+        "T-73",
+        "T-76",
+        "T-77",
+        "T-79",
+        "T-80",
+        "T-81"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "F-14",
+      "title": "Operational business exceptions",
+      "variants": [
+        "partial fulfilment",
+        "dispute",
+        "handover",
+        "absence",
+        "supplier failure",
+        "continuity"
+      ],
+      "task_ids": [
+        "T-52",
+        "T-56",
+        "T-57",
+        "T-96",
+        "T-101",
+        "T-102"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "F-15",
+      "title": "Interchange and extension",
+      "variants": [
+        "unsupported schema",
+        "compatibility",
+        "loss manifest",
+        "migration",
+        "plugin capabilities",
+        "uninstall"
+      ],
+      "task_ids": [
+        "T-55",
+        "T-62",
+        "T-99",
+        "T-100",
+        "T-107",
+        "T-108"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "F-16",
+      "title": "Economics and outcomes",
+      "variants": [
+        "currency/unit mismatch",
+        "forecast versus actual",
+        "incomplete contract",
+        "capacity contention",
+        "failed hypothesis"
+      ],
+      "task_ids": [
+        "T-56",
+        "T-57",
+        "T-58",
+        "T-60",
+        "T-64",
+        "T-101"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "F-17",
+      "title": "Cross-perspective consistency",
+      "variants": [
+        "same identity",
+        "multiple detail levels",
+        "manual/system alternatives",
+        "reverse trace",
+        "layout versus meaning"
+      ],
+      "task_ids": [
+        "T-49",
+        "T-51",
+        "T-54",
+        "T-61",
+        "T-63",
+        "T-90"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "F-18",
+      "title": "Policy lifecycle",
+      "variants": [
+        "draft/simulate/activate",
+        "incompatible rules",
+        "missing input",
+        "rollback",
+        "policy outage",
+        "stale decision"
+      ],
+      "task_ids": [
+        "T-59",
+        "T-76",
+        "T-77",
+        "T-78",
+        "T-80"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "F-19",
+      "title": "Installation and customer ownership",
+      "variants": [
+        "clean self-host",
+        "offline subset",
+        "modular install",
+        "upgrade failure",
+        "clean restore",
+        "export/exit"
+      ],
+      "task_ids": [
+        "T-86",
+        "T-97",
+        "T-99",
+        "T-104",
+        "T-105",
+        "T-108"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "F-20",
+      "title": "Sentinel source fidelity",
+      "variants": [
+        "all R/AT IDs",
+        "seven base claim types",
+        "property extension",
+        "determinism",
+        "atomic publication",
+        "first-session value"
+      ],
+      "task_ids": [
+        "T-65",
+        "T-66",
+        "T-67",
+        "T-68",
+        "T-69",
+        "T-70",
+        "T-71",
+        "T-72",
+        "T-73",
+        "T-74",
+        "T-75"
+      ],
+      "status": "not_run",
+      "evidence": []
+    }
+  ],
+  "boundaries": [
+    {
+      "id": "PC-01",
+      "task_ids": [
+        "T-49",
+        "T-53",
+        "T-67",
+        "T-68"
+      ],
+      "mutation": "Publish design without authorized semantic claims; layout edit must not change claims.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PC-02",
+      "task_ids": [
+        "T-61",
+        "T-82",
+        "T-84"
+      ],
+      "mutation": "Rename or collide identities while source mappings remain active.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PC-03",
+      "task_ids": [
+        "T-68",
+        "T-70",
+        "T-71",
+        "T-90"
+      ],
+      "mutation": "Replace current integrity snapshot with stale/failed compile result.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PC-04",
+      "task_ids": [
+        "T-76",
+        "T-77",
+        "T-90",
+        "T-91"
+      ],
+      "mutation": "Mutate artifact/context/environment after evaluation before dispatch.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PC-05",
+      "task_ids": [
+        "T-79",
+        "T-80",
+        "T-81",
+        "T-77"
+      ],
+      "mutation": "Revoke reviewer or change quorum after approval.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PC-06",
+      "task_ids": [
+        "T-77",
+        "T-87",
+        "T-88",
+        "T-89"
+      ],
+      "mutation": "Agent attempts broader tool/data scope through child delegation.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PC-07",
+      "task_ids": [
+        "T-77",
+        "T-85",
+        "T-94",
+        "T-96"
+      ],
+      "mutation": "Provider accepts request then times out before local acknowledgement.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PC-08",
+      "task_ids": [
+        "T-66",
+        "T-71",
+        "T-74",
+        "T-84",
+        "T-95"
+      ],
+      "mutation": "Observed authority bypass attempts to promote itself to accepted authority.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PC-09",
+      "task_ids": [
+        "T-53",
+        "T-74",
+        "T-90",
+        "T-93",
+        "T-95"
+      ],
+      "mutation": "Resolve notification without recompile; reuse stale approval after design correction.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PC-10",
+      "task_ids": [
+        "T-85",
+        "T-86",
+        "T-103",
+        "T-104"
+      ],
+      "mutation": "Lose/reorder/duplicate audit event during concurrent effects and restart.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PC-11",
+      "task_ids": [
+        "T-97",
+        "T-99",
+        "T-107"
+      ],
+      "mutation": "Disable or upgrade required module while work is queued.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PC-12",
+      "task_ids": [
+        "T-55",
+        "T-86",
+        "T-99",
+        "T-108"
+      ],
+      "mutation": "Import portability bundle with active credentials/grants or undisclosed losses.",
+      "status": "not_run",
+      "evidence": []
+    }
+  ],
+  "high_risk_intersections": [
+    {
+      "id": "X-01",
+      "family_ids": [
+        "F-02",
+        "F-03",
+        "F-08",
+        "F-13"
+      ],
+      "task_ids": [
+        "T-77",
+        "T-80",
+        "T-103"
+      ],
+      "scenario": "Reviewer revoked during duplicate effect dispatch",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "X-02",
+      "family_ids": [
+        "F-05",
+        "F-07",
+        "F-09",
+        "F-20"
+      ],
+      "task_ids": [
+        "T-69",
+        "T-71",
+        "T-74"
+      ],
+      "scenario": "Late property observation in overlapping subsidiary scopes",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "X-03",
+      "family_ids": [
+        "F-03",
+        "F-10",
+        "F-18"
+      ],
+      "task_ids": [
+        "T-77",
+        "T-88",
+        "T-89"
+      ],
+      "scenario": "Multi-agent budget race during policy revision",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "X-04",
+      "family_ids": [
+        "F-04",
+        "F-08",
+        "F-12"
+      ],
+      "task_ids": [
+        "T-92",
+        "T-94",
+        "T-104"
+      ],
+      "scenario": "Partial irreversible migration during deployment failover",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "X-05",
+      "family_ids": [
+        "F-05",
+        "F-11",
+        "F-19"
+      ],
+      "task_ids": [
+        "T-83",
+        "T-86",
+        "T-108"
+      ],
+      "scenario": "Restore/export during key rotation and retention hold",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "X-06",
+      "family_ids": [
+        "F-03",
+        "F-07",
+        "F-17"
+      ],
+      "task_ids": [
+        "T-53",
+        "T-63",
+        "T-90"
+      ],
+      "scenario": "Concurrent design merge invalidates SDLC context across lenses",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "X-07",
+      "family_ids": [
+        "F-09",
+        "F-13",
+        "F-14"
+      ],
+      "task_ids": [
+        "T-79",
+        "T-81",
+        "T-102"
+      ],
+      "scenario": "Supplier failure with absent approver in another legal unit",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "X-08",
+      "family_ids": [
+        "F-02",
+        "F-06",
+        "F-11"
+      ],
+      "task_ids": [
+        "T-98",
+        "T-103",
+        "T-104"
+      ],
+      "scenario": "Large graph and accessible search must not expose hidden classified neighbors",
+      "status": "not_run",
+      "evidence": []
+    }
+  ],
+  "enterprise_scenarios": [
+    {
+      "id": "ES-01",
+      "actor": "Executive/strategy owner",
+      "title": "Strategy and investment portfolio",
+      "success": "Compare objectives, initiatives, risks, capacity and expected benefits without treating forecasts as results.",
+      "adverse": "Conflicting goals or funding limits require an accountable prioritization decision.",
+      "support_class": "model_and_review",
+      "task_ids": [
+        "T-58",
+        "T-59",
+        "T-60",
+        "T-64"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "ES-02",
+      "actor": "Commercial owner",
+      "title": "Market, offering and go-to-market",
+      "success": "Map segment/need/offering/channel/journey to capability, acquisition assumptions and outcome measures.",
+      "adverse": "Unmeasured demand or unsupported market claims remain assumptions.",
+      "support_class": "model_and_review",
+      "task_ids": [
+        "T-56",
+        "T-58",
+        "T-60"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "ES-03",
+      "actor": "Sales/account owner",
+      "title": "Lead to agreement",
+      "success": "Trace an authorized opportunity/quote through scope, price, promised service and accepted commitment.",
+      "adverse": "Discount beyond delegation or incomplete contractual interpretation blocks the relevant approval.",
+      "support_class": "governed_adapter",
+      "task_ids": [
+        "T-56",
+        "T-58",
+        "T-79",
+        "T-96"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "ES-04",
+      "actor": "Service/operations owner",
+      "title": "Order to fulfilment",
+      "success": "Reserve people/assets, run delivery steps, hand over evidence and measure customer result.",
+      "adverse": "Partial fulfilment, late delivery and disputed acceptance route to cure/compensation rather than false completion.",
+      "support_class": "governed_adapter",
+      "task_ids": [
+        "T-52",
+        "T-56",
+        "T-57",
+        "T-96",
+        "T-101"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "ES-05",
+      "actor": "Finance operator",
+      "title": "Invoice, collection and reconciliation",
+      "success": "Link commitments, source invoices/payments and reconciled posting references with independent approval.",
+      "adverse": "Unknown payment result or unmatched invoice remains unreconciled; no blind duplicate transfer.",
+      "support_class": "governed_adapter",
+      "task_ids": [
+        "T-56",
+        "T-77",
+        "T-85",
+        "T-96"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "ES-06",
+      "actor": "Procurement/vendor owner",
+      "title": "Source to contract and supplier performance",
+      "success": "Compare suppliers, approve scoped procurement, record obligations and evaluate delivery/continuity.",
+      "adverse": "Supplier outage, conflict of interest or expired authority routes a qualified substitute decision.",
+      "support_class": "governed_adapter",
+      "task_ids": [
+        "T-56",
+        "T-57",
+        "T-79",
+        "T-96",
+        "T-102"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "ES-07",
+      "actor": "People manager",
+      "title": "Hire, onboard and train",
+      "success": "Model role/skill needs and restricted onboarding/training workflows with documented decision owners.",
+      "adverse": "Missing human review or restricted personnel data cannot become an autonomous hiring decision.",
+      "support_class": "qualified_domain_pack",
+      "task_ids": [
+        "T-50",
+        "T-52",
+        "T-57",
+        "T-59",
+        "T-79"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "ES-08",
+      "actor": "Team leader/identity admin",
+      "title": "Assignment, leave, handover and offboarding",
+      "success": "Transfer accountable work and scoped access while preserving capacity and evidence.",
+      "adverse": "An absent/revoked approver cannot authorize new actions; orphan work is escalated.",
+      "support_class": "core",
+      "task_ids": [
+        "T-57",
+        "T-79",
+        "T-82",
+        "T-87",
+        "T-102"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "ES-09",
+      "actor": "Customer support lead",
+      "title": "Complaint, service incident and redress",
+      "success": "Connect customer-impact case to commitment, process, deployed service and authorized remedy.",
+      "adverse": "Disputed facts and irreversible refunds remain reviewed and reconciled.",
+      "support_class": "governed_adapter",
+      "task_ids": [
+        "T-52",
+        "T-56",
+        "T-95",
+        "T-96",
+        "T-101"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "ES-10",
+      "actor": "Product/engineering owner",
+      "title": "Product lifecycle and software delivery",
+      "success": "Refine capability into system change, required tests, released artifact and observed outcome.",
+      "adverse": "Legacy/multi-repo/schema conflicts invalidate stale approvals and require safe recovery.",
+      "support_class": "core",
+      "task_ids": [
+        "T-54",
+        "T-90",
+        "T-91",
+        "T-92",
+        "T-93",
+        "T-94",
+        "T-95"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "ES-11",
+      "actor": "Asset/facility owner",
+      "title": "Asset maintenance and field service",
+      "success": "Model asset/location/calendar, qualified personnel, work order and completed inspection evidence.",
+      "adverse": "Unsafe machinery/field actions without certified adapter and authority stay unsupported.",
+      "support_class": "qualified_domain_pack",
+      "task_ids": [
+        "T-57",
+        "T-62",
+        "T-96",
+        "T-102"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "ES-12",
+      "actor": "Manufacturing/logistics owner",
+      "title": "Inventory, production and logistics",
+      "success": "Represent stock/resource references, transformations, transfers and quality handovers in process scope.",
+      "adverse": "Damaged/partial goods, uncertain sensor evidence and supplier failures stay explicit exceptions.",
+      "support_class": "qualified_domain_pack",
+      "task_ids": [
+        "T-52",
+        "T-57",
+        "T-62",
+        "T-96",
+        "T-101"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "ES-13",
+      "actor": "Risk/compliance owner",
+      "title": "Obligation to operating control",
+      "success": "Record sourced applicability/interpretation, owner, policy/control and independent operating tests.",
+      "adverse": "Unsupported jurisdiction or expired evidence blocks a compliance assertion, not all unrelated business work.",
+      "support_class": "qualified_domain_pack",
+      "task_ids": [
+        "T-59",
+        "T-70",
+        "T-76",
+        "T-100"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "ES-14",
+      "actor": "Security/incident commander",
+      "title": "Detect, contain and recover incident",
+      "success": "Link detection to affected authority, data, systems and protected containment/recovery actions.",
+      "adverse": "Break-glass is scoped, expiring and reviewed; cannot waive immutable denies.",
+      "support_class": "core",
+      "task_ids": [
+        "T-71",
+        "T-77",
+        "T-81",
+        "T-95",
+        "T-102",
+        "T-103"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "ES-15",
+      "actor": "Data/domain steward",
+      "title": "Definition, authority and data quality",
+      "success": "Resolve meanings/owners, trace property reads and require compatible producer/consumer contracts.",
+      "adverse": "Replica promoted to master or missing lineage coverage creates findings rather than auto-corrected truth.",
+      "support_class": "core",
+      "task_ids": [
+        "T-61",
+        "T-71",
+        "T-82",
+        "T-83",
+        "T-84"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "ES-16",
+      "actor": "Privacy/records owner",
+      "title": "Access, retention, hold and disposal",
+      "success": "Assess authorized disclosure/deletion scope and retain evidence of the decision and actual disposal.",
+      "adverse": "Legal hold, residency or dependency conflict blocks disposal with reason; logs cannot leak erased content.",
+      "support_class": "qualified_domain_pack",
+      "task_ids": [
+        "T-83",
+        "T-86",
+        "T-100",
+        "T-103",
+        "T-108"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "ES-17",
+      "actor": "Auditor/board reviewer",
+      "title": "Audit and governance assurance",
+      "success": "Select risk-based evidence sample, reconstruct authority/action/result and independently verify export.",
+      "adverse": "Missing causal events or invalid signatures are disclosed as gaps, not repaired by fabricated evidence.",
+      "support_class": "core",
+      "task_ids": [
+        "T-80",
+        "T-85",
+        "T-86",
+        "T-103"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "ES-18",
+      "actor": "Enterprise architect",
+      "title": "Reorganisation, merger and shared services",
+      "success": "Compare target operating models and map transferred capabilities, roles, authority, contracts and systems.",
+      "adverse": "Overlapping legal scopes or identity collisions need reviewed merge; history is preserved.",
+      "support_class": "core",
+      "task_ids": [
+        "T-50",
+        "T-53",
+        "T-55",
+        "T-63",
+        "T-79",
+        "T-108"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "ES-19",
+      "actor": "Continuity owner",
+      "title": "Disruption and disaster recovery",
+      "success": "Exercise process continuity separately from platform restore with alternate qualified people/providers.",
+      "adverse": "Recovery cannot duplicate commitments or resurrect revoked grants.",
+      "support_class": "core",
+      "task_ids": [
+        "T-57",
+        "T-86",
+        "T-99",
+        "T-102",
+        "T-104",
+        "T-105"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "ES-20",
+      "actor": "Agent supervisor",
+      "title": "Human/agent augmentation and multi-agent delegation",
+      "success": "Activate evaluated agent assignments and maintain aggregate authority/budget/checkpoint boundaries.",
+      "adverse": "Prompt injection, unbounded recursion and planner self-approval fail before protected effect.",
+      "support_class": "core",
+      "task_ids": [
+        "T-76",
+        "T-77",
+        "T-87",
+        "T-88",
+        "T-89"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "ES-21",
+      "actor": "Knowledge/process owner",
+      "title": "Knowledge reuse and organisational learning",
+      "success": "Import governed sources, relate evidence to instructions/assumptions and propose reviewed improvement.",
+      "adverse": "Stale, contradictory or malicious content cannot self-promote into policy or accepted claims.",
+      "support_class": "core",
+      "task_ids": [
+        "T-60",
+        "T-65",
+        "T-66",
+        "T-74",
+        "T-89",
+        "T-95",
+        "T-101"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "ES-22",
+      "actor": "Treasury/legal owner",
+      "title": "Funding, tax, statutory and corporate actions",
+      "success": "Model funding assumptions, obligations and authorized external-system responsibilities with evidence references.",
+      "adverse": "No generated model implies legal formation, statutory compliance, tax accuracy or permission to transact.",
+      "support_class": "qualified_domain_pack",
+      "task_ids": [
+        "T-56",
+        "T-59",
+        "T-79",
+        "T-96",
+        "T-100"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "ES-23",
+      "actor": "Partner/public-service owner",
+      "title": "Cross-enterprise and public/nonprofit collaboration",
+      "success": "Share a purpose-limited contract view across organisations with stakeholder/public-value outcomes.",
+      "adverse": "No revenue requirement for nonprofit; partner cannot infer hidden tenant or citizen data.",
+      "support_class": "qualified_domain_pack",
+      "task_ids": [
+        "T-50",
+        "T-58",
+        "T-60",
+        "T-79",
+        "T-100",
+        "T-108"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "ES-24",
+      "actor": "Customer operator/enterprise owner",
+      "title": "Retire service, wind down or exit OrgWard",
+      "success": "Drain work, settle/transfer obligations, export usable model/evidence and apply approved retention.",
+      "adverse": "Active effect, hold or missing export dependencies prevent false completed decommission.",
+      "support_class": "core",
+      "task_ids": [
+        "T-55",
+        "T-56",
+        "T-86",
+        "T-99",
+        "T-108"
+      ],
+      "status": "not_run",
+      "evidence": []
+    }
+  ],
+  "journeys": [
+    {
+      "id": "PQ-01",
+      "task_ids": [
+        "T-64"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PQ-02",
+      "task_ids": [
+        "T-98"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PQ-03",
+      "task_ids": [
+        "T-75"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PQ-04",
+      "task_ids": [
+        "T-81"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PQ-05",
+      "task_ids": [
+        "T-84"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PQ-06",
+      "task_ids": [
+        "T-89"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PQ-07",
+      "task_ids": [
+        "T-95"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PQ-08",
+      "task_ids": [
+        "T-102"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PQ-09",
+      "task_ids": [
+        "T-86"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PQ-10",
+      "task_ids": [
+        "T-105"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PQ-11",
+      "task_ids": [
+        "T-107"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "PQ-12",
+      "task_ids": [
+        "T-106"
+      ],
+      "status": "not_run",
+      "evidence": []
+    }
+  ]
+}

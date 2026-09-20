@@ -1,0 +1,847 @@
+{
+  "format": "orgward-work-package-draft-v1",
+  "taskId": "T-01",
+  "sliceId": "T-01-boundary-draft-01",
+  "title": "Freeze executable domain and API contracts",
+  "actor": "platform architect",
+  "trigger": "Authorized actor initiates ValidateContractPackage in SC-01, SC-12; task story: As platform architect, I want to define one versioned object and command vocabulary so every feature shares the same durable state.",
+  "observableOutcome": "Satisfy the unchanged source acceptance for T-01; primary boundary ValidateContractPackage reaches validated only after actual domain validation. Acknowledged jobs are not completed work.",
+  "reviewStatus": "pending",
+  "author": "codex",
+  "reviewer": null,
+  "implementationReady": false,
+  "independentReview": "Pending real independent review; no review, dependency proof or product execution is asserted.",
+  "sourceTaskHash": "21f270fbd2fa71cd5971959939527f6dffac0b5df341c7ab082d6edda5d6e0be",
+  "sourceRequirements": [
+    {
+      "id": "T-01-AC1",
+      "scenario": "Given every aggregate in C-01, validating valid and invalid fixtures accepts only correct fields, references and versions; an extension has an explicit version policy.",
+      "sourceKind": "unspecified"
+    },
+    {
+      "id": "T-01-AC2",
+      "scenario": "Given the C-02 command families, OpenAPI examples and event fixtures define request, response, errors, authentication and idempotency; a contract test rejects caller-supplied authority.",
+      "sourceKind": "unspecified"
+    },
+    {
+      "id": "T-01-AC3",
+      "scenario": "Given a schema or API breaking change, compatibility validation fails until migration and consumer examples exist; record exact supported providers/topology and unresolved design decisions.",
+      "sourceKind": "unspecified"
+    }
+  ],
+  "acceptanceIds": [
+    "T-01-AC1",
+    "T-01-AC2",
+    "T-01-AC3"
+  ],
+  "dependencyReceipts": [],
+  "dependencies": [],
+  "module": "platform",
+  "operationKind": "diagnostic",
+  "ownership": "Tenant/identity, command, persistence, job, effect, artifact and projection infrastructure; no duplicate domain semantics.",
+  "recordMeaning": "contract_package is a boundary payload/result view, not permission to create an independent authoritative store. Resolve its fields into the canonical aggregate family in A-05/C-01.",
+  "requiredOperations": [
+    "ValidateContractPackage"
+  ],
+  "uncoveredOperations": [],
+  "openDecisions": [
+    {
+      "id": "T-01-D01",
+      "owner": "independent-domain-and-security-reviewer",
+      "blocks": "implementation_start",
+      "decision": "Review this primary boundary against every original scenario; author concrete domain datasets and independent output oracles, not assertions derived from the implementation.",
+      "closure": "Approved bounded slices with executable negative/recovery fixtures for T-01-AC1, T-01-AC2, T-01-AC3 and a legitimate independent review receipt."
+    }
+  ],
+  "schemas": [
+    {
+      "id": "ValidateContractPackageRequest",
+      "definition": {
+        "type": "object",
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "packageVersion": {
+                "type": "string",
+                "minLength": 1
+              },
+              "schemaIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "uniqueItems": true
+              },
+              "compatibilityBase": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "packageVersion",
+              "schemaIds",
+              "compatibilityBase"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "payload"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "ValidateContractPackageResult",
+      "definition": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "ValidateContractPackage"
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "completed"
+            ]
+          },
+          "targetState": {
+            "type": "string",
+            "minLength": 1
+          },
+          "commandId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "resultRef": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "authoritativeGeneration": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "projectionWatermark": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "jobId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "operation",
+          "status",
+          "targetState",
+          "commandId",
+          "resultRef",
+          "version",
+          "authoritativeGeneration",
+          "projectionWatermark",
+          "partial",
+          "jobId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "SafeError",
+      "definition": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          },
+          "fieldErrors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "field",
+                "message"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "correlationId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "currentVersion": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "recoveryActions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "fieldErrors",
+          "correlationId",
+          "retryable",
+          "currentVersion",
+          "recoveryActions"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "operations": [
+    {
+      "name": "ValidateContractPackage",
+      "transport": "existing-client-or-local-contract-function",
+      "requestSchema": "ValidateContractPackageRequest",
+      "resultSchema": "ValidateContractPackageResult",
+      "errorSchema": "SafeError",
+      "requestExample": {
+        "payload": {
+          "packageVersion": "schema-v1",
+          "schemaIds": [
+            "workspace",
+            "object",
+            "command",
+            "event"
+          ],
+          "compatibilityBase": "legacy-v0.1"
+        }
+      },
+      "successExample": {
+        "operation": "ValidateContractPackage",
+        "status": "completed",
+        "targetState": "validated",
+        "commandId": "fixture-t-01-1",
+        "resultRef": "contract_package-1",
+        "version": 7,
+        "authoritativeGeneration": 12,
+        "projectionWatermark": 12,
+        "partial": false,
+        "jobId": null
+      },
+      "errorExample": {
+        "code": "VERSION_CONFLICT",
+        "message": "The selected revision changed; reload and review the retained draft.",
+        "fieldErrors": [],
+        "correlationId": "trace-t-01-1",
+        "retryable": false,
+        "currentVersion": 8,
+        "recoveryActions": [
+          "reload",
+          "compare",
+          "rebase"
+        ]
+      },
+      "permission": "platform.ValidateContractPackage: authenticated scoped membership plus current action grant; viewer may query authorized metadata only. Visible resource denial is 403; hidden or foreign resource is indistinguishable 404. No UI role selector or payload actor grants authority.",
+      "exampleMeaning": "Reserved synthetic IDs; digest strings are hashes of fixture labels, not claims about real artifacts. Missing referenced records must fail validation.",
+      "acknowledgement": "Return only computed/readback result; never a static success sample."
+    }
+  ],
+  "permissionRule": "platform.ValidateContractPackage: authenticated scoped membership plus current action grant; viewer may query authorized metadata only. Visible resource denial is 403; hidden or foreign resource is indistinguishable 404. No UI role selector or payload actor grants authority.",
+  "transactionBoundary": "No authoritative domain mutation. Use authorized existing read paths; local preferences are not business facts. Diagnostics emit test artifacts, not product acceptance.",
+  "idempotencyRule": "Repeat reads without domain writes; cancel older UI request results so they cannot overwrite a newer selection.",
+  "invalidationRule": "Use CHANGE-PROTOCOL dependency kinds/field paths. Semantic accepted publication atomically advances the authoritative invalidation generation. A view-only change does not invalidate evidence. Projection lag is visible; protected effects revalidate current identity/policy/context/cell epoch.",
+  "migrationRecovery": "Retain existing URL/selection and readable legacy data. Failed refresh cannot erase last-known data or relabel it fresh. No database migration in this boundary.",
+  "persistence": {
+    "authoritative": false,
+    "tenantBoundary": "Session-derived tenant/workspace; composite references and tenant-leading indices. A payload target tenant is a checked selector only.",
+    "indices": [],
+    "immutable": [
+      "published revisions",
+      "accepted evidence",
+      "prior attempts"
+    ],
+    "layoutStorage": "per-principal view preference; no semantic write"
+  },
+  "events": [
+    {
+      "type": "NoDomainEvent",
+      "meaning": "Read/local diagnostics publish no authoritative event.",
+      "envelopeFields": [
+        "eventId",
+        "schemaVersion",
+        "tenantId",
+        "workspaceId",
+        "aggregateId",
+        "version",
+        "type",
+        "actor",
+        "occurredAt",
+        "correlationId",
+        "causationId",
+        "data",
+        "evidenceRefs"
+      ],
+      "consumers": [],
+      "delivery": "Outbox at least once; deduplicate eventId, reject obsolete head promotion."
+    }
+  ],
+  "requiredEvents": [],
+  "transitions": [
+    {
+      "from": "draft",
+      "command": "ValidateContractPackage",
+      "to": "validated",
+      "precondition": "Valid schema, authorized actor, current version and domain conditions in the source scenario; async acceptance alone does not reach terminal state.",
+      "failureRecovery": "Retain draft and prior evidence; show safe error and permitted recovery. Resolve command status before retry."
+    },
+    {
+      "from": "draft",
+      "command": "ValidateContractPackage:invalid-or-denied",
+      "to": "draft",
+      "precondition": "Invalid payload, hidden object, stale context, unmet checkpoint or expired permission.",
+      "failureRecovery": "No domain/effect transition; disclose no hidden object data. Rebase or obtain legitimate new authority."
+    }
+  ],
+  "ui": {
+    "screens": [
+      "SC-01",
+      "SC-12"
+    ],
+    "source": "docs/product/SCREEN-CONTRACTS.md + PORTFOLIO-UX.md + MIGRATION-AND-COVERAGE.md",
+    "controls": [
+      {
+        "field": "packageVersion",
+        "control": "text-or-authorized-reference",
+        "required": true,
+        "valueSource": "server-validated record or retained user draft",
+        "validation": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      {
+        "field": "schemaIds",
+        "control": "typed-reference-list",
+        "required": true,
+        "valueSource": "server-validated record or retained user draft",
+        "validation": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      {
+        "field": "compatibilityBase",
+        "control": "text-or-authorized-reference",
+        "required": true,
+        "valueSource": "server-validated record or retained user draft",
+        "validation": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    ],
+    "primaryAction": "ValidateContractPackage",
+    "permissionVisibility": "Explain disabled visible actions; omit inaccessible resources. Server repeats authorization.",
+    "keyboard": "Tab reaches all controls in reading order; visible focus, labeled errors, focus first invalid field. Escape closes dialog and restores trigger focus; graph has list/table alternative.",
+    "reload": "Use durable result ID and pinned baseline, then restore selection/filter. Never replay a mutation just because the page reloads.",
+    "legacyException": "Implement against existing client/local boundaries. Do not require the unbuilt /api/v1 backend for independent T-01/T-02/T-03 diagnostics."
+  },
+  "uiStates": [
+    {
+      "state": "loading",
+      "behavior": "Show pending request and retain selection; disable duplicate submission without blocking unrelated navigation."
+    },
+    {
+      "state": "empty",
+      "behavior": "Show zero only after successful authorized empty response; offer the relevant create/import action if allowed."
+    },
+    {
+      "state": "stale",
+      "behavior": "Show source timestamp and baseline/watermark mismatch; allow inspect/refresh but prevent protected stale action."
+    },
+    {
+      "state": "conflict",
+      "behavior": "Keep unsaved values, show changed fields/current version, and require compare/rebase before new submission."
+    },
+    {
+      "state": "failed",
+      "behavior": "Display safe error, trace ID and retry eligibility; do not replace data with successful example values."
+    },
+    {
+      "state": "denied",
+      "behavior": "Explain denied action only on a visible resource; hide foreign resource details and purge revoked cached data."
+    },
+    {
+      "state": "success",
+      "behavior": "Render actual server readback and explicit proposed/accepted/enabled/evidenced state; a queued job is still queued."
+    },
+    {
+      "state": "recovery",
+      "behavior": "Inspect command/job outcome and unresolved effects; offer only permitted retry, resume, reconciliation or reviewed compensation."
+    }
+  ],
+  "fixtures": [
+    {
+      "id": "T-01-FX-1",
+      "kind": "positive",
+      "acceptanceIds": [
+        "T-01-AC1",
+        "T-01-AC2",
+        "T-01-AC3"
+      ],
+      "input": {
+        "request": {
+          "payload": {
+            "packageVersion": "schema-v1",
+            "schemaIds": [
+              "workspace",
+              "object",
+              "command",
+              "event"
+            ],
+            "compatibilityBase": "legacy-v0.1"
+          }
+        },
+        "actor": "authorized-actor-a",
+        "tenant": "tenant-a",
+        "initialState": "draft",
+        "currentVersion": 7
+      },
+      "expectedPersistedResult": {
+        "domainRevisionDelta": 0,
+        "externalDispatchCount": 0,
+        "resultState": "validated",
+        "requiredSourceCriterion": "T-01-AC1",
+        "note": "Domain-specific result assertions must satisfy the linked original acceptance scenario."
+      },
+      "testPath": "tests/acceptance/t-01.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-01-FX-2",
+      "kind": "negative",
+      "acceptanceIds": [
+        "T-01-AC1",
+        "T-01-AC2",
+        "T-01-AC3"
+      ],
+      "input": {
+        "request": {
+          "payload": {
+            "packageVersion": "schema-v1",
+            "schemaIds": [
+              "workspace",
+              "object",
+              "command",
+              "event"
+            ],
+            "compatibilityBase": "legacy-v0.1"
+          },
+          "unexpectedAuthority": "admin"
+        },
+        "actor": "viewer-a",
+        "tenant": "tenant-a"
+      },
+      "expectedPersistedResult": {
+        "validation": "reject-unexpected-field",
+        "domainRevisionDelta": 0,
+        "externalDispatchCount": 0
+      },
+      "testPath": "tests/acceptance/t-01.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-01-FX-3",
+      "kind": "concurrent",
+      "acceptanceIds": [
+        "T-01-AC1",
+        "T-01-AC2",
+        "T-01-AC3"
+      ],
+      "input": {
+        "requests": [
+          "selection-a",
+          "selection-b"
+        ],
+        "responseOrder": [
+          "selection-b",
+          "selection-a"
+        ]
+      },
+      "expectedPersistedResult": {
+        "visibleSelection": "selection-b",
+        "domainRevisionDelta": 0,
+        "externalDispatchCount": 0
+      },
+      "testPath": "tests/acceptance/t-01.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-01-FX-4",
+      "kind": "recovery",
+      "acceptanceIds": [
+        "T-01-AC1",
+        "T-01-AC2",
+        "T-01-AC3"
+      ],
+      "input": {
+        "request": {
+          "payload": {
+            "packageVersion": "schema-v1",
+            "schemaIds": [
+              "workspace",
+              "object",
+              "command",
+              "event"
+            ],
+            "compatibilityBase": "legacy-v0.1"
+          }
+        },
+        "failpoint": "refresh-unavailable",
+        "reload": true
+      },
+      "expectedPersistedResult": {
+        "fabricatedSuccessCount": 0,
+        "staleDataLabeled": true,
+        "domainRevisionDelta": 0
+      },
+      "testPath": "tests/acceptance/t-01.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-01-FX-5",
+      "kind": "isolation",
+      "acceptanceIds": [
+        "T-01-AC1",
+        "T-01-AC2",
+        "T-01-AC3"
+      ],
+      "input": {
+        "cachedScope": "workspace-a",
+        "nextScope": "workspace-b",
+        "reusedCachedResult": false
+      },
+      "expectedPersistedResult": {
+        "staleScopeVisible": false,
+        "authenticationProved": false,
+        "domainRevisionDelta": 0
+      },
+      "testPath": "tests/acceptance/t-01.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-01-FX-6",
+      "kind": "end_to_end",
+      "acceptanceIds": [
+        "T-01-AC1",
+        "T-01-AC2",
+        "T-01-AC3"
+      ],
+      "input": {
+        "request": {
+          "payload": {
+            "packageVersion": "schema-v1",
+            "schemaIds": [
+              "workspace",
+              "object",
+              "command",
+              "event"
+            ],
+            "compatibilityBase": "legacy-v0.1"
+          }
+        },
+        "actor": "authorized-actor-a",
+        "screens": [
+          "SC-01",
+          "SC-12"
+        ],
+        "actions": [
+          "open",
+          "inspect-source",
+          "edit-or-select",
+          "submit",
+          "reload",
+          "inspect-durable-result"
+        ]
+      },
+      "expectedPersistedResult": {
+        "fakeSuccessCount": 0,
+        "selectionRetained": true,
+        "unauthorizedControlsExecutable": false,
+        "originalAcceptanceRequired": [
+          "T-01-AC1",
+          "T-01-AC2",
+          "T-01-AC3"
+        ]
+      },
+      "testPath": "tests/acceptance/t-01.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-01-FX-7",
+      "kind": "cross_boundary",
+      "acceptanceIds": [
+        "T-01-AC1",
+        "T-01-AC2",
+        "T-01-AC3"
+      ],
+      "input": {
+        "request": {
+          "payload": {
+            "packageVersion": "schema-v1",
+            "schemaIds": [
+              "workspace",
+              "object",
+              "command",
+              "event"
+            ],
+            "compatibilityBase": "legacy-v0.1"
+          }
+        },
+        "initialGeneration": 12,
+        "currentGeneration": 13,
+        "projectionWatermark": 12,
+        "revokedGrant": true
+      },
+      "expectedPersistedResult": {
+        "protectedActionsEnabledByUi": false,
+        "freshness": "stale",
+        "fabricatedSuccessCount": 0
+      },
+      "testPath": "tests/acceptance/t-01.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-01-AC1-DOMAIN",
+      "kind": "end_to_end",
+      "acceptanceIds": [
+        "T-01-AC1"
+      ],
+      "input": {
+        "request": {
+          "payload": {
+            "packageVersion": "schema-v1",
+            "schemaIds": [
+              "workspace",
+              "object",
+              "command",
+              "event"
+            ],
+            "compatibilityBase": "legacy-v0.1"
+          }
+        },
+        "sourceScenarioId": "T-01-AC1",
+        "sourceScenarioHash": "9ed75e1955032d8147f79e07f03f67ee575fec354c3063fb3945d90d42bef93d"
+      },
+      "expectedPersistedResult": {
+        "sourceScenarioId": "T-01-AC1",
+        "mustAssertOriginalScenario": true,
+        "cannotSubstituteBoundaryFixture": true
+      },
+      "testPath": "tests/acceptance/t-01.test.mjs",
+      "status": "not_run",
+      "scope": "domain_oracle_requires_review"
+    },
+    {
+      "id": "T-01-AC2-DOMAIN",
+      "kind": "end_to_end",
+      "acceptanceIds": [
+        "T-01-AC2"
+      ],
+      "input": {
+        "request": {
+          "payload": {
+            "packageVersion": "schema-v1",
+            "schemaIds": [
+              "workspace",
+              "object",
+              "command",
+              "event"
+            ],
+            "compatibilityBase": "legacy-v0.1"
+          }
+        },
+        "sourceScenarioId": "T-01-AC2",
+        "sourceScenarioHash": "689d83a2c19c39c1117e9b87b7f270ed2646f4b60d18b13efbfa34cb37412821"
+      },
+      "expectedPersistedResult": {
+        "sourceScenarioId": "T-01-AC2",
+        "mustAssertOriginalScenario": true,
+        "cannotSubstituteBoundaryFixture": true
+      },
+      "testPath": "tests/acceptance/t-01.test.mjs",
+      "status": "not_run",
+      "scope": "domain_oracle_requires_review"
+    },
+    {
+      "id": "T-01-AC3-DOMAIN",
+      "kind": "end_to_end",
+      "acceptanceIds": [
+        "T-01-AC3"
+      ],
+      "input": {
+        "request": {
+          "payload": {
+            "packageVersion": "schema-v1",
+            "schemaIds": [
+              "workspace",
+              "object",
+              "command",
+              "event"
+            ],
+            "compatibilityBase": "legacy-v0.1"
+          }
+        },
+        "sourceScenarioId": "T-01-AC3",
+        "sourceScenarioHash": "3c44eefe72ad80c279ca85a43f0da2a429a169aea251edf714f5d97ea9b1090c"
+      },
+      "expectedPersistedResult": {
+        "sourceScenarioId": "T-01-AC3",
+        "mustAssertOriginalScenario": true,
+        "cannotSubstituteBoundaryFixture": true
+      },
+      "testPath": "tests/acceptance/t-01.test.mjs",
+      "status": "not_run",
+      "scope": "domain_oracle_requires_review"
+    }
+  ],
+  "domainCounterexamples": [
+    "Validate current JSON fixtures without rewriting their IDs; invalid references fail with a field path.",
+    "The contract package must distinguish accepted design, enabled authority and observed evidence; they are separate enums."
+  ],
+  "targetFiles": [
+    "contracts/enterprise/t-01.schema.json",
+    "src/modules/platform/t-01.mjs",
+    "tests/acceptance/t-01.test.mjs"
+  ],
+  "fileStatus": "intended paths, not implementation evidence",
+  "slices": [
+    {
+      "id": "T-01-contract",
+      "dependsOn": [],
+      "covers": [
+        "T-01-AC1",
+        "T-01-AC2",
+        "T-01-AC3"
+      ],
+      "exit": "Resolve open decisions, concrete domain oracles and independent review; schemas and examples must validate."
+    },
+    {
+      "id": "T-01-domain",
+      "dependsOn": [
+        "T-01-contract"
+      ],
+      "covers": [
+        "T-01-AC1",
+        "T-01-AC2",
+        "T-01-AC3"
+      ],
+      "exit": "Actual state, permission, concurrency and restart tests; no mock substituted for required real provider."
+    },
+    {
+      "id": "T-01-experience",
+      "dependsOn": [
+        "T-01-domain"
+      ],
+      "covers": [
+        "T-01-AC1",
+        "T-01-AC2",
+        "T-01-AC3"
+      ],
+      "exit": "Working role journey across all listed screens/states with keyboard and reload checks."
+    },
+    {
+      "id": "T-01-qualification",
+      "dependsOn": [
+        "T-01-experience"
+      ],
+      "covers": [
+        "T-01-AC1",
+        "T-01-AC2",
+        "T-01-AC3"
+      ],
+      "exit": "Independent revision-bound evidence for every original criterion and integration obligation; reconcile all child slices before parent closure."
+    }
+  ],
+  "observability": "Record correlation/command/job IDs, operation, authorized scope, version/generation/fence and safe error code. Redact content, credentials and foreign identifiers. Metrics include rejection, conflict, lag and unknown-effect counts; tenant labels are authorized and bounded.",
+  "sourceDecisions": [
+    "docs/production/SOLUTION-ARCHITECTURE.md",
+    "docs/production/CHANGE-PROTOCOL.md",
+    "docs/production/DELIVERY-CONTRACTS.md",
+    "docs/production/IMPLEMENTATION-HANDOFF.md",
+    "docs/production/IMPLEMENTATION-BACKLOG.json"
+  ],
+  "nonGoals": [
+    "No implementation or independent approval claimed by this draft.",
+    "No public deployment, new authority, real transaction or customer-specific policy inferred.",
+    "Do not replace existing IDs, task dependencies, domain scenarios or source rule IDs with generated boundary checks."
+  ],
+  "evidence": {
+    "status": "not_run",
+    "receipts": [],
+    "commands": [
+      "node --test tests/acceptance/t-01.test.mjs",
+      "npm run check",
+      "node ops/check-spec.mjs --self-test --verify-sources"
+    ],
+    "required": [
+      "revision",
+      "fixture manifest",
+      "actual storage/event/effect assertions",
+      "role journey",
+      "environment/provider versions",
+      "raw results",
+      "unresolved findings",
+      "independent review"
+    ]
+  }
+}

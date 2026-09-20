@@ -1,0 +1,68 @@
+{
+  "screens": [
+    {
+      "view": "command",
+      "heading": "Command center",
+      "overflow": false,
+      "nonKeyboardActions": 6,
+      "smallText": 54
+    },
+    {
+      "view": "enterprise",
+      "heading": "Northstar Bank operating blueprint",
+      "overflow": false,
+      "nonKeyboardActions": 13,
+      "smallText": 40
+    },
+    {
+      "view": "changes",
+      "heading": "Change portfolio",
+      "overflow": false,
+      "nonKeyboardActions": 4,
+      "smallText": 38
+    },
+    {
+      "view": "work",
+      "heading": "Work & agents",
+      "overflow": false,
+      "nonKeyboardActions": 7,
+      "smallText": 53
+    },
+    {
+      "view": "releases",
+      "heading": "Release center",
+      "overflow": false,
+      "nonKeyboardActions": 3,
+      "smallText": 32
+    },
+    {
+      "view": "evidence",
+      "heading": "Evidence & lineage",
+      "overflow": false,
+      "nonKeyboardActions": 4,
+      "smallText": 65
+    },
+    {
+      "view": "administration",
+      "heading": "Administration",
+      "overflow": false,
+      "nonKeyboardActions": 24,
+      "smallText": 96
+    }
+  ],
+  "errors": [],
+  "editDraft": {
+    "inspector": true,
+    "inputs": 0,
+    "focus": "<button class=\"platform-button primary\" data-capability=\"versioning\">Edit draft</button>"
+  },
+  "inspectorRemainsAfterEscape": true,
+  "roleFeedback": "View changed to Auditor. Server authority would still be evaluated independently.",
+  "emptySearch": "",
+  "offline": {
+    "claimsConnected": true,
+    "body": "DURABLE HUMAN AND AGENT WORK\nWork & agents\n\nPlan, assign and operate task graphs with versioned instructions, bounded tools, budgets and mandatory human checkpoints.\n\nManage instructions\nCreate process run\nLive backend slice\nBackend foundation; production conditions missing\nUX and backend contract specified\nOne real local execution foundation is connected.\n\nNo persisted execution run found. Durable queues, authenticated principals and hardened worker isolation remain specified.\n\nOpen live run\nPLANNED\n2\nPrepare migration rehearsal\n\nProduce reversible dataset and execution checklist.\n\nHuman · Operations\n2 deps\nDraft support runbook\n\nGenerate operator workflow from approved architecture.\n\nAgent · 12k tokens\nLow risk\nRUNNING\n1\nImplement ownership API\n\nBounded change against immutable repository base.\n\nAgent · coding-v2\n8m\nWAITING\n2\nApprove migration checkpoint\n\nHuman must inspect dry-run reconciliation evidence.\n\nControl owner\nCHECKPOINT\nMerge verified change\n\nWaiting for repository checks and protected review.\n\nGit provider\n3 checks\nCOMPLETED\n5\nDefine versioned contracts\n\nAPI, event and data compatibility accepted.\n\nArchitect + agent\nVERIFIED\nThreat analysis\n\nAuthority bypass and direct database paths rejected.\n\nSecurity reviewer\nVERIFIED\nRun observability\nInspect run contract →\nCOMPLETE\nCreate verified inventory service\n6 artifacts · evidence recorded\nLocal worker\nWAITING\nMigration rehearsal\nMandatory human checkpoint\n18m\nWorker boundary\nFOUNDATION\n\nFixed absolute executable, no shell, bounded output and per-run workspace are live. Queue leases, cancellation, container/microVM isolation, egress policy and credential brokerage are not."
+  },
+  "method": "Read-only Chromium audit, 1440x900, isolated createApp with temporary stores and execution disabled; API outage injected in browser route; no product mutation.",
+  "note": "Observed defects are expected findings, not passing product acceptance."
+}

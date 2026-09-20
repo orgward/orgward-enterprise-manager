@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#11151b">
+    <title>Controlled execution · OrgWard Enterprise Studio</title>
+    <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="/execution.css">
+  </head>
+  <body class="execution-body">
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="OrgWard Enterprise Studio home"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>OrgWard <small>Enterprise Studio</small></span></a>
+        <nav class="product-nav" aria-label="Product areas"><a href="/">Enterprise design</a><a href="/platform.html">Platform specification</a><a href="/sdlc.html">SDLC reference</a><a href="/execution.html" aria-current="page">Execution</a></nav>
+        <span class="privacy"><span></span> Local controlled environment</span>
+      </header>
+      <main class="execution-shell">
+        <aside class="execution-sidebar">
+          <span class="eyebrow">Production foundation</span>
+          <h1>Execution runs</h1>
+          <p class="boundary">Real executables and files, constrained to server-configured profiles and isolated workspaces. This is not yet production-ready.</p>
+          <button id="new-run" class="button primary" type="button">New controlled run</button>
+          <div id="run-list" class="run-list"></div>
+        </aside>
+        <section id="execution-main" class="execution-main" aria-live="polite"></section>
+      </main>
+    </div>
+    <template id="new-run-template">
+      <section class="execution-panel">
+        <span class="eyebrow">Approved system creation</span>
+        <h2>Create a bounded execution request</h2>
+        <p>The browser chooses an administrator-configured profile; it cannot submit an executable, shell command, workspace path, or environment secret.</p>
+        <form id="run-form" class="execution-form">
+          <label>Execution profile<select id="profile" name="profileId" required></select></label>
+          <label>Run title<input name="title" maxlength="160" value="Create customer service API" required></label>
+          <label>Objective<textarea name="objective" rows="5" maxlength="4000" required>Create a small Node.js service for customer requests with a health endpoint and traceable generated manifest.</textarea></label>
+          <label>Acceptance requirements<textarea name="requirements" rows="4" maxlength="4000">Health endpoint returns HTTP 200&#10;Service has an automated test&#10;No credentials are embedded</textarea></label>
+          <label>Requester identity<input name="requestedBy" maxlength="120" value="studio-requester" required></label>
+          <button class="button primary" type="submit">Create approval request</button>
+        </form>
+      </section>
+    </template>
+    <div id="execution-toast" class="toast" role="status" hidden></div>
+    <script type="module" src="/execution.js"></script>
+  </body>
+</html>

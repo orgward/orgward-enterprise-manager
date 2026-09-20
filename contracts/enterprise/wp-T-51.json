@@ -1,0 +1,1090 @@
+{
+  "format": "orgward-work-package-draft-v1",
+  "taskId": "T-51",
+  "sliceId": "T-51-boundary-draft-01",
+  "title": "Sixteen synchronized lens projections and cross-lens queries",
+  "actor": "enterprise designer",
+  "trigger": "Authorized actor initiates QueryCrossPerspective in SC-13; task story: As enterprise designer, I want to implement typed projection registry, bounded traversal API, saved personal/shared views and map/list/matrix equivalents using one selection/context so the operating model remains coherent and usable across perspectives.",
+  "observableOutcome": "Satisfy the unchanged source acceptance for T-51; primary boundary QueryCrossPerspective reaches projected only after actual domain validation. Acknowledged jobs are not completed work.",
+  "reviewStatus": "pending",
+  "author": "codex",
+  "reviewer": null,
+  "implementationReady": false,
+  "independentReview": "Pending real independent review; no review, dependency proof or product execution is asserted.",
+  "sourceTaskHash": "13cd354daad3556d668c4fbc148bb07b7730f687ba19723b51e92c5d40160310",
+  "sourceRequirements": [
+    {
+      "id": "T-51-AC1",
+      "scenario": "Given a capability selected in map view, switching to process/system/authority lenses preserves its ID, context and explained realization links.",
+      "sourceKind": "positive"
+    },
+    {
+      "id": "T-51-AC2",
+      "scenario": "Given a filtered or denied neighbor, projections distinguish filtered-empty from forbidden without disclosing unauthorized object names or counts.",
+      "sourceKind": "negative"
+    },
+    {
+      "id": "T-51-AC3",
+      "scenario": "Given a projection outage and reconnect, the view retains selection and marks cached data stale until a matching fresh baseline loads.",
+      "sourceKind": "recovery"
+    },
+    {
+      "id": "T-51-AC4",
+      "scenario": "Given a semantic edit versus layout drag, all relevant projections change only for the semantic command and layout preference cannot mutate a domain relation.",
+      "sourceKind": "cross_boundary"
+    }
+  ],
+  "acceptanceIds": [
+    "T-51-AC1",
+    "T-51-AC2",
+    "T-51-AC3",
+    "T-51-AC4"
+  ],
+  "dependencyReceipts": [],
+  "dependencies": [
+    "T-14",
+    "T-49"
+  ],
+  "module": "studio",
+  "operationKind": "read",
+  "ownership": "Enterprise model, baseline, process and operating work; shared canonical object/revision identities, not a per-screen graph store.",
+  "recordMeaning": "lens_query is a boundary payload/result view, not permission to create an independent authoritative store. Resolve its fields into the canonical aggregate family in A-05/C-01.",
+  "requiredOperations": [
+    "QueryCrossPerspective"
+  ],
+  "uncoveredOperations": [],
+  "openDecisions": [
+    {
+      "id": "T-51-D01",
+      "owner": "independent-domain-and-security-reviewer",
+      "blocks": "implementation_start",
+      "decision": "Review this primary boundary against every original scenario; author concrete domain datasets and independent output oracles, not assertions derived from the implementation.",
+      "closure": "Approved bounded slices with executable negative/recovery fixtures for T-51-AC1, T-51-AC2, T-51-AC3, T-51-AC4 and a legitimate independent review receipt."
+    }
+  ],
+  "schemas": [
+    {
+      "id": "QueryCrossPerspectiveRequest",
+      "definition": {
+        "type": "object",
+        "properties": {
+          "commandId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "operation": {
+            "const": "QueryCrossPerspective"
+          },
+          "expectedHead": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "expectedVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "context": {
+            "type": "object",
+            "properties": {
+              "workspaceId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "branchId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "effectiveAt": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "workspaceId",
+              "branchId",
+              "effectiveAt"
+            ],
+            "additionalProperties": false
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "selectedId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "primaryLens": {
+                "type": "string",
+                "minLength": 1
+              },
+              "secondaryLens": {
+                "type": "string",
+                "minLength": 1
+              },
+              "detailLevel": {
+                "type": "string",
+                "minLength": 1
+              },
+              "baselineId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "maxDepth": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "selectedId",
+              "primaryLens",
+              "secondaryLens",
+              "detailLevel",
+              "baselineId",
+              "maxDepth"
+            ],
+            "additionalProperties": false
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "commandId",
+          "operation",
+          "expectedHead",
+          "expectedVersion",
+          "context",
+          "payload",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "QueryCrossPerspectiveResult",
+      "definition": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "QueryCrossPerspective"
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "completed"
+            ]
+          },
+          "targetState": {
+            "type": "string",
+            "minLength": 1
+          },
+          "commandId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "resultRef": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "authoritativeGeneration": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "projectionWatermark": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "jobId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "operation",
+          "status",
+          "targetState",
+          "commandId",
+          "resultRef",
+          "version",
+          "authoritativeGeneration",
+          "projectionWatermark",
+          "partial",
+          "jobId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "SafeError",
+      "definition": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          },
+          "fieldErrors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "field",
+                "message"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "correlationId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "currentVersion": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "recoveryActions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "fieldErrors",
+          "correlationId",
+          "retryable",
+          "currentVersion",
+          "recoveryActions"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "operations": [
+    {
+      "name": "QueryCrossPerspective",
+      "transport": "GET /api/v1/queries/{operation}; serialize input in query parameters, no GET body",
+      "requestSchema": "QueryCrossPerspectiveRequest",
+      "resultSchema": "QueryCrossPerspectiveResult",
+      "errorSchema": "SafeError",
+      "requestExample": {
+        "commandId": "fixture-t-51-1",
+        "operation": "QueryCrossPerspective",
+        "expectedHead": 7,
+        "expectedVersion": 7,
+        "context": {
+          "workspaceId": "workspace-a",
+          "branchId": "branch-1",
+          "effectiveAt": "2026-09-19T00:00:00Z"
+        },
+        "payload": {
+          "selectedId": "capability-1",
+          "primaryLens": "L-03",
+          "secondaryLens": "L-08",
+          "detailLevel": "D2",
+          "baselineId": "baseline-7",
+          "maxDepth": 3
+        },
+        "reason": "Exercise T-51 boundary"
+      },
+      "successExample": {
+        "operation": "QueryCrossPerspective",
+        "status": "completed",
+        "targetState": "projected",
+        "commandId": "fixture-t-51-1",
+        "resultRef": "lens_query-1",
+        "version": 7,
+        "authoritativeGeneration": 12,
+        "projectionWatermark": 12,
+        "partial": false,
+        "jobId": null
+      },
+      "errorExample": {
+        "code": "VERSION_CONFLICT",
+        "message": "The selected revision changed; reload and review the retained draft.",
+        "fieldErrors": [],
+        "correlationId": "trace-t-51-1",
+        "retryable": false,
+        "currentVersion": 8,
+        "recoveryActions": [
+          "reload",
+          "compare",
+          "rebase"
+        ]
+      },
+      "permission": "studio.QueryCrossPerspective: authenticated scoped membership plus current action grant; viewer may query authorized metadata only. Visible resource denial is 403; hidden or foreign resource is indistinguishable 404. No UI role selector or payload actor grants authority.",
+      "exampleMeaning": "Reserved synthetic IDs; digest strings are hashes of fixture labels, not claims about real artifacts. Missing referenced records must fail validation.",
+      "acknowledgement": "Return only computed/readback result; never a static success sample."
+    }
+  ],
+  "permissionRule": "studio.QueryCrossPerspective: authenticated scoped membership plus current action grant; viewer may query authorized metadata only. Visible resource denial is 403; hidden or foreign resource is indistinguishable 404. No UI role selector or payload actor grants authority.",
+  "transactionBoundary": "No authoritative domain mutation. Use authorized existing read paths; local preferences are not business facts. Diagnostics emit test artifacts, not product acceptance.",
+  "idempotencyRule": "Repeat reads without domain writes; cancel older UI request results so they cannot overwrite a newer selection.",
+  "invalidationRule": "Use CHANGE-PROTOCOL dependency kinds/field paths. Semantic accepted publication atomically advances the authoritative invalidation generation. A view-only change does not invalidate evidence. Projection lag is visible; protected effects revalidate current identity/policy/context/cell epoch.",
+  "migrationRecovery": "Retain existing URL/selection and readable legacy data. Failed refresh cannot erase last-known data or relabel it fresh. No database migration in this boundary.",
+  "persistence": {
+    "authoritative": false,
+    "tenantBoundary": "Session-derived tenant/workspace; composite references and tenant-leading indices. A payload target tenant is a checked selector only.",
+    "indices": [],
+    "immutable": [
+      "published revisions",
+      "accepted evidence",
+      "prior attempts"
+    ],
+    "layoutStorage": "per-principal view preference; no semantic write"
+  },
+  "events": [
+    {
+      "type": "NoDomainEvent",
+      "meaning": "Read/local diagnostics publish no authoritative event.",
+      "envelopeFields": [
+        "eventId",
+        "schemaVersion",
+        "tenantId",
+        "workspaceId",
+        "aggregateId",
+        "version",
+        "type",
+        "actor",
+        "occurredAt",
+        "correlationId",
+        "causationId",
+        "data",
+        "evidenceRefs"
+      ],
+      "consumers": [],
+      "delivery": "Outbox at least once; deduplicate eventId, reject obsolete head promotion."
+    }
+  ],
+  "requiredEvents": [],
+  "transitions": [
+    {
+      "from": "loading",
+      "command": "QueryCrossPerspective",
+      "to": "projected",
+      "precondition": "Valid schema, authorized actor, current version and domain conditions in the source scenario; async acceptance alone does not reach terminal state.",
+      "failureRecovery": "Retain draft and prior evidence; show safe error and permitted recovery. Resolve command status before retry."
+    },
+    {
+      "from": "loading",
+      "command": "QueryCrossPerspective:invalid-or-denied",
+      "to": "loading",
+      "precondition": "Invalid payload, hidden object, stale context, unmet checkpoint or expired permission.",
+      "failureRecovery": "No domain/effect transition; disclose no hidden object data. Rebase or obtain legitimate new authority."
+    }
+  ],
+  "ui": {
+    "screens": [
+      "SC-13"
+    ],
+    "source": "docs/product/SCREEN-CONTRACTS.md + PORTFOLIO-UX.md + MIGRATION-AND-COVERAGE.md",
+    "controls": [
+      {
+        "field": "selectedId",
+        "control": "text-or-authorized-reference",
+        "required": true,
+        "valueSource": "server-validated record or retained user draft",
+        "validation": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      {
+        "field": "primaryLens",
+        "control": "text-or-authorized-reference",
+        "required": true,
+        "valueSource": "server-validated record or retained user draft",
+        "validation": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      {
+        "field": "secondaryLens",
+        "control": "text-or-authorized-reference",
+        "required": true,
+        "valueSource": "server-validated record or retained user draft",
+        "validation": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      {
+        "field": "detailLevel",
+        "control": "text-or-authorized-reference",
+        "required": true,
+        "valueSource": "server-validated record or retained user draft",
+        "validation": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      {
+        "field": "baselineId",
+        "control": "text-or-authorized-reference",
+        "required": true,
+        "valueSource": "server-validated record or retained user draft",
+        "validation": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      {
+        "field": "maxDepth",
+        "control": "numeric-input",
+        "required": true,
+        "valueSource": "server-validated record or retained user draft",
+        "validation": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    ],
+    "primaryAction": "QueryCrossPerspective",
+    "permissionVisibility": "Explain disabled visible actions; omit inaccessible resources. Server repeats authorization.",
+    "keyboard": "Tab reaches all controls in reading order; visible focus, labeled errors, focus first invalid field. Escape closes dialog and restores trigger focus; graph has list/table alternative.",
+    "reload": "Use durable result ID and pinned baseline, then restore selection/filter. Never replay a mutation just because the page reloads.",
+    "legacyException": null
+  },
+  "uiStates": [
+    {
+      "state": "loading",
+      "behavior": "Show pending request and retain selection; disable duplicate submission without blocking unrelated navigation."
+    },
+    {
+      "state": "empty",
+      "behavior": "Show zero only after successful authorized empty response; offer the relevant create/import action if allowed."
+    },
+    {
+      "state": "stale",
+      "behavior": "Show source timestamp and baseline/watermark mismatch; allow inspect/refresh but prevent protected stale action."
+    },
+    {
+      "state": "conflict",
+      "behavior": "Keep unsaved values, show changed fields/current version, and require compare/rebase before new submission."
+    },
+    {
+      "state": "failed",
+      "behavior": "Display safe error, trace ID and retry eligibility; do not replace data with successful example values."
+    },
+    {
+      "state": "denied",
+      "behavior": "Explain denied action only on a visible resource; hide foreign resource details and purge revoked cached data."
+    },
+    {
+      "state": "success",
+      "behavior": "Render actual server readback and explicit proposed/accepted/enabled/evidenced state; a queued job is still queued."
+    },
+    {
+      "state": "recovery",
+      "behavior": "Inspect command/job outcome and unresolved effects; offer only permitted retry, resume, reconciliation or reviewed compensation."
+    }
+  ],
+  "fixtures": [
+    {
+      "id": "T-51-FX-1",
+      "kind": "positive",
+      "acceptanceIds": [
+        "T-51-AC1",
+        "T-51-AC2",
+        "T-51-AC3",
+        "T-51-AC4"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-51-1",
+          "operation": "QueryCrossPerspective",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "selectedId": "capability-1",
+            "primaryLens": "L-03",
+            "secondaryLens": "L-08",
+            "detailLevel": "D2",
+            "baselineId": "baseline-7",
+            "maxDepth": 3
+          },
+          "reason": "Exercise T-51 boundary"
+        },
+        "actor": "authorized-actor-a",
+        "tenant": "tenant-a",
+        "initialState": "loading",
+        "currentVersion": 7
+      },
+      "expectedPersistedResult": {
+        "domainRevisionDelta": 0,
+        "externalDispatchCount": 0,
+        "resultState": "projected",
+        "requiredSourceCriterion": "T-51-AC1",
+        "note": "Domain-specific result assertions must satisfy the linked original acceptance scenario."
+      },
+      "testPath": "tests/acceptance/t-51.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-51-FX-2",
+      "kind": "negative",
+      "acceptanceIds": [
+        "T-51-AC1",
+        "T-51-AC2",
+        "T-51-AC3",
+        "T-51-AC4"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-51-1",
+          "operation": "QueryCrossPerspective",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "selectedId": "capability-1",
+            "primaryLens": "L-03",
+            "secondaryLens": "L-08",
+            "detailLevel": "D2",
+            "baselineId": "baseline-7",
+            "maxDepth": 3
+          },
+          "reason": "Exercise T-51 boundary",
+          "unexpectedAuthority": "admin"
+        },
+        "actor": "viewer-a",
+        "tenant": "tenant-a"
+      },
+      "expectedPersistedResult": {
+        "status": 400,
+        "code": "INVALID_SCHEMA",
+        "domainRevisionDelta": 0,
+        "externalDispatchCount": 0
+      },
+      "testPath": "tests/acceptance/t-51.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-51-FX-3",
+      "kind": "concurrent",
+      "acceptanceIds": [
+        "T-51-AC1",
+        "T-51-AC2",
+        "T-51-AC3",
+        "T-51-AC4"
+      ],
+      "input": {
+        "requests": [
+          "selection-a",
+          "selection-b"
+        ],
+        "responseOrder": [
+          "selection-b",
+          "selection-a"
+        ]
+      },
+      "expectedPersistedResult": {
+        "visibleSelection": "selection-b",
+        "domainRevisionDelta": 0,
+        "externalDispatchCount": 0
+      },
+      "testPath": "tests/acceptance/t-51.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-51-FX-4",
+      "kind": "recovery",
+      "acceptanceIds": [
+        "T-51-AC1",
+        "T-51-AC2",
+        "T-51-AC3",
+        "T-51-AC4"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-51-1",
+          "operation": "QueryCrossPerspective",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "selectedId": "capability-1",
+            "primaryLens": "L-03",
+            "secondaryLens": "L-08",
+            "detailLevel": "D2",
+            "baselineId": "baseline-7",
+            "maxDepth": 3
+          },
+          "reason": "Exercise T-51 boundary"
+        },
+        "failpoint": "refresh-unavailable",
+        "reload": true
+      },
+      "expectedPersistedResult": {
+        "fabricatedSuccessCount": 0,
+        "staleDataLabeled": true,
+        "domainRevisionDelta": 0
+      },
+      "testPath": "tests/acceptance/t-51.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-51-FX-5",
+      "kind": "isolation",
+      "acceptanceIds": [
+        "T-51-AC1",
+        "T-51-AC2",
+        "T-51-AC3",
+        "T-51-AC4"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-51-1",
+          "operation": "QueryCrossPerspective",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "selectedId": "capability-1",
+            "primaryLens": "L-03",
+            "secondaryLens": "L-08",
+            "detailLevel": "D2",
+            "baselineId": "baseline-7",
+            "maxDepth": 3
+          },
+          "reason": "Exercise T-51 boundary"
+        },
+        "authenticatedTenant": "tenant-b",
+        "targetOwner": "tenant-a",
+        "payloadTenantOverride": "tenant-a"
+      },
+      "expectedPersistedResult": {
+        "status": 404,
+        "leakedRecords": 0,
+        "leakedCounts": 0,
+        "leakedEventIds": 0,
+        "externalDispatchCount": 0
+      },
+      "testPath": "tests/acceptance/t-51.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-51-FX-6",
+      "kind": "end_to_end",
+      "acceptanceIds": [
+        "T-51-AC1",
+        "T-51-AC2",
+        "T-51-AC3",
+        "T-51-AC4"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-51-1",
+          "operation": "QueryCrossPerspective",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "selectedId": "capability-1",
+            "primaryLens": "L-03",
+            "secondaryLens": "L-08",
+            "detailLevel": "D2",
+            "baselineId": "baseline-7",
+            "maxDepth": 3
+          },
+          "reason": "Exercise T-51 boundary"
+        },
+        "actor": "authorized-actor-a",
+        "screens": [
+          "SC-13"
+        ],
+        "actions": [
+          "open",
+          "inspect-source",
+          "edit-or-select",
+          "submit",
+          "reload",
+          "inspect-durable-result"
+        ]
+      },
+      "expectedPersistedResult": {
+        "fakeSuccessCount": 0,
+        "selectionRetained": true,
+        "unauthorizedControlsExecutable": false,
+        "originalAcceptanceRequired": [
+          "T-51-AC1",
+          "T-51-AC2",
+          "T-51-AC3",
+          "T-51-AC4"
+        ]
+      },
+      "testPath": "tests/acceptance/t-51.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-51-FX-7",
+      "kind": "cross_boundary",
+      "acceptanceIds": [
+        "T-51-AC1",
+        "T-51-AC2",
+        "T-51-AC3",
+        "T-51-AC4"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-51-1",
+          "operation": "QueryCrossPerspective",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "selectedId": "capability-1",
+            "primaryLens": "L-03",
+            "secondaryLens": "L-08",
+            "detailLevel": "D2",
+            "baselineId": "baseline-7",
+            "maxDepth": 3
+          },
+          "reason": "Exercise T-51 boundary"
+        },
+        "initialGeneration": 12,
+        "currentGeneration": 13,
+        "projectionWatermark": 12,
+        "revokedGrant": true
+      },
+      "expectedPersistedResult": {
+        "protectedDispatchCount": 0,
+        "freshness": "stale",
+        "recoveryActions": [
+          "refresh-authority",
+          "recompute-context",
+          "review-again"
+        ],
+        "historicalEvidenceOverwritten": false
+      },
+      "testPath": "tests/acceptance/t-51.test.mjs",
+      "status": "not_run",
+      "scope": "shared_boundary_only",
+      "coverageMeaning": "Cross-cutting obligation only; does not satisfy any original domain scenario by itself."
+    },
+    {
+      "id": "T-51-AC1-DOMAIN",
+      "kind": "positive",
+      "acceptanceIds": [
+        "T-51-AC1"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-51-1",
+          "operation": "QueryCrossPerspective",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "selectedId": "capability-1",
+            "primaryLens": "L-03",
+            "secondaryLens": "L-08",
+            "detailLevel": "D2",
+            "baselineId": "baseline-7",
+            "maxDepth": 3
+          },
+          "reason": "Exercise T-51 boundary"
+        },
+        "sourceScenarioId": "T-51-AC1",
+        "sourceScenarioHash": "8e624e2a6005aacc7bdf3e06ae49a2ab1e5a23281e635a15d416ba1c436ecba5"
+      },
+      "expectedPersistedResult": {
+        "sourceScenarioId": "T-51-AC1",
+        "mustAssertOriginalScenario": true,
+        "cannotSubstituteBoundaryFixture": true
+      },
+      "testPath": "tests/acceptance/t-51.test.mjs",
+      "status": "not_run",
+      "scope": "domain_oracle_requires_review"
+    },
+    {
+      "id": "T-51-AC2-DOMAIN",
+      "kind": "negative",
+      "acceptanceIds": [
+        "T-51-AC2"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-51-1",
+          "operation": "QueryCrossPerspective",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "selectedId": "capability-1",
+            "primaryLens": "L-03",
+            "secondaryLens": "L-08",
+            "detailLevel": "D2",
+            "baselineId": "baseline-7",
+            "maxDepth": 3
+          },
+          "reason": "Exercise T-51 boundary"
+        },
+        "sourceScenarioId": "T-51-AC2",
+        "sourceScenarioHash": "c49c6906aca2df6106a80144b645bbbc58f520b458dfb8cb499dca368d7a7cb8"
+      },
+      "expectedPersistedResult": {
+        "sourceScenarioId": "T-51-AC2",
+        "mustAssertOriginalScenario": true,
+        "cannotSubstituteBoundaryFixture": true
+      },
+      "testPath": "tests/acceptance/t-51.test.mjs",
+      "status": "not_run",
+      "scope": "domain_oracle_requires_review"
+    },
+    {
+      "id": "T-51-AC3-DOMAIN",
+      "kind": "recovery",
+      "acceptanceIds": [
+        "T-51-AC3"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-51-1",
+          "operation": "QueryCrossPerspective",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "selectedId": "capability-1",
+            "primaryLens": "L-03",
+            "secondaryLens": "L-08",
+            "detailLevel": "D2",
+            "baselineId": "baseline-7",
+            "maxDepth": 3
+          },
+          "reason": "Exercise T-51 boundary"
+        },
+        "sourceScenarioId": "T-51-AC3",
+        "sourceScenarioHash": "99a74cae3ded6050d2006ac37406ce2afc432e167d6cecb31fe0214627d1dd32"
+      },
+      "expectedPersistedResult": {
+        "sourceScenarioId": "T-51-AC3",
+        "mustAssertOriginalScenario": true,
+        "cannotSubstituteBoundaryFixture": true
+      },
+      "testPath": "tests/acceptance/t-51.test.mjs",
+      "status": "not_run",
+      "scope": "domain_oracle_requires_review"
+    },
+    {
+      "id": "T-51-AC4-DOMAIN",
+      "kind": "cross_boundary",
+      "acceptanceIds": [
+        "T-51-AC4"
+      ],
+      "input": {
+        "request": {
+          "commandId": "fixture-t-51-1",
+          "operation": "QueryCrossPerspective",
+          "expectedHead": 7,
+          "expectedVersion": 7,
+          "context": {
+            "workspaceId": "workspace-a",
+            "branchId": "branch-1",
+            "effectiveAt": "2026-09-19T00:00:00Z"
+          },
+          "payload": {
+            "selectedId": "capability-1",
+            "primaryLens": "L-03",
+            "secondaryLens": "L-08",
+            "detailLevel": "D2",
+            "baselineId": "baseline-7",
+            "maxDepth": 3
+          },
+          "reason": "Exercise T-51 boundary"
+        },
+        "sourceScenarioId": "T-51-AC4",
+        "sourceScenarioHash": "7de33363b4bdc2f279d793828354e5d18eace9d00a1f3fb0bb3b52dee3e62dc6"
+      },
+      "expectedPersistedResult": {
+        "sourceScenarioId": "T-51-AC4",
+        "mustAssertOriginalScenario": true,
+        "cannotSubstituteBoundaryFixture": true
+      },
+      "testPath": "tests/acceptance/t-51.test.mjs",
+      "status": "not_run",
+      "scope": "domain_oracle_requires_review"
+    }
+  ],
+  "domainCounterexamples": [
+    "Select capability-1 in L-03 then L-08 at baseline-7; object identity, scope, context and breadcrumbs remain identical.",
+    "Change authority via graph, matrix and form; all submit the same registered command and display the same conflict code."
+  ],
+  "targetFiles": [
+    "contracts/enterprise/t-51.schema.json",
+    "src/modules/studio/t-51.mjs",
+    "tests/acceptance/t-51.test.mjs"
+  ],
+  "fileStatus": "intended paths, not implementation evidence",
+  "slices": [
+    {
+      "id": "T-51-contract",
+      "dependsOn": [],
+      "covers": [
+        "T-51-AC1",
+        "T-51-AC2",
+        "T-51-AC3",
+        "T-51-AC4"
+      ],
+      "exit": "Resolve open decisions, concrete domain oracles and independent review; schemas and examples must validate."
+    },
+    {
+      "id": "T-51-domain",
+      "dependsOn": [
+        "T-51-contract",
+        "T-14",
+        "T-49"
+      ],
+      "covers": [
+        "T-51-AC1",
+        "T-51-AC2",
+        "T-51-AC3",
+        "T-51-AC4"
+      ],
+      "exit": "Actual state, permission, concurrency and restart tests; no mock substituted for required real provider."
+    },
+    {
+      "id": "T-51-experience",
+      "dependsOn": [
+        "T-51-domain"
+      ],
+      "covers": [
+        "T-51-AC1",
+        "T-51-AC2",
+        "T-51-AC3",
+        "T-51-AC4"
+      ],
+      "exit": "Working role journey across all listed screens/states with keyboard and reload checks."
+    },
+    {
+      "id": "T-51-qualification",
+      "dependsOn": [
+        "T-51-experience"
+      ],
+      "covers": [
+        "T-51-AC1",
+        "T-51-AC2",
+        "T-51-AC3",
+        "T-51-AC4"
+      ],
+      "exit": "Independent revision-bound evidence for every original criterion and integration obligation; reconcile all child slices before parent closure."
+    }
+  ],
+  "observability": "Record correlation/command/job IDs, operation, authorized scope, version/generation/fence and safe error code. Redact content, credentials and foreign identifiers. Metrics include rejection, conflict, lag and unknown-effect counts; tenant labels are authorized and bounded.",
+  "sourceDecisions": [
+    "docs/production/SOLUTION-ARCHITECTURE.md",
+    "docs/production/CHANGE-PROTOCOL.md",
+    "docs/production/DELIVERY-CONTRACTS.md",
+    "docs/production/IMPLEMENTATION-HANDOFF.md",
+    "docs/production/IMPLEMENTATION-BACKLOG.json"
+  ],
+  "nonGoals": [
+    "No implementation or independent approval claimed by this draft.",
+    "No public deployment, new authority, real transaction or customer-specific policy inferred.",
+    "Do not replace existing IDs, task dependencies, domain scenarios or source rule IDs with generated boundary checks."
+  ],
+  "evidence": {
+    "status": "not_run",
+    "receipts": [],
+    "commands": [
+      "node --test tests/acceptance/t-51.test.mjs",
+      "npm run check",
+      "node ops/check-spec.mjs --self-test --verify-sources"
+    ],
+    "required": [
+      "revision",
+      "fixture manifest",
+      "actual storage/event/effect assertions",
+      "role journey",
+      "environment/provider versions",
+      "raw results",
+      "unresolved findings",
+      "independent review"
+    ]
+  }
+}

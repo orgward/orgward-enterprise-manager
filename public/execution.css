@@ -1,0 +1,34 @@
+:root { --exec: #f2a65a; --exec-line: rgba(218, 229, 241, .14); }
+.execution-body { background: #11151b; }
+.execution-body .app-shell { background: radial-gradient(circle at 80% 0, rgba(242,166,90,.1), transparent 30%), #11151b; }
+.execution-body .brand-mark i { background: var(--exec); }.execution-body .eyebrow { color: var(--exec); }
+.execution-body .button.primary { background: var(--exec); border-color: var(--exec); color: #1c1107; }
+.execution-shell { min-height: calc(100vh - 72px); display: grid; grid-template-columns: 290px minmax(0, 1fr); }
+.execution-sidebar { border-right: 1px solid var(--exec-line); padding: 28px 18px; }
+.execution-sidebar h1 { font: 400 28px var(--serif); margin: 8px 0 10px; }
+.boundary, .muted { color: var(--faint); font-size: 11px; line-height: 1.55; }
+.execution-sidebar > .button { width: 100%; margin: 12px 0; }
+.run-list { margin-top: 10px; }
+.run-link { width: 100%; display: grid; gap: 5px; text-align: left; border: 1px solid transparent; border-radius: 8px; color: var(--ink); background: transparent; padding: 11px; margin-bottom: 6px; cursor: pointer; }
+.run-link:hover, .run-link.active { border-color: var(--exec-line); background: rgba(242,166,90,.06); }
+.run-link strong { font-size: 11px; }.run-link span { color: var(--exec); font-size: 8px; letter-spacing: .08em; }.run-link small { color: var(--faint); }
+.execution-main { min-width: 0; padding: 42px clamp(18px,5vw,70px); }.execution-panel { max-width: 980px; }
+.execution-panel h2 { font: 400 clamp(31px,4vw,54px)/1 var(--serif); margin: 12px 0 18px; }
+.execution-panel > p, .objective { color: var(--muted); line-height: 1.65; max-width: 760px; }
+.execution-form { display: grid; gap: 14px; max-width: 760px; margin-top: 28px; padding: 22px; border: 1px solid var(--exec-line); border-radius: 12px; background: rgba(22,29,38,.7); }
+.execution-form label { display: grid; gap: 7px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+.execution-form input, .execution-form textarea, .execution-form select, .approval-box input { width: 100%; color: var(--ink); background: #0d1218; border: 1px solid var(--exec-line); border-radius: 7px; padding: 11px; text-transform: none; letter-spacing: 0; }
+.execution-form .button { min-height: 44px; }
+.run-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
+.run-status { flex: 0 0 auto; border: 1px solid var(--exec-line); border-radius: 20px; padding: 7px 10px; font-size: 9px; }
+.status-AWAITING_APPROVAL { color: var(--amber); }.status-APPROVED, .status-RUNNING { color: var(--blue); }.status-SUCCEEDED { color: var(--mint-2); }.status-FAILED, .status-INTERRUPTED { color: var(--red); }
+.run-section { border-top: 1px solid var(--exec-line); margin-top: 25px; padding-top: 20px; }.run-section h3 { font: 400 20px var(--serif); }
+.run-section p, .requirements { color: var(--muted); font-size: 12px; line-height: 1.65; }
+.inline-action { display: flex; gap: 8px; max-width: 570px; }.inline-action input { min-width: 0; }.inline-action .button { flex: 0 0 auto; }
+.evidence-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 8px; }
+.evidence-grid > div { border: 1px solid var(--exec-line); border-radius: 7px; padding: 11px; }.evidence-grid b, .evidence-grid span { display: block; }
+.evidence-grid b { color: var(--faint); font-size: 8px; text-transform: uppercase; }.evidence-grid span { margin-top: 5px; font-size: 11px; }
+.artifact-list { grid-column: 1/-1; color: var(--muted); font: 10px/1.7 ui-monospace, monospace; }
+.evidence-grid pre { grid-column: 1/-1; overflow: auto; background: #090d12; border-radius: 7px; padding: 12px; color: var(--mint-2); font: 10px/1.5 ui-monospace, monospace; }.evidence-grid pre.error-log { color: var(--red); }
+.run-events > div { display: flex; justify-content: space-between; gap: 20px; padding: 9px 0; border-bottom: 1px solid var(--exec-line); }.run-events b { font-size: 10px; }.run-events span { color: var(--faint); font-size: 9px; }
+@media (max-width: 760px) { .execution-shell { display: block; }.execution-sidebar { border-right: 0; border-bottom: 1px solid var(--exec-line); padding: 18px 15px; }.run-list { display: flex; overflow-x: auto; gap: 7px; }.run-link { flex: 0 0 270px; min-height: 60px; }.execution-main { padding: 26px 15px 50px; }.run-heading { flex-direction: column; }.evidence-grid { grid-template-columns: repeat(2,1fr); }.inline-action { flex-direction: column; }.inline-action .button { min-height: 44px; } }

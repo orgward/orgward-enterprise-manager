@@ -1,0 +1,1422 @@
+{
+  "format": "orgward-packet-drafts-index-v1",
+  "meaning": "Boundary drafts only; not approved, implementation-ready, or product evidence.",
+  "packets": [
+    {
+      "taskId": "T-01",
+      "title": "Freeze executable domain and API contracts",
+      "path": "contracts/enterprise/wp-T-01.json",
+      "sha256": "43ea14067cd9038fb8cea77c7de6264e40729d3d3c01a47a9a64fe6c4bf11b4f",
+      "primaryOperation": "ValidateContractPackage",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-02",
+      "title": "Correct demonstrator truth and navigation semantics",
+      "path": "contracts/enterprise/wp-T-02.json",
+      "sha256": "a4d9c6c13aad2787a24d3b888a8fbc0b776dffcc6563b4e9d6b1d75122af7792",
+      "primaryOperation": "ResolveSurfaceState",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-03",
+      "title": "Build usable shell and shared form states",
+      "path": "contracts/enterprise/wp-T-03.json",
+      "sha256": "f32216d8e8e86227db508b16ce028f03006042ded0b46742b9211a36b2c3ad04",
+      "primaryOperation": "RestoreNavigation",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-04",
+      "title": "Create transactional persistence and legacy import",
+      "path": "contracts/enterprise/wp-T-04.json",
+      "sha256": "82d3345e7fb58deea9ad02ce1600d84922d632d669133172fba9f4d4dff48b8a",
+      "primaryOperation": "CommitVersionedCommand",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-05",
+      "title": "Authenticate humans and workload principals",
+      "path": "contracts/enterprise/wp-T-05.json",
+      "sha256": "e3ac83f16ba0b29f29590a915ab352ddc3d03e567ed4dca6a7eadbf181bcf0db",
+      "primaryOperation": "BindIdentity",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-06",
+      "title": "Enforce authorization and workspace isolation",
+      "path": "contracts/enterprise/wp-T-06.json",
+      "sha256": "7a224339d3c277abde0538ecbb99f80ef934db7481be6447456f111702e1954c",
+      "primaryOperation": "EvaluateAuthorization",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-07",
+      "title": "Broker and rotate secret references",
+      "path": "contracts/enterprise/wp-T-07.json",
+      "sha256": "48228261a7ad4602f8e52ae1bd00343dcc70fcab8acc2ceaa71e7c13e89e752e",
+      "primaryOperation": "RotateSecretBinding",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-08",
+      "title": "Package clean self-host installation",
+      "path": "contracts/enterprise/wp-T-08.json",
+      "sha256": "25ac48acc467bc142492736c2ae3954c2b914d3c884736ba39e302dd9081019c",
+      "primaryOperation": "InitializeInstallation",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-09",
+      "title": "Persist the enterprise graph and complete area schema",
+      "path": "contracts/enterprise/wp-T-09.json",
+      "sha256": "182965d42954576bf8e5953813764a5f2c112a57c6f55bb795b610d7801baff4",
+      "primaryOperation": "CreateEnterpriseObject",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-10",
+      "title": "Make conversation and brief review iterative",
+      "path": "contracts/enterprise/wp-T-10.json",
+      "sha256": "11ca53d921c012a33b8988a5756399a873726f50ff5fe433149d6a9aa787bb92",
+      "primaryOperation": "AcceptBriefRevision",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-11",
+      "title": "Generate sourced enterprise proposals with a real model",
+      "path": "contracts/enterprise/wp-T-11.json",
+      "sha256": "d1b1dfb5275009ea63be2adadaad0d5aabe0cbf47dd0b3cd18ca8c927cd96de6",
+      "primaryOperation": "GenerateEnterpriseProposal",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-12",
+      "title": "Evaluate integrity and readiness evidence",
+      "path": "contracts/enterprise/wp-T-12.json",
+      "sha256": "3ef8f374102b2631a8cd73023f57991823e0b8e3e249d89c22c52d61eeaeafaf",
+      "primaryOperation": "AssessReadiness",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-13",
+      "title": "Edit, compare and publish enterprise versions",
+      "path": "contracts/enterprise/wp-T-13.json",
+      "sha256": "c3aa68614152847f7863ceb8c43b203c13abd299dcdb13b0c743a6c5baf8f881",
+      "primaryOperation": "PublishBaseline",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-14",
+      "title": "Unify graph, list and object navigation",
+      "path": "contracts/enterprise/wp-T-14.json",
+      "sha256": "b26e9932daa2095829d3a6567ff77aa40e5aab26823c5fc763fe81a36d02dbb5",
+      "primaryOperation": "QueryNeighborhood",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-15",
+      "title": "Make business economics and assumptions actionable",
+      "path": "contracts/enterprise/wp-T-15.json",
+      "sha256": "85870ad552969e3639a613b6d1244b2b4d6cea52d9e5415ff63267ab98212737",
+      "primaryOperation": "CalculateEconomicScenario",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-16",
+      "title": "Manage resources, capacity and lifecycle",
+      "path": "contracts/enterprise/wp-T-16.json",
+      "sha256": "95722981fe5731cd7a5bea49d24d5ee9d133e33d66437d0b8e10967ba0eed6e0",
+      "primaryOperation": "ReserveCapacity",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-17",
+      "title": "Assign, delegate and offboard humans and agents",
+      "path": "contracts/enterprise/wp-T-17.json",
+      "sha256": "7a74764a19678dbe24545c2a687539f076dd3f10d11545889740188c8150410d",
+      "primaryOperation": "EnableAssignment",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-18",
+      "title": "Version editable role and task instructions",
+      "path": "contracts/enterprise/wp-T-18.json",
+      "sha256": "a089041ddfc918f6017a3fa8bf88ee39a9bb2efe27f007da6ffd942ae8ccc839",
+      "primaryOperation": "PublishInstruction",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-19",
+      "title": "Design executable process graphs and triggers",
+      "path": "contracts/enterprise/wp-T-19.json",
+      "sha256": "64b876d37488bddc0f1007f2633d37b4ab9938fe033fdd93e582de274f2f361f",
+      "primaryOperation": "PublishProcess",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-20",
+      "title": "Run durable leased tasks with crash recovery",
+      "path": "contracts/enterprise/wp-T-20.json",
+      "sha256": "d601163923a1b6e2232b9b3dcbaf532a36b48967aaef071d8f5a7176d156cc26",
+      "primaryOperation": "AcquireTaskLease",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-21",
+      "title": "Isolate execution and broker bounded tools",
+      "path": "contracts/enterprise/wp-T-21.json",
+      "sha256": "627ad89aff993f6741b9dd451b6fc7141344849d7fe9eb58d918c4d3a01f56cc",
+      "primaryOperation": "LaunchIsolatedAttempt",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-22",
+      "title": "Execute real bounded model tasks with evaluation",
+      "path": "contracts/enterprise/wp-T-22.json",
+      "sha256": "50aae03c26bb0f313885f0244cdccb7c37a6aa7f6c266e6a4f91a0193d1daa74",
+      "primaryOperation": "ExecuteBoundedModelTask",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-23",
+      "title": "Implement pause, checkpoints, resume and cancellation",
+      "path": "contracts/enterprise/wp-T-23.json",
+      "sha256": "e83b7643c209342270dea1f03d0d79905a37176ba7eb7762678202412d95cc50",
+      "primaryOperation": "PauseRun",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-24",
+      "title": "Complete the non-software operating journey",
+      "path": "contracts/enterprise/wp-T-24.json",
+      "sha256": "c5bd036bcaad9e2583522aa85fdb63b267b461d080e48c0ec9d9c42c6d1401a3",
+      "primaryOperation": "RunBusinessJourney",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-25",
+      "title": "Discover governed change context and impact",
+      "path": "contracts/enterprise/wp-T-25.json",
+      "sha256": "0b9b8adaef2f832480fadc50e7161514c35b1d8cd2146f7ff2585216b26e986d",
+      "primaryOperation": "FreezeChangeContext",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-26",
+      "title": "Author and evaluate traced requirements",
+      "path": "contracts/enterprise/wp-T-26.json",
+      "sha256": "9c4e7be334cd3b50d1af613f5ffc29911cfc9b778b935b2347acd199048a3ebb",
+      "primaryOperation": "AcceptRequirement",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-27",
+      "title": "Approve architecture delta and recovery design",
+      "path": "contracts/enterprise/wp-T-27.json",
+      "sha256": "b4f2af06ce7b8a4b85b0ed83fa42a65eff7bea9d539d18c12631d48e01edb144",
+      "primaryOperation": "AcceptArchitectureDelta",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-28",
+      "title": "Compile change plans into the shared work engine",
+      "path": "contracts/enterprise/wp-T-28.json",
+      "sha256": "bc4e6f5f275fb991ae5562f3f042f0c44b91ca2f4027a4edec59809296bc42dd",
+      "primaryOperation": "PublishChangePlan",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-29",
+      "title": "Onboard and read real repositories securely",
+      "path": "contracts/enterprise/wp-T-29.json",
+      "sha256": "f1e07913202479d2a3df5afd8699e7f11edcb9938ccb7d01a0993aeaaa0cf68c",
+      "primaryOperation": "OnboardRepository",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-30",
+      "title": "Create, evaluate and review agent code changes",
+      "path": "contracts/enterprise/wp-T-30.json",
+      "sha256": "a36a75030cac501d75a4aa3ae8b8953e007257151aad209be94805f0229b8e25",
+      "primaryOperation": "ProposeCodeChange",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-31",
+      "title": "Build immutable candidates with independent assurance",
+      "path": "contracts/enterprise/wp-T-31.json",
+      "sha256": "a4b2de2c1ca90202a4312268fe8fed2a89f028d3df8ec60f1e97eefc269fcdf7",
+      "primaryOperation": "BuildCandidate",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-32",
+      "title": "Publish SBOM, provenance and signed artifacts",
+      "path": "contracts/enterprise/wp-T-32.json",
+      "sha256": "0a2137c07557d306a65c054dcf382055a5a1f1222a2191c376640eb6846c4e5c",
+      "primaryOperation": "SignCandidate",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-33",
+      "title": "Approve protected releases with bound authority",
+      "path": "contracts/enterprise/wp-T-33.json",
+      "sha256": "7304d5b328d8d51977af9a1ca387f3c771a1cbbda1a83b7f7bbea79c9d8d312d",
+      "primaryOperation": "ApproveRelease",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-34",
+      "title": "Deploy and reconcile actual environment effects",
+      "path": "contracts/enterprise/wp-T-34.json",
+      "sha256": "c9c68537155a9258c8b03c67f3a7bc5b1c473a55a28e69ed09e5010980eb0aef",
+      "primaryOperation": "DeployCandidate",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-35",
+      "title": "Rollback and recover incompatible releases",
+      "path": "contracts/enterprise/wp-T-35.json",
+      "sha256": "08a21f3a1016fe24539256bd2ff8cd886df7df99fa25458f966c11a4cbcae300",
+      "primaryOperation": "RollbackDeployment",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-36",
+      "title": "Measure technical, control and business outcomes",
+      "path": "contracts/enterprise/wp-T-36.json",
+      "sha256": "3cf7954dba0964a4b0ef7efc2807eae07b039173b86f4c0cb68b073e34a3c948",
+      "primaryOperation": "AssessOutcome",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-37",
+      "title": "Review learning and corrective changes",
+      "path": "contracts/enterprise/wp-T-37.json",
+      "sha256": "c6e04f8742c9427b560d9e52470bea2c40a2b47d29e3b9d3e5c72cf083cc5a83",
+      "primaryOperation": "AcceptLearning",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-38",
+      "title": "Route durable work and decision notifications",
+      "path": "contracts/enterprise/wp-T-38.json",
+      "sha256": "1c4d585e3b2d91120d18d450639034971ee4e7baaf3bb67b16d3b275e7894fa4",
+      "primaryOperation": "AcknowledgeWorkItem",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-39",
+      "title": "Export verifiable audit and lineage",
+      "path": "contracts/enterprise/wp-T-39.json",
+      "sha256": "d2bcfeabebf8e151ac2ef85b7e346d16537b16699f6c53bbd580a1397f7f4bb5",
+      "primaryOperation": "ExportAuditScope",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-40",
+      "title": "Administer policies, providers, quotas and retention",
+      "path": "contracts/enterprise/wp-T-40.json",
+      "sha256": "75f495c27b36659ef180381bda3332367c5a7e9de1faf0e4efa98bd23609b4a8",
+      "primaryOperation": "ApplyConfiguration",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-41",
+      "title": "Back up and restore complete enterprise state",
+      "path": "contracts/enterprise/wp-T-41.json",
+      "sha256": "d00ebd2628c157e4d510498af6aba3609d5e021fbc718b03fb55ebf7156858c0",
+      "primaryOperation": "RestoreBackup",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-42",
+      "title": "Upgrade supported releases and recover failed migration",
+      "path": "contracts/enterprise/wp-T-42.json",
+      "sha256": "5cdb6b3c68eb7939f7157e6b2c2a6c0f98a6dc649d08486a50bd5964a2e1c428",
+      "primaryOperation": "ApplyUpgrade",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-43",
+      "title": "Operate telemetry, incidents and diagnostics",
+      "path": "contracts/enterprise/wp-T-43.json",
+      "sha256": "e30d6d176c3f6ef95dbc336ff75329ddd24529bc3615bd987ff06a8b09dc3af3",
+      "primaryOperation": "OpenOperationalIncident",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-44",
+      "title": "Publish stable integration and import/export contracts",
+      "path": "contracts/enterprise/wp-T-44.json",
+      "sha256": "7725c541e3a5a51da848d34a6262f8993384e39e4c0af39cac43850618065b55",
+      "primaryOperation": "ValidateApiCompatibility",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-45",
+      "title": "Qualify accessible usable complete workflows",
+      "path": "contracts/enterprise/wp-T-45.json",
+      "sha256": "4f8ff9a84f1e2179de21d0f7ed6e18781a125829a88e5bb9fe89a5a2ad53e52e",
+      "primaryOperation": "RecordUsabilityRun",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-46",
+      "title": "Perform independent security and supply-chain review",
+      "path": "contracts/enterprise/wp-T-46.json",
+      "sha256": "c3f2db7b1a6b2e1fd61ac217a3e7c06eda3a4efd50bbd311da0a9b86ca12a39d",
+      "primaryOperation": "RecordSecurityAssessment",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-47",
+      "title": "Qualify scale, soak and redundant recovery",
+      "path": "contracts/enterprise/wp-T-47.json",
+      "sha256": "4cdce19b82a3a8ae79cb30e7a97812fa76a6ee98eda16d15a9663f290560a923",
+      "primaryOperation": "RecordResilienceRun",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-48",
+      "title": "Qualify integrated customer outcomes and release",
+      "path": "contracts/enterprise/wp-T-48.json",
+      "sha256": "dd66834001584dec6ceac1df698050d0f0d97b26e5fd172bc07bc740f4164bd7",
+      "primaryOperation": "AdjudicateCoreRelease",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 3
+    },
+    {
+      "taskId": "T-49",
+      "title": "Canonical scoped and temporal enterprise model",
+      "path": "contracts/enterprise/wp-T-49.json",
+      "sha256": "c1c809beec3e39c792168980dcc4dbbf9cb77f795eaa55a5e4a429512ab11892",
+      "primaryOperation": "CreateScopedRevision",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-50",
+      "title": "Organisation, legal entity and federation scopes",
+      "path": "contracts/enterprise/wp-T-50.json",
+      "sha256": "d4b7db8306eefa142a28a92ebc91283049ad83c4fa65a3947b1a6e11501360dd",
+      "primaryOperation": "PublishOrganisationScope",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-51",
+      "title": "Sixteen synchronized lens projections and cross-lens queries",
+      "path": "contracts/enterprise/wp-T-51.json",
+      "sha256": "61975934f5821d076014b855d110f91c08a9e8a98787a1ff7e9244ee56742149",
+      "primaryOperation": "QueryCrossPerspective",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-52",
+      "title": "Advanced process, case and decision modeling",
+      "path": "contracts/enterprise/wp-T-52.json",
+      "sha256": "6681159a85885686941f0b0e1807ee05f5851e0576aa2c4fd1cb734b2839338b",
+      "primaryOperation": "PublishCaseDefinition",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-53",
+      "title": "Branching, temporal baselines and semantic three-way merge",
+      "path": "contracts/enterprise/wp-T-53.json",
+      "sha256": "7e69ba73990da886352d5fd69d38cc74a655abf9d705bb3df6ec06f9a6491eaa",
+      "primaryOperation": "MergeBranch",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-54",
+      "title": "Progressive business-to-system refinement and reverse trace",
+      "path": "contracts/enterprise/wp-T-54.json",
+      "sha256": "1cba64b1bad3690aa0e3299a620678e7fa611985264d1825d8540bf1ecdf8b37",
+      "primaryOperation": "CreateRefinement",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-55",
+      "title": "Loss-aware interchange and versioned extension schema",
+      "path": "contracts/enterprise/wp-T-55.json",
+      "sha256": "c29f0a062ceec242c0107c2b18b2e90a6a8a8ff295380bfe07fdd828c57a3c9d",
+      "primaryOperation": "ExportEnterpriseModel",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-56",
+      "title": "Commitments, contracts and economic scenario semantics",
+      "path": "contracts/enterprise/wp-T-56.json",
+      "sha256": "f5f79d994162c1e4cdbde685a5297beddc126f330d94665cd468aa5f469c7c89",
+      "primaryOperation": "RecordCommitment",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-57",
+      "title": "Workforce, suppliers and resource capacity planning",
+      "path": "contracts/enterprise/wp-T-57.json",
+      "sha256": "eb55cffe37e3f759e5eb00c57a93b1cdf07e6a3d8b09440b2a49a2c2577c94ec",
+      "primaryOperation": "ReserveWorkforce",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-58",
+      "title": "Customer, offering and value-stream lifecycle",
+      "path": "contracts/enterprise/wp-T-58.json",
+      "sha256": "bfe76d035a84bfb27908a2943a7f95ff15886128b488042d9983acd03f64b1b6",
+      "primaryOperation": "PublishOfferingJourney",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-59",
+      "title": "Risk, obligation interpretation and control effectiveness",
+      "path": "contracts/enterprise/wp-T-59.json",
+      "sha256": "487ef6ffc2b8c992bcba245c079b8bb25c4d4f8a18955d595993d71bbaf4a3c8",
+      "primaryOperation": "AcceptControlInterpretation",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-60",
+      "title": "Strategy, outcome hypotheses and safe simulation",
+      "path": "contracts/enterprise/wp-T-60.json",
+      "sha256": "881342879993fe55f486b55456952a96c681c61fd9e2fc44800ba134c6cd85c7",
+      "primaryOperation": "RunBusinessSimulation",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-61",
+      "title": "Semantic information and system architecture refinement",
+      "path": "contracts/enterprise/wp-T-61.json",
+      "sha256": "858718780d03ba577749eb7ec8f59d8c831d1ac418a40f9c994ed44a73744310",
+      "primaryOperation": "MapSystemRealization",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-62",
+      "title": "Physical, service and non-digital extension profiles",
+      "path": "contracts/enterprise/wp-T-62.json",
+      "sha256": "0a8810e028539c82fed3e6a2c99004761b513f655325a09defacb7930c49478f",
+      "primaryOperation": "PublishPhysicalProfile",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-63",
+      "title": "Bulk editing, collaboration and migration conflict workbench",
+      "path": "contracts/enterprise/wp-T-63.json",
+      "sha256": "83d5742423557d184c8f63c97efe7573128fb1395df4533fbce860edbdd41162",
+      "primaryOperation": "ApplyBulkChange",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-64",
+      "title": "Explainable multi-axis business and module readiness",
+      "path": "contracts/enterprise/wp-T-64.json",
+      "sha256": "708fe48508c144e15c594ceb3379566590fef06d0dbc83ac2669864d2151d351",
+      "primaryOperation": "AssessBusinessAxes",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-65",
+      "title": "Sentinel source onboarding and safe ingestion",
+      "path": "contracts/enterprise/wp-T-65.json",
+      "sha256": "0cde1328380dbd16bdb4a40def270668d80a8d9db7189cd8c84fa2408798e00e",
+      "primaryOperation": "IngestSourceRevision",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-66",
+      "title": "Evidence-backed claim extraction and identity proposals",
+      "path": "contracts/enterprise/wp-T-66.json",
+      "sha256": "3bed0ba11b88d5bb8f3e7f54505fdd8a2598c1364d6ef8ca4b3389e10b17a8fa",
+      "primaryOperation": "ExtractClaims",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-67",
+      "title": "Scoped claim review and lifecycle commands",
+      "path": "contracts/enterprise/wp-T-67.json",
+      "sha256": "358323d5c9cfa18fc632c42024f80d2e52615799db125349f69cae92d4f7f562",
+      "primaryOperation": "AcceptClaim",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-68",
+      "title": "Deterministic claim compiler and atomic snapshot publication",
+      "path": "contracts/enterprise/wp-T-68.json",
+      "sha256": "16286a832ee734426f2ddd40222805652e3fa4de741916a56d4838876ffd9587",
+      "primaryOperation": "CompileAcceptedClaims",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-69",
+      "title": "Typed integrity graph and compatible OADL projection",
+      "path": "contracts/enterprise/wp-T-69.json",
+      "sha256": "d75540bd3db43cc7e6df948223c61cac144dcdd9835dde0e00763a452253790e",
+      "primaryOperation": "ProjectIntegrityGraph",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-70",
+      "title": "Sentinel base authority, governance and coverage rules",
+      "path": "contracts/enterprise/wp-T-70.json",
+      "sha256": "a78b1046ccf826f11b5d152fc58e7f86dce16c13dc2535ff78d210475154db80",
+      "primaryOperation": "EvaluateBaseRules",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-71",
+      "title": "Property/process lineage and advanced Sentinel rules",
+      "path": "contracts/enterprise/wp-T-71.json",
+      "sha256": "a36cc84f0c6ea1ee7dc07b1e0a9d8f4d088394dc6cd472f2e24f823b16144696",
+      "primaryOperation": "EvaluateLineageRules",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-72",
+      "title": "Actionable Sentinel inbox and remediation UX",
+      "path": "contracts/enterprise/wp-T-72.json",
+      "sha256": "24935659ccb5ef560b19048a8d2b006763e19098b5010fbebbca6da133fb9e9d",
+      "primaryOperation": "ProposeFindingRepair",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-73",
+      "title": "Governed Sentinel exceptions and expiry",
+      "path": "contracts/enterprise/wp-T-73.json",
+      "sha256": "1dfc896b8c497e9153d4b0dc8a6e90f6d0dc22aa54a17ddd1ce4270430320b2e",
+      "primaryOperation": "ApproveIntegrityException",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-74",
+      "title": "Semantic drift, source coverage and impact feedback",
+      "path": "contracts/enterprise/wp-T-74.json",
+      "sha256": "84be25a65436565277121be768025895eb016df0f473620ff57c4ef06aa809e2",
+      "primaryOperation": "CompareSnapshots",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-75",
+      "title": "Qualify Sentinel source acceptance and first-session value",
+      "path": "contracts/enterprise/wp-T-75.json",
+      "sha256": "2a959abf1771fe33d8a763ada1d6a486c46ac3e634e5f1721bc234fef644a041",
+      "primaryOperation": "QualifySentinel",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-76",
+      "title": "Warden versioned policy model and deterministic decisions",
+      "path": "contracts/enterprise/wp-T-76.json",
+      "sha256": "11fb092ddbec57e3ac9802dfc920512f959fb225c9a913d3c464acf2c252d0a5",
+      "primaryOperation": "ActivatePolicyPackage",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-77",
+      "title": "Warden enforcement, capability revocation and effect reconciliation",
+      "path": "contracts/enterprise/wp-T-77.json",
+      "sha256": "0b84ac07c8bd9a1e0e74aa4c34cb8de418f1c3179790a7d268d018ed4691caaa",
+      "primaryOperation": "DispatchEffect",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-78",
+      "title": "Warden simulation, rollout and operational controls",
+      "path": "contracts/enterprise/wp-T-78.json",
+      "sha256": "d915014cfe6d483afdadf84b49400dcd367784151b50d6bdc2c9a2b03a871d0d",
+      "primaryOperation": "SimulatePolicyChange",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-79",
+      "title": "Arbiter decision rights and bounded delegation",
+      "path": "contracts/enterprise/wp-T-79.json",
+      "sha256": "67d4b6d519708437acd551121c03026b95cf7462fa33fac9d9500a32f0ac1884",
+      "primaryOperation": "GrantDelegation",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-80",
+      "title": "Arbiter version-bound reviews, appeals and decisions",
+      "path": "contracts/enterprise/wp-T-80.json",
+      "sha256": "6fcbf74a8d561e40774c3a9494dad08a79489661e58e9976bd88c6243af1db55",
+      "primaryOperation": "CastDecisionVote",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-81",
+      "title": "Arbiter authority conflicts and constrained emergency access",
+      "path": "contracts/enterprise/wp-T-81.json",
+      "sha256": "206f6613c4a36a99e3b6fd9afd3920ef011d53b578381de5a16e2fc99bebcd83",
+      "primaryOperation": "ResolveAuthorityConflict",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-82",
+      "title": "Steward semantic catalogue and ownership handover",
+      "path": "contracts/enterprise/wp-T-82.json",
+      "sha256": "7cef26cf57d3a3aeae57ee1862f7f460efeb2fb7753932110d10830fa648f6f5",
+      "primaryOperation": "AcceptOwnershipHandover",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-83",
+      "title": "Steward quality, retention and remediation lifecycle",
+      "path": "contracts/enterprise/wp-T-83.json",
+      "sha256": "7525c72c01a3dc163e21ec2fe01a042d3bd9265e654f37faec8a8b8fb397d6da",
+      "primaryOperation": "AssessDataQuality",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-84",
+      "title": "Steward data contracts and semantic execution lineage",
+      "path": "contracts/enterprise/wp-T-84.json",
+      "sha256": "9c07e272bdeeb64d665cf02bcec9d27cc9e7d0c65c7fe9dfca8aee477ebfb53a",
+      "primaryOperation": "PublishDataContract",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-85",
+      "title": "Ledger durable governance event chain and reconciliation",
+      "path": "contracts/enterprise/wp-T-85.json",
+      "sha256": "d476b69808e55b7ac73f45a209724458baa784e0205e147f76ff5242aabecb79",
+      "primaryOperation": "AppendGovernanceEvent",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-86",
+      "title": "Ledger independently verifiable exports, holds and key lifecycle",
+      "path": "contracts/enterprise/wp-T-86.json",
+      "sha256": "3731884d4612ae229989ebdba964a0af30a11d94d90334da52ca5d0874adeded",
+      "primaryOperation": "VerifyEvidenceExport",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-87",
+      "title": "Overseer agent identity and autonomy envelopes",
+      "path": "contracts/enterprise/wp-T-87.json",
+      "sha256": "caefb0a91947935fbea844e98c114b7cb7c82253e8987a51458612e499721f65",
+      "primaryOperation": "EnableAgentProfile",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-88",
+      "title": "Overseer multi-agent handoff and shared-budget supervision",
+      "path": "contracts/enterprise/wp-T-88.json",
+      "sha256": "45519c8fdd8fc3c832b0824b3d261f2bb9d8a092ee674fc8c3b75414ddbf0321",
+      "primaryOperation": "DelegateAgentWork",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-89",
+      "title": "Overseer independent evaluations and adversarial qualification",
+      "path": "contracts/enterprise/wp-T-89.json",
+      "sha256": "8cbd3c785e67a5e27d3fafcb1adccfd02dd414968f78a1fc25b79de582e98475",
+      "primaryOperation": "EvaluateAgentProfile",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-90",
+      "title": "Bidirectional design, integrity and SDLC context pinning",
+      "path": "contracts/enterprise/wp-T-90.json",
+      "sha256": "5af2f3c632435837211d931fab61d464fb534552a99b782c02f3843b583dd042",
+      "primaryOperation": "PinDesignIntegrityContext",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-91",
+      "title": "Intent-derived requirements, evaluations and trace completeness",
+      "path": "contracts/enterprise/wp-T-91.json",
+      "sha256": "fa5fec361f0fdf205d6f1941f1c24f0f553a48b423f5596cf3e48f2b4f8cef30",
+      "primaryOperation": "AcceptIntentEvaluation",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-92",
+      "title": "Multi-repository, legacy and data-migration delivery",
+      "path": "contracts/enterprise/wp-T-92.json",
+      "sha256": "e045af783f8fba3b9202a683eb53c84d4420a483fc5805f0a4af8222975a356d",
+      "primaryOperation": "PlanMultiRepositoryChange",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-93",
+      "title": "Architecture alternatives and governed regeneration",
+      "path": "contracts/enterprise/wp-T-93.json",
+      "sha256": "dc02ce979fe558399d034b6e7ca4d26ad85bf0abb7a2f36e22f3fca079e4a4fe",
+      "primaryOperation": "AcceptDesignAlternative",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-94",
+      "title": "Environment promotion, progressive delivery and operational acceptance",
+      "path": "contracts/enterprise/wp-T-94.json",
+      "sha256": "c41550d5dd040e66a82689ba43a8eaa25a160dc602e95b102652a889ade7d8d4",
+      "primaryOperation": "PromoteEnvironment",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-95",
+      "title": "Software incidents and governed design feedback",
+      "path": "contracts/enterprise/wp-T-95.json",
+      "sha256": "bb8aaf40abaecb19eaa831b7d0ae2c2177f3587247870966a01968645723ce5c",
+      "primaryOperation": "OpenDesignCorrection",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-96",
+      "title": "Governed enterprise transactions and long-running operations",
+      "path": "contracts/enterprise/wp-T-96.json",
+      "sha256": "1ea4af245afb36e06402b91d1843d64608a8a8976e18ef9cb17445c1edc65ac2",
+      "primaryOperation": "DispatchBusinessAction",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-97",
+      "title": "Connector catalogue and resilient integration lifecycle",
+      "path": "contracts/enterprise/wp-T-97.json",
+      "sha256": "d8ea04f004463af5f647f0cbda2031279a8ebbf21c455e1ef534ce550974509d",
+      "primaryOperation": "ActivateConnector",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-98",
+      "title": "Role-based portfolio shell, search and accessible interaction",
+      "path": "contracts/enterprise/wp-T-98.json",
+      "sha256": "4a7a5f9f7ef9978bce916d38964568bb0f867f44fa7fc0fe8b2210bc79e5037d",
+      "primaryOperation": "ResolveRoleHome",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-99",
+      "title": "Modular self-host packaging and customer-controlled operations",
+      "path": "contracts/enterprise/wp-T-99.json",
+      "sha256": "a729c69132926b9a890d5641b8171a96e19afb96a3fb962fa2f440415b0a2d42",
+      "primaryOperation": "InstallModuleSet",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-100",
+      "title": "Industry and jurisdiction packs with scoped interpretation",
+      "path": "contracts/enterprise/wp-T-100.json",
+      "sha256": "5249e785239c0be51414b36d1a6b1267247bc4dd55a8aca85205f7543d969cea",
+      "primaryOperation": "ActivateDomainPack",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-101",
+      "title": "Organisation simulation, case exceptions and operating learning",
+      "path": "contracts/enterprise/wp-T-101.json",
+      "sha256": "2cc57f43a46347c92a2eda84a783002bf8848038cd6354246717063b30080c1b",
+      "primaryOperation": "SimulateCaseException",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-102",
+      "title": "Enterprise continuity, handover and supplier failure",
+      "path": "contracts/enterprise/wp-T-102.json",
+      "sha256": "555c77c7f2c74e03db3feda6d5515dafd35e05baf8e01c01e4a3e25c1ff9db15",
+      "primaryOperation": "ActivateContinuityPlan",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-103",
+      "title": "Cross-module security, privacy and authority qualification",
+      "path": "contracts/enterprise/wp-T-103.json",
+      "sha256": "7144ea627cf73f30fb502632787b6b1bebfa3f7e9af3c3a4ae3c4dd60da41f90",
+      "primaryOperation": "QualifyPortfolioSecurity",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-104",
+      "title": "Portfolio load, compiler scale and failure qualification",
+      "path": "contracts/enterprise/wp-T-104.json",
+      "sha256": "17e7ff8d81862d974f76de71fbf944e4c5f545cad86adb9eaf5cd00c1b17c44b",
+      "primaryOperation": "QualifyPortfolioLoad",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-105",
+      "title": "Independent customer installation and portfolio user acceptance",
+      "path": "contracts/enterprise/wp-T-105.json",
+      "sha256": "2a958ab7167294dc0ca9e616f1f20010688bf4465d16d1b78b2295da7aab64a7",
+      "primaryOperation": "QualifyCustomerInstallation",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-106",
+      "title": "Integrated portfolio round-trip release qualification",
+      "path": "contracts/enterprise/wp-T-106.json",
+      "sha256": "0901a64269483f505da20e7a84fc916a1bede27862791dee3b90cd32cadda946",
+      "primaryOperation": "AdjudicatePortfolioBaseline",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-107",
+      "title": "Extension certification and compatibility laboratory",
+      "path": "contracts/enterprise/wp-T-107.json",
+      "sha256": "daafeb45ec93926cc5d360529a7c4289c10f9895267f2676bd2d36aed3a27219",
+      "primaryOperation": "CertifyExtension",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-108",
+      "title": "Portfolio retirement, portability and structural reorganisation",
+      "path": "contracts/enterprise/wp-T-108.json",
+      "sha256": "89efdab5e49c04265200a7587fad88030168a2390d9188c9b31e2a6a652cbbbc",
+      "primaryOperation": "RetireEnterpriseScope",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-109",
+      "title": "Scoped whole-business inventory and completeness certification",
+      "path": "contracts/enterprise/wp-T-109.json",
+      "sha256": "956cc83daea704c7c058c54363332ece9e1b8e65cc0f208f38949b145c2e99c0",
+      "primaryOperation": "AcceptInventory",
+      "openDecisions": 4,
+      "uncoveredOperations": [
+        "AssessCoverage",
+        "CertifyScope",
+        "ReopenCoverage"
+      ],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-110",
+      "title": "Managed SaaS tenant provisioning and regional placement",
+      "path": "contracts/enterprise/wp-T-110.json",
+      "sha256": "e02105e2e5611545faa644272f240bfec029e67815612cd516d4b72464dcac9d",
+      "primaryOperation": "ProvisionTenant",
+      "openDecisions": 4,
+      "uncoveredOperations": [
+        "RequestTenant",
+        "ActivateTenant",
+        "ReconcileProvisioning"
+      ],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-111",
+      "title": "Enterprise identity onboarding and SaaS access lifecycle",
+      "path": "contracts/enterprise/wp-T-111.json",
+      "sha256": "0711b7b4aaf3628acf1b1225f721ce849ba9ef76da984b54d0e38f5ee0943bcb",
+      "primaryOperation": "BindIdentityProvider",
+      "openDecisions": 5,
+      "uncoveredOperations": [
+        "VerifyDomain",
+        "SyncMembership",
+        "RevokeSession",
+        "RecoverOwner"
+      ],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-112",
+      "title": "SaaS entitlements, metering, quotas and safe subscription lifecycle",
+      "path": "contracts/enterprise/wp-T-112.json",
+      "sha256": "689723a2b4366139562b200db701e97b6a6cd2c3da8998c7cb892433440c15fa",
+      "primaryOperation": "ConfigureEntitlement",
+      "openDecisions": 5,
+      "uncoveredOperations": [
+        "RecordUsage",
+        "ReserveQuota",
+        "RestrictTenant",
+        "ResumeTenant"
+      ],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-113",
+      "title": "SaaS operator plane and customer-controlled support access",
+      "path": "contracts/enterprise/wp-T-113.json",
+      "sha256": "e7571db59c9d5d66527f50971b8eb09e86a1e12b41975feabfe72d71f18f32a0",
+      "primaryOperation": "GrantSupportAccess",
+      "openDecisions": 4,
+      "uncoveredOperations": [
+        "OpenSupportCase",
+        "RevokeSupportAccess",
+        "ScheduleMaintenance"
+      ],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-114",
+      "title": "Residency, encryption ownership and tenant cell relocation",
+      "path": "contracts/enterprise/wp-T-114.json",
+      "sha256": "8a817f4e0c61e8c0ff3300002aac908428047bf5f4dbd64339e52654096979b4",
+      "primaryOperation": "PrepareRelocation",
+      "openDecisions": 4,
+      "uncoveredOperations": [
+        "SetResidencyPolicy",
+        "RotateTenantKey",
+        "CommitPlacementEpoch"
+      ],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-115",
+      "title": "Existing-enterprise discovery and source inventory",
+      "path": "contracts/enterprise/wp-T-115.json",
+      "sha256": "91ccd4b7f694622fdf4414b9d0c6d4bf880e749d523fe9c1604fb664ca7db6c0",
+      "primaryOperation": "DiscoverSources",
+      "openDecisions": 3,
+      "uncoveredOperations": [
+        "ProfileSource",
+        "AcceptSourceInventory"
+      ],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-116",
+      "title": "Migration identity mapping, transformations and staging",
+      "path": "contracts/enterprise/wp-T-116.json",
+      "sha256": "1f2809c5487300ecb9725da1af6d605690b83f7e5fa22688f991609c095e342d",
+      "primaryOperation": "StageBatch",
+      "openDecisions": 5,
+      "uncoveredOperations": [
+        "ProposeMapping",
+        "ApproveMapping",
+        "QuarantineRecord",
+        "RepairMapping"
+      ],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-117",
+      "title": "Source-of-record ownership and incremental coexistence",
+      "path": "contracts/enterprise/wp-T-117.json",
+      "sha256": "1f559261d9f7921cac5ba3a24685e3fce8ab671a5d2e409f3b7967d6f607a065",
+      "primaryOperation": "SetSourceAuthority",
+      "openDecisions": 4,
+      "uncoveredOperations": [
+        "StartDeltaSync",
+        "ResolveSyncConflict",
+        "PauseSync"
+      ],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-118",
+      "title": "Migration validation, shadow operation and rehearsal",
+      "path": "contracts/enterprise/wp-T-118.json",
+      "sha256": "8d28f5b9dd6368914b8999fbd229bf06fc239a816f2e025e96861de83dac7f3b",
+      "primaryOperation": "RehearseCutover",
+      "openDecisions": 4,
+      "uncoveredOperations": [
+        "ValidateMigration",
+        "StartShadow",
+        "RecordRehearsal"
+      ],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-119",
+      "title": "Fenced cutover, rollback and migration hypercare",
+      "path": "contracts/enterprise/wp-T-119.json",
+      "sha256": "bef9397905c0503af4f511c2c0e31b5ae57f9d9aba6dd0e8e23ab64ab34052b9",
+      "primaryOperation": "CommitCutover",
+      "openDecisions": 6,
+      "uncoveredOperations": [
+        "RequestCutover",
+        "ApproveCutover",
+        "FenceSource",
+        "ReconcileCutover",
+        "RecoverMigration"
+      ],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-120",
+      "title": "New and migrated enterprise activation and scope sign-off",
+      "path": "contracts/enterprise/wp-T-120.json",
+      "sha256": "67fb7fc0b1ca5876f100c71d20e568dd08e0e7e515c365d18ea240649eda6ca7",
+      "primaryOperation": "AcceptMigratedScope",
+      "openDecisions": 4,
+      "uncoveredOperations": [
+        "RequestActivation",
+        "ValidateOperatingScope",
+        "ActivateBusinessScope"
+      ],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-121",
+      "title": "Unified semantic command registry for every edit surface",
+      "path": "contracts/enterprise/wp-T-121.json",
+      "sha256": "b95514e18ed16d3d66703b8178d121cf557b0bc85ba002d825debc95f3016e72",
+      "primaryOperation": "SubmitChange",
+      "openDecisions": 4,
+      "uncoveredOperations": [
+        "RegisterOperation",
+        "PreviewChange",
+        "QueryCommandResult"
+      ],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-122",
+      "title": "Field-level dependencies and constraint impact fixed point",
+      "path": "contracts/enterprise/wp-T-122.json",
+      "sha256": "8c38059b5aec94cd8bbd44ed24f9b0436deb606d20f39a13c9bbfa552c22a690",
+      "primaryOperation": "ComputeImpact",
+      "openDecisions": 4,
+      "uncoveredOperations": [
+        "RegisterDependency",
+        "EvaluateConstraint",
+        "ResolveImpactConflict"
+      ],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-123",
+      "title": "Atomic publication barriers and consistent projection watermarks",
+      "path": "contracts/enterprise/wp-T-123.json",
+      "sha256": "1d911bff770dc33d435922398bfc9de146987aba089c19fdc7d071e7d2bdb3a1",
+      "primaryOperation": "PublishChange",
+      "openDecisions": 5,
+      "uncoveredOperations": [
+        "ApproveChange",
+        "InvalidateContext",
+        "RecomputeProjection",
+        "ReadConsistentView"
+      ],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-124",
+      "title": "Continuous knowledge reconciliation and explicit truth states",
+      "path": "contracts/enterprise/wp-T-124.json",
+      "sha256": "18594c985ffe92d93b9182a1eafb13df53d8fbc6c42563103ea835043f54bbcc",
+      "primaryOperation": "ReconcileSource",
+      "openDecisions": 4,
+      "uncoveredOperations": [
+        "SetFreshnessPolicy",
+        "ProposeObservedChange",
+        "RepairDependency"
+      ],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-125",
+      "title": "Customer-defined concepts, constraints and governed actions",
+      "path": "contracts/enterprise/wp-T-125.json",
+      "sha256": "284f7b9dc290013d993e8b605302b081a8727c0220c728eb7caa6740779ae62b",
+      "primaryOperation": "RegisterDomainType",
+      "openDecisions": 5,
+      "uncoveredOperations": [
+        "RegisterRelation",
+        "RegisterConstraint",
+        "PublishActionTemplate",
+        "MigrateDomainSchema"
+      ],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-126",
+      "title": "Unified business workbench and executable activity forms",
+      "path": "contracts/enterprise/wp-T-126.json",
+      "sha256": "1a40526352bfc9f917a8804a473a699d5143b1c326061a65e2f11f1e5e16952c",
+      "primaryOperation": "SubmitHumanTask",
+      "openDecisions": 5,
+      "uncoveredOperations": [
+        "PublishActivityForm",
+        "StartCase",
+        "ScheduleActivity",
+        "RecordPhysicalResult"
+      ],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-127",
+      "title": "Role adoption, safe templates and graduated autonomy",
+      "path": "contracts/enterprise/wp-T-127.json",
+      "sha256": "fd9a77e4cad65d92fd39d5f64f7e65d371af7f64d98063caf54f5c2fff4cc6c4",
+      "primaryOperation": "InstantiateTemplate",
+      "openDecisions": 4,
+      "uncoveredOperations": [
+        "RunTrainingSandbox",
+        "ReviewRoleReadiness",
+        "EnableAutonomyTier"
+      ],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-128",
+      "title": "Generated enterprise variation matrix and architectural conformance",
+      "path": "contracts/enterprise/wp-T-128.json",
+      "sha256": "dbb61b375103403fe974992bca28a2336699a88d3c3cab661b267b1d9c43c003",
+      "primaryOperation": "GenerateQualificationMatrix",
+      "openDecisions": 3,
+      "uncoveredOperations": [
+        "RegisterScenario",
+        "ValidateArchitectureProfile"
+      ],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-129",
+      "title": "SaaS isolation, fairness, public-edge and service qualification",
+      "path": "contracts/enterprise/wp-T-129.json",
+      "sha256": "894b65f683cbf6e635ebc192f8ddefbccbd8b2a6e2b6eb492a4b96df498d350f",
+      "primaryOperation": "RunTenantIsolationSuite",
+      "openDecisions": 4,
+      "uncoveredOperations": [
+        "RunFairnessSuite",
+        "RunCellFailover",
+        "RecordSaasQualification"
+      ],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-130",
+      "title": "Migration and cross-perspective consistency qualification",
+      "path": "contracts/enterprise/wp-T-130.json",
+      "sha256": "3988eb4b23902c44349fdf6934ad18804f91b4211eb5ab8659fb00c033be0b39",
+      "primaryOperation": "RunConsistencyRaceSuite",
+      "openDecisions": 3,
+      "uncoveredOperations": [
+        "RunMigrationJourney",
+        "VerifyCoverageCertificate"
+      ],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-131",
+      "title": "Enforce complete bounded implementation packets",
+      "path": "contracts/enterprise/wp-T-131.json",
+      "sha256": "df42a7c75fbe209625bd078ede91fe7950664075af6cd16f4f502a251335643e",
+      "primaryOperation": "ValidateWorkPackage",
+      "openDecisions": 3,
+      "uncoveredOperations": [
+        "StartImplementationPacket",
+        "AttachAcceptanceEvidence"
+      ],
+      "acceptanceCount": 4
+    },
+    {
+      "taskId": "T-132",
+      "title": "Full enterprise SaaS and migration release qualification",
+      "path": "contracts/enterprise/wp-T-132.json",
+      "sha256": "fb6c9934d9c8a1d5ff38a5add1685476050988cdb672317d1f57613ee69f6ad8",
+      "primaryOperation": "AdjudicateEnterpriseSaasRelease",
+      "openDecisions": 1,
+      "uncoveredOperations": [],
+      "acceptanceCount": 4
+    }
+  ]
+}

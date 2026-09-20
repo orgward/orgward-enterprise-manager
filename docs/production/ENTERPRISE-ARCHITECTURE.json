@@ -1,0 +1,452 @@
+{
+  "revision": 4,
+  "status": "specified_not_implemented",
+  "workflow_obligations": "contracts/enterprise/workflow-obligations-10.json",
+  "final_task": "T-132",
+  "prior_qualifier": "T-106",
+  "prior_task_ids": [
+    "T-01",
+    "T-02",
+    "T-03",
+    "T-04",
+    "T-05",
+    "T-06",
+    "T-07",
+    "T-08",
+    "T-09",
+    "T-10",
+    "T-11",
+    "T-12",
+    "T-13",
+    "T-14",
+    "T-15",
+    "T-16",
+    "T-17",
+    "T-18",
+    "T-19",
+    "T-20",
+    "T-21",
+    "T-22",
+    "T-23",
+    "T-24",
+    "T-25",
+    "T-26",
+    "T-27",
+    "T-28",
+    "T-29",
+    "T-30",
+    "T-31",
+    "T-32",
+    "T-33",
+    "T-34",
+    "T-35",
+    "T-36",
+    "T-37",
+    "T-38",
+    "T-39",
+    "T-40",
+    "T-41",
+    "T-42",
+    "T-43",
+    "T-44",
+    "T-45",
+    "T-46",
+    "T-47",
+    "T-48",
+    "T-49",
+    "T-50",
+    "T-51",
+    "T-52",
+    "T-53",
+    "T-54",
+    "T-55",
+    "T-56",
+    "T-57",
+    "T-58",
+    "T-59",
+    "T-60",
+    "T-61",
+    "T-62",
+    "T-63",
+    "T-64",
+    "T-65",
+    "T-66",
+    "T-67",
+    "T-68",
+    "T-69",
+    "T-70",
+    "T-71",
+    "T-72",
+    "T-73",
+    "T-74",
+    "T-75",
+    "T-76",
+    "T-77",
+    "T-78",
+    "T-79",
+    "T-80",
+    "T-81",
+    "T-82",
+    "T-83",
+    "T-84",
+    "T-85",
+    "T-86",
+    "T-87",
+    "T-88",
+    "T-89",
+    "T-90",
+    "T-91",
+    "T-92",
+    "T-93",
+    "T-94",
+    "T-95",
+    "T-96",
+    "T-97",
+    "T-98",
+    "T-99",
+    "T-100",
+    "T-101",
+    "T-102",
+    "T-103",
+    "T-104",
+    "T-105",
+    "T-106",
+    "T-107",
+    "T-108"
+  ],
+  "required_saas_task_ids": [
+    "T-109",
+    "T-110",
+    "T-111",
+    "T-112",
+    "T-113",
+    "T-114",
+    "T-115",
+    "T-116",
+    "T-117",
+    "T-118",
+    "T-119",
+    "T-120",
+    "T-121",
+    "T-122",
+    "T-123",
+    "T-124",
+    "T-125",
+    "T-126",
+    "T-127",
+    "T-128",
+    "T-129",
+    "T-130",
+    "T-131",
+    "T-132"
+  ],
+  "decisions_document": "docs/production/SOLUTION-ARCHITECTURE.md",
+  "change_protocol": "docs/production/CHANGE-PROTOCOL.md",
+  "migration_contract": "docs/product/MIGRATION-AND-COVERAGE.md",
+  "handoff_contract": "docs/production/IMPLEMENTATION-HANDOFF.md",
+  "invariants": [
+    {
+      "id": "AI-01",
+      "title": "One authenticated tenant/placement boundary",
+      "task_ids": [
+        "T-110",
+        "T-111",
+        "T-129"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AI-02",
+      "title": "Typed stable identity and historical revisions",
+      "task_ids": [
+        "T-49",
+        "T-116"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AI-03",
+      "title": "One semantic command path for all edit entry points",
+      "task_ids": [
+        "T-121"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AI-04",
+      "title": "Field-sensitive complete dependency closure",
+      "task_ids": [
+        "T-122"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AI-05",
+      "title": "Atomic publication and invalidation barrier",
+      "task_ids": [
+        "T-123"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AI-06",
+      "title": "No stale projection promoted as current",
+      "task_ids": [
+        "T-123"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AI-07",
+      "title": "Fresh authority and context at actual effect time",
+      "task_ids": [
+        "T-77",
+        "T-123"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AI-08",
+      "title": "Observed behavior never self-authorizes design",
+      "task_ids": [
+        "T-124"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AI-09",
+      "title": "Versioned scope completeness without hidden unknowns",
+      "task_ids": [
+        "T-109",
+        "T-120"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AI-10",
+      "title": "One writer per declared source-of-record scope",
+      "task_ids": [
+        "T-117",
+        "T-119"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AI-11",
+      "title": "Migration never replays unknown effects or imports active grants",
+      "task_ids": [
+        "T-116",
+        "T-118",
+        "T-119"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AI-12",
+      "title": "Customer-defined concepts retain core constraints",
+      "task_ids": [
+        "T-125"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AI-13",
+      "title": "Business work has actual typed execution and evidence",
+      "task_ids": [
+        "T-126"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AI-14",
+      "title": "Entitlement does not grant operational authority",
+      "task_ids": [
+        "T-112"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AI-15",
+      "title": "Support access is explicit, scoped and revocable",
+      "task_ids": [
+        "T-113"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AI-16",
+      "title": "Residency and relocation preserve fenced ownership",
+      "task_ids": [
+        "T-114"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AI-17",
+      "title": "Every implementation slice has a complete reviewed packet",
+      "task_ids": [
+        "T-131"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "AI-18",
+      "title": "Full SaaS release requires migration and consistency evidence",
+      "task_ids": [
+        "T-130",
+        "T-132"
+      ],
+      "status": "not_run",
+      "evidence": []
+    }
+  ],
+  "journeys": [
+    {
+      "id": "SQ-01",
+      "title": "New enterprise complete scoped design and controlled activation",
+      "task_ids": [
+        "T-109",
+        "T-120",
+        "T-126",
+        "T-127"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "SQ-02",
+      "title": "Existing enterprise discovery through reconciled cutover",
+      "task_ids": [
+        "T-115",
+        "T-116",
+        "T-117",
+        "T-118",
+        "T-119",
+        "T-120"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "SQ-03",
+      "title": "Every edit entry point preserves constraint and knowledge linkage",
+      "task_ids": [
+        "T-121",
+        "T-122",
+        "T-123",
+        "T-124",
+        "T-130"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "SQ-04",
+      "title": "Managed SaaS identity, entitlements, support and safe lifecycle",
+      "task_ids": [
+        "T-110",
+        "T-111",
+        "T-112",
+        "T-113",
+        "T-129"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "SQ-05",
+      "title": "Region relocation, recovery and no revived grants",
+      "task_ids": [
+        "T-114",
+        "T-119",
+        "T-129"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "SQ-06",
+      "title": "Custom domain and real human/agent/external business operation",
+      "task_ids": [
+        "T-125",
+        "T-126",
+        "T-127"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "SQ-07",
+      "title": "Independent scenario matrix and customer migration qualification",
+      "task_ids": [
+        "T-128",
+        "T-129",
+        "T-130"
+      ],
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "SQ-08",
+      "title": "All modules, SaaS and business operations release adjudication",
+      "task_ids": [
+        "T-106",
+        "T-131",
+        "T-132"
+      ],
+      "status": "not_run",
+      "evidence": []
+    }
+  ],
+  "edit_entry_points": [
+    "conversation",
+    "form",
+    "graph",
+    "matrix",
+    "bulk",
+    "api",
+    "connector",
+    "migration",
+    "workflow_result",
+    "accepted_learning"
+  ],
+  "execution_modes": [
+    "human",
+    "internal-agent",
+    "internal-deterministic",
+    "external-system",
+    "physical-attested",
+    "unsupported"
+  ],
+  "migration_phases": [
+    "discovery",
+    "mapping",
+    "staged",
+    "validated",
+    "shadow",
+    "rehearsed",
+    "cutover_pending",
+    "cutover",
+    "hypercare",
+    "complete"
+  ],
+  "draft_registry": "contracts/enterprise/packet-drafts.index.json",
+  "packages": []
+}

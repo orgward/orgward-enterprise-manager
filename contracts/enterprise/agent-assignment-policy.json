@@ -1,0 +1,1350 @@
+{
+  "format": "orgward-agent-assignment-recommendations-v1",
+  "checkedAt": "2026-09-19",
+  "meaning": "Engineering recommendation only; does not switch models, authorize delegation, prove reviewer independence or start tasks.",
+  "source": "https://learn.chatgpt.com/docs/models",
+  "default": {
+    "model": "gpt-5.6-terra",
+    "reasoning": "high"
+  },
+  "leafWork": {
+    "model": "gpt-5.6-luna",
+    "reasoning": "medium",
+    "allowed": [
+      "bounded presentation/control work under frozen behavior contract",
+      "fixture transcription from independent approved oracle",
+      "mechanical refactoring with regression proof",
+      "documentation synchronization"
+    ],
+    "prohibited": [
+      "authority or isolation design",
+      "effect dispatch or retry semantics",
+      "destructive migration design",
+      "independent release qualification",
+      "inventing business acceptance oracles"
+    ]
+  },
+  "escalation": "Promote Terra to Sol High for ambiguity, cross-module invariant changes or repeated failed acceptance; use XHigh for difficult races/cutover and Max only for a demonstrated unresolved hard problem. No automatic quota/billing fallback.",
+  "tasks": [
+    {
+      "taskId": "T-01",
+      "title": "Freeze executable domain and API contracts",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-02",
+      "title": "Correct demonstrator truth and navigation semantics",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-03",
+      "title": "Build usable shell and shared form states",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-04",
+      "title": "Create transactional persistence and legacy import",
+      "model": "gpt-5.6-sol",
+      "reasoning": "xhigh",
+      "rationale": "Concurrency, authority, temporal or cutover invariant requires deeper adversarial reasoning.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "xhigh"
+    },
+    {
+      "taskId": "T-05",
+      "title": "Authenticate humans and workload principals",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-06",
+      "title": "Enforce authorization and workspace isolation",
+      "model": "gpt-5.6-sol",
+      "reasoning": "xhigh",
+      "rationale": "Concurrency, authority, temporal or cutover invariant requires deeper adversarial reasoning.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "xhigh"
+    },
+    {
+      "taskId": "T-07",
+      "title": "Broker and rotate secret references",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-08",
+      "title": "Package clean self-host installation",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-09",
+      "title": "Persist the enterprise graph and complete area schema",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-10",
+      "title": "Make conversation and brief review iterative",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-11",
+      "title": "Generate sourced enterprise proposals with a real model",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-12",
+      "title": "Evaluate integrity and readiness evidence",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-13",
+      "title": "Edit, compare and publish enterprise versions",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-14",
+      "title": "Unify graph, list and object navigation",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-15",
+      "title": "Make business economics and assumptions actionable",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-16",
+      "title": "Manage resources, capacity and lifecycle",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-17",
+      "title": "Assign, delegate and offboard humans and agents",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-18",
+      "title": "Version editable role and task instructions",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-19",
+      "title": "Design executable process graphs and triggers",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-20",
+      "title": "Run durable leased tasks with crash recovery",
+      "model": "gpt-5.6-sol",
+      "reasoning": "xhigh",
+      "rationale": "Concurrency, authority, temporal or cutover invariant requires deeper adversarial reasoning.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "xhigh"
+    },
+    {
+      "taskId": "T-21",
+      "title": "Isolate execution and broker bounded tools",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-22",
+      "title": "Execute real bounded model tasks with evaluation",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-23",
+      "title": "Implement pause, checkpoints, resume and cancellation",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-24",
+      "title": "Complete the non-software operating journey",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-25",
+      "title": "Discover governed change context and impact",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-26",
+      "title": "Author and evaluate traced requirements",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-27",
+      "title": "Approve architecture delta and recovery design",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-28",
+      "title": "Compile change plans into the shared work engine",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-29",
+      "title": "Onboard and read real repositories securely",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-30",
+      "title": "Create, evaluate and review agent code changes",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-31",
+      "title": "Build immutable candidates with independent assurance",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-32",
+      "title": "Publish SBOM, provenance and signed artifacts",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-33",
+      "title": "Approve protected releases with bound authority",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-34",
+      "title": "Deploy and reconcile actual environment effects",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-35",
+      "title": "Rollback and recover incompatible releases",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-36",
+      "title": "Measure technical, control and business outcomes",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-37",
+      "title": "Review learning and corrective changes",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-38",
+      "title": "Route durable work and decision notifications",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-39",
+      "title": "Export verifiable audit and lineage",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-40",
+      "title": "Administer policies, providers, quotas and retention",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-41",
+      "title": "Back up and restore complete enterprise state",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-42",
+      "title": "Upgrade supported releases and recover failed migration",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-43",
+      "title": "Operate telemetry, incidents and diagnostics",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-44",
+      "title": "Publish stable integration and import/export contracts",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-45",
+      "title": "Qualify accessible usable complete workflows",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-46",
+      "title": "Perform independent security and supply-chain review",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-47",
+      "title": "Qualify scale, soak and redundant recovery",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-48",
+      "title": "Qualify integrated customer outcomes and release",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-49",
+      "title": "Canonical scoped and temporal enterprise model",
+      "model": "gpt-5.6-sol",
+      "reasoning": "xhigh",
+      "rationale": "Concurrency, authority, temporal or cutover invariant requires deeper adversarial reasoning.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "xhigh"
+    },
+    {
+      "taskId": "T-50",
+      "title": "Organisation, legal entity and federation scopes",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-51",
+      "title": "Sixteen synchronized lens projections and cross-lens queries",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-52",
+      "title": "Advanced process, case and decision modeling",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-53",
+      "title": "Branching, temporal baselines and semantic three-way merge",
+      "model": "gpt-5.6-sol",
+      "reasoning": "xhigh",
+      "rationale": "Concurrency, authority, temporal or cutover invariant requires deeper adversarial reasoning.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "xhigh"
+    },
+    {
+      "taskId": "T-54",
+      "title": "Progressive business-to-system refinement and reverse trace",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-55",
+      "title": "Loss-aware interchange and versioned extension schema",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-56",
+      "title": "Commitments, contracts and economic scenario semantics",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-57",
+      "title": "Workforce, suppliers and resource capacity planning",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-58",
+      "title": "Customer, offering and value-stream lifecycle",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-59",
+      "title": "Risk, obligation interpretation and control effectiveness",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-60",
+      "title": "Strategy, outcome hypotheses and safe simulation",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-61",
+      "title": "Semantic information and system architecture refinement",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-62",
+      "title": "Physical, service and non-digital extension profiles",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-63",
+      "title": "Bulk editing, collaboration and migration conflict workbench",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-64",
+      "title": "Explainable multi-axis business and module readiness",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-65",
+      "title": "Sentinel source onboarding and safe ingestion",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-66",
+      "title": "Evidence-backed claim extraction and identity proposals",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-67",
+      "title": "Scoped claim review and lifecycle commands",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-68",
+      "title": "Deterministic claim compiler and atomic snapshot publication",
+      "model": "gpt-5.6-sol",
+      "reasoning": "xhigh",
+      "rationale": "Concurrency, authority, temporal or cutover invariant requires deeper adversarial reasoning.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "xhigh"
+    },
+    {
+      "taskId": "T-69",
+      "title": "Typed integrity graph and compatible OADL projection",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-70",
+      "title": "Sentinel base authority, governance and coverage rules",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-71",
+      "title": "Property/process lineage and advanced Sentinel rules",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-72",
+      "title": "Actionable Sentinel inbox and remediation UX",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-73",
+      "title": "Governed Sentinel exceptions and expiry",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-74",
+      "title": "Semantic drift, source coverage and impact feedback",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-75",
+      "title": "Qualify Sentinel source acceptance and first-session value",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-76",
+      "title": "Warden versioned policy model and deterministic decisions",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-77",
+      "title": "Warden enforcement, capability revocation and effect reconciliation",
+      "model": "gpt-5.6-sol",
+      "reasoning": "xhigh",
+      "rationale": "Concurrency, authority, temporal or cutover invariant requires deeper adversarial reasoning.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "xhigh"
+    },
+    {
+      "taskId": "T-78",
+      "title": "Warden simulation, rollout and operational controls",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-79",
+      "title": "Arbiter decision rights and bounded delegation",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-80",
+      "title": "Arbiter version-bound reviews, appeals and decisions",
+      "model": "gpt-5.6-sol",
+      "reasoning": "xhigh",
+      "rationale": "Concurrency, authority, temporal or cutover invariant requires deeper adversarial reasoning.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "xhigh"
+    },
+    {
+      "taskId": "T-81",
+      "title": "Arbiter authority conflicts and constrained emergency access",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-82",
+      "title": "Steward semantic catalogue and ownership handover",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-83",
+      "title": "Steward quality, retention and remediation lifecycle",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-84",
+      "title": "Steward data contracts and semantic execution lineage",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-85",
+      "title": "Ledger durable governance event chain and reconciliation",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-86",
+      "title": "Ledger independently verifiable exports, holds and key lifecycle",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-87",
+      "title": "Overseer agent identity and autonomy envelopes",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-88",
+      "title": "Overseer multi-agent handoff and shared-budget supervision",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-89",
+      "title": "Overseer independent evaluations and adversarial qualification",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-90",
+      "title": "Bidirectional design, integrity and SDLC context pinning",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-91",
+      "title": "Intent-derived requirements, evaluations and trace completeness",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-92",
+      "title": "Multi-repository, legacy and data-migration delivery",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-93",
+      "title": "Architecture alternatives and governed regeneration",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-94",
+      "title": "Environment promotion, progressive delivery and operational acceptance",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-95",
+      "title": "Software incidents and governed design feedback",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-96",
+      "title": "Governed enterprise transactions and long-running operations",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-97",
+      "title": "Connector catalogue and resilient integration lifecycle",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-98",
+      "title": "Role-based portfolio shell, search and accessible interaction",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-99",
+      "title": "Modular self-host packaging and customer-controlled operations",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-100",
+      "title": "Industry and jurisdiction packs with scoped interpretation",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-101",
+      "title": "Organisation simulation, case exceptions and operating learning",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-102",
+      "title": "Enterprise continuity, handover and supplier failure",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-103",
+      "title": "Cross-module security, privacy and authority qualification",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-104",
+      "title": "Portfolio load, compiler scale and failure qualification",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-105",
+      "title": "Independent customer installation and portfolio user acceptance",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-106",
+      "title": "Integrated portfolio round-trip release qualification",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-107",
+      "title": "Extension certification and compatibility laboratory",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-108",
+      "title": "Portfolio retirement, portability and structural reorganisation",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-109",
+      "title": "Scoped whole-business inventory and completeness certification",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-110",
+      "title": "Managed SaaS tenant provisioning and regional placement",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-111",
+      "title": "Enterprise identity onboarding and SaaS access lifecycle",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-112",
+      "title": "SaaS entitlements, metering, quotas and safe subscription lifecycle",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-113",
+      "title": "SaaS operator plane and customer-controlled support access",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-114",
+      "title": "Residency, encryption ownership and tenant cell relocation",
+      "model": "gpt-5.6-sol",
+      "reasoning": "xhigh",
+      "rationale": "Concurrency, authority, temporal or cutover invariant requires deeper adversarial reasoning.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "xhigh"
+    },
+    {
+      "taskId": "T-115",
+      "title": "Existing-enterprise discovery and source inventory",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-116",
+      "title": "Migration identity mapping, transformations and staging",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-117",
+      "title": "Source-of-record ownership and incremental coexistence",
+      "model": "gpt-5.6-sol",
+      "reasoning": "xhigh",
+      "rationale": "Concurrency, authority, temporal or cutover invariant requires deeper adversarial reasoning.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "xhigh"
+    },
+    {
+      "taskId": "T-118",
+      "title": "Migration validation, shadow operation and rehearsal",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-119",
+      "title": "Fenced cutover, rollback and migration hypercare",
+      "model": "gpt-5.6-sol",
+      "reasoning": "xhigh",
+      "rationale": "Concurrency, authority, temporal or cutover invariant requires deeper adversarial reasoning.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "xhigh"
+    },
+    {
+      "taskId": "T-120",
+      "title": "New and migrated enterprise activation and scope sign-off",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-121",
+      "title": "Unified semantic command registry for every edit surface",
+      "model": "gpt-5.6-sol",
+      "reasoning": "xhigh",
+      "rationale": "Concurrency, authority, temporal or cutover invariant requires deeper adversarial reasoning.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "xhigh"
+    },
+    {
+      "taskId": "T-122",
+      "title": "Field-level dependencies and constraint impact fixed point",
+      "model": "gpt-5.6-sol",
+      "reasoning": "xhigh",
+      "rationale": "Concurrency, authority, temporal or cutover invariant requires deeper adversarial reasoning.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "xhigh"
+    },
+    {
+      "taskId": "T-123",
+      "title": "Atomic publication barriers and consistent projection watermarks",
+      "model": "gpt-5.6-sol",
+      "reasoning": "xhigh",
+      "rationale": "Concurrency, authority, temporal or cutover invariant requires deeper adversarial reasoning.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "xhigh"
+    },
+    {
+      "taskId": "T-124",
+      "title": "Continuous knowledge reconciliation and explicit truth states",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-125",
+      "title": "Customer-defined concepts, constraints and governed actions",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-126",
+      "title": "Unified business workbench and executable activity forms",
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "rationale": "Bounded feature implementation after reviewed contracts and dependencies.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-127",
+      "title": "Role adoption, safe templates and graduated autonomy",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-128",
+      "title": "Generated enterprise variation matrix and architectural conformance",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-129",
+      "title": "SaaS isolation, fairness, public-edge and service qualification",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-130",
+      "title": "Migration and cross-perspective consistency qualification",
+      "model": "gpt-5.6-sol",
+      "reasoning": "xhigh",
+      "rationale": "Concurrency, authority, temporal or cutover invariant requires deeper adversarial reasoning.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "xhigh"
+    },
+    {
+      "taskId": "T-131",
+      "title": "Enforce complete bounded implementation packets",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    },
+    {
+      "taskId": "T-132",
+      "title": "Full enterprise SaaS and migration release qualification",
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "rationale": "Foundational, cross-module, safety-sensitive or qualification work requires design judgment.",
+      "reviewRequired": true,
+      "reviewModel": "gpt-5.6-sol",
+      "reviewReasoning": "high"
+    }
+  ]
+}
