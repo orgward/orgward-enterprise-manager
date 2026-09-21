@@ -1,0 +1,1003 @@
+{
+  "algorithm": "SHA-256 over sorted per-file SHA-256, two spaces, relative path and newline",
+  "revision": "tree-sha256:002c7a618573ea17481d77a6076605dbc2cc5a3cfc7d62d9f130a09d8bd39c6a",
+  "scope": "Checkpoint-13 product/validator scope plus checkpoint-14 vectors and walkthrough/handoff and publication preflight; current raw checks replace prior checks; excludes mutable data and current receipt/manifest.",
+  "files": [
+    {
+      "file": ".gitignore",
+      "sha256": "25d83069fa39c950545c8e08edbd7c9618b3179dffa96358456f43203b6cc6c5"
+    },
+    {
+      "file": "AGENTS.md",
+      "sha256": "c77c009266f8d2fb7153bbdca13b95de039e681cd4f3722ff531127504ccc7cb"
+    },
+    {
+      "file": "DELIVERY-STATUS.json",
+      "sha256": "2e5f14ce305b503518db6d664f52b6e1925a60d5fc46395c6bdb8dd2b39fb9a9"
+    },
+    {
+      "file": "PRODUCTION-READINESS.json",
+      "sha256": "e75c79c586fce5031132ef8aff2876c4d33d6ea9503bb6d94d099a62a4062399"
+    },
+    {
+      "file": "README.md",
+      "sha256": "a882614ef761a97d6dc8ea9b01ae0b491c72dd897f0a81682018ac1e5bd67ef0"
+    },
+    {
+      "file": "contracts/enterprise/additional-operation-decisions.mjs",
+      "sha256": "fe2ee3479006d2604ab0a78687e58aff8ecb36dcf62fff029d9f865d0ecad466"
+    },
+    {
+      "file": "contracts/enterprise/agent-assignment-policy.json",
+      "sha256": "f24e8fbe62e62de83ebb8caee6d3b0920c0b18db872781480b0840600083caaf"
+    },
+    {
+      "file": "contracts/enterprise/consistency-cases.json",
+      "sha256": "433f4af7275f5450b0c493e9d4eaaa3b15f4471737f11ea5055aee6726e8a237"
+    },
+    {
+      "file": "contracts/enterprise/domain-vectors-07.mjs",
+      "sha256": "4d5871f98a92172c6850ec24e830206ba280ba2dd3b39f935293daabb7da9180"
+    },
+    {
+      "file": "contracts/enterprise/domain-vectors-08.mjs",
+      "sha256": "b128710e9b5e4561087dd527c595a5823fc0beec7a1fe4d02d22622ddb660de8"
+    },
+    {
+      "file": "contracts/enterprise/domain-vectors-09.mjs",
+      "sha256": "221f99c0f26d0ccbe9c9c0b309a188c9acfa6e8df73e7f6ddc7fc97798f441e0"
+    },
+    {
+      "file": "contracts/enterprise/domain-vectors-10.mjs",
+      "sha256": "553123b706ef5d7a2cbd8a8b58d07e458ba266d6b645c40ea2155191ab238c75"
+    },
+    {
+      "file": "contracts/enterprise/domain-vectors-11.mjs",
+      "sha256": "b1f651cad74bd676eb18a76d82ea1577da3cd0bb398a91b29973d5292057a4f9"
+    },
+    {
+      "file": "contracts/enterprise/domain-vectors-12.mjs",
+      "sha256": "dc18054b6084fb4939be1373602ff30bcc03c07cce48f61066c57bf8f174d882"
+    },
+    {
+      "file": "contracts/enterprise/domain-vectors-13.mjs",
+      "sha256": "953a6a830d4cbd8ff7c25867ba733d7662c5bc7f9e669c2188e280ac54ab2e49"
+    },
+    {
+      "file": "contracts/enterprise/domain-vectors-14.mjs",
+      "sha256": "cc55ed028215dfe0b250fdfff2cdd67b1d2ce8c279afd959f1879f3d08cdf050"
+    },
+    {
+      "file": "contracts/enterprise/domain-vectors.index.json",
+      "sha256": "48e802f942b7ff4353442357375d4d4a6a37a355c5ae300ec8189a575667001b"
+    },
+    {
+      "file": "contracts/enterprise/packet-blueprints.json",
+      "sha256": "a8014c692c949771a69b38abb64bded4f6868f63681b186eb0c5435329b22410"
+    },
+    {
+      "file": "contracts/enterprise/packet-drafts.index.json",
+      "sha256": "9e4f5f2cf4800681806586fcc780bff8b44562fb1bf61d89ca5441d3149daceb"
+    },
+    {
+      "file": "contracts/enterprise/sentinel-rule-fixtures-12.mjs",
+      "sha256": "6663a045912979bb47700d8952f925e72384520b5b332bf7d5e0d84c37fd9a12"
+    },
+    {
+      "file": "contracts/enterprise/work-package.contract.json",
+      "sha256": "12962b7ef218617aa457e890aad41087432b55ac6607ce408977cf812c3c962c"
+    },
+    {
+      "file": "contracts/enterprise/workflow-obligations-10.json",
+      "sha256": "3a015e47d5befee65abad2ecd83088db993f02400650c0f7e9e840aa558eaf5f"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-01.json",
+      "sha256": "42a827ccbcbaf490f5c2b0345776717f0ece19e1e6079948aadd9a06e8f4e780"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-02.json",
+      "sha256": "ef0a69b6d8122a8eb25fd5ff80d3c87c74bd12ee1683318b7a4ad4db601fe316"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-03.json",
+      "sha256": "70884fe879f1134a0b91e5f812862acbac7f1824a8838b356821876bb8fd4fb2"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-04.json",
+      "sha256": "134363c63ba151604a3fc694665fc5958b9fe015bd9892c255953639afb9e7a6"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-05.json",
+      "sha256": "b83f079cfc4a21e2e85e960d2a2886f991f04b99527df75fce36bfe4640e2128"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-06.json",
+      "sha256": "5271709207e8163375ddbf290a975aad3da9fa0d976c8e335f99cbbacad8eb2f"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-07.json",
+      "sha256": "1c077b4f5c86db220faca31a6b0a91a1499b682c44b43b6183e9f7a51196f28b"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-08.json",
+      "sha256": "e1b6376674d004fc541a7fc76e2625fc9ba75242f427cc9cd8e881802e702338"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-09.json",
+      "sha256": "ff0715dfee47c53260c4d2982d352ed54e77bd54f7438d7d0882b444305db7c2"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-10.json",
+      "sha256": "00768f70f5514da063cdccb71448bff417755ca5d4b49000a15881db136ae38a"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-100.json",
+      "sha256": "7153695bf8febbf1b89d13d6382d75e2e7f923de5ea337ce69ea467ae060ad98"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-101.json",
+      "sha256": "8607cf230438fbf3d443f32c4be6ed2dcbe5f1e461694bc5077eb3dfbb57136b"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-102.json",
+      "sha256": "db90453993e9c4fe8d04b5630edc706c75a2d07531e6997e154ede2af626673a"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-103.json",
+      "sha256": "62d4b90c72557689af47a1266f6484d51a59c428456dfed14fc99cb709a1cd51"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-104.json",
+      "sha256": "1f8cd797a6a15f03a948b76f225cbd1730053d2077876b087911890f82f90af4"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-105.json",
+      "sha256": "d3b7a4f2ced645307baed3c3e35926fa44ac38c1f9bc8b26fc12d73f1b264a6b"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-106.json",
+      "sha256": "458b87518bb35fce77d12d5a72559df5f490c1e45b98f6cbc2a07ed4ce1013d0"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-107.json",
+      "sha256": "13bd650a30b4806a5834919bc384e728b6f7d683174076fff63dfcae7cd946b2"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-108.json",
+      "sha256": "eed192a1a27653cb969ee84c7cc8fe00ff58da3487e7d50de9bda8c5b527335e"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-109.json",
+      "sha256": "c3fd4577daf6595884f45d86889c1602cc0229fcf0acb30d20e055cd0dd151e7"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-11.json",
+      "sha256": "15432aff943b1e51f058c1075ccf9ed0a14d868dc71ef7e52426c1bbd4152a4a"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-110.json",
+      "sha256": "eef75949531fe7b3c2a7053686d556f8b3d2f79e29463a6bfe12bb22c71108b0"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-111.json",
+      "sha256": "1bec7733a5147285f3aa7e938c20ad14a8978b7ca61fb8674ef62c295ccdca03"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-112.json",
+      "sha256": "6426102b69497d9bce3945c2b3151c9390acb558f6530e44bc80b8bf01381c45"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-113.json",
+      "sha256": "c0808095728ce9ec6bc784bd4695ccba841b0ff5ac4311f42b5800458164e869"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-114.json",
+      "sha256": "083d56228e81fe6f2a9ee765da60c5856a2bb431134c7572a2b7922d04c194c7"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-115.json",
+      "sha256": "50549b7adab5c747cdbb5a7631f599575785a70c680d73c00987ffb38b3a7a1c"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-116.json",
+      "sha256": "dfb23c1c7ff8e1320b38ee7d16298cb0f47038d57e5dcb267bfd837e37239e11"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-117.json",
+      "sha256": "6f4fa51833df538b71820ae05edba876f305e97cd7e8e5f0fe2d1e4d90d41f8a"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-118.json",
+      "sha256": "d5f39a9897c053f80702bfc4a13a40d7e3b990de46d82b37b4b8df585bdc3f71"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-119.json",
+      "sha256": "2d9acab70daeca82985ce75a528d5e42bd8f49243cc1dfff75c30101e2772829"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-12.json",
+      "sha256": "c2aafbc9547cd4ef21a157825b97b18171038105122583b265738e97def5488b"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-120.json",
+      "sha256": "3dbfeec28f33f273f1d18aef53b3ec10a8c8e71f07f740369f5b6df487377b80"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-121.json",
+      "sha256": "f843de7a0380e2949869a9236bbeafd3f800b9b7e3e452739813b058a1920333"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-122.json",
+      "sha256": "eb76c801c8c83bbbf3abea29711200e978288d777d1cc733d7e7ce2136431640"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-123.json",
+      "sha256": "c00a14a6b8ce717534a9ef35d94b28457e3ce108455cd0054b213c31c8391a2b"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-124.json",
+      "sha256": "938d48a0f5cf6a8521a51a8e09ea06eb152cffe3284dfe2f04b9396afeccbf15"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-125.json",
+      "sha256": "cad2267e57fc9f9cc164ed35e6e02af8b2993657885d0b04b84d7d5a761ccaac"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-126.json",
+      "sha256": "906866691774daee5bf8cda606cb36ee1576782abafd9b2555f1912d092264b9"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-127.json",
+      "sha256": "873c547f3de65c53c622524d14c30b276247c9e9271bcbb9e91c74a9b698e550"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-128.json",
+      "sha256": "48d641bcb837b0e4a00cd19d63789ccfa5cab5361dbc3c0a08a9985aeeb6e776"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-129.json",
+      "sha256": "bac221938734bd4fac5f591a1bae309aab917ee5f5fda46a87a8a918b9796736"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-13.json",
+      "sha256": "7c9c60fab99d5b7967b4f73dccff22fd46cc2211288e5373410860530919ce75"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-130.json",
+      "sha256": "6c8564a0db715881979522d406f4b44e0660ccc258917bdc9f4f05c3da91873f"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-131.json",
+      "sha256": "39ec1d365a31641b5fcabea6dc02e355c9762c1a23ffa4018add238a2a1bb523"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-132.json",
+      "sha256": "d2489fd24b8b5b74dbad904d175da27fc1336e6457291648ce341582e15da237"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-14.json",
+      "sha256": "4f10434dbb28e1177df5fbdb2e1dd427e3d68bf9ce41d38ad4753a12d55f683e"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-15.json",
+      "sha256": "13cac0801022688a7d1318380ad39d0ec4ec466a065ee2304b6c6c60f3214633"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-16.json",
+      "sha256": "122f009a54700bda3b655eff307745cd1273cbb8cadce427275049a7e2162ad9"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-17.json",
+      "sha256": "66083e3a121e40de8b70e995b68ae18a5f6a419c4bf1534ae01cb7540aeb2140"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-18.json",
+      "sha256": "f0eb9e48e2a17e791a9a1a3497868efb33f3a00462c95127ea0d6fe8dee99dca"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-19.json",
+      "sha256": "085bd8c8630742df85c30e5e9e7bea0b2d4a35688d0b216d1136c33a20dda90b"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-20.json",
+      "sha256": "21bfbdc41cff095890946758410baab5e3556a6cf334348cdb49e4f9c6690722"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-21.json",
+      "sha256": "7ea3a9fc3abe6f4fa9213860c620101fa36b4b0088a97a470fc1fbf7f899a014"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-22.json",
+      "sha256": "642679b25c7b69e7bd073430db8081bce240ea04a9319d66a84be840f58355f9"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-23.json",
+      "sha256": "f50286516c54a54c6a70b62a7c060be1a5c9990124514857cb6cf861fafc598f"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-24.json",
+      "sha256": "3b8c1d0a2f225b0ebf28b6dd66e7d55f085188240d96d6542f715e86afc530e4"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-25.json",
+      "sha256": "00085aecceb5b796987e497a87000649dfbfa577d5d32bc63d16d44ed36852e7"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-26.json",
+      "sha256": "3b1d4c715ab1dda59bdfb615f874f784dd85cbb386c05c7469c7ed120baec67a"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-27.json",
+      "sha256": "d454a156fff6d51c50457682c3278607cf3fdf7f01bea3018a3fa3dc05d35257"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-28.json",
+      "sha256": "c2a505542a3128d8a8b09558d6f2b54155cb7a5b725a541cdb6eb3740d3c8a60"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-29.json",
+      "sha256": "060a72299836559532cc713a5b8dc69dab5564565350bb51715c522347352a50"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-30.json",
+      "sha256": "3b761acaf634e09c21b4883e04c1eb9e4dfd5f678816f6f271396b607543fbeb"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-31.json",
+      "sha256": "95e2d7e2ac00c91ac54719a1cbc9dc961a6c80195c9cfc1bdd54e05215877342"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-32.json",
+      "sha256": "6404f07825a326db3f423d4adb1d34a25dfedd328e38c9296cf736b4eb44c5e5"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-33.json",
+      "sha256": "c459ffad5573b213eda8e3d64402076a3dfc49570366351b1b7d89005562ea73"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-34.json",
+      "sha256": "a9ba175299c725d6232ca441a5744221cb7c83b43fa9c1e4f1a9339f37e747dc"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-35.json",
+      "sha256": "21d010d5b8339c5579be47a87966e5906cb409367ee616800c165cfc61ab91c4"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-36.json",
+      "sha256": "6396be44c45e5d19758d599e11f14ffc05848279bfbd7984eae7bd182f0f7c3a"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-37.json",
+      "sha256": "6035925ea3eba0d78d27581131b043abaa8fb16d8381b1b8f71a38b4f8fa6e3f"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-38.json",
+      "sha256": "3d2ac028810308f118a83f060bad7eb8716473e7c7fe9607de4649f62c88140c"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-39.json",
+      "sha256": "c9086b577fab6dd850241488e8fa34879748e335c2416aa9ecb122f1489f64aa"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-40.json",
+      "sha256": "de86a097501a197e7c379078a90d722aa036d4b382222ccc6c81d358d854db52"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-41.json",
+      "sha256": "21385dbe4837f0279d6ecf032c24026071d3f1281fb4f9f51d16046357ee5d04"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-42.json",
+      "sha256": "db1b90345a6d8d1da5b3b1f52102e010847409acc6eaa71332a92c9b44d4bf4d"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-43.json",
+      "sha256": "632f0360d43fc0ea1b9a592d252b6daf23fd75660880a9c33fc638b8993fdcda"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-44.json",
+      "sha256": "19b95bdde64875ba9c2b6113eb602ba86066c30d003265743f581539199e261d"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-45.json",
+      "sha256": "61150e8d8867ab31679d5f75bb56985ab9b9259db49419dd793b6ca1588537b5"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-46.json",
+      "sha256": "6d830a113a35530c5080635d9148cfeeb7a9631354d9fd2fcd976506c8b495df"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-47.json",
+      "sha256": "ad6ddfb35ea9798f7beec754b88d1680e1988153d6c6c929699429ae29eee86e"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-48.json",
+      "sha256": "43597e275cb15d681eaa9497f3142e15a06cabb6e3cb100aa5408d6d75630819"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-49.json",
+      "sha256": "3dace9da43a8e1bc7f3b75c6fce60e4fe3297203ecc5e090d502837d75b2d42d"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-50.json",
+      "sha256": "4ce1ad867931a689078c4e366818c7b3b43811ce22717d4907161bd0c49eb84d"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-51.json",
+      "sha256": "21082ae0d00d7a95d7aec12f07b00b8af3ebf1ef9f8d5029e5723957fc97e6d2"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-52.json",
+      "sha256": "ae4fef7312d4b3cf81bbf99671f2f3fcbfd8e79d01067fb2ca2c991734ce0c8d"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-53.json",
+      "sha256": "a78be0bb9ad94675e46abd095fcda89d90d6efc54339283d8f348dc915d23e32"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-54.json",
+      "sha256": "4fb35a0012121f38567f7f1bd4d7232b563b3761a7a88e55cc8427cde232bde2"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-55.json",
+      "sha256": "d90866c4ab90b3f897777636fd689081c485f32164ae5b7ecd0c1b25b466a442"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-56.json",
+      "sha256": "1df691bff7c9a42845dc308f10f3b465da952b5ce459623c0f53e4e78415f00d"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-57.json",
+      "sha256": "0e1393a6a69982daa4fb41592695417ee7f27ddc9ea3281e9c135ebb10ae2601"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-58.json",
+      "sha256": "3868c2a77c2bb4d3a32de1b0a0618bdcd3b0d08f72ea8571808a5076f93c0031"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-59.json",
+      "sha256": "56a434623b04de63f7de954864142aae150c268f0704b1fb8a1ca51ea630000f"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-60.json",
+      "sha256": "7445a8275598085dd5fe06619718bf75da488ac2e2a54ec55e681bba76ae84d7"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-61.json",
+      "sha256": "b05c58c885c303495cc262c6990040357c3a27918af0a48d02e4e1c5f8151e33"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-62.json",
+      "sha256": "7ac849e0ed8e7efc54a930a4f92682d5df39907b7c25210bff3b599f2287ad2c"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-63.json",
+      "sha256": "b2914b628e8d87c1e807f9bab18141eb6a5bfc0dd508fa86fc464f3e64672279"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-64.json",
+      "sha256": "0437853ae3e0c234437c2d28e54674564b6cd9143afce5fa99d00d24fe10c64b"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-65.json",
+      "sha256": "f9584792e9f78f0992a16889169ddd77a59cccb604e8a1434a9f06b4f3c36e84"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-66.json",
+      "sha256": "76ce805df2f8948d249a01fde1f073f1601d40e03c6b86fa41645d49e4cdf25b"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-67.json",
+      "sha256": "872c1e0fa940c76f65c40ca421953446b9a17b29b573b6709ac0914ed3c84238"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-68.json",
+      "sha256": "b15973ab3fc03316390dc682ce4e537beceafb4899bda52abf0f77e0ddafe81e"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-69.json",
+      "sha256": "f46f87cf0ee51f5c551b4fffdd91a06e723d884aaeec1b22f89d273d64b16d93"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-70.json",
+      "sha256": "6ffd6383314642c35f93d7a6fc00c2367811ce478763d5ae9be8e6dd4822d758"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-71.json",
+      "sha256": "50c238617d6ddd418b10dc31394f62ab70c2d234abaa44a9d02879f0bbb40cf1"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-72.json",
+      "sha256": "229fff380f01702f4ae20bafff17b5b34d05b2c4aead0769e9b0f90b4a62dfad"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-73.json",
+      "sha256": "e27b605b6153abd00ab6bf077f491887005346ad832ec1e8690947027f1873ee"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-74.json",
+      "sha256": "53a4ecacd6cf9f859cd36eb72aed425991ba62e81f8b5d0570dbca8c64aaced9"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-75.json",
+      "sha256": "eecc1583fe20ceabe5336c89f9a479e9bb28e379257676753d1ab576b0212f01"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-76.json",
+      "sha256": "0f6962464f435f2ac4a76c8063d2e47831d4fb337f29aa99a259d5b1db5fa61f"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-77.json",
+      "sha256": "8188bb81c21425c5bf683a54280afa9b9c6ee13eb83421eb876f393bddd6f257"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-78.json",
+      "sha256": "6e345815dbfa9c9fa495e20e2bb160c5d6a781f8492d996598ecc68b780e31bb"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-79.json",
+      "sha256": "b93a943819f3e8cf0f06bfee3cdbc1d66a25cf04024e1be2e216ea1503354a43"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-80.json",
+      "sha256": "8283cac1c9d547479a261a7c3deceaa418bd99c7fc2c2efabf39664ac008fd5a"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-81.json",
+      "sha256": "51b0187ee2dfec4e879481eb68f96e526f69646a07b1888e99c14195dec40027"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-82.json",
+      "sha256": "07facd1e87ab26d5bea3e953681d1eebc9278e8c9b932538377ad1bb872a366f"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-83.json",
+      "sha256": "d4f1b99973f029d5ee4d92267178c3cf2748bf7828d7d5a557f37a51499a0b5c"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-84.json",
+      "sha256": "74b8b1fa729af185831285f2a4632f015956c106efe261aab5491768e4403a8f"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-85.json",
+      "sha256": "0dd17b9e28f2427e7cd0b8018f27107b0f363b0c0631161a783fbae8ef54c9b7"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-86.json",
+      "sha256": "cbad76516c3611469c423bcce6580f2235f4c3a7e544eea09fa1048bfc1b57a5"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-87.json",
+      "sha256": "493c2fb1cfbb44fa3e5fbffcdab5a64341a8f0c820c43db4f3e54772120fc037"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-88.json",
+      "sha256": "6aff1cc10c7d4a0e806c6962725b55c1d2d257e127ac45a627dec02f20f46625"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-89.json",
+      "sha256": "8d83f70f7a7e020866d2f5d6c845cab6f8b7cef673dd4cf2994e015a50461175"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-90.json",
+      "sha256": "c550041ba3da2940fbb60cf7f8103b98eb5e9417c6c33e99473c83b6e5930f19"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-91.json",
+      "sha256": "a743bb94e30fb21a378d8b9e4827ca553dd80d08e2b852cff12e04cc5c2c65f6"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-92.json",
+      "sha256": "9d2fd5a67784f4cbff6f60d3f9dcc2a7627dc8f384210d5c389075dfd2fc46f8"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-93.json",
+      "sha256": "a6d7bd1660690150570744dfc8cb0e5ba82ca50734e13e9ea22b48f9dfad556c"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-94.json",
+      "sha256": "f8c0e9beda951d289853873a32975376ff7487051ef5cd12854a898c3d41a6ca"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-95.json",
+      "sha256": "5b29e169fa1a2f47cc78bcb145f5def18fa436573faccab8b69a9f2d4e14932d"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-96.json",
+      "sha256": "f0a44bb56d600532ab982b95a98a56a5ee46753a202daaeb3aadbad7468f9283"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-97.json",
+      "sha256": "73c85fcf1e0baedbe2f6d3b08f6cd2a9490902d4cebe1ecd742e03344c962481"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-98.json",
+      "sha256": "82b53a1cdb1773bb53f470568090d007121973008cfa37db76e32773fec9d8f1"
+    },
+    {
+      "file": "contracts/enterprise/wp-T-99.json",
+      "sha256": "9f51775021b2811b206eff37d3ae3a100c3ae51694275aea011c99054e7fbc6f"
+    },
+    {
+      "file": "docs/product/ARCHITECTURE-REVIEW-04.md",
+      "sha256": "41a45fe4ebf34eff4f6523edbeab2277c08e78fb3df0a5eca533aca3e2858f2a"
+    },
+    {
+      "file": "docs/product/BUSINESS-SENTINEL-INTERACTIONS-11.md",
+      "sha256": "f6757a05640d91b3c155aca1ba498da065a6e8ee2fe61acd7ef6c538c1a3fefb"
+    },
+    {
+      "file": "docs/product/CONFIGURABLE-WORKFLOWS.md",
+      "sha256": "5f7beb9c3577ea3c27ae9773eab67ad4b8f628c1d7c819406bccf0251ea177cb"
+    },
+    {
+      "file": "docs/product/DELIVERY-CUSTOMER-INTERACTIONS-14.md",
+      "sha256": "85e4829af1c41c017ffc6a19dd062336001a13d561f053ba268e034009b2b538"
+    },
+    {
+      "file": "docs/product/ENTERPRISE-MODEL.md",
+      "sha256": "b3a1a539a7f74a61428efecf0dddc5ef9181fcc89013440e278899744159fbc7"
+    },
+    {
+      "file": "docs/product/ENTERPRISE-SCENARIOS.md",
+      "sha256": "7254372031cfa3e6dd24792ff8f5e8deb185c13a914a99098d3a4c27b974db41"
+    },
+    {
+      "file": "docs/product/GOVERNANCE-AGENT-INTERACTIONS-13.md",
+      "sha256": "ba0b5922056a4d8cf8bebf14e744bedbfda35f07017cdd4871048b5f6790f1a8"
+    },
+    {
+      "file": "docs/product/MIGRATION-AND-COVERAGE.md",
+      "sha256": "9393e402beeaa71e8e1115eff57d70987e00f59f662435d000a82c4528aac0a7"
+    },
+    {
+      "file": "docs/product/OUTCOME-CONTRACT.md",
+      "sha256": "fbd237c94b56900bb8fb8f63a9397f74cd1b77c0f1a387f58f39529edd44acad"
+    },
+    {
+      "file": "docs/product/PORTFOLIO-CONTRACT.md",
+      "sha256": "a39310527fe74a9229febbac4db7ff706e84ea22accd9a78118f479f8c0ca0c0"
+    },
+    {
+      "file": "docs/product/PORTFOLIO-SOURCES.json",
+      "sha256": "00cc5042fa4433b0ad5e8d6849848e60ebd0c5923083ad67b38af1a2e2dafd5d"
+    },
+    {
+      "file": "docs/product/PORTFOLIO-UX.md",
+      "sha256": "9a95d62c57394c4082e602c3a56ce648edfb44444482eeb5067e06b1463c124c"
+    },
+    {
+      "file": "docs/product/PRODUCT-INTENT.md",
+      "sha256": "e9671198f9f736bba25070effad5c621b0164464f61fd2b848a57c496fcbcb76"
+    },
+    {
+      "file": "docs/product/SCREEN-CONTRACTS.md",
+      "sha256": "4ae5d9e0e7b4bb2fa64658f2527379386db3bdd014c6819dfb20f1a849e559e8"
+    },
+    {
+      "file": "docs/product/SDLC-INTERACTIONS-09.md",
+      "sha256": "c07043dfb8b8c87e2b0080cff4dc1df0725850e9b593e0ad613e69618b592952"
+    },
+    {
+      "file": "docs/product/SENTINEL-CONTRACT.md",
+      "sha256": "0542295b60edbc38a1b32593a8d45d6e712c6b8efeb8363f6259cc0d996aac7e"
+    },
+    {
+      "file": "docs/product/SENTINEL-WARDEN-INTERACTIONS-12.md",
+      "sha256": "4c3716f5e9735471152784aa3bc202de1322b9f8604a2cf5761afcfc8f2f1b96"
+    },
+    {
+      "file": "docs/product/UX-REVIEW-02.md",
+      "sha256": "640570e797e1a02a185ef40de99cb850993ab6ad510adda9a1b70520dc3ac5a6"
+    },
+    {
+      "file": "docs/product/UX-REVIEW-03.md",
+      "sha256": "71d0f9c42e9abda5776c1451e2a00c2d237f0d5c064b842ba193e6f16f3685bf"
+    },
+    {
+      "file": "docs/product/UX-SPEC.md",
+      "sha256": "c1cf6a1da52516fa31929c69452cb485f6c1502638ef310d0b1dec3d7a899c00"
+    },
+    {
+      "file": "docs/production/ADR-010-CONFIGURABLE-WORKFLOW.md",
+      "sha256": "55b9aa9483d4a7e3de9363146f6b07371d9a2d6471100c6ea33576454d90274a"
+    },
+    {
+      "file": "docs/production/CHANGE-PROTOCOL.md",
+      "sha256": "ad86f0697b3b57d6b988faa06d59edea6252d3ad1302e7d32b4d4cdd8f6c00b6"
+    },
+    {
+      "file": "docs/production/DELIVERY-CONTRACTS.md",
+      "sha256": "5dba3e62af136850871d8fd5d75897ad5552f8df7eacce4a11fb97112b3c8936"
+    },
+    {
+      "file": "docs/production/DOMAIN-FIXTURE-HANDOFF-07.md",
+      "sha256": "0e62c4b4fe4cca5f45d5faabd74f82dcbac08bef88b921d25e49075ba88f3a92"
+    },
+    {
+      "file": "docs/production/DOMAIN-FIXTURE-HANDOFF-08.md",
+      "sha256": "d36c0ed4736f1544a65c12f9fea877ee6c8a3ddf168380d317bd070acdbfd103"
+    },
+    {
+      "file": "docs/production/DOMAIN-FIXTURE-HANDOFF-09.md",
+      "sha256": "9c54b2f933fd9f62267d03bd59a8aff1467c934bf2a15a4df166782fb97a2688"
+    },
+    {
+      "file": "docs/production/DOMAIN-FIXTURE-HANDOFF-10.md",
+      "sha256": "7c6c4b4b0dbf7283d28a328778715ac7091167affcb808ba5aeb3959e5371afc"
+    },
+    {
+      "file": "docs/production/DOMAIN-FIXTURE-HANDOFF-11.md",
+      "sha256": "7e5f546db3869ba5029961ea1122a77031762795fa12c4c2bf2b3b8ae67c1832"
+    },
+    {
+      "file": "docs/production/DOMAIN-FIXTURE-HANDOFF-12.md",
+      "sha256": "800c99af1997f097410155199615f6547c456cd223536c0ce8c18cdb3a98f01e"
+    },
+    {
+      "file": "docs/production/DOMAIN-FIXTURE-HANDOFF-13.md",
+      "sha256": "49900916c87a0c79d6772feb268dfc38fa957591b2228978f0c653ad405f2651"
+    },
+    {
+      "file": "docs/production/DOMAIN-FIXTURE-HANDOFF-14.md",
+      "sha256": "bb1ecd7a649bcfdeef4e71a3fbd7c928d13429f6dc2d22effbe5f7a26565865e"
+    },
+    {
+      "file": "docs/production/ENGINEERING-DECISIONS-06.md",
+      "sha256": "76f29a1b9a399198d85f946753afcd08993f34a70cf122b064d2bc0628aee342"
+    },
+    {
+      "file": "docs/production/ENTERPRISE-ARCHITECTURE.json",
+      "sha256": "28e968bd5f846b62879780b1e5b35e71f5e88384c49e3ce714660303b227c7aa"
+    },
+    {
+      "file": "docs/production/IMPLEMENTATION-BACKLOG.json",
+      "sha256": "efe30f1148737a4c40f3f6ee089b11b67d41a77cbbd04ed50d2b691aec5441f1"
+    },
+    {
+      "file": "docs/production/IMPLEMENTATION-HANDOFF.md",
+      "sha256": "9c2fd6a8949ab1ece060532fdf865f220234b052a881c36f0417ab3a4056a6c4"
+    },
+    {
+      "file": "docs/production/PORTFOLIO-COVERAGE.json",
+      "sha256": "bfe2be26473824d2622fab37b86680abb89d6f1713715e88fcf589376f83e2bf"
+    },
+    {
+      "file": "docs/production/PORTFOLIO-QUALIFICATION.md",
+      "sha256": "2814097f12c9a531e11835395fa3f3cc581b702abd3dee33486b6e1995258adc"
+    },
+    {
+      "file": "docs/production/PORTFOLIO-ROADMAP.md",
+      "sha256": "9c9d20be18d5772e8c0fa61a7504843ca2abdf1745cdb55cb68dbf3c780d6a37"
+    },
+    {
+      "file": "docs/production/QUALIFICATION.md",
+      "sha256": "ede2b0173ee8205f119f74ce5d943fd91f608dd66af42fb2a96064a9b9e1da6c"
+    },
+    {
+      "file": "docs/production/ROADMAP.md",
+      "sha256": "6553e34c0793ca8d37226941d03d6de8bfde1cc89360e2163b4f56a0e4f71e93"
+    },
+    {
+      "file": "docs/production/SAAS-QUALIFICATION.md",
+      "sha256": "dce078a3a4f49a036bd6e2c5a538be825853779ea20f4cf316f87654d1bfcf8d"
+    },
+    {
+      "file": "docs/production/SOLUTION-ARCHITECTURE.md",
+      "sha256": "5965b67b975f306b9db0bf2920c1cef4df86ad7efef5616a010cb677166e20c9"
+    },
+    {
+      "file": "docs/production/TASK-INDEX.md",
+      "sha256": "9fb04a5a3daf89c8aaa4c4c0f873a09e58be9af3e797acdc4d8c4f2e7f55e039"
+    },
+    {
+      "file": "docs/production/WORK-PACKAGE-INDEX.md",
+      "sha256": "2ab2d48ad0cf578fc6250f383055e3607f9a7b0c9451967cbd1ce718b19065a9"
+    },
+    {
+      "file": "docs/production/WORK-PACKAGE-REVIEW.md",
+      "sha256": "adf313a69000a379f92b25767c8e32fa8c797da4264ff6b9efb60aa61b84c5ff"
+    },
+    {
+      "file": "docs/sdlc/ADR-001-REFERENCE-MODULAR-CONTROL-PLANE.md",
+      "sha256": "9b513edf669ffd2f68fd23d2e50b6a6ad166717ae51f6a14e5cc421973d3d4c7"
+    },
+    {
+      "file": "docs/sdlc/IMPLEMENTATION-PLAN.md",
+      "sha256": "2b66cd88279f3490998a2bb6d5c29729d3c0331e2773bd140cc74a528baeb345"
+    },
+    {
+      "file": "docs/sdlc/RUNBOOK.md",
+      "sha256": "132c600602d2317c4decace9bc508605a8c565c70a3c73f3a65fb89ce414a518"
+    },
+    {
+      "file": "docs/sdlc/THREAT-MODEL.md",
+      "sha256": "11b99fba6cf7325d306d867efe528f8c158801a2c5216cce9d9857e497f9b45c"
+    },
+    {
+      "file": "ops/build-work-package-drafts.mjs",
+      "sha256": "705db868f9df7cb65218b1a70c1f96ca919a1a6d9cc1167acca8795a28e88017"
+    },
+    {
+      "file": "ops/check-configurable-workflow.mjs",
+      "sha256": "545cbce3b87445f4df6447bcd4d55d761f35344e4989061e6fb37b73869bc426"
+    },
+    {
+      "file": "ops/check-design-resolutions.mjs",
+      "sha256": "effb0636a61ec6bfa05d883693c5b4e4ef324c0dafb561080c996843924aa754"
+    },
+    {
+      "file": "ops/check-domain-vectors.mjs",
+      "sha256": "1e4f1c2d8f0a9da7c044f29f453297586f1b5ff42c383c4b365bc439e53ab419"
+    },
+    {
+      "file": "ops/check-enterprise-architecture.mjs",
+      "sha256": "5a97763026c5f13f3dc1c35597198e9e96a92c360ee5701c53f12af3d606b414"
+    },
+    {
+      "file": "ops/check-portfolio.mjs",
+      "sha256": "85b173f98a293e7b778754f05cfa5e32390aa6c7cedcd5823d1e52f3654ae1fc"
+    },
+    {
+      "file": "ops/check-spec.mjs",
+      "sha256": "75ac7762da4a68b76e11900dac466ca6f83ba86ba44d5d18bb30f805774b378e"
+    },
+    {
+      "file": "ops/check-work-package-drafts.mjs",
+      "sha256": "3a99456fa1e4b275e218c347a9d57698f81b5cb3e5a2d37665a8f7356fed2c15"
+    },
+    {
+      "file": "ops/checks/domain-vectors-14-check-results.json",
+      "sha256": "d2f56f9c4cd480e24e4ca6b9a0723a215a2ecf8be2bf337de88ed8af79c2dcde"
+    },
+    {
+      "file": "ops/checks/publication-preflight-2026-09-20.md",
+      "sha256": "c8bbce4a9cae3270b767e81ba1cd0347c1b23e58efcbdf8394569d3dbb0c1368"
+    },
+    {
+      "file": "ops/checks/workflow-framework-research-10.md",
+      "sha256": "ecaf89cac2759a0a510139b733d527cf086317c058155fec38d57dfa86bc326b"
+    },
+    {
+      "file": "package.json",
+      "sha256": "3871f0383e0db8cd5c744658d761d567d5c867bed3a1078b179ff2715ede8321"
+    },
+    {
+      "file": "public/app.js",
+      "sha256": "0757f1025ab24dd20414f94a58673a876e1d24879658c433ea6bb53e0317ff40"
+    },
+    {
+      "file": "public/execution.css",
+      "sha256": "c07117ade734b77eb3f92d66fb06cbafe5ed8f75d003f6484379180fc7a1236f"
+    },
+    {
+      "file": "public/execution.html",
+      "sha256": "e2701a7bc410e51d7eda3dc6c8465b376146b7fac38fd7e424954bafc9063de6"
+    },
+    {
+      "file": "public/execution.js",
+      "sha256": "a52c1a69f859076248a9c308b524a365d45fac5405b909469ad4e3dbc0f04599"
+    },
+    {
+      "file": "public/index.html",
+      "sha256": "f82a68a9dcb513a804c6e4740120ab298c163ce9302f9a0dd53eda2a48e41e92"
+    },
+    {
+      "file": "public/map-state.js",
+      "sha256": "23e1c0f8dcc4fa3306e79f282367c251424fa8dc35f6b571524481852537f1f3"
+    },
+    {
+      "file": "public/platform.css",
+      "sha256": "001ddead85222cab3898a2488727b14e2cbcc9ace6459f24e8c5f3b7b5b9a9e5"
+    },
+    {
+      "file": "public/platform.html",
+      "sha256": "b7e0ee37159d867701086078ba68246afa690f261868eb64550b2fd8d6aee32d"
+    },
+    {
+      "file": "public/platform.js",
+      "sha256": "9ae1389fcdc4d184c9c3754bd473d138387c0f92b05dfa4de17e0d249fd9699c"
+    },
+    {
+      "file": "public/sdlc.css",
+      "sha256": "897b8e3f55aacf08ec3993035a6323463cd96f9febd4ed0649d4d3010d9c22b5"
+    },
+    {
+      "file": "public/sdlc.html",
+      "sha256": "3701b0c6510815ac36e08c96f42eede34698c47a0f114264fb1d994041dd11b6"
+    },
+    {
+      "file": "public/sdlc.js",
+      "sha256": "5713e007e917eea08cba3e61b57c22d403ecb83361fcc7a053cfbceb86244b06"
+    },
+    {
+      "file": "public/styles.css",
+      "sha256": "05bb0d9bc69b319a117413702fde5f1068c349a6e0b1680eb30c415cede24c36"
+    },
+    {
+      "file": "server.mjs",
+      "sha256": "2fb29273bec62557a54e494e2d4549ee52e11056925af2496c67b697cee003dd"
+    },
+    {
+      "file": "src/execution/contracts.mjs",
+      "sha256": "7863238b9e56e86ef8fb9f48869742cc7352fc0617d81e295e04ddb6c31628d5"
+    },
+    {
+      "file": "src/execution/service.mjs",
+      "sha256": "9f9b81fe2ed8dcf14db25252f64b49cd132d04f04800ff0103a763dec26d69c1"
+    },
+    {
+      "file": "src/execution/store.mjs",
+      "sha256": "70d27b6777fb075f99e80a1c36f5b1ebd6950232f35f5069790d114e8663da63"
+    },
+    {
+      "file": "src/model.mjs",
+      "sha256": "4b0f9059ac95af33ddd49c5eac270cd65df3f64ac4fc61a292234dc01b06c040"
+    },
+    {
+      "file": "src/sdlc/contracts.mjs",
+      "sha256": "8bd2103a1f6f6b7c275a594d902b631da544c6a3a43ab514d50865e9e8923854"
+    },
+    {
+      "file": "src/sdlc/engine.mjs",
+      "sha256": "860af413a7f8c2a895d6609248e3b526c0342caec2b3b0cf96b053e3b85eb7a7"
+    },
+    {
+      "file": "src/sdlc/execution-adapter.mjs",
+      "sha256": "4baa6451cdcc76cfeb7bfbfbcbd3c16b1e102d03dca8bec3885b883e181f1b07"
+    },
+    {
+      "file": "src/sdlc/fixture.mjs",
+      "sha256": "151fe9a06fcdd0be331906cca76a43a90b97334e52a287790a983ebaf8b091f8"
+    },
+    {
+      "file": "src/sdlc/store.mjs",
+      "sha256": "f249514f5002f117ddbf2442b520795ab3fdc3352e61b453fba5b7ed63de524a"
+    },
+    {
+      "file": "src/store.mjs",
+      "sha256": "b2079001f4ea5dd6f43d9b206319607efbf223b59202952a9f27d5ca1b8f1bd3"
+    },
+    {
+      "file": "tests/execution/server.test.mjs",
+      "sha256": "8d2c5951b5edda77e2ed231a4269ee0b45f8f4a4e717a519292f2e0707d0df59"
+    },
+    {
+      "file": "tests/execution/service.test.mjs",
+      "sha256": "81545e0f542118e21db3a23d4480bb6a9c68349826be6a455bbcb417aad36f42"
+    },
+    {
+      "file": "tests/map-state.test.mjs",
+      "sha256": "ea7029bb00be231de3b99a5e52e492bc04ee00beddef63431ba5bd4be6d5dfd6"
+    },
+    {
+      "file": "tests/model.test.mjs",
+      "sha256": "cdc2dede74c1711c8bd4bc26240f91c7a1a258beca437dd588ef86e091cf6981"
+    },
+    {
+      "file": "tests/sdlc/engine.test.mjs",
+      "sha256": "ed9983a96acdf62a86b6bfed23ea355622d1e440c3207955a9599cb1a99e70cf"
+    },
+    {
+      "file": "tests/sdlc/execution-adapter.test.mjs",
+      "sha256": "722a2b0a9240285a9179c741b2377a5ff90bd834346b5cfd6b037555717e9fa5"
+    },
+    {
+      "file": "tests/sdlc/fixtures/reference-agent.mjs",
+      "sha256": "98cda4939832026dd31b6c075cea774e10a92c4369ee8c469b9e26b62076f14c"
+    },
+    {
+      "file": "tests/sdlc/server.test.mjs",
+      "sha256": "3dcafb2e020f4d90909631a57d3d3ddebf706a83324bd79143f187cd1db0faa5"
+    },
+    {
+      "file": "tests/server.test.mjs",
+      "sha256": "b8d3e2ddd26f43b153b4af62f7b9cc89e23791ff2cc7c542e3e2471c6fecdbe5"
+    },
+    {
+      "file": "workers/scaffold-node-service.mjs",
+      "sha256": "68828c22b3defcdb7f85f7a523b9cc707896eee5a601112aa7daeaa78b21af4f"
+    }
+  ]
+}

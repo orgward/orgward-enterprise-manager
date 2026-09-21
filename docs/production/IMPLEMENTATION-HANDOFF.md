@@ -1,5 +1,11 @@
 # Agent implementation contract and decision policy — revision 4
 
+Engineering execution kit: [ways of working](../engineering/WAYS-OF-WORKING.md),
+[change control](../engineering/CHANGE-CONTROL.md), repo-local `.agents/skills`,
+and `docs/engineering/prompts`/`templates`. The plan may evolve when evidence
+warrants improvement: preserve intent/history, review impact and update the full
+affected contract/test/roadmap chain. These assets do not approve any packet.
+
 Mandatory user-requested addendum: [CONFIGURABLE-WORKFLOWS](../product/CONFIGURABLE-WORKFLOWS.md)
 and [ADR-010](ADR-010-CONFIGURABLE-WORKFLOW.md). The canonical backlog and
 architecture link sixteen WF obligations. Affected approved packets must declare
@@ -8,11 +14,17 @@ its contribution receipt and T-132 requires every integrated WF result passed.
 Do not impose downstream full-runtime tests on a prerequisite schema task, or
 mistake its schema receipt for the integrated user journey. All review rules remain.
 
-For the 91 tasks covered through [DOMAIN-FIXTURE-HANDOFF-13.md](DOMAIN-FIXTURE-HANDOFF-13.md),
+For all 132 tasks covered through [DOMAIN-FIXTURE-HANDOFF-17.md](DOMAIN-FIXTURE-HANDOFF-17.md),
 use concrete vectors and independently collected observations, never a generic
-pass flag. The 316 comparator self-tests are not actual application acceptance.
-The remaining 164 original scenarios still need this elaboration. Read the linked SDLC
-interaction guide for actual user decisions and cross-product handoffs.
+pass flag. The 480 comparator self-tests are not actual application acceptance.
+No original scenario lacks this definition layer; full contract/seed/adapter
+integration and independent review remain. Read the linked customer/SDLC
+interaction guides for actual user decisions and cross-product handoffs.
+
+Contracts are part of these elaboration passes: shared schemas/commands and boundary
+drafts are refined by domain-specific expected outcomes and recovery decisions.
+Before each implementation slice, integrate full schemas/seeds/observation adapters
+and obtain independent review; do not design a disconnected second set of contracts.
 
 Current engineering defaults and all 73 supplemental operation definitions are
 in [ENGINEERING-DECISIONS-06.md](ENGINEERING-DECISIONS-06.md) and its contract
@@ -56,9 +68,10 @@ Required fields:
 
 ## Implementation sequence and completion prohibition
 
-Latest concrete expectations: [DOMAIN-FIXTURE-HANDOFF-13.md](DOMAIN-FIXTURE-HANDOFF-13.md).
-316 scenarios across 91 tasks now have vector definitions, source-sentence hashes,
-failure schedules and expected observations. 164 original scenarios still need this layer.
+Latest concrete expectations: [DOMAIN-FIXTURE-HANDOFF-17.md](DOMAIN-FIXTURE-HANDOFF-17.md).
+480 original scenarios across all 132 tasks now have vector definitions,
+source-sentence hashes, failure schedules and 2,608 expected observations.
+Next is bounded foundation packet integration/review, not another blanket scenario pass.
 Complete schema seeds, observation adapters and independent review before
 claiming any packet ready. This supplements, not replaces, the packet requirements.
 

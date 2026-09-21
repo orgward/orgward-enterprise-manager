@@ -1,0 +1,22 @@
+{
+  "checkpoint": "engineering-workflow-18",
+  "meaning": "Publication preflight and preservation; does not certify product or exhaustive security",
+  "results": [
+    {
+      "command": "Preservation and task/gate/research audit",
+      "chunk_id": "f6f280",
+      "wall_time_seconds": 0.06992067,
+      "exit_code": 0,
+      "original_token_count": 510,
+      "output": "{\n  \"status\": \"pass\",\n  \"preservedFiles\": 49,\n  \"preserved\": [\n    \"contracts/enterprise/agent-assignment-policy.json\",\n    \"contracts/enterprise/domain-vectors-07.mjs\",\n    \"contracts/enterprise/domain-vectors-08.mjs\",\n    \"contracts/enterprise/domain-vectors-09.mjs\",\n    \"contracts/enterprise/domain-vectors-10.mjs\",\n    \"contracts/enterprise/domain-vectors-11.mjs\",\n    \"contracts/enterprise/domain-vectors-12.mjs\",\n    \"contracts/enterprise/domain-vectors-13.mjs\",\n    \"contracts/enterprise/domain-vectors-14.mjs\",\n    \"contracts/enterprise/domain-vectors-15.mjs\",\n    \"contracts/enterprise/domain-vectors-16.mjs\",\n    \"contracts/enterprise/domain-vectors-17.mjs\",\n    \"contracts/enterprise/sentinel-rule-fixtures-12.mjs\",\n    \"docs/production/ENTERPRISE-ARCHITECTURE.json\",\n    \"docs/production/IMPLEMENTATION-BACKLOG.json\",\n    \"public/app.js\",\n    \"public/execution.css\",\n    \"public/execution.html\",\n    \"public/execution.js\",\n    \"public/index.html\",\n    \"public/map-state.js\",\n    \"public/platform.css\",\n    \"public/platform.html\",\n    \"public/platform.js\",\n    \"public/sdlc.css\",\n    \"public/sdlc.html\",\n    \"public/sdlc.js\",\n    \"public/styles.css\",\n    \"server.mjs\",\n    \"src/execution/contracts.mjs\",\n    \"src/execution/service.mjs\",\n    \"src/execution/store.mjs\",\n    \"src/model.mjs\",\n    \"src/sdlc/contracts.mjs\",\n    \"src/sdlc/engine.mjs\",\n    \"src/sdlc/execution-adapter.mjs\",\n    \"src/sdlc/fixture.mjs\",\n    \"src/sdlc/store.mjs\",\n    \"src/store.mjs\",\n    \"tests/execution/server.test.mjs\",\n    \"tests/execution/service.test.mjs\",\n    \"tests/map-state.test.mjs\",\n    \"tests/model.test.mjs\",\n    \"tests/sdlc/engine.test.mjs\",\n    \"tests/sdlc/execution-adapter.test.mjs\",\n    \"tests/sdlc/fixtures/reference-agent.mjs\",\n    \"tests/sdlc/server.test.mjs\",\n    \"tests/server.test.mjs\",\n    \"workers/scaffold-node-service.mjs\"\n  ],\n  \"plannedTasks\": 132,\n  \"unrunCriteria\": 480,\n  \"approvedPackets\": 0,\n  \"gates\": {\n    \"P\": \"4/12\",\n    \"E\": \"0/16\",\n    \"WF\": \"0/16\"\n  },\n  \"research\": {\n    \"used\": 2,\n    \"remaining\": 3\n  }\n}\n"
+    },
+    {
+      "command": "Focused exact staged-tree credential-pattern scan (approved rerun after sandbox Git subprocess denial)",
+      "chunk_id": "edc579",
+      "wall_time_seconds": 0.000005633,
+      "exit_code": 0,
+      "original_token_count": 58,
+      "output": "{\n  \"status\": \"pass\",\n  \"stagedTreeFiles\": 334,\n  \"patternHits\": [],\n  \"forbiddenPaths\": [],\n  \"meaning\": \"Focused credential-pattern scan of exact staged bytes, not exhaustive security certification; no secret values printed\"\n}\n"
+    }
+  ]
+}

@@ -38,6 +38,27 @@ checkpoint at time/quota boundaries. On Codex quota exhaustion, wait until reset
 no busy retries, API-billing switch, purchases or reset-credit redemption.
 Prefer focused context and normal speed. Stop when all release gates/demo pass.
 
+## Engineering workflow and evolving requirements (checkpoint 18)
+
+Read docs/engineering/WAYS-OF-WORKING.md for design, implementation, review and
+orchestration. Reusable repo skills are in .agents/skills/orgward-{design,implement,
+review,orchestrate}/SKILL.md; explicitly read the relevant file when the session
+starts outside this repo and automatic discovery is unavailable. Prompts and
+templates live in docs/engineering/. Do not mistake templates for approved packets.
+
+The user authorizes reasonable requirement/design/acceptance improvements toward
+the agreed goal. Follow docs/engineering/CHANGE-CONTROL.md: preserve old semantics,
+IDs and evidence, record impact and alternatives, obtain the appropriate review,
+update affected UX/contracts/vectors/dependencies/roadmap together, and stale old
+approvals. Do not quietly weaken safety or alter the goal; those need explicit
+owner/user decisions. Pause only affected work when a blocking choice arises.
+
+Use node ops/engineering-task.mjs <task-id> --role <role> for read-only model/effort
+routing, retaining all 132 parent recommendations. This grants no model switch,
+delegation, approval, external effect or implementation-start authority. Run
+npm run check:engineering after changing skills/prompts/templates/change records;
+npm run check includes it. Real product tests and independent review remain separate.
+
 ## Enterprise implementation contract (review revision 4)
 
 The current endpoint includes managed SaaS and existing-enterprise migration.
@@ -73,7 +94,37 @@ Temporal is the planned durable adapter, bpmn-js the diagram adapter; installati
 and qualification are pending. Sixteen WF obligations are linked from backlog and
 architecture; reviewed affected packets must map workflowObligationIds and bounded
 contribution evidence. Do not bypass this guard or introduce a fixed-stage runtime.
-Latest: docs/production/DOMAIN-FIXTURE-HANDOFF-13.md and
+Latest: docs/production/DOMAIN-FIXTURE-HANDOFF-17.md and
+docs/product/ACTIVATION-CONSISTENCY-INTERACTIONS-17.md finish the original
+scenario-definition pass: 480/480 definitions, 2,608 observations, 132/132 tasks.
+No original criterion lacks this layer; all actual enterprise acceptance remains
+not_run and no implementation packet is approved. Next: bounded T-01/T-02 packet
+integration, complete schemas/seeds/observation adapters and legitimate independent
+review before implementation. Preserve additional WF/SQ/source obligations; do not
+mistake full definition coverage for production readiness or authorization to build.
+
+Historical: docs/production/DOMAIN-FIXTURE-HANDOFF-16.md and
+docs/product/SAAS-MIGRATION-INTERACTIONS-16.md cover T-109–T-118: 40 new
+definitions, 432/480 cumulative across 120 tasks; 48 scenarios/12 tasks remain
+without this layer. Full schemas/seeds/adapters and independent packet review
+still precede implementation; no runtime or gate promotion. Next: remaining
+T-120–T-132 excluding already-covered T-123; T-119 also already has vectors.
+
+Historical: docs/production/DOMAIN-FIXTURE-HANDOFF-15.md and
+docs/product/RESILIENCE-QUALIFICATION-INTERACTIONS-15.md cover T-100–T-108:
+36 new definitions, 392/480 cumulative across 110 tasks; 88 scenarios/22 tasks
+remain without this layer. Full schemas/seeds/adapters and independent packet
+review still precede implementation. No qualification, runtime or gate promotion.
+Next: T-109–T-118; T-119/T-123 already have earlier vectors.
+
+Historical: docs/production/DOMAIN-FIXTURE-HANDOFF-14.md and
+docs/product/DELIVERY-CUSTOMER-INTERACTIONS-14.md cover T-90–T-99: 40 new
+definitions, 356/480 cumulative across 101 tasks; 124 scenarios/31 tasks remain
+without this layer. Contracts are already part of the work, but full seed/adapter
+integration and independent packet review remain required before implementation.
+No runtime feature or gate promotion. Next: T-100–T-108.
+
+Historical: docs/production/DOMAIN-FIXTURE-HANDOFF-13.md and
 docs/product/GOVERNANCE-AGENT-INTERACTIONS-13.md cover T-78–T-89: 48 new
 definitions, 316/480 cumulative across 91 tasks; 164 scenarios/41 tasks remain
 without this layer. All full seed/adapter, independent review and real acceptance

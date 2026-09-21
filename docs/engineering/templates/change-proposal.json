@@ -1,0 +1,42 @@
+{
+  "template": true,
+  "id": "CR-REPLACE",
+  "status": "proposed",
+  "kind": "refinement",
+  "author": null,
+  "reason": null,
+  "evidence": [],
+  "taskIds": [],
+  "acceptanceIds": [],
+  "before": {
+    "revision": null,
+    "exactText": null,
+    "digest": null
+  },
+  "after": {
+    "proposal": null,
+    "candidateDigest": null
+  },
+  "alternatives": [],
+  "impact": {
+    "ux": null,
+    "model": null,
+    "apiEvents": null,
+    "security": null,
+    "workflow": null,
+    "migration": null,
+    "evidence": null,
+    "operations": null,
+    "dependencies": null,
+    "qualification": null
+  },
+  "preservedObligations": [],
+  "successorMappings": [],
+  "invalidationPlan": [],
+  "validationCommands": [],
+  "review": null,
+  "ownerDecision": null,
+  "appliedArtifacts": [],
+  "validationReceipts": [],
+  "resumeCondition": null
+}

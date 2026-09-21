@@ -2,7 +2,16 @@
 
 ## Current target: complete business representation, operation and enterprise SaaS
 
-Current definition checkpoint: [increment 13](DOMAIN-FIXTURE-HANDOFF-13.md),
+Current definition checkpoint: [increment 17](DOMAIN-FIXTURE-HANDOFF-17.md),
+480/480 original scenarios across all 132 tasks, 2,608 expected observations.
+The original scenario pass is complete; additional WF/source/journey obligations
+are preserved. All enterprise acceptance remains not_run, approved packets zero.
+Next: bounded foundation packet integration and legitimate independent review,
+including exact contracts, full seeds and actual observation adapters before coding.
+No gate or runtime capability changed. See the
+[activation/consistency scenarios](../product/ACTIVATION-CONSISTENCY-INTERACTIONS-17.md).
+
+Historical definition checkpoint: [increment 13](DOMAIN-FIXTURE-HANDOFF-13.md),
 316/480 original scenarios across 91 tasks, 1,778 observations. Read the
 [governance/agent journeys](../product/GOVERNANCE-AGENT-INTERACTIONS-13.md).
 Next T-90–T-99; 164 scenarios remain without this layer, and all actual implementation,
@@ -116,7 +125,26 @@ SDLC, must be visually/form editable. Sixteen additional WF obligations augment
 the unchanged original tasks. See ADR slices WF-S1–WF-S6 for dependency-respecting
 schema/editor/runtime/operations/qualification work. No fixed-stage-only endpoint.
 
-Latest checkpoint [13](DOMAIN-FIXTURE-HANDOFF-13.md) covers T-78–T-89;
+Latest checkpoint [17](DOMAIN-FIXTURE-HANDOFF-17.md) closes the final 48 definitions:
+480/480 original scenarios across 132/132 tasks. Next is the bounded T-01/T-02
+packet integration/review described in that handoff. Do not start feature code
+without concrete schemas/seeds/adapters, prerequisite evidence and independent
+approval; no packet is currently approved. Stop after that authorized increment.
+Historical checkpoint [16](DOMAIN-FIXTURE-HANDOFF-16.md) covers T-109–T-118;
+432/480 scenarios across 120 tasks have concrete expected observations. Next:
+remaining T-120–T-132 excluding T-123; T-119/T-123 already have earlier vectors.
+The final 48 uncovered scenarios and all packet integration/review requirements
+remain; neither provisioning nor migration is implemented by this specification.
+Historical checkpoint [15](DOMAIN-FIXTURE-HANDOFF-15.md) covers T-100–T-108;
+392/480 scenarios across 110 tasks now have concrete expected observations.
+Next bounded definition slice: T-109–T-118. All contract integration, independent
+review and actual qualification obligations remain; T-132 is the final endpoint.
+Historical checkpoint [14](DOMAIN-FIXTURE-HANDOFF-14.md) covers T-90–T-99;
+356/480 scenarios across 101 tasks now have concrete expected observations.
+Next bounded definition slice: T-100–T-108. Contracts are elaborated alongside
+scenarios; selected packets still need full schema/seed/adapter integration and
+independent review, not a separate from-scratch contract-design round.
+Historical checkpoint [13](DOMAIN-FIXTURE-HANDOFF-13.md) covers T-78–T-89;
 next bounded definition slice is T-90–T-99. Earlier checkpoint text is historical.
 Historical checkpoint [12](DOMAIN-FIXTURE-HANDOFF-12.md) covers T-69–T-76;
 next bounded definition slice is T-78–T-89. Earlier checkpoint text is historical.

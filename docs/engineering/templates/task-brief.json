@@ -1,0 +1,29 @@
+{
+  "template": true,
+  "taskId": null,
+  "sliceId": null,
+  "role": "implement",
+  "risk": "normal",
+  "observableOutcome": null,
+  "acceptanceIds": [],
+  "workflowContributions": [],
+  "sourceFilesAndDigests": [],
+  "packetPathAndDigest": null,
+  "reviewReceipt": null,
+  "dependencyReceipts": [],
+  "ownedPaths": [],
+  "allowedOperations": [],
+  "delegationAuthority": null,
+  "recommendedProfile": null,
+  "actualModelAndEffort": null,
+  "independentOracleAndObservationAdapter": null,
+  "verificationCommands": [],
+  "limits": {
+    "time": null,
+    "resources": null,
+    "concurrency": 1
+  },
+  "nonGoals": [],
+  "stopCondition": null,
+  "handoffPath": null
+}

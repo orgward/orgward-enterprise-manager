@@ -4,19 +4,54 @@ Development workspace with enterprise-design, synthetic SDLC-reference, and cont
 
 ## Unified product specification
 
+[Engineering workflow](docs/engineering/WAYS-OF-WORKING.md) now supplies four
+repo-local skills, reusable prompts/templates, governed requirement/design changes,
+task/subtask model routing and honest review/evidence handoffs. Read
+[change control](docs/engineering/CHANGE-CONTROL.md) when implementation reveals
+a better requirement or architecture. Improvements are allowed with traceable
+impact/review, not silent acceptance weakening. Run `npm run check:engineering`;
+the routing helper does not start agents or approve implementation.
+
 Hard requirement: [configurable enterprise/SDLC workflows](docs/product/CONFIGURABLE-WORKFLOWS.md)
 with equivalent diagram/forms, substeps, bounded loops, conditions, registered
 actions, simulation, versions and safe run migration. [ADR-010](docs/production/ADR-010-CONFIGURABLE-WORKFLOW.md)
 selects bpmn-js modeling and a planned Temporal runtime adapter; neither is installed
 by this specification. Sixteen additional WF acceptance obligations are mandatory.
-Latest [handoff 13](docs/production/DOMAIN-FIXTURE-HANDOFF-13.md): 316/480 original
-scenarios defined across 91 tasks, plus those sixteen unrun obligations. The earlier
-checkpoint counts below are historical.
+Latest [handoff 17](docs/production/DOMAIN-FIXTURE-HANDOFF-17.md): **480/480 original
+scenarios defined across all 132 tasks**, with 2,608 expected observations, plus
+the sixteen unrun workflow obligations. This completes original scenario-definition
+coverage, not implementation readiness. Approved packets and actual enterprise
+acceptance runs remain zero. Earlier checkpoint counts below are historical.
+
+[Activation, consistency and everyday work](docs/product/ACTIVATION-CONSISTENCY-INTERACTIONS-17.md)
+explains scope activation, all-angle edits, knowledge reconciliation, custom concepts,
+worker forms, configurable SDLC and final enterprise qualification. Next: integrate
+a bounded foundation packet with full schemas/seeds/observation adapters and genuine
+independent review before coding. No runtime/UI feature is added by definitions.
+
+[SaaS and migration interactions](docs/product/SAAS-MIGRATION-INTERACTIONS-16.md)
+details scoped business coverage, tenant/identity/usage/support/residency, source
+discovery/mapping/coexistence and migration validation/shadow/rehearsal. At checkpoint
+16, 48 scenarios across 12 tasks still needed this layer. No new runtime or qualification;
+full contract/seed/adapter integration and independent packet review remain required.
+
+[Resilience, qualification and exit](docs/product/RESILIENCE-QUALIFICATION-INTERACTIONS-15.md)
+details interpreted domain packs, simulation/case learning, continuity, independent
+security/load/customer qualification, extensions and safe reorganisation/portability.
+At checkpoint 15, 88 original scenarios still needed this layer; full packet integration
+and independent review remain required. No product qualification is delivered by definitions.
+
+[Delivery and customer interactions](docs/product/DELIVERY-CUSTOMER-INTERACTIONS-14.md)
+details design-linked SDLC, multi-repository recovery, human-owned regeneration,
+business effects, connectors, accessible laptop workflows and self-host operations.
+Contracts are included throughout planning; full seeds/adapters, contract integration
+and independent packet review still precede implementation. At checkpoint 14, 124 original
+scenarios still needed this definition layer. No new runtime/UI feature was implemented.
 
 [Governance and agent interactions](docs/product/GOVERNANCE-AGENT-INTERACTIONS-13.md)
 details current reviewer eligibility, ownership/access changes, independent audit
 verification and shared-budget specialist work through configurable SDLC. These are
-required future features; 164 original scenarios still need this definition layer.
+required future features; at checkpoint 13, 164 original scenarios still needed this layer.
 
 [Sentinel to Warden to SDLC](docs/product/SENTINEL-WARDEN-INTERACTIONS-12.md)
 details evidence-backed findings, reviewed repairs, timeboxed exceptions and

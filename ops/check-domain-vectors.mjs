@@ -9,10 +9,14 @@ import { domainVectors as vectors10 } from '../contracts/enterprise/domain-vecto
 import { domainVectors as vectors11 } from '../contracts/enterprise/domain-vectors-11.mjs';
 import { domainVectors as vectors12 } from '../contracts/enterprise/domain-vectors-12.mjs';
 import { domainVectors as vectors13 } from '../contracts/enterprise/domain-vectors-13.mjs';
+import { domainVectors as vectors14 } from '../contracts/enterprise/domain-vectors-14.mjs';
+import { domainVectors as vectors15 } from '../contracts/enterprise/domain-vectors-15.mjs';
+import { domainVectors as vectors16 } from '../contracts/enterprise/domain-vectors-16.mjs';
+import { domainVectors as vectors17 } from '../contracts/enterprise/domain-vectors-17.mjs';
 import { ruleProfile, ruleFixtures } from '../contracts/enterprise/sentinel-rule-fixtures-12.mjs';
 import { digest } from './build-work-package-drafts.mjs';
 
-const batches=[vectors07,vectors08,vectors09,vectors10,vectors11,vectors12,vectors13];
+const batches=[vectors07,vectors08,vectors09,vectors10,vectors11,vectors12,vectors13,vectors14,vectors15,vectors16,vectors17];
 export const domainVectors=batches.flat();
 const registry=JSON.parse(await readFile(new URL('../contracts/enterprise/domain-vectors.index.json',import.meta.url),'utf8'));
 
@@ -111,8 +115,16 @@ export function validateSentinelRuleFixtures(profile,rows) {
   return true;
 }
 
+export function validateCompleteDomainCoverage(plan,vectors) {
+  const expected=plan.tasks.flatMap(task=>task.acceptance.map(ac=>ac.id)).sort();
+  const actual=vectors.map(vector=>vector.acceptanceId).sort();
+  assert.deepEqual(actual,expected,'Original acceptance coverage must remain complete and one-to-one');
+  return true;
+}
+
 export function checkDomainVectors(plan,{selfTest=false}={}) {
   validateVectorRegistry(registry,plan);
+  validateCompleteDomainCoverage(plan,domainVectors);
   validateSentinelRuleFixtures(ruleProfile,ruleFixtures);
   let rejectedRuleFixtureMutations=0;
   if(selfTest) {
@@ -139,8 +151,14 @@ export function checkDomainVectors(plan,{selfTest=false}={}) {
     }
   }
   const tasksCovered=new Set(domainVectors.map(v=>v.taskId));
-  let rejectedDefinitions=0,rejectedRegistryMutations=0;
+  let rejectedDefinitions=0,rejectedRegistryMutations=0,rejectedCoverageMutations=0;
   if(selfTest) {
+    for(const vectors of [domainVectors.slice(1),[...domainVectors,domainVectors[0]]]) {
+      assert.throws(()=>validateCompleteDomainCoverage(plan,vectors));rejectedCoverageMutations++;
+    }
+    const expandedPlan=structuredClone(plan);
+    expandedPlan.tasks[0].acceptance.push({id:'T-01-AC-uncovered-new-obligation'});
+    assert.throws(()=>validateCompleteDomainCoverage(expandedPlan,domainVectors));rejectedCoverageMutations++;
     const mutations=[v=>v.status='pass',v=>v.reviewStatus='approved',v=>v.reviewer='invented',v=>v.acceptanceId='T-999-AC1',v=>v.taskId='T-999',v=>v.initial={},v=>v.steps=['implement it'],v=>v.assertions=[],v=>v.assertions.push(v.assertions[0]),v=>v.assertions[0].path='/__proto__/polluted',v=>v.assertions[0].op='trust-pass-label',v=>delete v.assertions[0].value,v=>v.testPath='tests/../escape.test.mjs'];
     for(const mutate of mutations){const copy=structuredClone(domainVectors[0]);mutate(copy);assert.throws(()=>validateVector(copy,plan));rejectedDefinitions++;}
     const indexMutations=[r=>r.version=99,r=>r.status='verified',r=>r.batches.pop(),r=>r.batches[0].count++,r=>r.batches[0].vectorDigest='changed',r=>r.batches[0].sources.pop(),r=>r.batches[0].sources[0].scenarioDigest='changed',r=>r.batches[0].path='../other.mjs',r=>r.batches.reverse()];
@@ -156,6 +174,7 @@ export function checkDomainVectors(plan,{selfTest=false}={}) {
     comparator_self_test_positive:comparatorPositive,comparator_self_test_negative:comparatorNegative,
     rejected_invalid_vector_definitions:rejectedDefinitions,actual_domain_acceptance_runs:0,
     rejected_vector_registry_or_source_mutations:rejectedRegistryMutations,
+    rejected_incomplete_or_duplicate_coverage_mutations:rejectedCoverageMutations,
     domain_vector_digest:digest(domainVectors)};
 }
 

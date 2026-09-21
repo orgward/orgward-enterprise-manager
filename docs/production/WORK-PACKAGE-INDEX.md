@@ -1,6 +1,27 @@
 # Implementation packet register — draft increment 05
 
-Latest: [handoff 13](DOMAIN-FIXTURE-HANDOFF-13.md), 316 original vectors across
+Latest: [handoff 17](DOMAIN-FIXTURE-HANDOFF-17.md), all 480 original vectors across
+132 tasks, with 2,608 expected observations. No original scenario remains uncovered
+by this layer. Approved packets remain zero: integrate full contracts/seeds/observation
+adapters and obtain genuine independent review for a bounded foundation slice next.
+Additional workflow/source/qualification obligations remain mandatory and unrun.
+
+Historical: [handoff 16](DOMAIN-FIXTURE-HANDOFF-16.md), 432 original vectors across
+120 tasks. 48 original scenarios across 12 tasks still lack this layer. Full contract
+integration, materialized seeds/observation adapters and independent review remain;
+no implementation or qualification is inferred from these definitions.
+
+Historical: [handoff 15](DOMAIN-FIXTURE-HANDOFF-15.md), 392 original vectors across
+110 tasks. 88 original scenarios across 22 tasks still lack this layer. Independent
+review and full schema/seed/adapter integration remain before implementation;
+qualification definitions are not performed security/load/operator/user-study tests.
+
+Historical: [handoff 14](DOMAIN-FIXTURE-HANDOFF-14.md), 356 original vectors across
+101 tasks. 124 original scenarios across 31 tasks still lack this layer. Contracts
+are included in these passes; complete schema/seed/adapter integration and genuine
+independent packet review still precede implementation. No approved packets added.
+
+Historical: [handoff 13](DOMAIN-FIXTURE-HANDOFF-13.md), 316 original vectors across
 91 tasks. 164 original scenarios across 41 tasks still lack this layer. Independent
 approval, full seeds/adapters and actual implementation remain pending.
 

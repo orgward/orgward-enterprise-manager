@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "meaning": "Engineering guidance and read-only routing, not autonomous scheduling, approval or product acceptance.",
+  "parentPolicy": "contracts/enterprise/agent-assignment-policy.json",
+  "changeRegister": "contracts/engineering/change-register.json",
+  "guide": "docs/engineering/WAYS-OF-WORKING.md",
+  "changeControl": "docs/engineering/CHANGE-CONTROL.md",
+  "roles": {
+    "design": {
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "skill": "orgward-design",
+      "prompt": "docs/engineering/prompts/design.md"
+    },
+    "implement": {
+      "model": "gpt-5.6-terra",
+      "reasoning": "high",
+      "skill": "orgward-implement",
+      "prompt": "docs/engineering/prompts/implement.md"
+    },
+    "review": {
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "skill": "orgward-review",
+      "prompt": "docs/engineering/prompts/review.md"
+    },
+    "orchestrate": {
+      "model": "gpt-5.6-sol",
+      "reasoning": "high",
+      "skill": "orgward-orchestrate",
+      "prompt": "docs/engineering/prompts/orchestrate.md"
+    },
+    "leaf": {
+      "model": "gpt-5.6-luna",
+      "reasoning": "medium",
+      "skill": "orgward-implement",
+      "prompt": "docs/engineering/prompts/implement.md"
+    }
+  },
+  "risks": [
+    "normal",
+    "authority",
+    "concurrency",
+    "migration",
+    "irreversible-effect"
+  ],
+  "highRiskProfile": {
+    "model": "gpt-5.6-sol",
+    "reasoning": "xhigh"
+  },
+  "leafRequiresFrozenContract": true,
+  "automaticDelegation": false,
+  "automaticBillingFallback": false,
+  "templates": [
+    "docs/engineering/templates/implementation-packet.md",
+    "docs/engineering/templates/change-proposal.json",
+    "docs/engineering/templates/task-brief.json",
+    "docs/engineering/templates/review.md",
+    "docs/engineering/templates/evidence-receipt.md"
+  ]
+}
