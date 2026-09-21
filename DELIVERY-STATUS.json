@@ -1,4 +1,23 @@
 {
+  "closed_loop_reconciliation_19": {
+    "id": "closed-loop-issue-1-19",
+    "status": "specified_proposal_checked_pending_independent_review",
+    "checked_at": "2026-09-21 07:31:08 UTC",
+    "source": "docs/production/ISSUE-1-SOURCE-19.json",
+    "contract": "contracts/enterprise/closed-loop-obligations-19.json",
+    "change": "docs/engineering/changes/CR-019.json",
+    "receipt": "ops/checks/closed-loop-19-2026-09-21.md",
+    "source_acceptance_obligations": 24,
+    "additional_supporting_scenarios": 4,
+    "delivery_slices": 18,
+    "payload_schema_definitions": 17,
+    "affected_existing_tasks": 49,
+    "original_criteria_preserved": 480,
+    "regression_and_tooling_tests_passed": 55,
+    "approved_implementation_packets": 0,
+    "new_product_acceptance_passes": 0,
+    "note": "Linked architecture/UX/contracts/backlog/prompt enrichment. No runtime, original acceptance, P/E/WF status, research allowance or automatic model dispatch changes; independent review and bounded schema/seed/adapter integration remain."
+  },
   "engineering_workflow_18": {
     "id": "engineering-workflow-18",
     "status": "engineering_assets_checked_not_product_qualification",

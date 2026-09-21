@@ -1,5 +1,13 @@
 # OrgWard engineering operating guide
 
+Checkpoint 19: when designing affected SDLC/evaluation/knowledge packets, load the
+source-linked closed-loop-obligations-19.json and CLOSED-LOOP-CONTROL-19.md.
+CR-019 is a proposed architecture enrichment, not an approved implementation packet.
+Record intent/uncertainty/context/proof coverage and diagnostic failure routes in
+packets. For our own work distinguish schema checks, product evidence and accepted
+outcome; a failed test may require replanning or clarification, not repeated edits.
+The proposed product controller does not automatically switch this coding model.
+
 This governs work on OrgWard, not its product workflow runtime. Product execution
 still requires the versioned workflow/Temporal/broker contracts. Keep the goal:
 coherent enterprise design and operation, SDLC and governance—not a static demo.

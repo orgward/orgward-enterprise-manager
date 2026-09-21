@@ -1,5 +1,16 @@
 # Agent implementation contract and decision policy — revision 4
 
+Issue #1 now has a [closed-loop integration proposal](CLOSED-LOOP-CONTROL-19.md),
+[UX](../product/CLOSED-LOOP-UX-19.md) and machine-linked CL-001–018 slices in
+contracts/enterprise/closed-loop-obligations-19.json. CR-019 is pending legitimate
+independent review; original tasks/criteria remain unchanged. Affected packets
+must name closedLoopRequirementIds and bounded contributions, bind the approved
+candidate digest, and cover linked supplemental cases. Ready/Done must include
+intent, uncertainty, context and proof strategy plus current evidence/authority.
+T-132 additionally requires all CL obligations and supplementary cases to pass.
+A schema prerequisite supplies bounded schema evidence, not downstream runtime
+acceptance. See CL-001/002 first; do not start another blanket original-scenario pass.
+
 Engineering execution kit: [ways of working](../engineering/WAYS-OF-WORKING.md),
 [change control](../engineering/CHANGE-CONTROL.md), repo-local `.agents/skills`,
 and `docs/engineering/prompts`/`templates`. The plan may evolve when evidence

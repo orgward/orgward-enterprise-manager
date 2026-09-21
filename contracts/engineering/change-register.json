@@ -1,5 +1,5 @@
 {
   "version": 1,
   "meaning": "Real governed semantic change records only; templates are never approved records.",
-  "changes": []
+  "changes": ["docs/engineering/changes/CR-019.json"]
 }

@@ -1,5 +1,24 @@
 # Full OrgWard portfolio roadmap — revision 4
 
+## Issue #1 delivery overlay — proposed checkpoint 19
+
+[Control protocol and ADR-019](CLOSED-LOOP-CONTROL-19.md) and
+[customer interactions](../product/CLOSED-LOOP-UX-19.md) enrich existing tasks.
+The machine-readable closed-loop-obligations-19.json supplies 18 dependency-ordered
+slices, owners, deliverables, target paths and 24 source-linked acceptance scenarios
+plus four supporting cases. Paths denote future work, not existing implementations.
+
+Sequence: CL-001/002 review and contracts → CL-003/004 intent/reconciliation and
+clarification → CL-005–008 evaluator registry/adapters → CL-009/010 acceptance and
+diagnosis → CL-011/012 durable execution and trace UX → CL-013–017 suites/calibration/
+observations/learning → CL-018 integrated qualification. The JSON dependency graph
+permits safe earlier work on independent suites; parent task dependencies also hold.
+No parent closes until its bounded CL contributions and original ACs are evidenced.
+
+Next: review CR-019 and integrate CL-001/002 into the bounded T-01 packet; T-02
+truthful demonstrator work is independent. Then resume existing delivery order with
+this overlay. No new P/E gates, approved packets or automatic model dispatch.
+
 ## Current target: complete business representation, operation and enterprise SaaS
 
 Current definition checkpoint: [increment 17](DOMAIN-FIXTURE-HANDOFF-17.md),

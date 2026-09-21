@@ -1,5 +1,9 @@
 # Bounded design prompt
 
+For issue #1 affected work, include closed-loop-obligations-19.json and CR-019.
+Map uncertainty/context/proof obligations, diagnostic routes and supplemental cases
+to the bounded contribution. Proposal status is not architecture adoption.
+
 Use $orgward-design for [task/slice] and [authorized outcome] in the product repo.
 Read AGENTS.md, canonical task, relevant source contracts, draft, vector batch and
 WF/source/journey obligations. Trace actor → interaction → command → state/effect →

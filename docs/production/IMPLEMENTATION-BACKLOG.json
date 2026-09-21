@@ -2,8 +2,12 @@
   "schema_version": "1.0",
   "revision": 4,
   "planning_status": "specified_not_implemented",
+  "closed_loop_obligations": "contracts/enterprise/closed-loop-obligations-19.json",
   "workflow_obligations": "contracts/enterprise/workflow-obligations-10.json",
   "source_contracts": [
+    "contracts/enterprise/closed-loop-obligations-19.json",
+    "docs/production/CLOSED-LOOP-CONTROL-19.md",
+    "docs/product/CLOSED-LOOP-UX-19.md",
     "docs/product/CONFIGURABLE-WORKFLOWS.md",
     "docs/production/ADR-010-CONFIGURABLE-WORKFLOW.md",
     "contracts/enterprise/workflow-obligations-10.json",

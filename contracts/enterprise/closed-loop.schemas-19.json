@@ -1,0 +1,1998 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:orgward:closed-loop:19",
+  "title": "Proposed portable payload schemas; inherit canonical aggregate scope and authority; not runtime implementation",
+  "$defs": {
+    "VersionRef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "EvidenceRef": {
+      "type": "object",
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "locator": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "artifact",
+        "digest",
+        "locator"
+      ],
+      "additionalProperties": false
+    },
+    "Provenance": {
+      "type": "object",
+      "properties": {
+        "sourceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "activityRef": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "origin": {
+          "enum": [
+            "explicit",
+            "inferred",
+            "observed",
+            "imported"
+          ]
+        },
+        "recordedAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "authorRef": {
+          "$ref": "#/$defs/VersionRef"
+        }
+      },
+      "required": [
+        "sourceRefs",
+        "activityRef",
+        "origin",
+        "recordedAt",
+        "authorRef"
+      ],
+      "additionalProperties": false
+    },
+    "IntentSpecification": {
+      "type": "object",
+      "properties": {
+        "requestedOutcome": {
+          "type": "string",
+          "minLength": 1
+        },
+        "problemStatement": {
+          "type": "string",
+          "minLength": 1
+        },
+        "actorRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "desiredState": {
+          "type": "string",
+          "minLength": 1
+        },
+        "successMeasureRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "requirementRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "constraintRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "preferenceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "nonGoals": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "assumptionRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "unknownRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "decisionRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "acceptanceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "authorityRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "risk": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical",
+            "unknown"
+          ]
+        },
+        "status": {
+          "enum": [
+            "draft",
+            "reviewed",
+            "accepted",
+            "superseded",
+            "rejected"
+          ]
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "supersedes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "requestedOutcome",
+        "problemStatement",
+        "actorRefs",
+        "desiredState",
+        "successMeasureRefs",
+        "requirementRefs",
+        "constraintRefs",
+        "preferenceRefs",
+        "nonGoals",
+        "assumptionRefs",
+        "unknownRefs",
+        "decisionRefs",
+        "acceptanceRefs",
+        "authorityRefs",
+        "risk",
+        "status",
+        "provenance",
+        "supersedes"
+      ],
+      "additionalProperties": false
+    },
+    "Requirement": {
+      "type": "object",
+      "properties": {
+        "intent": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "actor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "condition": {
+          "type": "string",
+          "minLength": 1
+        },
+        "behavior": {
+          "type": "string",
+          "minLength": 1
+        },
+        "outcome": {
+          "type": "string",
+          "minLength": 1
+        },
+        "origin": {
+          "enum": [
+            "explicit",
+            "inferred"
+          ]
+        },
+        "priority": {
+          "enum": [
+            "must",
+            "should",
+            "could"
+          ]
+        },
+        "constraintKind": {
+          "enum": [
+            "hard",
+            "preference",
+            "not_applicable"
+          ]
+        },
+        "sourceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "proofRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "decisionRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "intent",
+        "actor",
+        "condition",
+        "behavior",
+        "outcome",
+        "origin",
+        "priority",
+        "constraintKind",
+        "sourceRefs",
+        "proofRefs",
+        "decisionRefs"
+      ],
+      "additionalProperties": false
+    },
+    "Uncertainty": {
+      "type": "object",
+      "properties": {
+        "statement": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "affectedRequirementRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "confidencePercent": {
+          "enum": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52,
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60,
+            61,
+            62,
+            63,
+            64,
+            65,
+            66,
+            67,
+            68,
+            69,
+            70,
+            71,
+            72,
+            73,
+            74,
+            75,
+            76,
+            77,
+            78,
+            79,
+            80,
+            81,
+            82,
+            83,
+            84,
+            85,
+            86,
+            87,
+            88,
+            89,
+            90,
+            91,
+            92,
+            93,
+            94,
+            95,
+            96,
+            97,
+            98,
+            99,
+            100
+          ]
+        },
+        "reversibility": {
+          "enum": [
+            "cheap",
+            "costly",
+            "irreversible",
+            "unknown"
+          ]
+        },
+        "consequence": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical",
+            "unknown"
+          ]
+        },
+        "blastRadius": {
+          "enum": [
+            "local",
+            "workspace",
+            "enterprise",
+            "external",
+            "unknown"
+          ]
+        },
+        "costToClarify": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "unknown"
+          ]
+        },
+        "costToDefer": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "unknown"
+          ]
+        },
+        "empiricallyTestable": {
+          "type": "boolean"
+        },
+        "authorityNeeded": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "disposition": {
+          "enum": [
+            "infer",
+            "infer_and_record",
+            "investigate",
+            "prototype",
+            "ask_human",
+            "block"
+          ]
+        },
+        "policy": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rejectedInterpretations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "statement",
+        "sourceRefs",
+        "affectedRequirementRefs",
+        "confidencePercent",
+        "reversibility",
+        "consequence",
+        "blastRadius",
+        "costToClarify",
+        "costToDefer",
+        "empiricallyTestable",
+        "authorityNeeded",
+        "disposition",
+        "policy",
+        "rationale",
+        "rejectedInterpretations"
+      ],
+      "additionalProperties": false
+    },
+    "Clarification": {
+      "type": "object",
+      "properties": {
+        "intent": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "uncertainty": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1
+              },
+              "consequence": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "label",
+              "consequence"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "respondentRoleRef": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "dueAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "open",
+            "answered",
+            "reconciled",
+            "canceled",
+            "superseded"
+          ]
+        },
+        "answer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "answerEvidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "interpretation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reconciliationRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "intent",
+        "uncertainty",
+        "question",
+        "options",
+        "respondentRoleRef",
+        "dueAt",
+        "status",
+        "answer",
+        "answerEvidence",
+        "interpretation",
+        "reconciliationRef"
+      ],
+      "additionalProperties": false
+    },
+    "EvaluationContract": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "targetType": {
+          "enum": [
+            "requirement",
+            "constraint",
+            "artifact",
+            "action",
+            "trajectory",
+            "outcome",
+            "control"
+          ]
+        },
+        "criterion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evaluatorType": {
+          "enum": [
+            "deterministic",
+            "semantic",
+            "groundedness",
+            "retrieval",
+            "trajectory",
+            "security",
+            "performance",
+            "architecture",
+            "human",
+            "production_signal"
+          ]
+        },
+        "evaluatorRef": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "expectedProperties": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "evidenceRequired": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "threshold": {
+          "type": "object",
+          "properties": {
+            "operator": {
+              "enum": [
+                "eq",
+                "gte",
+                "lte",
+                "all",
+                "human_decision"
+              ]
+            },
+            "value": {
+              "type": "string",
+              "minLength": 1
+            },
+            "unit": {
+              "type": "string",
+              "minLength": 1
+            },
+            "windowSeconds": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "operator",
+            "value",
+            "unit",
+            "windowSeconds"
+          ],
+          "additionalProperties": false
+        },
+        "severityOnFailure": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "minimumConfidencePercent": {
+          "enum": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52,
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60,
+            61,
+            62,
+            63,
+            64,
+            65,
+            66,
+            67,
+            68,
+            69,
+            70,
+            71,
+            72,
+            73,
+            74,
+            75,
+            76,
+            77,
+            78,
+            79,
+            80,
+            81,
+            82,
+            83,
+            84,
+            85,
+            86,
+            87,
+            88,
+            89,
+            90,
+            91,
+            92,
+            93,
+            94,
+            95,
+            96,
+            97,
+            98,
+            99,
+            100
+          ]
+        },
+        "samplingPolicy": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "repeatabilityPolicy": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "independencePolicy": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "blocking": {
+          "type": "boolean"
+        },
+        "failureAction": {
+          "enum": [
+            "repair",
+            "replan",
+            "rearchitect",
+            "clarify",
+            "escalate",
+            "rollback",
+            "reject"
+          ]
+        },
+        "status": {
+          "enum": [
+            "draft",
+            "enabled",
+            "retired",
+            "superseded"
+          ]
+        }
+      },
+      "required": [
+        "target",
+        "targetType",
+        "criterion",
+        "rationale",
+        "evaluatorType",
+        "evaluatorRef",
+        "inputs",
+        "expectedProperties",
+        "evidenceRequired",
+        "threshold",
+        "severityOnFailure",
+        "minimumConfidencePercent",
+        "samplingPolicy",
+        "repeatabilityPolicy",
+        "independencePolicy",
+        "blocking",
+        "failureAction",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "Finding": {
+      "type": "object",
+      "properties": {
+        "criterionRef": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "severity": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "statement": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "ownerRef": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "repair": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "open",
+            "resolved",
+            "disputed"
+          ]
+        }
+      },
+      "required": [
+        "criterionRef",
+        "severity",
+        "statement",
+        "evidence",
+        "ownerRef",
+        "repair",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "EvaluationResult": {
+      "type": "object",
+      "properties": {
+        "contract": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "target": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "runRef": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "attemptId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evaluatorRef": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "inputManifestDigest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "timestamp": {
+          "type": "string",
+          "minLength": 1
+        },
+        "result": {
+          "enum": [
+            "pass",
+            "fail",
+            "indeterminate",
+            "error"
+          ]
+        },
+        "score": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "confidencePercent": {
+          "enum": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52,
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60,
+            61,
+            62,
+            63,
+            64,
+            65,
+            66,
+            67,
+            68,
+            69,
+            70,
+            71,
+            72,
+            73,
+            74,
+            75,
+            76,
+            77,
+            78,
+            79,
+            80,
+            81,
+            82,
+            83,
+            84,
+            85,
+            86,
+            87,
+            88,
+            89,
+            90,
+            91,
+            92,
+            93,
+            94,
+            95,
+            96,
+            97,
+            98,
+            99,
+            100
+          ]
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Finding"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "unsupportedClaims": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "assumptionRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "recommendedTransition": {
+          "enum": [
+            "advance",
+            "repair",
+            "replan",
+            "rearchitect",
+            "clarify",
+            "discover",
+            "escalate",
+            "rollback",
+            "reject",
+            "evaluator_repair",
+            "operations_recovery",
+            "observe"
+          ]
+        },
+        "diagnosticClass": {
+          "enum": [
+            "none",
+            "local_defect",
+            "missing_work",
+            "specification_gap",
+            "context_gap",
+            "architecture_gap",
+            "authority_gap",
+            "environment_failure",
+            "evaluator_failure",
+            "outcome_failure"
+          ]
+        }
+      },
+      "required": [
+        "contract",
+        "target",
+        "runRef",
+        "attemptId",
+        "evaluatorRef",
+        "inputManifestDigest",
+        "timestamp",
+        "result",
+        "score",
+        "confidencePercent",
+        "findings",
+        "evidence",
+        "unsupportedClaims",
+        "assumptionRefs",
+        "recommendedTransition",
+        "diagnosticClass"
+      ],
+      "additionalProperties": false
+    },
+    "ContextAssessment": {
+      "type": "object",
+      "properties": {
+        "task": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "requiredAuthorities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "requiredArtifactTypes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "requiredContracts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "requiredRuntimeEvidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "freshnessPolicy": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "permissionPolicy": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "retrievedManifestDigest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "knownUnknowns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "completionCriteria": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "status": {
+          "enum": [
+            "sufficient",
+            "incomplete_nonblocking",
+            "retrieve",
+            "clarify",
+            "inaccessible"
+          ]
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "task",
+        "requiredAuthorities",
+        "requiredArtifactTypes",
+        "requiredContracts",
+        "requiredRuntimeEvidence",
+        "freshnessPolicy",
+        "permissionPolicy",
+        "retrievedManifestDigest",
+        "knownUnknowns",
+        "completionCriteria",
+        "status",
+        "rationale"
+      ],
+      "additionalProperties": false
+    },
+    "ReconciliationProposal": {
+      "type": "object",
+      "properties": {
+        "subjectRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "proposedAssertions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceRef"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "sourceActivity": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "relationship": {
+          "enum": [
+            "confirms",
+            "refines",
+            "contradicts",
+            "supersedes",
+            "creates",
+            "uncertain"
+          ]
+        },
+        "confidencePercent": {
+          "enum": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52,
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60,
+            61,
+            62,
+            63,
+            64,
+            65,
+            66,
+            67,
+            68,
+            69,
+            70,
+            71,
+            72,
+            73,
+            74,
+            75,
+            76,
+            77,
+            78,
+            79,
+            80,
+            81,
+            82,
+            83,
+            84,
+            85,
+            86,
+            87,
+            88,
+            89,
+            90,
+            91,
+            92,
+            93,
+            94,
+            95,
+            96,
+            97,
+            98,
+            99,
+            100
+          ]
+        },
+        "authorityRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "affectedRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "impactComplete": {
+          "type": "boolean"
+        },
+        "impactClass": {
+          "enum": [
+            "local",
+            "cross_module",
+            "authority",
+            "irreversible"
+          ]
+        },
+        "disposition": {
+          "enum": [
+            "accept",
+            "reject",
+            "investigate",
+            "clarify",
+            "require_authority"
+          ]
+        },
+        "supersedesRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "invalidatesRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "staleRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "resultingRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        }
+      },
+      "required": [
+        "subjectRefs",
+        "proposedAssertions",
+        "evidenceRefs",
+        "sourceActivity",
+        "relationship",
+        "confidencePercent",
+        "authorityRefs",
+        "affectedRefs",
+        "impactComplete",
+        "impactClass",
+        "disposition",
+        "supersedesRefs",
+        "invalidatesRefs",
+        "staleRefs",
+        "resultingRefs",
+        "provenance"
+      ],
+      "additionalProperties": false
+    },
+    "Applicability": {
+      "type": "object",
+      "properties": {
+        "subject": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "dependencyManifestDigest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "status": {
+          "enum": [
+            "CURRENT",
+            "STALE",
+            "INVALID",
+            "UNCERTAIN",
+            "SUPERSEDED"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "truthAssessmentRef": {
+          "$ref": "#/$defs/VersionRef"
+        }
+      },
+      "required": [
+        "subject",
+        "dependencyManifestDigest",
+        "generation",
+        "status",
+        "reason",
+        "truthAssessmentRef"
+      ],
+      "additionalProperties": false
+    },
+    "AcceptanceAssessment": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "requiredManifestDigest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "dependencyGeneration": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "obligationRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "resultRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "decisionRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "blockingFindingRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "missingObligationRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "phase": {
+          "enum": [
+            "unready",
+            "implementation_complete",
+            "verification_complete",
+            "release_approved",
+            "deployed",
+            "operationally_healthy",
+            "observing",
+            "outcome_observed",
+            "outcome_accepted",
+            "blocked",
+            "stale"
+          ]
+        },
+        "windowStart": {
+          "type": "string",
+          "minLength": 1
+        },
+        "windowEnd": {
+          "type": "string",
+          "minLength": 1
+        },
+        "minimumSamples": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "actualDistinctSamples": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "explanation": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "target",
+        "requiredManifestDigest",
+        "dependencyGeneration",
+        "obligationRefs",
+        "resultRefs",
+        "decisionRefs",
+        "blockingFindingRefs",
+        "missingObligationRefs",
+        "phase",
+        "windowStart",
+        "windowEnd",
+        "minimumSamples",
+        "actualDistinctSamples",
+        "explanation"
+      ],
+      "additionalProperties": false
+    },
+    "ControlTransition": {
+      "type": "object",
+      "properties": {
+        "run": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "expectedRunVersion": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "profile": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "nodeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "iteration": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "diagnosisRef": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "evidenceRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "decisionRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "routeNodeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "progressFingerprint": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "repeatCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "budgetReservationRef": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "dependencyGeneration": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "status": {
+          "enum": [
+            "proposed",
+            "committed",
+            "pending_delivery",
+            "delivered",
+            "rejected"
+          ]
+        }
+      },
+      "required": [
+        "run",
+        "expectedRunVersion",
+        "profile",
+        "nodeId",
+        "iteration",
+        "diagnosisRef",
+        "evidenceRefs",
+        "decisionRefs",
+        "routeNodeId",
+        "reason",
+        "progressFingerprint",
+        "repeatCount",
+        "budgetReservationRef",
+        "dependencyGeneration",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "EvaluatorRegistration": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "enum": [
+            "deterministic",
+            "semantic",
+            "groundedness",
+            "retrieval",
+            "trajectory",
+            "security",
+            "performance",
+            "architecture",
+            "human",
+            "production_signal"
+          ]
+        },
+        "adapterRef": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "modelRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "promptDigest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rubricDigest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "inputSchemaRef": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "outputSchemaRef": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "calibrationRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "allowedTargetTypes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "classificationPolicy": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "budgetPolicy": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "status": {
+          "enum": [
+            "draft",
+            "qualified",
+            "enabled",
+            "retired"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "adapterRef",
+        "modelRef",
+        "promptDigest",
+        "rubricDigest",
+        "inputSchemaRef",
+        "outputSchemaRef",
+        "calibrationRef",
+        "allowedTargetTypes",
+        "classificationPolicy",
+        "budgetPolicy",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "RegressionScenario": {
+      "type": "object",
+      "properties": {
+        "intent": {
+          "$ref": "#/$defs/VersionRef"
+        },
+        "knownAmbiguities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "hiddenAmbiguities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "contextRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "expectedClarifications": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "expectedActions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "forbiddenActions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "requiredOutcome": {
+          "type": "string",
+          "minLength": 1
+        },
+        "obligationRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "expectedEvidence": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "acceptableAlternatives": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "category": {
+          "enum": [
+            "normal",
+            "ambiguous",
+            "edge",
+            "adversarial",
+            "security",
+            "trajectory",
+            "outcome",
+            "historical-regressions",
+            "evaluator-calibration"
+          ]
+        },
+        "sourceCorrectionRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/VersionRef"
+          },
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "holdoutPolicy": {
+          "$ref": "#/$defs/VersionRef"
+        }
+      },
+      "required": [
+        "intent",
+        "knownAmbiguities",
+        "hiddenAmbiguities",
+        "contextRefs",
+        "expectedClarifications",
+        "expectedActions",
+        "forbiddenActions",
+        "requiredOutcome",
+        "obligationRefs",
+        "expectedEvidence",
+        "acceptableAlternatives",
+        "category",
+        "sourceCorrectionRefs",
+        "holdoutPolicy"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

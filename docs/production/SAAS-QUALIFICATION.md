@@ -1,5 +1,11 @@
 # Enterprise SaaS, migration and consistency qualification — revision 4
 
+Proposed additional issue #1 qualification: after CR-019 review, T-132 must execute
+the 24 CL obligations and four supplementary cases from the linked contract,
+including [nonlinear E2E and recovery](../product/CLOSED-LOOP-UX-19.md). Integrate
+with SQ-03/08 and existing PQ/RS journeys; no separate orchestration island or
+replacement of original criteria. All CL product results currently remain not_run.
+
 Mandatory configurable-workflow overlay: T-132 also requires WF-01–WF-16 from
 `contracts/enterprise/workflow-obligations-10.json`, including both UI editors,
 changed SDLC execution, active-run migration, broker safeguards and qualified

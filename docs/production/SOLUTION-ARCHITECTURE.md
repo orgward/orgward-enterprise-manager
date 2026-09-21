@@ -1,5 +1,11 @@
 # OrgWard enterprise SaaS architecture — revision 4
 
+Proposed issue #1 enrichment: [ADR-019/control protocol](CLOSED-LOOP-CONTROL-19.md).
+CR-019 awaits independent review. It connects existing modules, enterprise truth,
+workflow continuations, evaluation and acceptance without a second orchestrator.
+Use its source-linked obligations during packet design; do not infer adoption or
+runtime implementation from this link.
+
 User-requested mandatory addendum: [ADR-010](ADR-010-CONFIGURABLE-WORKFLOW.md)
 and [configurable workflows](../product/CONFIGURABLE-WORKFLOWS.md). Workflow
 definitions (including SDLC itself) are editable versioned data. bpmn-js is the

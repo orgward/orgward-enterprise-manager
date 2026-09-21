@@ -1,5 +1,9 @@
 # Bounded orchestration prompt
 
+For issue #1, combine CL-001–018 slice dependencies with existing parent task
+dependencies. Require approved change/packet digests and bounded contribution
+evidence; do not require downstream runtime proof from prerequisite schema work.
+
 Use $orgward-orchestrate for [one outcome]. Delegation authority: [actual instruction
 or none]. Limits: [time/concurrency/resources]. Stop at [result].
 Inspect current work, dependency closure, approved packets and actual receipts.

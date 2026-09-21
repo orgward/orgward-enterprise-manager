@@ -1,5 +1,11 @@
 # UX and interaction acceptance contracts
 
+Issue #1 proposed refinement: [CLOSED-LOOP-UX-19.md](CLOSED-LOOP-UX-19.md) details
+selective clarification, proof/gap workbench, editable diagnostic routes, current
+enterprise impact and distinct release/outcome states in these same screens.
+CR-019 awaits independent review. These are functional acceptance requirements,
+not claims that the demonstrator implements the controls.
+
 Revision-3 supplement: PORTFOLIO-UX.md adds SC-13–SC-20 and role-based laptop workflows across all modules. Its screens inherit every global/visual/accessibility requirement below. The demonstrator still does not implement these contracts.
 
 Revision 2. Complements `UX-SPEC.md`; overrides generic inspector-only descriptions there. These are target behavior, not claims about `/platform.html`. Stable screen IDs below are referenced by the executable backlog. Spec inspection is a separate review mode; ordinary customer actions must operate the named object.

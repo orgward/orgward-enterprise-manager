@@ -2,6 +2,7 @@
   "revision": 4,
   "status": "specified_not_implemented",
   "workflow_obligations": "contracts/enterprise/workflow-obligations-10.json",
+  "closed_loop_obligations": "contracts/enterprise/closed-loop-obligations-19.json",
   "final_task": "T-132",
   "prior_qualifier": "T-106",
   "prior_task_ids": [

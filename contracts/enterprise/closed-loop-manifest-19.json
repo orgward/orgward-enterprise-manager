@@ -1,0 +1,111 @@
+{
+  "format": "orgward-proposed-candidate-manifest-v1",
+  "baseRevision": "38294934987c9ec5b528dd6105656a16edcf2a02",
+  "files": [
+    {
+      "path": "AGENTS.md",
+      "sha256": "a1a2198b981709b86be8bc1eec33f19f274f4ec7b45d99de330d4815a9176ac2"
+    },
+    {
+      "path": "contracts/engineering/change-register.json",
+      "sha256": "c0eb3475b35019dfc1adc043c94b42433e01cc1c06b7fc87486f02ec4dfc6699"
+    },
+    {
+      "path": "contracts/enterprise/closed-loop-examples-19.json",
+      "sha256": "8792db3630b0ba4abfada42d3e0ce3bd8b2fdc4a0bface85cbbd2da5dd229c54"
+    },
+    {
+      "path": "contracts/enterprise/closed-loop-obligations-19.json",
+      "sha256": "e782eec3056273b7b25873e2e5fe89f6e305e7942822454f064e7b575794eaa0"
+    },
+    {
+      "path": "contracts/enterprise/closed-loop.schemas-19.json",
+      "sha256": "57c4309303cae47a252c457a1d4f8079dbd7c579aa31b23da23318fb53a12eba"
+    },
+    {
+      "path": "docs/engineering/WAYS-OF-WORKING.md",
+      "sha256": "c4e02226ce514ee5e42115624ba1e104ee195a1efd652b61456628f4a0181254"
+    },
+    {
+      "path": "docs/engineering/prompts/design.md",
+      "sha256": "985826fd6211c103155b5ebe3f005ac971b626d3574c6b518c54e1b0027f6aab"
+    },
+    {
+      "path": "docs/engineering/prompts/implement.md",
+      "sha256": "14e22ddbc53d9471982aaa52195d3f51cd477de7669c6265cdca9dc8b7b92de6"
+    },
+    {
+      "path": "docs/engineering/prompts/orchestrate.md",
+      "sha256": "e11a7d0aa543e024a74423330564d2c9e4fd52b172a60d95f53e8705e8d546be"
+    },
+    {
+      "path": "docs/engineering/prompts/review.md",
+      "sha256": "04f9446e5334727439dcd54a5ba831902de2fb0f1b243d0f624510bbc393e3f0"
+    },
+    {
+      "path": "docs/engineering/templates/implementation-packet.md",
+      "sha256": "b2192f771bd3d5652f3542bd74b1f5890883faac9672a16c65abaa80f0dff98f"
+    },
+    {
+      "path": "docs/product/CLOSED-LOOP-UX-19.md",
+      "sha256": "7103151dac5687887e2b0569fe840ef2c7c4e692ac9e0b9a49259d9a9e1bb891"
+    },
+    {
+      "path": "docs/product/CONFIGURABLE-WORKFLOWS.md",
+      "sha256": "6d1c1ed52db31f0645db844ebe5180260b41f0f96defa77684805645007b602e"
+    },
+    {
+      "path": "docs/product/SCREEN-CONTRACTS.md",
+      "sha256": "78b8bdeb0823468bbf928181a208884af6784f0efb93083e8fd3f5d1be73433d"
+    },
+    {
+      "path": "docs/production/CHANGE-PROTOCOL.md",
+      "sha256": "30a7e2ef38423428d5cb50f1d4241dd8b011f006b98197690b1aec7674028ca3"
+    },
+    {
+      "path": "docs/production/CLOSED-LOOP-CONTROL-19.md",
+      "sha256": "e10396bcf9082591f27165b1eba5ff8948ecdb671df970f94306bf6d3494a2af"
+    },
+    {
+      "path": "docs/production/ENTERPRISE-ARCHITECTURE.json",
+      "sha256": "762daf97669f5b9e0dc1b4e40c03d4ef91d27d01877b5fa91042b88b05603bec"
+    },
+    {
+      "path": "docs/production/IMPLEMENTATION-BACKLOG.json",
+      "sha256": "2063d9928bbb83db81c8f81706d9c502808369fe2b5c3f628388832e1e4161d6"
+    },
+    {
+      "path": "docs/production/IMPLEMENTATION-HANDOFF.md",
+      "sha256": "1d9af729714bd916b6aeb7871ded4c5edccfcf58bd6d45321bd65f3f1f7f992c"
+    },
+    {
+      "path": "docs/production/ISSUE-1-SOURCE-19.json",
+      "sha256": "f5aaeab4a430abf05e2f0d45cd46ff54988919a11cbf2f8adebbadab81352eff"
+    },
+    {
+      "path": "docs/production/PORTFOLIO-ROADMAP.md",
+      "sha256": "ccf93c6c2f49f144b91bebbbbea91673ae2aebbe864cc3119689d8a0fadcda51"
+    },
+    {
+      "path": "docs/production/SAAS-QUALIFICATION.md",
+      "sha256": "f0ac525861bef53040670dcb1feea9278ee57f36f6e659bf3e33d1bbcf4507cd"
+    },
+    {
+      "path": "docs/production/SOLUTION-ARCHITECTURE.md",
+      "sha256": "bc0a7ea9bc8981ea4c50b305e072907d7515db4e1137ecf2a49dc9450de1ba8e"
+    },
+    {
+      "path": "ops/check-closed-loop.mjs",
+      "sha256": "6e72f62e893a48b2ccd8ddcc0391ff81342cd035f12e273a55943ec692ce0a6b"
+    },
+    {
+      "path": "ops/check-spec.mjs",
+      "sha256": "25195d228f80ee5afa39d45de81553f2f9f2ad1d9876f7eed254617037939dff"
+    },
+    {
+      "path": "tests/closed-loop-spec.test.mjs",
+      "sha256": "dc4bf2742bf7bd28ace4e69afbee46cb557fa3726b7f0dcd1f472cd43b74803f"
+    }
+  ],
+  "hashPolicy": "Exact bytes except semantic projections of backlog/architecture; see candidateHash and control specification."
+}

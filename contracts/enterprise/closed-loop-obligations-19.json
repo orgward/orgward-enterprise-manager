@@ -1,0 +1,1921 @@
+{
+  "format": "orgward-closed-loop-obligations-v1",
+  "status": "proposed_pending_independent_review",
+  "changeRecord": "docs/engineering/changes/CR-019.json",
+  "source": "docs/production/ISSUE-1-SOURCE-19.json",
+  "sourceBodyDigest": "9e36a8585731acc644b0c6208836f1468ecf909a4528cf659871b72dcc524c6c",
+  "decision": "docs/production/CLOSED-LOOP-CONTROL-19.md",
+  "ux": "docs/product/CLOSED-LOOP-UX-19.md",
+  "schemas": "contracts/enterprise/closed-loop.schemas-19.json",
+  "baselinePreservation": "132 original tasks, 480 original criteria, WF16 and P12/E16 unchanged; additions are separately counted",
+  "requirements": [
+    {
+      "id": "CL-R01",
+      "sourceCriterion": "lifecycle is implemented/documented as a feedback state graph, not a linear checklist;",
+      "title": "Feedback graph",
+      "taskIds": [
+        "T-19",
+        "T-20",
+        "T-28",
+        "T-52"
+      ],
+      "acceptanceIds": [
+        "T-19-AC1",
+        "T-19-AC2",
+        "T-19-AC3",
+        "T-20-AC1",
+        "T-20-AC2",
+        "T-20-AC3",
+        "T-28-AC1",
+        "T-28-AC2",
+        "T-28-AC3",
+        "T-52-AC1",
+        "T-52-AC2",
+        "T-52-AC3",
+        "T-52-AC4"
+      ],
+      "sliceIds": [
+        "CL-011"
+      ],
+      "existingCoverage": "partial; existing parent semantics preserved, integrated issue behavior requires this addition",
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {},
+      "scenario": {
+        "id": "CL-S01",
+        "seed": {
+          "tenant": "tenant-a",
+          "workspace": "workspace-a",
+          "profile": "booking-v2",
+          "failedProof": "recurring",
+          "diagnosis": "missing_work",
+          "iteration": 1
+        },
+        "action": "Commit the diagnosed route from evaluation to planning, then render diagram and form after reload.",
+        "expected": {
+          "route": "planning",
+          "newIteration": 2,
+          "priorIteration": "retained",
+          "formDiagramEquivalent": true
+        },
+        "counterexample": "Remove the planning route: TRANSITION_BLOCKED; no implicit jump.",
+        "observationSources": [
+          "authorized UI and API response",
+          "independent database/revision and outbox read",
+          "runtime history and provider effect ledger when applicable"
+        ],
+        "testPath": "tests/acceptance/closed-loop/cl-01.test.mjs",
+        "testPathStatus": "planned_not_executed"
+      }
+    },
+    {
+      "id": "CL-R02",
+      "sourceCriterion": "intent and assumptions are durable/versioned;",
+      "title": "Durable explicit and inferred intent",
+      "taskIds": [
+        "T-09",
+        "T-10",
+        "T-26"
+      ],
+      "acceptanceIds": [
+        "T-09-AC1",
+        "T-09-AC2",
+        "T-09-AC3",
+        "T-10-AC1",
+        "T-10-AC2",
+        "T-10-AC3",
+        "T-26-AC1",
+        "T-26-AC2",
+        "T-26-AC3"
+      ],
+      "sliceIds": [
+        "CL-003"
+      ],
+      "existingCoverage": "partial; existing parent semantics preserved, integrated issue behavior requires this addition",
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {},
+      "scenario": {
+        "id": "CL-S02",
+        "seed": {
+          "tenant": "tenant-a",
+          "workspace": "workspace-a",
+          "intent": "I1",
+          "explicit": "recurring bookings",
+          "inferred": "weekly default",
+          "supersedingAnswer": "monthly"
+        },
+        "action": "Accept authorized I2 and reload original statements and assumptions.",
+        "expected": {
+          "head": "I2",
+          "original": "I1",
+          "originOfWeekly": "inferred",
+          "historyRetained": true
+        },
+        "counterexample": "Late I1 answer cannot overwrite I2.",
+        "observationSources": [
+          "authorized UI and API response",
+          "independent database/revision and outbox read",
+          "runtime history and provider effect ledger when applicable"
+        ],
+        "testPath": "tests/acceptance/closed-loop/cl-02.test.mjs",
+        "testPathStatus": "planned_not_executed"
+      }
+    },
+    {
+      "id": "CL-R03",
+      "sourceCriterion": "clarification has an explicit decision policy and lifecycle;",
+      "title": "Selective clarification",
+      "taskIds": [
+        "T-10",
+        "T-25",
+        "T-26",
+        "T-89"
+      ],
+      "acceptanceIds": [
+        "T-10-AC1",
+        "T-10-AC2",
+        "T-10-AC3",
+        "T-25-AC1",
+        "T-25-AC2",
+        "T-25-AC3",
+        "T-26-AC1",
+        "T-26-AC2",
+        "T-26-AC3",
+        "T-89-AC1",
+        "T-89-AC2",
+        "T-89-AC3",
+        "T-89-AC4"
+      ],
+      "sliceIds": [
+        "CL-004",
+        "CL-014"
+      ],
+      "existingCoverage": "partial; existing parent semantics preserved, integrated issue behavior requires this addition",
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {},
+      "scenario": {
+        "id": "CL-S03",
+        "seed": {
+          "tenant": "tenant-a",
+          "workspace": "workspace-a",
+          "unknowns": [
+            "display ordering",
+            "documented API version",
+            "automatic charging"
+          ],
+          "authorityForCharging": false
+        },
+        "action": "Classify each uncertainty, inspect evidence and ask the owner only the material business question.",
+        "expected": {
+          "dispositions": [
+            "infer",
+            "investigate",
+            "ask_human"
+          ],
+          "livePaymentEnabled": false,
+          "materialAnswerPersisted": true
+        },
+        "counterexample": "Absent effect authority remains blocked even after a factual answer.",
+        "observationSources": [
+          "authorized UI and API response",
+          "independent database/revision and outbox read",
+          "runtime history and provider effect ledger when applicable"
+        ],
+        "testPath": "tests/acceptance/closed-loop/cl-03.test.mjs",
+        "testPathStatus": "planned_not_executed"
+      }
+    },
+    {
+      "id": "CL-R04",
+      "sourceCriterion": "consequential requirements map to proof obligations;",
+      "title": "Consequential proof coverage",
+      "taskIds": [
+        "T-01",
+        "T-26",
+        "T-91"
+      ],
+      "acceptanceIds": [
+        "T-01-AC1",
+        "T-01-AC2",
+        "T-01-AC3",
+        "T-26-AC1",
+        "T-26-AC2",
+        "T-26-AC3",
+        "T-91-AC1",
+        "T-91-AC2",
+        "T-91-AC3",
+        "T-91-AC4"
+      ],
+      "sliceIds": [
+        "CL-002"
+      ],
+      "existingCoverage": "partial; existing parent semantics preserved, integrated issue behavior requires this addition",
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {},
+      "scenario": {
+        "id": "CL-S04",
+        "seed": {
+          "tenant": "tenant-a",
+          "workspace": "workspace-a",
+          "requirements": [
+            "single",
+            "recurring"
+          ],
+          "obligationTargets": [
+            "single"
+          ]
+        },
+        "action": "Assess readiness before adding and reviewing the missing recurring obligation.",
+        "expected": {
+          "ready": false,
+          "uncovered": [
+            "recurring"
+          ],
+          "generationUnchanged": true
+        },
+        "counterexample": "Deleting a requirement or weakening mandatory status to hide the gap is denied.",
+        "observationSources": [
+          "authorized UI and API response",
+          "independent database/revision and outbox read",
+          "runtime history and provider effect ledger when applicable"
+        ],
+        "testPath": "tests/acceptance/closed-loop/cl-04.test.mjs",
+        "testPathStatus": "planned_not_executed"
+      }
+    },
+    {
+      "id": "CL-R05",
+      "sourceCriterion": "evaluator taxonomy and common result envelope exist;",
+      "title": "Typed evaluator envelope",
+      "taskIds": [
+        "T-01",
+        "T-22",
+        "T-89"
+      ],
+      "acceptanceIds": [
+        "T-01-AC1",
+        "T-01-AC2",
+        "T-01-AC3",
+        "T-22-AC1",
+        "T-22-AC2",
+        "T-22-AC3",
+        "T-89-AC1",
+        "T-89-AC2",
+        "T-89-AC3",
+        "T-89-AC4"
+      ],
+      "sliceIds": [
+        "CL-005"
+      ],
+      "existingCoverage": "partial; existing parent semantics preserved, integrated issue behavior requires this addition",
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {},
+      "scenario": {
+        "id": "CL-S05",
+        "seed": {
+          "tenant": "tenant-a",
+          "workspace": "workspace-a",
+          "contract": "O1@1",
+          "run": "run-a",
+          "adapterResult": "missing evidence",
+          "types": [
+            "deterministic",
+            "semantic",
+            "groundedness",
+            "retrieval",
+            "trajectory",
+            "security",
+            "performance",
+            "architecture",
+            "human",
+            "production_signal"
+          ]
+        },
+        "action": "Normalize registered evaluator results and reload their pinned contracts.",
+        "expected": {
+          "result": "indeterminate",
+          "contract": "O1@1",
+          "evidenceMissingVisible": true
+        },
+        "counterexample": "Unknown evaluator version or malformed score-only payload rejected.",
+        "observationSources": [
+          "authorized UI and API response",
+          "independent database/revision and outbox read",
+          "runtime history and provider effect ledger when applicable"
+        ],
+        "testPath": "tests/acceptance/closed-loop/cl-05.test.mjs",
+        "testPathStatus": "planned_not_executed"
+      }
+    },
+    {
+      "id": "CL-R06",
+      "sourceCriterion": "deterministic checks are preferred where possible;",
+      "title": "Deterministic first",
+      "taskIds": [
+        "T-12",
+        "T-31",
+        "T-89",
+        "T-21",
+        "T-77"
+      ],
+      "acceptanceIds": [
+        "T-12-AC1",
+        "T-12-AC2",
+        "T-12-AC3",
+        "T-31-AC1",
+        "T-31-AC2",
+        "T-31-AC3",
+        "T-89-AC1",
+        "T-89-AC2",
+        "T-89-AC3",
+        "T-89-AC4",
+        "T-21-AC1",
+        "T-21-AC2",
+        "T-21-AC3",
+        "T-77-AC1",
+        "T-77-AC2",
+        "T-77-AC3",
+        "T-77-AC4"
+      ],
+      "sliceIds": [
+        "CL-006",
+        "CL-008"
+      ],
+      "existingCoverage": "partial; existing parent semantics preserved, integrated issue behavior requires this addition",
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {},
+      "scenario": {
+        "id": "CL-S06",
+        "seed": {
+          "tenant": "tenant-a",
+          "workspace": "workspace-a",
+          "property": "cross-tenant denial",
+          "deterministicFixture": "tenant-b-read-a",
+          "judgeOpinion": "looks safe"
+        },
+        "action": "Execute the tenant-isolation adapter against the actual denied request.",
+        "expected": {
+          "proofSource": "API denial and storage audit",
+          "semanticOpinionCannotReplace": true,
+          "foreignRecordDisclosed": false,
+          "attemptedReadRecorded": true
+        },
+        "counterexample": "Actual leak fails regardless of judge score.",
+        "observationSources": [
+          "authorized UI and API response",
+          "independent database/revision and outbox read",
+          "runtime history and provider effect ledger when applicable"
+        ],
+        "testPath": "tests/acceptance/closed-loop/cl-06.test.mjs",
+        "testPathStatus": "planned_not_executed"
+      }
+    },
+    {
+      "id": "CL-R07",
+      "sourceCriterion": "semantic evaluators return structured evidence/confidence;",
+      "title": "Grounded semantic results",
+      "taskIds": [
+        "T-22",
+        "T-66",
+        "T-89"
+      ],
+      "acceptanceIds": [
+        "T-22-AC1",
+        "T-22-AC2",
+        "T-22-AC3",
+        "T-66-AC1",
+        "T-66-AC2",
+        "T-66-AC3",
+        "T-66-AC4",
+        "T-89-AC1",
+        "T-89-AC2",
+        "T-89-AC3",
+        "T-89-AC4"
+      ],
+      "sliceIds": [
+        "CL-007"
+      ],
+      "existingCoverage": "partial; existing parent semantics preserved, integrated issue behavior requires this addition",
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {},
+      "scenario": {
+        "id": "CL-S07",
+        "seed": {
+          "tenant": "tenant-a",
+          "workspace": "workspace-a",
+          "claim": "recurring booking exists",
+          "artifact": "single-only",
+          "evidenceSpans": []
+        },
+        "action": "Run an independent groundedness evaluator and inspect claim-level findings.",
+        "expected": {
+          "claimStatus": "unsupported",
+          "result": "fail",
+          "acceptanceBlocked": true
+        },
+        "counterexample": "A high score without supporting spans cannot pass.",
+        "observationSources": [
+          "authorized UI and API response",
+          "independent database/revision and outbox read",
+          "runtime history and provider effect ledger when applicable"
+        ],
+        "testPath": "tests/acceptance/closed-loop/cl-07.test.mjs",
+        "testPathStatus": "planned_not_executed"
+      }
+    },
+    {
+      "id": "CL-R08",
+      "sourceCriterion": "evaluator quality itself can be tested;",
+      "title": "Evaluator calibration",
+      "taskIds": [
+        "T-89"
+      ],
+      "acceptanceIds": [
+        "T-89-AC1",
+        "T-89-AC2",
+        "T-89-AC3",
+        "T-89-AC4"
+      ],
+      "sliceIds": [
+        "CL-015"
+      ],
+      "existingCoverage": "partial; existing parent semantics preserved, integrated issue behavior requires this addition",
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {},
+      "scenario": {
+        "id": "CL-S08",
+        "seed": {
+          "tenant": "tenant-a",
+          "workspace": "workspace-a",
+          "labels": [
+            "pass",
+            "fail",
+            "fail"
+          ],
+          "judge": [
+            "pass",
+            "pass",
+            "fail"
+          ],
+          "variant": "irrelevant verbosity"
+        },
+        "action": "Measure false acceptance on the held-out human-labelled set and rerun with order and verbosity variants.",
+        "expected": {
+          "falseAcceptances": 1,
+          "labeledFailures": 2,
+          "rate": 0.5,
+          "calibrationVersionRetained": true
+        },
+        "counterexample": "Uncalibrated judge cannot be sole consequential acceptance; do not repair product for broken judge.",
+        "observationSources": [
+          "authorized UI and API response",
+          "independent database/revision and outbox read",
+          "runtime history and provider effect ledger when applicable"
+        ],
+        "testPath": "tests/acceptance/closed-loop/cl-08.test.mjs",
+        "testPathStatus": "planned_not_executed"
+      }
+    },
+    {
+      "id": "CL-R09",
+      "sourceCriterion": "evaluation failures are diagnostically routed to the correct upstream/downstream state;",
+      "title": "Diagnostic backward routing",
+      "taskIds": [
+        "T-25",
+        "T-27",
+        "T-28",
+        "T-30"
+      ],
+      "acceptanceIds": [
+        "T-25-AC1",
+        "T-25-AC2",
+        "T-25-AC3",
+        "T-27-AC1",
+        "T-27-AC2",
+        "T-27-AC3",
+        "T-28-AC1",
+        "T-28-AC2",
+        "T-28-AC3",
+        "T-30-AC1",
+        "T-30-AC2",
+        "T-30-AC3"
+      ],
+      "sliceIds": [
+        "CL-010"
+      ],
+      "existingCoverage": "partial; existing parent semantics preserved, integrated issue behavior requires this addition",
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {},
+      "scenario": {
+        "id": "CL-S09",
+        "seed": {
+          "tenant": "tenant-a",
+          "workspace": "workspace-a",
+          "diagnoses": [
+            "local_defect",
+            "missing_work",
+            "specification_gap",
+            "context_gap",
+            "architecture_gap",
+            "authority_gap",
+            "environment_failure",
+            "evaluator_failure",
+            "outcome_failure"
+          ]
+        },
+        "action": "Exercise each diagnosis independently against the reviewed profile.",
+        "expected": {
+          "routes": [
+            "implementation",
+            "plan",
+            "clarify",
+            "discovery",
+            "architecture",
+            "awaiting_authority",
+            "operations_recovery",
+            "evaluator_repair",
+            "outcome"
+          ],
+          "diagnosesRetained": 9,
+          "silentImplementationFallbacks": 0
+        },
+        "counterexample": "Unknown or conflicting diagnosis escalates; never defaults to implement.",
+        "observationSources": [
+          "authorized UI and API response",
+          "independent database/revision and outbox read",
+          "runtime history and provider effect ledger when applicable"
+        ],
+        "testPath": "tests/acceptance/closed-loop/cl-09.test.mjs",
+        "testPathStatus": "planned_not_executed"
+      }
+    },
+    {
+      "id": "CL-R10",
+      "sourceCriterion": "repeated no-progress loops are bounded/detected;",
+      "title": "No-progress bound",
+      "taskIds": [
+        "T-20",
+        "T-22",
+        "T-88"
+      ],
+      "acceptanceIds": [
+        "T-20-AC1",
+        "T-20-AC2",
+        "T-20-AC3",
+        "T-22-AC1",
+        "T-22-AC2",
+        "T-22-AC3",
+        "T-88-AC1",
+        "T-88-AC2",
+        "T-88-AC3",
+        "T-88-AC4"
+      ],
+      "sliceIds": [
+        "CL-011"
+      ],
+      "existingCoverage": "partial; existing parent semantics preserved, integrated issue behavior requires this addition",
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {},
+      "scenario": {
+        "id": "CL-S10",
+        "seed": {
+          "tenant": "tenant-a",
+          "workspace": "workspace-a",
+          "fingerprint": "same-input-same-evidence",
+          "failedRepairs": 2,
+          "modelChanged": true
+        },
+        "action": "Request a third identical repair after process restart.",
+        "expected": {
+          "route": "strategy_review",
+          "thirdRepairDispatched": false,
+          "counter": 2
+        },
+        "counterexample": "Timestamp/model/paraphrase changes do not reset count or budget.",
+        "observationSources": [
+          "authorized UI and API response",
+          "independent database/revision and outbox read",
+          "runtime history and provider effect ledger when applicable"
+        ],
+        "testPath": "tests/acceptance/closed-loop/cl-10.test.mjs",
+        "testPathStatus": "planned_not_executed"
+      }
+    },
+    {
+      "id": "CL-R11",
+      "sourceCriterion": "\"done\" is computed from evidence/obligations rather than agent assertion;",
+      "title": "Derived acceptance",
+      "taskIds": [
+        "T-12",
+        "T-64",
+        "T-91"
+      ],
+      "acceptanceIds": [
+        "T-12-AC1",
+        "T-12-AC2",
+        "T-12-AC3",
+        "T-64-AC1",
+        "T-64-AC2",
+        "T-64-AC3",
+        "T-64-AC4",
+        "T-91-AC1",
+        "T-91-AC2",
+        "T-91-AC3",
+        "T-91-AC4"
+      ],
+      "sliceIds": [
+        "CL-009"
+      ],
+      "existingCoverage": "partial; existing parent semantics preserved, integrated issue behavior requires this addition",
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {},
+      "scenario": {
+        "id": "CL-S11",
+        "seed": {
+          "tenant": "tenant-a",
+          "workspace": "workspace-a",
+          "blockingProofs": [
+            "O1",
+            "O2"
+          ],
+          "results": {
+            "O1": "pass",
+            "O2": "indeterminate"
+          },
+          "agentSays": "done"
+        },
+        "action": "Compute acceptance from current authoritative obligations.",
+        "expected": {
+          "outcomeAccepted": false,
+          "blockedBy": [
+            "O2"
+          ],
+          "agentClaimIgnored": true
+        },
+        "counterexample": "Zero-proof manifests and unresolved critical findings cannot pass.",
+        "observationSources": [
+          "authorized UI and API response",
+          "independent database/revision and outbox read",
+          "runtime history and provider effect ledger when applicable"
+        ],
+        "testPath": "tests/acceptance/closed-loop/cl-11.test.mjs",
+        "testPathStatus": "planned_not_executed"
+      }
+    },
+    {
+      "id": "CL-R12",
+      "sourceCriterion": "implementation/release/outcome acceptance are distinct states;",
+      "title": "Distinct release and outcome",
+      "taskIds": [
+        "T-33",
+        "T-34",
+        "T-36",
+        "T-94"
+      ],
+      "acceptanceIds": [
+        "T-33-AC1",
+        "T-33-AC2",
+        "T-33-AC3",
+        "T-34-AC1",
+        "T-34-AC2",
+        "T-34-AC3",
+        "T-36-AC1",
+        "T-36-AC2",
+        "T-36-AC3",
+        "T-94-AC1",
+        "T-94-AC2",
+        "T-94-AC3",
+        "T-94-AC4"
+      ],
+      "sliceIds": [
+        "CL-016"
+      ],
+      "existingCoverage": "partial; existing parent semantics preserved, integrated issue behavior requires this addition",
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {},
+      "scenario": {
+        "id": "CL-S12",
+        "seed": {
+          "tenant": "tenant-a",
+          "workspace": "workspace-a",
+          "deployed": true,
+          "healthy": true,
+          "observationWindowMinutes": 60,
+          "elapsedMinutes": 59
+        },
+        "action": "Read acceptance dimensions independently.",
+        "expected": {
+          "deployed": true,
+          "operationallyHealthy": true,
+          "outcome": "observing",
+          "outcomeAccepted": false
+        },
+        "counterexample": "An operator cannot mark outcome accepted by changing deployment status.",
+        "observationSources": [
+          "authorized UI and API response",
+          "independent database/revision and outbox read",
+          "runtime history and provider effect ledger when applicable"
+        ],
+        "testPath": "tests/acceptance/closed-loop/cl-12.test.mjs",
+        "testPathStatus": "planned_not_executed"
+      }
+    },
+    {
+      "id": "CL-R13",
+      "sourceCriterion": "production evidence can reopen earlier lifecycle stages;",
+      "title": "Production feedback",
+      "taskIds": [
+        "T-35",
+        "T-36",
+        "T-95"
+      ],
+      "acceptanceIds": [
+        "T-35-AC1",
+        "T-35-AC2",
+        "T-35-AC3",
+        "T-36-AC1",
+        "T-36-AC2",
+        "T-36-AC3",
+        "T-95-AC1",
+        "T-95-AC2",
+        "T-95-AC3",
+        "T-95-AC4"
+      ],
+      "sliceIds": [
+        "CL-016"
+      ],
+      "existingCoverage": "partial; existing parent semantics preserved, integrated issue behavior requires this addition",
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {},
+      "scenario": {
+        "id": "CL-S13",
+        "seed": {
+          "tenant": "tenant-a",
+          "workspace": "workspace-a",
+          "technical": "pass",
+          "business": "fail",
+          "cause": "goal assumption false"
+        },
+        "action": "Record adverse business signal and inspect owned next action.",
+        "expected": {
+          "route": "outcome",
+          "technicalPassRetained": true,
+          "priorAcceptance": "historical"
+        },
+        "counterexample": "Regression mitigation requires current rollback authority and effect reconciliation.",
+        "observationSources": [
+          "authorized UI and API response",
+          "independent database/revision and outbox read",
+          "runtime history and provider effect ledger when applicable"
+        ],
+        "testPath": "tests/acceptance/closed-loop/cl-13.test.mjs",
+        "testPathStatus": "planned_not_executed"
+      }
+    },
+    {
+      "id": "CL-R14",
+      "sourceCriterion": "any lifecycle activity can emit state-change evidence and trigger reconciliation without waiting for `Learn`;",
+      "title": "Reconcile at any activity",
+      "taskIds": [
+        "T-74",
+        "T-121",
+        "T-124"
+      ],
+      "acceptanceIds": [
+        "T-74-AC1",
+        "T-74-AC2",
+        "T-74-AC3",
+        "T-74-AC4",
+        "T-121-AC1",
+        "T-121-AC2",
+        "T-121-AC3",
+        "T-121-AC4",
+        "T-124-AC1",
+        "T-124-AC2",
+        "T-124-AC3",
+        "T-124-AC4"
+      ],
+      "sliceIds": [
+        "CL-003"
+      ],
+      "existingCoverage": "partial; existing parent semantics preserved, integrated issue behavior requires this addition",
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {},
+      "scenario": {
+        "id": "CL-S14",
+        "seed": {
+          "tenant": "tenant-a",
+          "workspace": "workspace-a",
+          "activity": "implementation",
+          "assertion": "API synchronous",
+          "observation": "eventually consistent"
+        },
+        "action": "Submit runtime evidence before any Learn node executes.",
+        "expected": {
+          "finding": "contradiction",
+          "proposalCreated": true,
+          "waitForLearn": false,
+          "acceptedAssertionUnchanged": true
+        },
+        "counterexample": "An observer cannot accept its own authority-changing proposal.",
+        "observationSources": [
+          "authorized UI and API response",
+          "independent database/revision and outbox read",
+          "runtime history and provider effect ledger when applicable"
+        ],
+        "testPath": "tests/acceptance/closed-loop/cl-14.test.mjs",
+        "testPathStatus": "planned_not_executed"
+      }
+    },
+    {
+      "id": "CL-R15",
+      "sourceCriterion": "authoritative enterprise truths are versioned/superseded rather than silently overwritten;",
+      "title": "Immutable truth lineage",
+      "taskIds": [
+        "T-13",
+        "T-53",
+        "T-124"
+      ],
+      "acceptanceIds": [
+        "T-13-AC1",
+        "T-13-AC2",
+        "T-13-AC3",
+        "T-53-AC1",
+        "T-53-AC2",
+        "T-53-AC3",
+        "T-53-AC4",
+        "T-124-AC1",
+        "T-124-AC2",
+        "T-124-AC3",
+        "T-124-AC4"
+      ],
+      "sliceIds": [
+        "CL-003"
+      ],
+      "existingCoverage": "partial; existing parent semantics preserved, integrated issue behavior requires this addition",
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {},
+      "scenario": {
+        "id": "CL-S15",
+        "seed": {
+          "tenant": "tenant-a",
+          "workspace": "workspace-a",
+          "head": "A1",
+          "candidate": "A2",
+          "reviewer": "authorized-owner"
+        },
+        "action": "Review and publish the successor through CP-03.",
+        "expected": {
+          "head": "A2",
+          "A1": "retained",
+          "supersedes": "A1",
+          "provenanceSaved": true
+        },
+        "counterexample": "Stale expectedHead rejects; history cannot be overwritten.",
+        "observationSources": [
+          "authorized UI and API response",
+          "independent database/revision and outbox read",
+          "runtime history and provider effect ledger when applicable"
+        ],
+        "testPath": "tests/acceptance/closed-loop/cl-15.test.mjs",
+        "testPathStatus": "planned_not_executed"
+      }
+    },
+    {
+      "id": "CL-R16",
+      "sourceCriterion": "dependency changes propagate `CURRENT` / `STALE` / `INVALID` / `UNCERTAIN` / `SUPERSEDED` status through the affected subgraph;",
+      "title": "Applicability propagation",
+      "taskIds": [
+        "T-122",
+        "T-123",
+        "T-124"
+      ],
+      "acceptanceIds": [
+        "T-122-AC1",
+        "T-122-AC2",
+        "T-122-AC3",
+        "T-122-AC4",
+        "T-123-AC1",
+        "T-123-AC2",
+        "T-123-AC3",
+        "T-123-AC4",
+        "T-124-AC1",
+        "T-124-AC2",
+        "T-124-AC3",
+        "T-124-AC4"
+      ],
+      "sliceIds": [
+        "CL-012"
+      ],
+      "existingCoverage": "partial; existing parent semantics preserved, integrated issue behavior requires this addition",
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {},
+      "scenario": {
+        "id": "CL-S16",
+        "seed": {
+          "tenant": "tenant-a",
+          "workspace": "workspace-a",
+          "changed": "requirement-r@2",
+          "dependents": [
+            "ADR-a",
+            "plan-p",
+            "proof-e"
+          ],
+          "unrelated": "label-z"
+        },
+        "action": "Race publication with old-proof acceptance while graph projection is delayed.",
+        "expected": {
+          "stale": [
+            "ADR-a",
+            "plan-p",
+            "proof-e"
+          ],
+          "unrelated": "current",
+          "oldProofAccepted": false,
+          "barrierBeforeAck": true
+        },
+        "counterexample": "Traversal exhaustion blocks protected publication; cycles must not disappear.",
+        "observationSources": [
+          "authorized UI and API response",
+          "independent database/revision and outbox read",
+          "runtime history and provider effect ledger when applicable"
+        ],
+        "testPath": "tests/acceptance/closed-loop/cl-16.test.mjs",
+        "testPathStatus": "planned_not_executed"
+      }
+    },
+    {
+      "id": "CL-R17",
+      "sourceCriterion": "reconciliation and workflow state are modeled separately but connected;",
+      "title": "Separate workflow and knowledge",
+      "taskIds": [
+        "T-20",
+        "T-52",
+        "T-124"
+      ],
+      "acceptanceIds": [
+        "T-20-AC1",
+        "T-20-AC2",
+        "T-20-AC3",
+        "T-52-AC1",
+        "T-52-AC2",
+        "T-52-AC3",
+        "T-52-AC4",
+        "T-124-AC1",
+        "T-124-AC2",
+        "T-124-AC3",
+        "T-124-AC4"
+      ],
+      "sliceIds": [
+        "CL-011"
+      ],
+      "existingCoverage": "partial; existing parent semantics preserved, integrated issue behavior requires this addition",
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {},
+      "scenario": {
+        "id": "CL-S17",
+        "seed": {
+          "tenant": "tenant-a",
+          "workspace": "workspace-a",
+          "runNode": "implementation",
+          "enterpriseAssertion": "contradicted",
+          "effect": "unknown"
+        },
+        "action": "Pause affected work and inspect enterprise state and workflow history independently.",
+        "expected": {
+          "assertion": "contradicted",
+          "run": "blocked",
+          "externalEffect": "unknown",
+          "historyRetained": true
+        },
+        "counterexample": "Moving a workflow node cannot grant accepted truth or reverse an external effect.",
+        "observationSources": [
+          "authorized UI and API response",
+          "independent database/revision and outbox read",
+          "runtime history and provider effect ledger when applicable"
+        ],
+        "testPath": "tests/acceptance/closed-loop/cl-17.test.mjs",
+        "testPathStatus": "planned_not_executed"
+      }
+    },
+    {
+      "id": "CL-R18",
+      "sourceCriterion": "`Learn` is reserved primarily for institutionalization/generalization across runs;",
+      "title": "Learn institutionalizes",
+      "taskIds": [
+        "T-37",
+        "T-101"
+      ],
+      "acceptanceIds": [
+        "T-37-AC1",
+        "T-37-AC2",
+        "T-37-AC3",
+        "T-101-AC1",
+        "T-101-AC2",
+        "T-101-AC3",
+        "T-101-AC4"
+      ],
+      "sliceIds": [
+        "CL-017"
+      ],
+      "existingCoverage": "partial; existing parent semantics preserved, integrated issue behavior requires this addition",
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {},
+      "scenario": {
+        "id": "CL-S18",
+        "seed": {
+          "tenant": "tenant-a",
+          "workspace": "workspace-a",
+          "correction": "booking recurrence bug",
+          "currentReconciliation": "already committed"
+        },
+        "action": "Propose a reusable regression and clarification-policy lesson, then review separately.",
+        "expected": {
+          "regression": "proposed",
+          "policy": "draft",
+          "currentTruthReconciliationRepeated": false
+        },
+        "counterexample": "No retroactive passing evaluation or unreviewed global policy update.",
+        "observationSources": [
+          "authorized UI and API response",
+          "independent database/revision and outbox read",
+          "runtime history and provider effect ledger when applicable"
+        ],
+        "testPath": "tests/acceptance/closed-loop/cl-18.test.mjs",
+        "testPathStatus": "planned_not_executed"
+      }
+    },
+    {
+      "id": "CL-R19",
+      "sourceCriterion": "human authority is represented as a first-class evaluator/transition;",
+      "title": "Typed human authority",
+      "taskIds": [
+        "T-23",
+        "T-79",
+        "T-80"
+      ],
+      "acceptanceIds": [
+        "T-23-AC1",
+        "T-23-AC2",
+        "T-23-AC3",
+        "T-79-AC1",
+        "T-79-AC2",
+        "T-79-AC3",
+        "T-79-AC4",
+        "T-80-AC1",
+        "T-80-AC2",
+        "T-80-AC3",
+        "T-80-AC4"
+      ],
+      "sliceIds": [
+        "CL-009"
+      ],
+      "existingCoverage": "partial; existing parent semantics preserved, integrated issue behavior requires this addition",
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {},
+      "scenario": {
+        "id": "CL-S19",
+        "seed": {
+          "tenant": "tenant-a",
+          "workspace": "workspace-a",
+          "reviewTarget": "artifact-a@2",
+          "decisionTarget": "artifact-a@1",
+          "reviewerRevoked": true
+        },
+        "action": "Attempt protected continuation with the obsolete decision.",
+        "expected": {
+          "allowed": false,
+          "reason": "STALE_AUTHORITY",
+          "effectDispatched": false
+        },
+        "counterexample": "A current eligible reviewer and exact digest are needed; approved:true is rejected.",
+        "observationSources": [
+          "authorized UI and API response",
+          "independent database/revision and outbox read",
+          "runtime history and provider effect ledger when applicable"
+        ],
+        "testPath": "tests/acceptance/closed-loop/cl-19.test.mjs",
+        "testPathStatus": "planned_not_executed"
+      }
+    },
+    {
+      "id": "CL-R20",
+      "sourceCriterion": "cross-stage traceability is queryable;",
+      "title": "Queryable trace",
+      "taskIds": [
+        "T-39",
+        "T-51",
+        "T-90",
+        "T-91"
+      ],
+      "acceptanceIds": [
+        "T-39-AC1",
+        "T-39-AC2",
+        "T-39-AC3",
+        "T-51-AC1",
+        "T-51-AC2",
+        "T-51-AC3",
+        "T-51-AC4",
+        "T-90-AC1",
+        "T-90-AC2",
+        "T-90-AC3",
+        "T-90-AC4",
+        "T-91-AC1",
+        "T-91-AC2",
+        "T-91-AC3",
+        "T-91-AC4"
+      ],
+      "sliceIds": [
+        "CL-012"
+      ],
+      "existingCoverage": "partial; existing parent semantics preserved, integrated issue behavior requires this addition",
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {},
+      "scenario": {
+        "id": "CL-S20",
+        "seed": {
+          "tenant": "tenant-a",
+          "workspace": "workspace-a",
+          "chain": [
+            "I2",
+            "R-recurring",
+            "ADR1",
+            "P2",
+            "artifact2",
+            "O2",
+            "result2",
+            "evidence2",
+            "measure2"
+          ],
+          "foreignTenant": "b"
+        },
+        "action": "Traverse both directions, find orphan requirements/artifacts and inspect changed-ADR impact.",
+        "expected": {
+          "authorizedChainLength": 9,
+          "foreignNamesLeaked": false,
+          "watermarkVisible": true
+        },
+        "counterexample": "Denied evidence must not create a false complete trace or hidden-count leak.",
+        "observationSources": [
+          "authorized UI and API response",
+          "independent database/revision and outbox read",
+          "runtime history and provider effect ledger when applicable"
+        ],
+        "testPath": "tests/acceptance/closed-loop/cl-20.test.mjs",
+        "testPathStatus": "planned_not_executed"
+      }
+    },
+    {
+      "id": "CL-R21",
+      "sourceCriterion": "historical failures can become regression evals;",
+      "title": "Regression memory",
+      "taskIds": [
+        "T-37",
+        "T-89",
+        "T-95"
+      ],
+      "acceptanceIds": [
+        "T-37-AC1",
+        "T-37-AC2",
+        "T-37-AC3",
+        "T-89-AC1",
+        "T-89-AC2",
+        "T-89-AC3",
+        "T-89-AC4",
+        "T-95-AC1",
+        "T-95-AC2",
+        "T-95-AC3",
+        "T-95-AC4"
+      ],
+      "sliceIds": [
+        "CL-013"
+      ],
+      "existingCoverage": "partial; existing parent semantics preserved, integrated issue behavior requires this addition",
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {},
+      "scenario": {
+        "id": "CL-S21",
+        "seed": {
+          "tenant": "tenant-a",
+          "workspace": "workspace-a",
+          "incident": "INC1",
+          "source": "authorized-customer-correction",
+          "expected": "reject duplicate slot"
+        },
+        "action": "Create and review a sanitized regression with expected and forbidden actions.",
+        "expected": {
+          "caseSource": "INC1",
+          "suite": "historical-regressions",
+          "oldEvidenceUnchanged": true
+        },
+        "counterexample": "Holdout cases remain unavailable to implementer retrieval and logs.",
+        "observationSources": [
+          "authorized UI and API response",
+          "independent database/revision and outbox read",
+          "runtime history and provider effect ledger when applicable"
+        ],
+        "testPath": "tests/acceptance/closed-loop/cl-21.test.mjs",
+        "testPathStatus": "planned_not_executed"
+      }
+    },
+    {
+      "id": "CL-R22",
+      "sourceCriterion": "at least one E2E scenario demonstrates clarification + backward transitions + repair + outcome acceptance;",
+      "title": "Nonlinear golden journey",
+      "taskIds": [
+        "T-48",
+        "T-106",
+        "T-132",
+        "T-45",
+        "T-130"
+      ],
+      "acceptanceIds": [
+        "T-48-AC1",
+        "T-48-AC2",
+        "T-48-AC3",
+        "T-106-AC1",
+        "T-106-AC2",
+        "T-106-AC3",
+        "T-106-AC4",
+        "T-132-AC1",
+        "T-132-AC2",
+        "T-132-AC3",
+        "T-132-AC4",
+        "T-45-AC1",
+        "T-45-AC2",
+        "T-45-AC3",
+        "T-130-AC1",
+        "T-130-AC2",
+        "T-130-AC3",
+        "T-130-AC4"
+      ],
+      "sliceIds": [
+        "CL-018"
+      ],
+      "existingCoverage": "partial; existing parent semantics preserved, integrated issue behavior requires this addition",
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {},
+      "scenario": {
+        "id": "CL-S22",
+        "seed": {
+          "tenant": "tenant-a",
+          "workspace": "workspace-a",
+          "intent": "single and recurring",
+          "initialImplementation": "single only",
+          "payment": "excluded",
+          "samples": 9,
+          "requiredSamples": 10,
+          "windowMinutes": 60
+        },
+        "action": "Execute the seven-step golden journey in CLOSED-LOOP-UX-19, including missing-work repair, authorized release and restart.",
+        "expected": {
+          "unitPassBeforeRepair": true,
+          "outcomeFailBeforeRepair": true,
+          "route": "plan",
+          "nineSamples": "indeterminate",
+          "tenAtMinute60": "outcome_accepted",
+          "deploymentCount": 1
+        },
+        "counterexample": "Run clarify/rearchitect/reject/rollback counter-journeys; no mocked live-provider acceptance.",
+        "observationSources": [
+          "authorized UI and API response",
+          "independent database/revision and outbox read",
+          "runtime history and provider effect ledger when applicable"
+        ],
+        "testPath": "tests/acceptance/closed-loop/cl-22.test.mjs",
+        "testPathStatus": "planned_not_executed"
+      }
+    },
+    {
+      "id": "CL-R23",
+      "sourceCriterion": "architecture/roadmap/delivery documentation agree on the model;",
+      "title": "Connected architecture and roadmap",
+      "taskIds": [
+        "T-01",
+        "T-131",
+        "T-132"
+      ],
+      "acceptanceIds": [
+        "T-01-AC1",
+        "T-01-AC2",
+        "T-01-AC3",
+        "T-131-AC1",
+        "T-131-AC2",
+        "T-131-AC3",
+        "T-131-AC4",
+        "T-132-AC1",
+        "T-132-AC2",
+        "T-132-AC3",
+        "T-132-AC4"
+      ],
+      "sliceIds": [
+        "CL-001"
+      ],
+      "existingCoverage": "partial; existing parent semantics preserved, integrated issue behavior requires this addition",
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {},
+      "scenario": {
+        "id": "CL-S23",
+        "seed": {
+          "tenant": "tenant-a",
+          "workspace": "workspace-a",
+          "sourceCriteria": 24,
+          "deliverySlices": 18,
+          "originalTasks": 132,
+          "originalCriteria": 480
+        },
+        "action": "Check exact source mapping, contract/UX linkage and bounded-contribution packet requirements.",
+        "expected": {
+          "sourceCriteriaMapped": 24,
+          "originalCriteriaPreserved": 480,
+          "approvedPackets": 0
+        },
+        "counterexample": "Disconnected supplement, fabricated approval or a missing issue checkbox must fail specification checks.",
+        "observationSources": [
+          "authorized UI and API response",
+          "independent database/revision and outbox read",
+          "runtime history and provider effect ledger when applicable"
+        ],
+        "testPath": "tests/acceptance/closed-loop/cl-23.test.mjs",
+        "testPathStatus": "planned_not_executed"
+      }
+    },
+    {
+      "id": "CL-R24",
+      "sourceCriterion": "a fresh agent can resume the workflow from durable repository/runtime state without previous conversation context.",
+      "title": "Transcript-free resume",
+      "taskIds": [
+        "T-20",
+        "T-23",
+        "T-41",
+        "T-88"
+      ],
+      "acceptanceIds": [
+        "T-20-AC1",
+        "T-20-AC2",
+        "T-20-AC3",
+        "T-23-AC1",
+        "T-23-AC2",
+        "T-23-AC3",
+        "T-41-AC1",
+        "T-41-AC2",
+        "T-41-AC3",
+        "T-88-AC1",
+        "T-88-AC2",
+        "T-88-AC3",
+        "T-88-AC4"
+      ],
+      "sliceIds": [
+        "CL-011"
+      ],
+      "existingCoverage": "partial; existing parent semantics preserved, integrated issue behavior requires this addition",
+      "status": "not_run",
+      "evidence": [],
+      "taskEvidence": {},
+      "scenario": {
+        "id": "CL-S24",
+        "seed": {
+          "tenant": "tenant-a",
+          "workspace": "workspace-a",
+          "crashAt": "domain transition committed before runtime signal",
+          "commandId": "route-1",
+          "runtimeDelivered": false
+        },
+        "action": "Restore with a fresh session, reconcile pending outbox and reconstruct next admissible action.",
+        "expected": {
+          "logicalTransitions": 1,
+          "duplicateEffects": 0,
+          "pinnedVersionsRetained": true,
+          "budgetsRetained": true,
+          "conversationRequired": false
+        },
+        "counterexample": "Old fence cannot dispatch after restore; unknown provider outcome reconciles first.",
+        "observationSources": [
+          "authorized UI and API response",
+          "independent database/revision and outbox read",
+          "runtime history and provider effect ledger when applicable"
+        ],
+        "testPath": "tests/acceptance/closed-loop/cl-24.test.mjs",
+        "testPathStatus": "planned_not_executed"
+      }
+    }
+  ],
+  "slices": [
+    {
+      "id": "CL-001",
+      "title": "Vocabulary and ownership ADR",
+      "taskIds": [
+        "T-01",
+        "T-131"
+      ],
+      "dependsOn": [],
+      "deliverable": "Review CP truth/applicability distinction, controller/module ownership and all source mappings; retain old invariants.",
+      "targetPath": "docs/production/CLOSED-LOOP-CONTROL-19.md",
+      "pathMeaning": "planned integration target, not implemented evidence",
+      "status": "planned",
+      "reviewStatus": "pending",
+      "boundedContribution": "Map original acceptance and CL requirement contribution in the existing work-package contract; parent dependencies still apply; schema prerequisites need not execute downstream runtime.",
+      "evidence": []
+    },
+    {
+      "id": "CL-002",
+      "title": "Schemas and identity contracts",
+      "taskIds": [
+        "T-01",
+        "T-26",
+        "T-91"
+      ],
+      "dependsOn": [
+        "CL-001"
+      ],
+      "deliverable": "Integrate strict payloads, typed tenant refs, envelopes, semantic invariants and negative schema fixtures in reviewed packets.",
+      "targetPath": "contracts/enterprise/closed-loop.schemas-19.json",
+      "pathMeaning": "planned integration target, not implemented evidence",
+      "status": "planned",
+      "reviewStatus": "pending",
+      "boundedContribution": "Map original acceptance and CL requirement contribution in the existing work-package contract; parent dependencies still apply; schema prerequisites need not execute downstream runtime.",
+      "evidence": []
+    },
+    {
+      "id": "CL-003",
+      "title": "Intent graph and immediate reconciliation",
+      "taskIds": [
+        "T-09",
+        "T-10",
+        "T-13",
+        "T-26",
+        "T-53",
+        "T-74",
+        "T-121",
+        "T-124"
+      ],
+      "dependsOn": [
+        "CL-002"
+      ],
+      "deliverable": "Implement immutable intent/uncertainty provenance and CP reconciliation with conflict/restart/authority-denial evidence.",
+      "targetPath": "src/modules/studio/intent/",
+      "pathMeaning": "planned integration target, not implemented evidence",
+      "status": "planned",
+      "reviewStatus": "pending",
+      "boundedContribution": "Map original acceptance and CL requirement contribution in the existing work-package contract; parent dependencies still apply; schema prerequisites need not execute downstream runtime.",
+      "evidence": []
+    },
+    {
+      "id": "CL-004",
+      "title": "Clarification and context policy",
+      "taskIds": [
+        "T-10",
+        "T-25",
+        "T-26"
+      ],
+      "dependsOn": [
+        "CL-003"
+      ],
+      "deliverable": "Implement ordered dispositions, context sufficiency, question/answer/reconciliation lifecycle and actionable accessible forms.",
+      "targetPath": "src/modules/sdlc/clarification/",
+      "pathMeaning": "planned integration target, not implemented evidence",
+      "status": "planned",
+      "reviewStatus": "pending",
+      "boundedContribution": "Map original acceptance and CL requirement contribution in the existing work-package contract; parent dependencies still apply; schema prerequisites need not execute downstream runtime.",
+      "evidence": []
+    },
+    {
+      "id": "CL-005",
+      "title": "Evaluator registry",
+      "taskIds": [
+        "T-22",
+        "T-89"
+      ],
+      "dependsOn": [
+        "CL-002"
+      ],
+      "deliverable": "Version evaluator capabilities, result envelope, calibration requirements, support/enablement and deprecation; no unqualified activation.",
+      "targetPath": "src/modules/overseer/evaluations/",
+      "pathMeaning": "planned integration target, not implemented evidence",
+      "status": "planned",
+      "reviewStatus": "pending",
+      "boundedContribution": "Map original acceptance and CL requirement contribution in the existing work-package contract; parent dependencies still apply; schema prerequisites need not execute downstream runtime.",
+      "evidence": []
+    },
+    {
+      "id": "CL-006",
+      "title": "Deterministic adapters",
+      "taskIds": [
+        "T-12",
+        "T-31",
+        "T-89"
+      ],
+      "dependsOn": [
+        "CL-005"
+      ],
+      "deliverable": "Collect real test/schema/security/performance/architecture results with scoped evidence and error semantics.",
+      "targetPath": "src/modules/overseer/evaluations/adapters/",
+      "pathMeaning": "planned integration target, not implemented evidence",
+      "status": "planned",
+      "reviewStatus": "pending",
+      "boundedContribution": "Map original acceptance and CL requirement contribution in the existing work-package contract; parent dependencies still apply; schema prerequisites need not execute downstream runtime.",
+      "evidence": []
+    },
+    {
+      "id": "CL-007",
+      "title": "Semantic and grounded adapters",
+      "taskIds": [
+        "T-22",
+        "T-66",
+        "T-89"
+      ],
+      "dependsOn": [
+        "CL-005"
+      ],
+      "deliverable": "Pin prompt/model/rubric, claim evidence and structured findings; exercise real permitted provider plus poisoning/abstention.",
+      "targetPath": "src/modules/overseer/evaluations/adapters/",
+      "pathMeaning": "planned integration target, not implemented evidence",
+      "status": "planned",
+      "reviewStatus": "pending",
+      "boundedContribution": "Map original acceptance and CL requirement contribution in the existing work-package contract; parent dependencies still apply; schema prerequisites need not execute downstream runtime.",
+      "evidence": []
+    },
+    {
+      "id": "CL-008",
+      "title": "Trajectory evaluation",
+      "taskIds": [
+        "T-21",
+        "T-77",
+        "T-89"
+      ],
+      "dependsOn": [
+        "CL-005"
+      ],
+      "deliverable": "Check real tool parameters/order/current effect authority, idempotency and forbidden actions even for correct final output.",
+      "targetPath": "src/modules/overseer/evaluations/trajectory/",
+      "pathMeaning": "planned integration target, not implemented evidence",
+      "status": "planned",
+      "reviewStatus": "pending",
+      "boundedContribution": "Map original acceptance and CL requirement contribution in the existing work-package contract; parent dependencies still apply; schema prerequisites need not execute downstream runtime.",
+      "evidence": []
+    },
+    {
+      "id": "CL-009",
+      "title": "Evidence-derived acceptance",
+      "taskIds": [
+        "T-12",
+        "T-23",
+        "T-64",
+        "T-79",
+        "T-80",
+        "T-91"
+      ],
+      "dependsOn": [
+        "CL-003",
+        "CL-005"
+      ],
+      "deliverable": "Atomically assess complete mandatory proof manifest, decisions and current dependency generation; deny stale/empty/indeterminate success.",
+      "targetPath": "src/modules/sdlc/acceptance/",
+      "pathMeaning": "planned integration target, not implemented evidence",
+      "status": "planned",
+      "reviewStatus": "pending",
+      "boundedContribution": "Map original acceptance and CL requirement contribution in the existing work-package contract; parent dependencies still apply; schema prerequisites need not execute downstream runtime.",
+      "evidence": []
+    },
+    {
+      "id": "CL-010",
+      "title": "Diagnostic router",
+      "taskIds": [
+        "T-25",
+        "T-27",
+        "T-28",
+        "T-30"
+      ],
+      "dependsOn": [
+        "CL-004",
+        "CL-009"
+      ],
+      "deliverable": "Map every diagnosis to registered profile routes, preserve failures, explicit strategy choice and safety-first rollback handling.",
+      "targetPath": "src/modules/sdlc/diagnosis/",
+      "pathMeaning": "planned integration target, not implemented evidence",
+      "status": "planned",
+      "reviewStatus": "pending",
+      "boundedContribution": "Map original acceptance and CL requirement contribution in the existing work-package contract; parent dependencies still apply; schema prerequisites need not execute downstream runtime.",
+      "evidence": []
+    },
+    {
+      "id": "CL-011",
+      "title": "Durable feedback execution",
+      "taskIds": [
+        "T-19",
+        "T-20",
+        "T-22",
+        "T-23",
+        "T-28",
+        "T-41",
+        "T-52",
+        "T-88",
+        "T-124"
+      ],
+      "dependsOn": [
+        "CL-010"
+      ],
+      "deliverable": "Use existing Temporal bridge with atomic receipts/outbox, bounded iterations and budget fingerprints; qualify crash/replay/cancel/migration.",
+      "targetPath": "src/platform/workflows/",
+      "pathMeaning": "planned integration target, not implemented evidence",
+      "status": "planned",
+      "reviewStatus": "pending",
+      "boundedContribution": "Map original acceptance and CL requirement contribution in the existing work-package contract; parent dependencies still apply; schema prerequisites need not execute downstream runtime.",
+      "evidence": []
+    },
+    {
+      "id": "CL-012",
+      "title": "Traceability and impact UX",
+      "taskIds": [
+        "T-39",
+        "T-51",
+        "T-90",
+        "T-91",
+        "T-122",
+        "T-123",
+        "T-124"
+      ],
+      "dependsOn": [
+        "CL-003",
+        "CL-009"
+      ],
+      "deliverable": "Ship scoped bidirectional queries, proof-gap filters, field impact and race-safe applicability; diagram/table parity.",
+      "targetPath": "src/modules/sdlc/trace/",
+      "pathMeaning": "planned integration target, not implemented evidence",
+      "status": "planned",
+      "reviewStatus": "pending",
+      "boundedContribution": "Map original acceptance and CL requirement contribution in the existing work-package contract; parent dependencies still apply; schema prerequisites need not execute downstream runtime.",
+      "evidence": []
+    },
+    {
+      "id": "CL-013",
+      "title": "Regression suite format",
+      "taskIds": [
+        "T-37",
+        "T-89",
+        "T-95"
+      ],
+      "dependsOn": [
+        "CL-002"
+      ],
+      "deliverable": "Version scenario format with ambiguity, alternatives, expected/forbidden actions and holdout protection; incident lineage.",
+      "targetPath": "tests/evaluations/",
+      "pathMeaning": "planned integration target, not implemented evidence",
+      "status": "planned",
+      "reviewStatus": "pending",
+      "boundedContribution": "Map original acceptance and CL requirement contribution in the existing work-package contract; parent dependencies still apply; schema prerequisites need not execute downstream runtime.",
+      "evidence": []
+    },
+    {
+      "id": "CL-014",
+      "title": "Clarification benchmark",
+      "taskIds": [
+        "T-10",
+        "T-25",
+        "T-89"
+      ],
+      "dependsOn": [
+        "CL-004",
+        "CL-013"
+      ],
+      "deliverable": "Human-labelled safe/material ambiguities; measure unsafe assumptions, useful/unnecessary questions and avoidable human interruptions.",
+      "targetPath": "tests/evaluations/clarification/",
+      "pathMeaning": "planned integration target, not implemented evidence",
+      "status": "planned",
+      "reviewStatus": "pending",
+      "boundedContribution": "Map original acceptance and CL requirement contribution in the existing work-package contract; parent dependencies still apply; schema prerequisites need not execute downstream runtime.",
+      "evidence": []
+    },
+    {
+      "id": "CL-015",
+      "title": "Evaluator calibration",
+      "taskIds": [
+        "T-89"
+      ],
+      "dependsOn": [
+        "CL-006",
+        "CL-007",
+        "CL-013"
+      ],
+      "deliverable": "Measure false acceptance/rejection, abstention, disagreement, order/verbosity/injection sensitivity with frozen held-out labels.",
+      "targetPath": "tests/evaluations/evaluator-calibration/",
+      "pathMeaning": "planned integration target, not implemented evidence",
+      "status": "planned",
+      "reviewStatus": "pending",
+      "boundedContribution": "Map original acceptance and CL requirement contribution in the existing work-package contract; parent dependencies still apply; schema prerequisites need not execute downstream runtime.",
+      "evidence": []
+    },
+    {
+      "id": "CL-016",
+      "title": "Release and outcome feedback",
+      "taskIds": [
+        "T-33",
+        "T-34",
+        "T-35",
+        "T-36",
+        "T-94",
+        "T-95"
+      ],
+      "dependsOn": [
+        "CL-011"
+      ],
+      "deliverable": "Distinct deployment/health/observation/acceptance, bounded windows/dedupe, failed outcome reframing and governed mitigation.",
+      "targetPath": "src/modules/sdlc/observations/",
+      "pathMeaning": "planned integration target, not implemented evidence",
+      "status": "planned",
+      "reviewStatus": "pending",
+      "boundedContribution": "Map original acceptance and CL requirement contribution in the existing work-package contract; parent dependencies still apply; schema prerequisites need not execute downstream runtime.",
+      "evidence": []
+    },
+    {
+      "id": "CL-017",
+      "title": "Institutional learning",
+      "taskIds": [
+        "T-37",
+        "T-101"
+      ],
+      "dependsOn": [
+        "CL-012",
+        "CL-013",
+        "CL-016"
+      ],
+      "deliverable": "Convert accepted corrections into reviewed reusable policy/rubric/regression drafts without delaying immediate state reconciliation.",
+      "targetPath": "src/modules/sdlc/learning/",
+      "pathMeaning": "planned integration target, not implemented evidence",
+      "status": "planned",
+      "reviewStatus": "pending",
+      "boundedContribution": "Map original acceptance and CL requirement contribution in the existing work-package contract; parent dependencies still apply; schema prerequisites need not execute downstream runtime.",
+      "evidence": []
+    },
+    {
+      "id": "CL-018",
+      "title": "Integrated nonlinear qualification",
+      "taskIds": [
+        "T-45",
+        "T-48",
+        "T-106",
+        "T-130",
+        "T-132"
+      ],
+      "dependsOn": [
+        "CL-008",
+        "CL-011",
+        "CL-012",
+        "CL-014",
+        "CL-015",
+        "CL-016",
+        "CL-017"
+      ],
+      "deliverable": "Execute golden journey and all negative/recovery variants across actual UI/API/store/runtime/provider; independent adjudication.",
+      "targetPath": "tests/acceptance/closed-loop/",
+      "pathMeaning": "planned integration target, not implemented evidence",
+      "status": "planned",
+      "reviewStatus": "pending",
+      "boundedContribution": "Map original acceptance and CL requirement contribution in the existing work-package contract; parent dependencies still apply; schema prerequisites need not execute downstream runtime.",
+      "evidence": []
+    }
+  ],
+  "supportingScenarios": [
+    {
+      "id": "CL-X01",
+      "testPath": "tests/acceptance/closed-loop/cl-x01.test.mjs",
+      "testPathStatus": "planned_not_executed",
+      "requirementIds": [
+        "CL-R06"
+      ],
+      "sliceIds": [
+        "CL-008"
+      ],
+      "seed": {
+        "finalOutput": "correct",
+        "trajectory": [
+          "read allowed data",
+          "call forbidden tool"
+        ],
+        "currentToolGrant": false
+      },
+      "action": "Evaluate final artifact and actual ordered broker/tool receipts independently.",
+      "expected": {
+        "artifact": "pass",
+        "trajectory": "fail",
+        "acceptance": false
+      },
+      "counterexample": "A correct final artifact must not hide a prohibited tool action.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "CL-X02",
+      "testPath": "tests/acceptance/closed-loop/cl-x02.test.mjs",
+      "testPathStatus": "planned_not_executed",
+      "requirementIds": [
+        "CL-R03"
+      ],
+      "sliceIds": [
+        "CL-014"
+      ],
+      "seed": {
+        "humanLabels": {
+          "safeDisplayChoice": "infer",
+          "availableRepoFact": "investigate",
+          "paymentScope": "ask_human",
+          "missingEffectGrant": "block"
+        }
+      },
+      "action": "Run the same four uncertainty cases through the versioned policy and record the confusion matrix and unnecessary question count.",
+      "expected": {
+        "unsafeAssumptions": 0,
+        "unnecessaryQuestions": 0,
+        "materialQuestionCount": 1,
+        "deniedEffectCount": 1
+      },
+      "counterexample": "Asking four questions or guessing missing payment authority fails this fixture.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "CL-X03",
+      "testPath": "tests/acceptance/closed-loop/cl-x03.test.mjs",
+      "testPathStatus": "planned_not_executed",
+      "requirementIds": [
+        "CL-R08",
+        "CL-R11"
+      ],
+      "sliceIds": [
+        "CL-015",
+        "CL-009"
+      ],
+      "seed": {
+        "qualifiedJudgeA": "pass",
+        "qualifiedJudgeB": "fail",
+        "blocking": true
+      },
+      "action": "Aggregate conflicting independently evidenced judgments against the same pinned rubric and target.",
+      "expected": {
+        "outcomeAccepted": false,
+        "disagreement": "open",
+        "route": "escalate"
+      },
+      "counterexample": "Averaging scores or choosing the more optimistic judge cannot accept.",
+      "status": "not_run",
+      "evidence": []
+    },
+    {
+      "id": "CL-X04",
+      "testPath": "tests/acceptance/closed-loop/cl-x04.test.mjs",
+      "testPathStatus": "planned_not_executed",
+      "requirementIds": [
+        "CL-R03",
+        "CL-R24"
+      ],
+      "sliceIds": [
+        "CL-004",
+        "CL-011"
+      ],
+      "seed": {
+        "requiredContext": [
+          "API contract v2",
+          "current policy"
+        ],
+        "available": [
+          "API contract v1"
+        ],
+        "policyReadAllowed": false
+      },
+      "action": "Assess required context and reconstruct that assessment in a fresh session.",
+      "expected": {
+        "sufficient": false,
+        "route": "inaccessible",
+        "staleSource": "API contract v1",
+        "hiddenPolicyContentDisclosed": false
+      },
+      "counterexample": "A plausible final answer or model memory cannot replace current authorized context.",
+      "status": "not_run",
+      "evidence": []
+    }
+  ],
+  "originalSemanticsDigest": "bae6cc764818772670970f4979da2c8bc3c94d0c57b252c339713a57f6f06320",
+  "proposalManifest": "contracts/enterprise/closed-loop-manifest-19.json"
+}

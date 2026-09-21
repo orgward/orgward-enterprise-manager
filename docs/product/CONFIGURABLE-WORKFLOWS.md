@@ -1,5 +1,12 @@
 # Hard requirement: user-editable enterprise and SDLC workflows
 
+Issue #1 enrichment under pending CR-019 is specified in
+[CLOSED-LOOP-CONTROL-19](../production/CLOSED-LOOP-CONTROL-19.md) and
+[CLOSED-LOOP-UX-19](CLOSED-LOOP-UX-19.md). Diagnostic routes remain editable profile
+data with complete diagram/form parity. Backward routes create bounded iterations
+or reviewed successors, not arbitrary jumps or a second workflow engine. Required
+proofs, current authority and no-progress limits remain independent of node labels.
+
 Normative user-requested addendum, increment 10. Required, not implemented.
 Applies to business processes and **the SDLC process itself**, including subproducts'
 review, evaluation and remediation workflows. ADR-010 fixes architecture choices.

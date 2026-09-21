@@ -9,6 +9,7 @@ import { checkDraftRegistry } from './check-work-package-drafts.mjs';
 import { checkDesignResolutions } from './check-design-resolutions.mjs';
 import { checkDomainVectors } from './check-domain-vectors.mjs';
 import { checkConfigurableWorkflow } from './check-configurable-workflow.mjs';
+import { checkClosedLoop } from './check-closed-loop.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = async file => JSON.parse(await readFile(path.join(root, file), 'utf8'));
@@ -92,6 +93,7 @@ Object.assign(result, await checkDraftRegistry(root, backlog, packetContract, { 
 Object.assign(result, await checkDesignResolutions(backlog, { selfTest: process.argv.includes('--self-test') }));
 Object.assign(result, checkDomainVectors(backlog, { selfTest: process.argv.includes('--self-test') }));
 Object.assign(result, await checkConfigurableWorkflow(backlog, architecture, { selfTest: process.argv.includes('--self-test') }));
+Object.assign(result, await checkClosedLoop(root, backlog, architecture));
 if (backlog.tasks.find(t => t.id === portfolio.qualifier_task).status === 'complete') {
   assert.ok([...privateLedger.gates, ...productionLedger.gates].every(g => ['verified','complete'].includes(g.status)), 'Full portfolio qualification requires every original P/E gate');
 }

@@ -1,5 +1,16 @@
 # OrgWard Enterprise Studio coding workspace
 
+## Issue #1 reconciliation — checkpoint 19
+
+User-requested closed-loop enrichment is linked from the canonical backlog and
+architecture via contracts/enterprise/closed-loop-obligations-19.json. Read
+docs/production/CLOSED-LOOP-CONTROL-19.md and docs/product/CLOSED-LOOP-UX-19.md
+before affected packet work. CR-019 is proposed pending independent review, not
+approved architecture or implementation. Its 24 source obligations, 18 delivery
+slices and four supplementary cases are additional to the original 480 and WF16.
+Affected tasks cannot start without approved change/packet linkage and bounded
+contribution evidence. No self-approval, new scheduler or automatic model dispatch.
+
 You are Codex, the coding operator for the private first product. This scoped
 file supersedes parent AGENTS.md clauses describing the OpenClaw research
 agent's unavailable shell tools and inability to write a product workspace.

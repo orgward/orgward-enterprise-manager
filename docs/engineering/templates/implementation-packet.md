@@ -7,6 +7,10 @@ this checklist as an approved packet.
 - taskId/sliceId, actor, trigger, observableOutcome; acceptanceIds and applicable
   workflowObligationIds/contributions; nonGoals and source/architecture digests.
 - dependencyReceipts and authentic independentReview; no fabricated readiness.
+- For issue #1 affected slices: closedLoopRequirementIds, closedLoopContributions
+  (requirementId, bounded scope, testPath), approved CR-019 candidate digest; intent,
+  uncertainty dispositions, context sufficiency, proof strategy, diagnostic routes
+  and supplemental CL-X cases. Review the proposal before treating it as adopted.
 - schemas: full fields/enums/nullability/units/time/typed refs/scopes/invariants,
   input/output/error examples and invalid counterexamples.
 - operations: registered command or method/path, request/success/error examples,

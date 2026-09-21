@@ -1,0 +1,209 @@
+{
+  "meaning": "Schema examples only, not valid authority, complete aggregate seeds or executed acceptance.",
+  "valid": [
+    {
+      "schema": "EvaluationResult",
+      "input": {
+        "contract": {
+          "id": "O1",
+          "kind": "evaluation_contract",
+          "revision": 1
+        },
+        "target": {
+          "id": "R1",
+          "kind": "requirement",
+          "revision": 1
+        },
+        "runRef": {
+          "id": "run-a",
+          "kind": "run",
+          "revision": 1
+        },
+        "attemptId": "attempt-a",
+        "evaluatorRef": {
+          "id": "adapter-a",
+          "kind": "evaluator",
+          "revision": 1
+        },
+        "inputManifestDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "timestamp": "2026-09-21T12:00:00Z",
+        "result": "indeterminate",
+        "score": null,
+        "confidencePercent": 70,
+        "findings": [],
+        "evidence": [],
+        "unsupportedClaims": [
+          "recurring bookings"
+        ],
+        "assumptionRefs": [],
+        "recommendedTransition": "clarify",
+        "diagnosticClass": "specification_gap"
+      }
+    },
+    {
+      "schema": "Uncertainty",
+      "input": {
+        "statement": "Should booking charge automatically?",
+        "sourceRefs": [
+          {
+            "artifact": {
+              "id": "api-observation",
+              "kind": "artifact",
+              "revision": 1
+            },
+            "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "locator": "response.status"
+          }
+        ],
+        "affectedRequirementRefs": [
+          {
+            "id": "R1",
+            "kind": "requirement",
+            "revision": 1
+          }
+        ],
+        "confidencePercent": 20,
+        "reversibility": "irreversible",
+        "consequence": "high",
+        "blastRadius": "external",
+        "costToClarify": "low",
+        "costToDefer": "high",
+        "empiricallyTestable": false,
+        "authorityNeeded": [
+          {
+            "id": "payment-owner",
+            "kind": "role",
+            "revision": 1
+          }
+        ],
+        "disposition": "ask_human",
+        "policy": {
+          "id": "clarification-policy",
+          "kind": "policy",
+          "revision": 1
+        },
+        "rationale": "Business authority choice changes outcome and external effects.",
+        "rejectedInterpretations": [
+          "Treat silence as payment authorization"
+        ]
+      }
+    },
+    {
+      "schema": "ControlTransition",
+      "input": {
+        "run": {
+          "id": "run-a",
+          "kind": "run",
+          "revision": 1
+        },
+        "expectedRunVersion": 3,
+        "profile": {
+          "id": "booking-workflow",
+          "kind": "workflow",
+          "revision": 1
+        },
+        "nodeId": "eval-recurring",
+        "iteration": 1,
+        "diagnosisRef": {
+          "id": "missing-recurring",
+          "kind": "diagnosis",
+          "revision": 1
+        },
+        "evidenceRefs": [
+          {
+            "id": "result-failed",
+            "kind": "evaluation_result",
+            "revision": 1
+          }
+        ],
+        "decisionRefs": [],
+        "routeNodeId": "plan",
+        "reason": "Missing required recurring behavior despite green single-booking tests.",
+        "progressFingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "repeatCount": 0,
+        "budgetReservationRef": {
+          "id": "budget-a",
+          "kind": "budget",
+          "revision": 1
+        },
+        "dependencyGeneration": 7,
+        "status": "proposed"
+      }
+    },
+    {
+      "schema": "Applicability",
+      "input": {
+        "subject": {
+          "id": "proof-e",
+          "kind": "evaluation_result",
+          "revision": 1
+        },
+        "dependencyManifestDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "generation": 8,
+        "status": "STALE",
+        "reason": "Required intent changed from I1 to I2.",
+        "truthAssessmentRef": {
+          "id": "assessment-1",
+          "kind": "truth_assessment",
+          "revision": 1
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "base": 0,
+      "patch": {
+        "result": "done"
+      },
+      "reason": "Unknown result enum"
+    },
+    {
+      "base": 0,
+      "patch": {
+        "confidencePercent": 101
+      },
+      "reason": "Confidence outside percentage range"
+    },
+    {
+      "base": 0,
+      "patch": {
+        "approved": true
+      },
+      "reason": "Result cannot carry untyped approval"
+    },
+    {
+      "base": 0,
+      "remove": "contract",
+      "reason": "Result must pin an obligation version"
+    },
+    {
+      "base": 1,
+      "patch": {
+        "disposition": "guess-and-charge"
+      },
+      "reason": "Unknown clarification disposition"
+    },
+    {
+      "base": 2,
+      "patch": {
+        "expectedRunVersion": -1
+      },
+      "reason": "Invalid expected run version"
+    },
+    {
+      "base": 2,
+      "patch": {
+        "progressFingerprint": "unbound"
+      },
+      "reason": "Progress identity must be a digest"
+    },
+    {
+      "base": 3,
+      "patch": {
+        "status": "PASS"
+      },
+      "reason": "Applicability is not evaluation result"
+    }
+  ]
+}

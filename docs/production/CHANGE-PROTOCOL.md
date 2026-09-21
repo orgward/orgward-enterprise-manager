@@ -1,5 +1,11 @@
 # One change protocol for every entry point
 
+Issue #1 integration proposal: [continuous reconciliation](CLOSED-LOOP-CONTROL-19.md)
+and [impact UX](../product/CLOSED-LOOP-UX-19.md), CR-019 pending review. CP-01–06
+remain authoritative; proposed dependency applicability is a separate dimension,
+not a replacement for CP-05 truth states. Any-stage observations propose governed
+changes; they do not wait for Learn or grant themselves accepted authority.
+
 Revision 4. Normative target for T-121–T-124 and all earlier mutation tasks. This supplies deterministic decisions, not a claim of an implemented synchronization engine.
 
 ## CP-01 — Command envelope and ownership
