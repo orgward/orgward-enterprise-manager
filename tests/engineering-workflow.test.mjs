@@ -38,10 +38,10 @@ test('change validation rejects missing impact lineage evidence and template reg
   const mutations=[r=>r.template=true,r=>r.id='CR-REPLACE',r=>r.evidence=[],r=>r.acceptanceIds=['T-999-AC1'],r=>r.preservedObligations=[],r=>r.before.digest='bad',r=>r.impact.workflow=null,r=>r.resumeCondition='',r=>r.status='green'];
   for(const mutate of mutations){const r=proposal();mutate(r);assert.throws(()=>validateChangeRecord(r,plan));}
 });
-function reviewed(){const r=proposal();r.status='approved';r.review={reviewer:'reviewer-test',independenceEvidence:'Separate synthetic fixture identity, not a real approval',receipt:'ops/checks/synthetic-review.md',candidateDigest:r.after.candidateDigest,decision:'approved'};return r;}
+function reviewed(){const r=proposal();r.status='approved';r.review={reviewer:'reviewer-test',independenceEvidence:'Separate synthetic fixture identity, not a real approval',receipt:'ops/checks/synthetic-review.md',candidateRevision:'a'.repeat(40),candidateDigest:r.after.candidateDigest,decision:'approved'};return r;}
 test('approval requires separate matching review and owner decision for goal changes',()=>{
   assert.equal(validateChangeRecord(reviewed(),plan),true);
-  for(const mutate of [r=>r.review=null,r=>r.review.reviewer=r.author,r=>r.review.candidateDigest=sha('old'),r=>r.review.decision='changes_requested',r=>r.kind='goal_change']){const r=reviewed();mutate(r);assert.throws(()=>validateChangeRecord(r,plan));}
+  for(const mutate of [r=>r.review=null,r=>r.review.reviewer=r.author,r=>delete r.review.candidateRevision,r=>r.review.candidateRevision='not-a-commit',r=>r.review.candidateDigest=sha('old'),r=>r.review.decision='changes_requested',r=>r.kind='goal_change']){const r=reviewed();mutate(r);assert.throws(()=>validateChangeRecord(r,plan));}
   const goal=reviewed();goal.kind='goal_change';goal.ownerDecision={principal:'owner-test',authority:'synthetic test only',receipt:'ops/checks/synthetic-owner.md',decision:'approved',candidateDigest:goal.after.candidateDigest};assert.equal(validateChangeRecord(goal,plan),true);
 });
 test('applied changes require artifact and actual-validation references',()=>{

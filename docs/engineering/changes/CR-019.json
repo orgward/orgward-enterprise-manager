@@ -9,7 +9,8 @@
     "docs/production/ISSUE-1-SOURCE-19.json",
     "docs/production/CLOSED-LOOP-CONTROL-19.md",
     "docs/product/CLOSED-LOOP-UX-19.md",
-    "contracts/enterprise/closed-loop-manifest-19.json"
+    "contracts/enterprise/closed-loop-manifest-19.json",
+    "ops/checks/cr-019-independent-review-6c8e99e-51b327d5-2026-09-21.md"
   ],
   "taskIds": [
     "T-01",
@@ -241,8 +242,8 @@
     "digest": "e8d8bada22fa13a1f188995a7a59895bfaa379fdb15c85147468d4f075c91964"
   },
   "after": {
-    "proposal": "Add the source-mapped CL-001–018 integration overlay, 24 obligations, four supplementary cases and strict draft payload schemas. Preserve original task/criterion semantics and CP/WF authority. See CLOSED-LOOP-CONTROL-19.md and candidate manifest; independent review is still required.",
-    "candidateDigest": "51b327d5bf810e9290cadfecb9c453d5f223db1a5a52a8d4a4657d602daffbc6"
+    "proposal": "Add the source-mapped CL-001–018 integration overlay, 24 obligations, four task-owned supplementary cases, strict draft payload schemas, semantic CR candidate binding and exact reviewed-revision validation. Preserve original task/criterion semantics and CP/WF authority. See CLOSED-LOOP-CONTROL-19.md and candidate manifest; independent re-review is required.",
+    "candidateDigest": "991c3a2c687a592e64451d9bee7088867f8bcd731b9aa460a7f0aaea9bcda489"
   },
   "alternatives": [
     "Leave stages connected only by prompts: rejected because durable diagnosis and acceptance remain ambiguous.",
@@ -258,8 +259,8 @@
     "migration": "Legacy statuses remain unverified; additive schemas and resumable backfill require lineage checks. Unknown effects prohibit unsafe active-run migration.",
     "evidence": "Bind results to contract/evaluator/input/target versions; keep pass/fail/indeterminate/error; calibration and observation windows required; stale results stay historical.",
     "operations": "Measure diagnostic routes, useful questions, loop exhaustion and accepted outcomes; restore fences domain/runtime/provider histories; no paid or billing fallback.",
-    "dependencies": "18 slice dependencies supplement unchanged parent graph; T-01 supplies schemas without requiring downstream runtime completion. Affected packets bind this candidate; unrelated T-02 remains independent.",
-    "qualification": "Add 24 CL and four supplementary cases to T-132 without replacing 480 original AC, WF16, SQ/PQ/source requirements or changing P12/E16. All product runs not_run."
+    "dependencies": "18 slice dependencies supplement unchanged parent graph; T-01 supplies schemas without requiring downstream runtime completion. Affected packets bind this candidate, and task-owned CL-X contributions are guarded independently; unrelated T-02 remains independent.",
+    "qualification": "Add 24 CL and four task-owned supplementary cases to bounded parent contributions and T-132 without replacing 480 original AC, WF16, SQ/PQ/source requirements or changing P12/E16. All product runs not_run."
   },
   "preservedObligations": [
     "T-01-AC1",
@@ -438,12 +439,14 @@
   "invalidationPlan": [
     "All affected candidate packets must incorporate the CL overlay before approval; current registry has zero approved packets.",
     "Any candidate artifact hash change invalidates its review and closedLoopCandidateDigest linkage.",
-    "Do not reinterpret old 480 vectors as proving added requirements; keep current CL results not_run until actual execution."
+    "Do not reinterpret old 480 vectors as proving added requirements; keep current CL results not_run until actual execution.",
+    "The changes-requested review of 6c8e99ed7114a7285146ca00c64904cfb35a11e5 remains historical evidence and is invalid for this repaired candidate digest."
   ],
   "validationCommands": [
     "npm run check:spec",
     "npm run check:engineering",
     "node --test tests/closed-loop-spec.test.mjs",
+    "node ops/check-closed-loop.mjs",
     "npm run check",
     "node ops/check-spec.mjs --self-test --verify-sources"
   ],
@@ -451,5 +454,5 @@
   "ownerDecision": null,
   "appliedArtifacts": [],
   "validationReceipts": [],
-  "resumeCondition": "Independent architecture/security review of exact candidate manifest, then governed approval/adoption and bounded T-01 CL-001/002 schema/seed/observation packet integration. Product implementation and automatic model dispatch are not authorized by structural validation."
+  "resumeCondition": "Independent engineering re-review of the repaired exact candidate manifest and pushed Git revision. Only a passing digest- and revision-bound review may precede governed approval/adoption and bounded T-01 CL-001/002 packet integration. Product implementation and automatic model dispatch are not authorized by structural validation."
 }

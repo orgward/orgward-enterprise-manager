@@ -1,26 +1,37 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { validateExample } from './check-work-package-drafts.mjs';
 import { validateChangeRecord } from './check-engineering-workflow.mjs';
 
 export const contractPath='contracts/enterprise/closed-loop-obligations-19.json';
 export const sha=text=>createHash('sha256').update(text).digest('hex');
+export const manifestHash=manifest=>sha(JSON.stringify(manifest));
 export const semantics=plan=>plan.tasks.map(t=>({id:t.id,title:t.title,user_story:t.user_story,depends_on:t.depends_on,acceptance:t.acceptance.map(a=>({id:a.id,scenario:a.scenario}))}));
+const json=bytes=>JSON.parse(Buffer.isBuffer(bytes)?bytes.toString('utf8'):bytes);
+export function changeSemantics(bytes) {
+  const parsed=json(bytes);
+  const {status,review,ownerDecision,appliedArtifacts,validationReceipts,...candidate}=parsed;
+  const {candidateDigest,...after}=candidate.after;
+  return {...candidate,after};
+}
 // Progress and newly reviewed packets must not stale an otherwise unchanged
 // proposal. Their validity is checked separately by the start/acceptance guards.
 export function candidateHash(file,bytes) {
   if(file==='docs/production/IMPLEMENTATION-BACKLOG.json') {
-    const p=JSON.parse(bytes);
+    const p=json(bytes);
     return sha(JSON.stringify({...p,tasks:p.tasks.map(({status,receipts,acceptance,...t})=>({...t,acceptance:acceptance.map(({status,evidence,...ac})=>ac)}))}));
   }
   if(file==='docs/production/ENTERPRISE-ARCHITECTURE.json') {
-    const {packages,...a}=JSON.parse(bytes);
+    const {packages,...a}=json(bytes);
     for(const key of ['invariants','journeys'])a[key]=a[key].map(({status,evidence,...r})=>r);
     return sha(JSON.stringify(a));
   }
+  if(file==='docs/engineering/changes/CR-019.json')return sha(JSON.stringify(changeSemantics(bytes)));
   return sha(bytes);
 }
 const nonempty=x=>assert.ok(typeof x==='string'&&x.trim().length>0,'Missing concrete text');
@@ -94,6 +105,25 @@ export function validateClosedLoop(c,plan,architecture,source,change) {
     assert.match(s.testPath,/^tests\/acceptance\/closed-loop\/cl-x\d{2}\.test\.mjs$/);
     unique(s.requirementIds);assert.ok(s.requirementIds.length);s.requirementIds.forEach(id=>assert.ok(c.requirements.some(r=>r.id===id)));
     unique(s.sliceIds);assert.ok(s.sliceIds.length);s.sliceIds.forEach(id=>assert.ok(slices.has(id)));
+    unique(s.taskIds);assert.ok(s.taskIds.length);
+    const sliceTasks=new Set(s.sliceIds.flatMap(id=>slices.get(id).taskIds));
+    s.taskIds.forEach(id=>{assert.ok(tasks.has(id),'Unknown supplementary owner');assert.ok(sliceTasks.has(id),'Supplementary owner is outside its delivery slice');});
+    assert.ok(s.taskEvidence&&typeof s.taskEvidence==='object');
+    for(const [id,refs]of Object.entries(s.taskEvidence)){assert.ok(s.taskIds.includes(id));assert.ok(refs.length);unique(refs);refs.forEach(receipt);}
+    for(const id of s.taskIds) {
+      if(['in_progress','complete'].includes(tasks.get(id).status)) {
+        assert.ok(['approved','applied'].includes(change.status),'Supplementary work starts before change review');
+        assert.equal(c.status,'approved_specification');
+        const packets=architecture.packages.filter(p=>p.taskId===id&&p.closedLoopSupplementaryCaseIds?.includes(s.id));
+        assert.ok(packets.length,`${id}: missing ${s.id} supplementary packet linkage`);
+        for(const p of packets) {
+          assert.equal(p.closedLoopCandidateDigest,change.after.candidateDigest,'Stale CL supplementary packet');
+          const contribution=p.closedLoopSupplementaryContributions?.find(x=>x.caseId===s.id);
+          assert.ok(contribution,'Missing supplementary bounded contribution');nonempty(contribution.scope);nonempty(contribution.testPath);
+        }
+      }
+      if(tasks.get(id).status==='complete')assert.ok(s.taskEvidence[id]?.length,'Missing supplementary task contribution receipt');
+    }
   }
   const mapped=new Set([...c.requirements,...c.supportingScenarios].flatMap(r=>r.sliceIds));
   c.slices.forEach(s=>assert.ok(mapped.has(s.id),'Slice without acceptance coverage'));
@@ -118,14 +148,23 @@ export async function checkClosedLoop(root,plan,architecture) {
   const c=await read(contractPath),source=await read(c.source),change=await read(c.changeRecord);
   validateClosedLoop(c,plan,architecture,source,change);
   const manifest=await read(c.proposalManifest);
-  assert.equal(change.after.candidateDigest,sha(JSON.stringify(manifest.files)),'Candidate manifest/CR drift');
+  assert.equal(change.after.candidateDigest,manifestHash(manifest),'Candidate manifest/CR drift');
   unique(manifest.files.map(f=>f.path));
-  for(const needed of [contractPath,c.source,c.decision,c.ux,c.schemas,'docs/production/IMPLEMENTATION-BACKLOG.json','docs/production/ENTERPRISE-ARCHITECTURE.json','ops/check-closed-loop.mjs'])assert.ok(manifest.files.some(f=>f.path===needed),'Incomplete candidate manifest');
+  for(const needed of [contractPath,c.source,c.decision,c.ux,c.schemas,c.changeRecord,'docs/production/IMPLEMENTATION-BACKLOG.json','docs/production/ENTERPRISE-ARCHITECTURE.json','ops/check-closed-loop.mjs'])assert.ok(manifest.files.some(f=>f.path===needed),'Incomplete candidate manifest');
   const rootReal=await realpath(root);
   for(const f of manifest.files) {
     assert.ok(!path.isAbsolute(f.path)&&!f.path.split('/').includes('..'));
     const resolved=await realpath(path.join(root,f.path));assert.ok(resolved.startsWith(rootReal+path.sep));
     assert.equal(candidateHash(f.path,await readFile(resolved)),f.sha256,`Candidate changed: ${f.path}; update proposal and invalidate review`);
+  }
+  if(change.review) {
+    const revision=change.review.candidateRevision;
+    assert.match(revision,/^[a-f0-9]{40}$/,'Review lacks exact candidate Git revision');
+    const run=promisify(execFile);
+    for(const f of manifest.files) {
+      const {stdout}=await run('git',['show',`${revision}:${f.path}`],{cwd:root,encoding:null,maxBuffer:32*1024*1024});
+      assert.equal(candidateHash(f.path,stdout),f.sha256,`Reviewed revision does not contain candidate: ${f.path}`);
+    }
   }
   const schemas=await read(c.schemas),examples=await read('contracts/enterprise/closed-loop-examples-19.json');
   assert.equal(Object.keys(schemas.$defs).length,17);

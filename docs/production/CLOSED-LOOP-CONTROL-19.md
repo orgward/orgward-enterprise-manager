@@ -289,10 +289,22 @@ reconciles domain/runtime/provider histories under a new fence before dispatch.
 to existing task/AC owners, CL-001–018 dependency-ordered slices and concrete scenario
 inputs/expected observations. All remain not_run. The source snapshot and proposal
 manifest are hash-bound. `CLOSED-LOOP-UX-19.md` specifies interactions and golden path.
-The manifest hashes exact artifact bytes except the backlog/architecture indexes:
+The CR candidate digest hashes the full manifest object, including its format,
+base revision, file list and hash policy. The manifest hashes exact artifact bytes
+except the backlog/architecture indexes:
 there it hashes semantic content without task/criterion progress, evidence arrays
-or packet registrations. Those mutable records are separately validated. Legitimate
-unrelated task progress must not stale this proposal; changed meaning must.
+or packet registrations. It also hashes a canonical CR-019 semantic projection:
+proposal, impacts, preserved obligations, invalidation and resume semantics are
+bound, while mutable lifecycle/review/owner/application metadata and the circular
+candidate-digest field are excluded. A recorded review names an exact Git commit;
+the checker re-reads every manifest artifact at that commit and rejects drift.
+Those mutable records are separately validated. Legitimate unrelated task progress
+or review recording must not stale this proposal; changed meaning must.
+
+CL-X01–CL-X04 are task-owned adversarial contributions, not final-qualification-only
+notes. Applicable packets list `closedLoopSupplementaryCaseIds` and per-case bounded
+scope/test paths. An owner task cannot start without adopted CR linkage and cannot
+complete without its case contribution receipt; T-132 still verifies composition.
 
 First bounded integration is CL-001/002 under T-01: review vocabulary/ownership,
 schemas, negative examples and adoption migration; no live effects. Then integrate

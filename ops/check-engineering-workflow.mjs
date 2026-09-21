@@ -38,6 +38,7 @@ export function validateChangeRecord(record,plan) {
     const review=record.review;assert.ok(review,'Missing real review record');
     nonempty(review.reviewer,'reviewer');assert.notEqual(review.reviewer,record.author,'Author cannot independently approve');
     nonempty(review.independenceEvidence,'review independence');nonempty(review.receipt,'review receipt');
+    assert.match(review.candidateRevision,/^[a-f0-9]{40}$/,'Review must bind exact candidate Git revision');
     assert.equal(review.candidateDigest,record.after.candidateDigest,'Stale review');
     assert.ok(['approved','changes_requested'].includes(review.decision));
     if(['approved','applied'].includes(record.status))assert.equal(review.decision,'approved');

@@ -11,12 +11,16 @@
       "sha256": "c0eb3475b35019dfc1adc043c94b42433e01cc1c06b7fc87486f02ec4dfc6699"
     },
     {
+      "path": "docs/engineering/changes/CR-019.json",
+      "sha256": "bf7ce5813102d211a3144aac93ff182fcd15f453e4b53150fdfd5592ed4bc72c"
+    },
+    {
       "path": "contracts/enterprise/closed-loop-examples-19.json",
       "sha256": "8792db3630b0ba4abfada42d3e0ce3bd8b2fdc4a0bface85cbbd2da5dd229c54"
     },
     {
       "path": "contracts/enterprise/closed-loop-obligations-19.json",
-      "sha256": "e782eec3056273b7b25873e2e5fe89f6e305e7942822454f064e7b575794eaa0"
+      "sha256": "d3594640a888e0effeb35834aa620ba1d310402ed1358f9a6a54a627d46a1d21"
     },
     {
       "path": "contracts/enterprise/closed-loop.schemas-19.json",
@@ -44,7 +48,7 @@
     },
     {
       "path": "docs/engineering/templates/implementation-packet.md",
-      "sha256": "b2192f771bd3d5652f3542bd74b1f5890883faac9672a16c65abaa80f0dff98f"
+      "sha256": "0b9164d8c3ee663f87048ac3f95153e4fb5ad8001015330a1241c6eb9f40ae09"
     },
     {
       "path": "docs/product/CLOSED-LOOP-UX-19.md",
@@ -64,7 +68,7 @@
     },
     {
       "path": "docs/production/CLOSED-LOOP-CONTROL-19.md",
-      "sha256": "e10396bcf9082591f27165b1eba5ff8948ecdb671df970f94306bf6d3494a2af"
+      "sha256": "92354881878ec6848f9eca5d2b3fb7e95e5b80142a179c2afd5e4710b7e8c848"
     },
     {
       "path": "docs/production/ENTERPRISE-ARCHITECTURE.json",
@@ -96,7 +100,15 @@
     },
     {
       "path": "ops/check-closed-loop.mjs",
-      "sha256": "6e72f62e893a48b2ccd8ddcc0391ff81342cd035f12e273a55943ec692ce0a6b"
+      "sha256": "74071d49d0065299eb5b08d50f59bae9dcd3704a721b5c5251f252335457ca1a"
+    },
+    {
+      "path": "ops/check-engineering-workflow.mjs",
+      "sha256": "96e2f56aa1bfba14635854f4ff11215505ee53cdafa533c996348cef2ccb0ab1"
+    },
+    {
+      "path": "ops/checks/cr-019-independent-review-6c8e99e-51b327d5-2026-09-21.md",
+      "sha256": "2692c6d0d985e7834e827237617be7041729038cc41e81a5396276806d01a2f3"
     },
     {
       "path": "ops/check-spec.mjs",
@@ -104,8 +116,12 @@
     },
     {
       "path": "tests/closed-loop-spec.test.mjs",
-      "sha256": "dc4bf2742bf7bd28ace4e69afbee46cb557fa3726b7f0dcd1f472cd43b74803f"
+      "sha256": "1f8dd0e9562722630d10766f19be9e29c968c1eae4f8649e289840090f06bd3f"
+    },
+    {
+      "path": "tests/engineering-workflow.test.mjs",
+      "sha256": "42a4599648b4b85847fa659095a2aac8d0e6f3c137293dca907f36ab0410ee2f"
     }
   ],
-  "hashPolicy": "Exact bytes except semantic projections of backlog/architecture; see candidateHash and control specification."
+  "hashPolicy": "Exact bytes except semantic projections of backlog, architecture and CR lifecycle metadata; review records bind an exact Git revision whose manifest artifacts are rehashed; see candidateHash and control specification."
 }
