@@ -31,7 +31,18 @@
         <span class="eyebrow">Approved system creation</span>
         <h2>Create a bounded execution request</h2>
         <p>The browser chooses an administrator-configured profile; it cannot submit an executable, shell command, workspace path, or environment secret.</p>
+        <section class="run-section" aria-labelledby="process-plan-heading">
+          <h3 id="process-plan-heading">Plan from a saved process</h3>
+          <p>This saves a proposed task graph with planned tasks only. It does not create an execution run or dispatch work.</p>
+          <form id="process-plan-form" class="execution-form">
+            <label>Project<select id="plan-project" required></select></label>
+            <label>Saved process<select id="plan-process" required></select></label>
+            <button class="button" type="submit">Create planning graph</button>
+          </form>
+          <div id="process-plans" aria-live="polite"></div>
+        </section>
         <form id="run-form" class="execution-form">
+          <label>Project<select id="project" name="projectId" required></select></label>
           <label>Execution profile<select id="profile" name="profileId" required></select></label>
           <label>Run title<input name="title" maxlength="160" value="Create customer service API" required></label>
           <label>Objective<textarea name="objective" rows="5" maxlength="4000" required>Create a small Node.js service for customer requests with a health endpoint and traceable generated manifest.</textarea></label>

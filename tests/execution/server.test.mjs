@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -36,6 +36,23 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.equal(run.execution.workspaceRef, `workspace:${run.id}`);
   assert.equal((await request(base, '/api/execution/runs')).runs.length, 1);
   await request(base, `/api/execution/runs/${run.id}`, { headers: { 'x-orgward-tenant': 'other-tenant' } }, 404);
+  const sourcePath = 'src/server.mjs';
+  const artifactResponse = await fetch(`${base}/api/execution/runs/${run.id}/artifact?path=${encodeURIComponent(sourcePath)}`, {
+    headers: { 'x-orgward-tenant': 'execution-test' },
+  });
+  assert.equal(artifactResponse.status, 200);
+  assert.match(await artifactResponse.text(), /createServer/);
+  assert.equal(artifactResponse.headers.get('cache-control'), 'private, no-store');
+  assert.equal(artifactResponse.headers.get('x-content-sha256'), run.execution.changedArtifacts.find((entry) => entry.path === sourcePath).contentHash);
+  const hiddenArtifact = await fetch(`${base}/api/execution/runs/${run.id}/artifact?path=${encodeURIComponent(sourcePath)}`, {
+    headers: { 'x-orgward-tenant': 'other-tenant' },
+  });
+  assert.equal(hiddenArtifact.status, 404);
+  const traversal = await fetch(`${base}/api/execution/runs/${run.id}/artifact?path=${encodeURIComponent('../.orgward-context.json')}`);
+  assert.equal(traversal.status, 404);
+  await writeFile(path.join(root, 'workspaces', run.id, sourcePath), 'tampered after execution');
+  const tampered = await fetch(`${base}/api/execution/runs/${run.id}/artifact?path=${encodeURIComponent(sourcePath)}`);
+  assert.equal(tampered.status, 404);
 
   const ui = await fetch(`${base}/execution.html`);
   assert.equal(ui.status, 200);

@@ -21,16 +21,21 @@
           <a href="/execution.html">Execution</a>
         </nav>
         <div class="top-actions">
-          <span class="privacy"><span></span> Private workspace</span>
+          <span id="foundation-badge" class="privacy" title="Identity status is reported by this installation"><span></span> Checking identity</span>
           <label class="project-switcher">
             <span class="sr-only">Current project</span>
             <select id="project-select" aria-label="Current project"></select>
           </label>
+          <button id="sign-out" class="button ghost" type="button" hidden>Sign out</button>
           <button id="new-project" class="button ghost" type="button">New project</button>
         </div>
       </header>
 
-      <main id="app" aria-live="polite"></main>
+      <section id="app-state" class="app-state" role="status" aria-live="polite">
+        <div><strong id="app-state-title">Loading workspace</strong><p id="app-state-message">Checking the saved projects and service capabilities…</p></div>
+        <div id="app-state-actions" class="app-state-actions"></div>
+      </section>
+      <main id="app" aria-busy="true"></main>
     </div>
 
     <template id="welcome-template">
@@ -41,10 +46,11 @@
         <form id="create-form" class="create-card">
           <label for="project-name">Name this workspace</label>
           <div class="create-row">
-            <input id="project-name" name="name" maxlength="80" placeholder="e.g. Northstar Circular Foods" autocomplete="off" required>
+            <input id="project-name" name="name" maxlength="80" placeholder="e.g. Northstar Circular Foods" autocomplete="off" aria-describedby="project-name-error" required>
             <button class="button primary" type="submit">Start designing <span aria-hidden="true">→</span></button>
           </div>
-          <small>Stored on this private server. No external action is enabled.</small>
+          <p id="project-name-error" class="field-error" role="alert" hidden></p>
+          <small>For an unconfigured local development installation, enterprise authentication and external actions are not enabled. Configure enterprise identity before opening shared workspaces.</small>
         </form>
         <div class="promise-grid">
           <article><span>01</span><h2>Describe</h2><p>Capture purpose, customers, economics, boundaries, and automation intent in plain language.</p></article>
@@ -65,7 +71,8 @@
           <div id="conversation" class="conversation" aria-label="Business design conversation"></div>
           <form id="message-form" class="message-form">
             <label for="message-input" class="sr-only">Your answer</label>
-            <textarea id="message-input" rows="3" maxlength="2000" placeholder="Describe your business in your own words…" required></textarea>
+            <textarea id="message-input" rows="3" maxlength="2000" placeholder="Describe your business in your own words…" aria-describedby="message-error" required></textarea>
+            <p id="message-error" class="field-error" role="alert" hidden></p>
             <div><small><span id="question-count">Question 1 of 4</span> · Your answers become traceable design evidence.</small><button class="send-button" type="submit" aria-label="Send answer">↑</button></div>
           </form>
         </aside>
@@ -84,13 +91,16 @@
               </div>
               <div class="version-badge"><span>Saved</span> Version <strong id="blueprint-version"></strong></div>
             </div>
-            <nav class="view-tabs" aria-label="Blueprint views">
-              <button type="button" data-view="blueprint" aria-selected="true">Blueprint</button>
-              <button type="button" data-view="map" aria-selected="false">Interactive map</button>
+            <nav class="view-tabs" role="tablist" aria-label="Blueprint views">
+              <button id="blueprint-tab" type="button" role="tab" aria-controls="blueprint-view" data-view="blueprint" aria-selected="true">Blueprint</button>
+              <button id="coverage-tab" type="button" role="tab" aria-controls="coverage-view" data-view="coverage" aria-selected="false">Coverage & next steps</button>
+              <button id="map-tab" type="button" role="tab" aria-controls="map-view" data-view="map" aria-selected="false">Interactive map</button>
             </nav>
-            <div id="blueprint-view"></div>
-            <div id="map-view" hidden>
+            <div id="blueprint-view" role="tabpanel" aria-labelledby="blueprint-tab" tabindex="0"></div>
+            <div id="coverage-view" role="tabpanel" aria-labelledby="coverage-tab" tabindex="0" hidden></div>
+            <div id="map-view" role="tabpanel" aria-labelledby="map-tab" tabindex="0" hidden>
               <div class="map-toolbar">
+                <div id="map-area-context" class="map-area-context" hidden></div>
                 <div id="type-filters" class="type-filters" aria-label="Filter map by object type"></div>
                 <div class="map-actions">
                   <div class="segmented" aria-label="Map display mode">

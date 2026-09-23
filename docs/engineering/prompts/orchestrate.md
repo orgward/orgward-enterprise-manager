@@ -1,17 +1,5 @@
-# Bounded orchestration prompt
+# Task orchestration prompt
 
-For issue #1, combine CL-001–018 slice dependencies with existing parent task
-dependencies. Require approved change/packet digests and bounded contribution
-evidence; do not require downstream runtime proof from prerequisite schema work.
-
-Use $orgward-orchestrate for [one outcome]. Delegation authority: [actual instruction
-or none]. Limits: [time/concurrency/resources]. Stop at [result].
-Inspect current work, dependency closure, approved packets and actual receipts.
-
-Use read-only routing for task/role/risk and record actual harness availability.
-Create briefs with exclusive files, pinned inputs, criteria, independent oracle,
-evidence and recovery. Only explicitly authorized independent work may run in
-parallel; otherwise use sequential briefs. One integrator owns shared contracts
-and ledgers. Changes stale affected briefs/reviews through change control.
-Rerun combined checks; retain unfinished parent criteria and durable checkpoints.
-No blanket approvals, external effects, billing fallback or reviewer loops.
+Use `TASKS.md` to select the smallest unblocked outcome. Keep dependencies and file
+ownership clear, integrate code, run tests and review after implementation. Parallel
+work requires explicit authority. Do not create routing matrices or packet paperwork.

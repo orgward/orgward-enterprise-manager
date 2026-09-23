@@ -1,4 +1,6 @@
-const state = { meta: null, cases: [], changeCase: null, tab: 'overview' };
+import { caseUiModel } from './sdlc-view.mjs';
+
+const state = { meta: null, projects: [], cases: [], changeCase: null, tab: 'overview', authenticated: false };
 const app = document.querySelector('#sdlc-app');
 const list = document.querySelector('#case-list');
 const toast = document.querySelector('#sdlc-toast');
@@ -50,6 +52,9 @@ function showWelcome() {
   app.replaceChildren(document.querySelector('#sdlc-welcome').content.cloneNode(true));
   const select = document.querySelector('#mutation-select');
   for (const [value, entry] of Object.entries(state.meta.mutations)) select.append(el('option', { text: entry.label, attrs: { value } }));
+  const projectSelect = document.querySelector('#case-project');
+  for (const project of state.projects) projectSelect.append(el('option', { text: project.name, attrs: { value: project.id } }));
+  if (!state.projects.length) document.querySelector('#case-form button[type="submit"]').disabled = true;
   select.addEventListener('change', renderMutationExpectation);
   document.querySelector('#case-form').addEventListener('submit', createCase);
   renderMutationExpectation(); renderCaseList();
@@ -65,7 +70,7 @@ async function createCase(event) {
   event.preventDefault();
   const button = event.currentTarget.querySelector('button[type="submit"]'); button.disabled = true;
   try {
-    state.changeCase = await api('/api/sdlc/cases', { method: 'POST', body: JSON.stringify({ mode: 'golden', rawIntent: event.currentTarget.elements.rawIntent.value, mutation: event.currentTarget.elements.mutation.value }) });
+    state.changeCase = await api('/api/sdlc/cases', { method: 'POST', body: JSON.stringify({ mode: 'golden', projectId: event.currentTarget.elements.projectId.value, rawIntent: event.currentTarget.elements.rawIntent.value, mutation: event.currentTarget.elements.mutation.value }) });
     await refreshCases(); renderCase(); notify('Governed change case created.');
   } catch (error) { notify(error.message); button.disabled = false; }
 }
@@ -79,7 +84,7 @@ async function command(action, payload = {}) {
   const current = state.changeCase;
   try {
     state.changeCase = await api(`/api/sdlc/cases/${current.id}/${action}`, {
-      method: 'POST', body: JSON.stringify({ version: current.version, idempotencyKey: uid(action), actor: 'studio-operator', ...payload }),
+      method: 'POST', body: JSON.stringify({ version: current.version, idempotencyKey: uid(action), ...(state.authenticated ? {} : { actor: 'studio-operator' }), ...payload }),
     });
     await refreshCases(); renderCase(); notify(action === 'run' ? 'Advanced to the next governed checkpoint.' : 'Change case updated.');
   } catch (error) { notify(error.message); await loadCase(current.id); }
@@ -94,7 +99,7 @@ function renderCase() {
   const status = document.querySelector('#case-status'); status.textContent = changeCase.status.replace('_', ' '); status.className = `status-pill status-${changeCase.status}`;
   document.querySelector('#step-case').addEventListener('click', () => command('advance'));
   document.querySelector('#run-case').addEventListener('click', () => command('run'));
-  const canRun = !['BLOCKED', 'FAILED', 'NEEDS_HUMAN', 'PASSED'].includes(changeCase.status);
+  const canRun = !['BLOCKED', 'FAILED', 'NEEDS_HUMAN', 'PASSED', 'STOPPED'].includes(changeCase.status);
   document.querySelector('#step-case').disabled = !canRun; document.querySelector('#run-case').disabled = !canRun;
   renderStages(); renderTabs(); renderContent(); renderCheckpoint(); renderCaseList();
 }
@@ -124,7 +129,7 @@ function renderTabsSelection() {
 
 function renderContent() {
   const content = document.querySelector('#case-content'); content.replaceChildren();
-  const renderers = { overview: renderOverview, context: renderContext, impact: renderImpact, requirements: renderRequirements, architecture: renderArchitecture, delivery: renderDelivery, assurance: renderAssurance, evidence: renderEvidence };
+  const renderers = { overview: renderOverview, context: renderContext, impact: renderImpact, requirements: renderRequirements, proofs: renderProofs, architecture: renderArchitecture, delivery: renderDelivery, assurance: renderAssurance, evidence: renderEvidence };
   renderers[state.tab](content);
 }
 
@@ -134,14 +139,98 @@ function empty(message) { return el('div', { className: 'empty-artifact', text: 
 
 function renderOverview(content) {
   const c = state.changeCase;
-  content.append(el('div', { className: 'metric-grid' }, [metric(`${c.metrics.stagePasses}/${state.meta.stages.length}`, 'Stages passed'), metric(c.evidenceLedger.length, 'Evidence records'), metric(c.evaluations.length, 'Evaluations'), metric(c.metrics.humanInterventions, 'Human interventions')]));
+  const ui = caseUiModel(c, state.meta);
+  content.append(el('div', { className: 'metric-grid' }, [metric(`${c.metrics.stagePasses}/${state.meta.stages.length}`, 'Stages passed'), metric(c.evidenceLedger.length, 'Evidence records'), metric(c.clarifications.length, 'Clarifications'), metric(`v${c.intent.revision}`, 'Intent revision')]));
   const tags = el('div', { className: 'tag-list' });
-  for (const value of [...c.intent.desiredOutcomes, ...c.intent.constraints]) tags.append(el('span', { className: 'tag', text: value }));
+  for (const value of [...c.intent.desiredOutcomes, ...c.intent.constraints, ...c.intent.nonGoals]) tags.append(el('span', { className: 'tag', text: value }));
   content.append(section('Business intent', el('div', { className: 'intent-panel' }, [el('blockquote', { text: c.intent.statement }), tags])));
+  content.append(section('Control queue', workspaceQueue(ui.queue)));
+  content.append(section('Clarify intent', clarificationWorkbench(c, ui.clarifications)));
   const gates = el('div');
   for (const decision of c.gateHistory.slice(-5).reverse()) gates.append(gateCard(decision));
   content.append(section('Latest gate decisions', gates.childNodes.length ? gates : empty('No gate has run yet. Run the first stage to evaluate intent quality.')));
   content.append(section('Machine-queryable lineage', lineageView(c.traceability)));
+}
+
+function workspaceQueue(queue) {
+  const wrapper = el('div', { className: 'workspace-queue' });
+  wrapper.append(el('article', { className: 'next-action-card' }, [
+    el('span', { text: 'Next allowed action' }),
+    el('strong', { text: queue.nextAction.label }),
+    el('p', { text: queue.nextAction.reason }),
+  ]));
+  const columns = el('div', { className: 'workspace-queue-columns' });
+  const questions = el('div', {}, [el('h4', { text: `Questions · ${queue.questions.length}` })]);
+  for (const item of queue.questions) questions.append(el('div', { className: 'queue-row' }, [
+    el('b', { text: item.status }), el('span', { text: item.question }),
+  ]));
+  if (!queue.questions.length) questions.append(el('small', { text: 'No unresolved questions.' }));
+  const gaps = el('div', {}, [el('h4', { text: `Proof gaps · ${queue.proofGaps.length}` })]);
+  for (const item of queue.proofGaps) gaps.append(el('div', { className: 'queue-row' }, [
+    el('b', { text: item.status }), el('span', { text: item.criterion }),
+  ]));
+  if (!queue.proofGaps.length) gaps.append(el('small', { text: 'No current required-proof gaps.' }));
+  const failures = el('div', {}, [el('h4', { text: `Failed evidence · ${queue.failedResults.length}` })]);
+  for (const item of queue.failedResults.slice().reverse()) failures.append(el('div', { className: 'queue-row' }, [
+    el('b', { text: item.status }), el('span', { text: item.summary }),
+  ]));
+  if (!queue.failedResults.length) failures.append(el('small', { text: 'No failed or indeterminate results.' }));
+  columns.append(questions, gaps, failures); wrapper.append(columns);
+  return wrapper;
+}
+
+function clarificationWorkbench(changeCase, clarifications) {
+  const wrapper = el('div', { className: 'clarification-workbench' });
+  for (const item of clarifications) {
+    const card = el('article', { className: 'clarification-card' }, [
+      el('header', {}, [el('strong', { text: item.question }), el('span', { text: item.status })]),
+      el('p', { text: `${item.rationale} · updates ${item.targetField}` }),
+    ]);
+    if (item.answer) card.append(el('blockquote', { text: item.answer }));
+    if (item.control === 'ANSWER') {
+      const form = el('form', { className: 'clarification-form' }, [
+        el('input', { attrs: { name: 'answer', required: '', placeholder: `Answer as ${item.eligibleRespondent}` } }),
+        el('button', { className: 'button primary', text: 'Save answer', attrs: { type: 'submit' } }),
+      ]);
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
+        command('answer-clarification', { actor: item.eligibleRespondent, questionRef: item.id, answer: event.currentTarget.elements.answer.value });
+      });
+      card.append(form);
+    } else if (item.control === 'RECONCILE') {
+      const button = el('button', { className: 'button primary', text: 'Reconcile into intent', attrs: { type: 'button' } });
+      button.addEventListener('click', () => command('reconcile-clarification', { actor: changeCase.accountableOwner, questionRef: item.id }));
+      card.append(button);
+    } else if (item.status === 'RECONCILED') {
+      card.append(el('small', { text: `Included in intent v${item.intentRevisionAfter}` }));
+    } else {
+      card.append(el('small', { text: `Superseded by intent v${changeCase.intent.revision}; no action is available.` }));
+    }
+    wrapper.append(card);
+  }
+  if (!changeCase.artifacts.requirements) {
+    const form = el('form', { className: 'clarification-new' }, [
+      el('input', { attrs: { name: 'question', required: '', placeholder: 'Ask one consequential question' } }),
+      el('select', { attrs: { name: 'targetField' } }, [
+        el('option', { text: 'Non-goal', attrs: { value: 'nonGoals' } }),
+        el('option', { text: 'Desired outcome', attrs: { value: 'desiredOutcomes' } }),
+        el('option', { text: 'Constraint', attrs: { value: 'constraints' } }),
+        el('option', { text: 'Assumption', attrs: { value: 'assumptions' } }),
+      ]),
+      el('button', { className: 'button ghost', text: 'Open question', attrs: { type: 'submit' } }),
+    ]);
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      command('clarify', {
+        question: event.currentTarget.elements.question.value,
+        targetField: event.currentTarget.elements.targetField.value,
+        rationale: 'The answer changes the intended outcome or delivery boundary.',
+        eligibleRespondent: changeCase.accountableOwner,
+      });
+    });
+    wrapper.append(form);
+  }
+  return wrapper;
 }
 
 function gateCard(decision) {
@@ -195,6 +284,131 @@ function renderRequirements(content) {
   content.append(section('Traced requirements', table(['ID / kind', 'Requirement', 'Verification'], artifact.requirements.map((entry) => [[el('strong', { text: entry.id }), el('br'), el('span', { text: entry.kind })], entry.statement, entry.acceptanceCriteria[0] ?? 'Missing']))));
 }
 
+function renderProofs(content) {
+  const c = state.changeCase;
+  const proofs = caseUiModel(c, state.meta).proofs;
+  const assessment = c.proofs.assessments.findLast((entry) => entry.intentRevision === c.intent.revision);
+  if (assessment) {
+    content.append(section('Current acceptance', el('div', { className: `acceptance-card phase-${assessment.phase}` }, [
+      el('strong', { text: assessment.phase }),
+      el('p', { text: assessment.explanation }),
+      el('span', { text: `${assessment.coverage.passed}/${assessment.coverage.required} required proofs passing` }),
+    ])));
+  }
+  const cards = el('div', { className: 'proof-list' });
+  for (const proof of proofs) {
+    const result = proof.result;
+    const card = el('article', { className: 'proof-card' }, [
+      el('header', {}, [el('strong', { text: proof.criterion }), el('span', { text: proof.resultStatus })]),
+      el('p', { text: `${proof.required ? 'Required' : 'Optional'} · ${proof.evaluatorType} · intent v${proof.intentRevision}` }),
+      el('p', { className: 'proof-loop-counter', text: `${proof.attempts}/${proof.attemptLimit} bounded actions started` }),
+    ]);
+    if (result) {
+      card.append(el('blockquote', { text: result.summary }));
+      if (result.observations.length) card.append(el('ul', {}, result.observations.map((value) => el('li', { text: value }))));
+      const proofAction = proof.action;
+      if (proofAction) {
+        const actionPanel = el('div', { className: 'proof-action' }, [
+          el('strong', { text: `${proofAction.action} · ${proofAction.status}` }),
+          el('p', { text: `${proofAction.reason} Destination: ${proofAction.destination}; owner: ${proofAction.owner}.` }),
+          el('small', { text: 'The source result remains in proof history.' }),
+        ]);
+        if (proof.control === 'RESUME') {
+          const resumeButton = el('button', { className: 'button primary', text: 'Resume pending action', attrs: { type: 'button' } });
+          resumeButton.addEventListener('click', () => command('resume-proof-action', { actor: proofAction.owner, actionRef: proofAction.id }));
+          actionPanel.append(resumeButton);
+        } else if (proof.control === 'COMPLETE') {
+          const completionForm = el('form', { className: 'proof-completion-form' }, [
+            el('select', { attrs: { name: 'outcome', 'aria-label': 'Action outcome' } }, [
+              el('option', { text: 'Succeeded', attrs: { value: 'SUCCEEDED' } }),
+              el('option', { text: 'Failed', attrs: { value: 'FAILED' } }),
+            ]),
+            el('input', { attrs: { name: 'summary', required: '', placeholder: 'What did this action produce?' } }),
+            el('button', { className: 'button primary', text: 'Complete action', attrs: { type: 'submit' } }),
+          ]);
+          completionForm.addEventListener('submit', (event) => {
+            event.preventDefault();
+            command('complete-proof-action', {
+              actor: proofAction.owner, actionRef: proofAction.id,
+              outcome: event.currentTarget.elements.outcome.value,
+              summary: event.currentTarget.elements.summary.value,
+            });
+          });
+          actionPanel.append(completionForm);
+        } else if (proofAction.completionSummary) {
+          actionPanel.append(el('p', { text: proofAction.completionSummary }));
+        }
+        card.append(actionPanel);
+      } else if (proof.control === 'ROUTE') {
+        const routeForm = el('form', { className: 'proof-route-form' }, [
+          el('select', { attrs: { name: 'action', 'aria-label': 'Next bounded action' } }, [
+            ...proof.routeChoices.map(([value, label]) => el('option', { text: label, attrs: { value } })),
+          ]),
+          el('input', { attrs: { name: 'reason', required: '', placeholder: 'Why is this the safe next action?' } }),
+          el('button', { className: 'button ghost', text: 'Route result', attrs: { type: 'submit' } }),
+        ]);
+        routeForm.addEventListener('submit', (event) => {
+          event.preventDefault();
+          const action = event.currentTarget.elements.action.value;
+          command('route-proof', {
+            actor: action === 'STOP' ? c.accountableOwner : 'studio-operator',
+            proofRef: proof.id, resultRef: result.id, action,
+            reason: event.currentTarget.elements.reason.value,
+          });
+        });
+        card.append(routeForm);
+      }
+      if (proof.history.length) {
+        const history = el('div', { className: 'proof-history' }, [el('h4', { text: 'Prior results' })]);
+        for (const priorResult of proof.history) {
+          const priorAction = priorResult.action;
+          history.append(el('article', { className: 'proof-history-entry' }, [
+            el('header', {}, [el('strong', { text: priorResult.status }), el('span', { text: new Date(priorResult.recordedAt).toLocaleString() })]),
+            el('p', { text: priorResult.summary }),
+            priorAction ? el('small', { text: `${priorAction.action} → ${priorAction.destination} · ${priorAction.status}` }) : null,
+          ]));
+        }
+        card.append(history);
+      }
+    }
+    if (proof.control === 'RECORD_RESULT') {
+      const resultForm = el('form', { className: 'proof-result-form' }, [
+        el('select', { attrs: { name: 'status' } }, ['PASS', 'FAIL', 'INDETERMINATE', 'ERROR'].map((value) => el('option', { text: value, attrs: { value } }))),
+        el('input', { attrs: { name: 'summary', required: '', placeholder: 'What actually happened?' } }),
+        el('input', { attrs: { name: 'observation', placeholder: 'Concrete observation (required for pass)' } }),
+        el('button', { className: 'button ghost', text: 'Record result', attrs: { type: 'submit' } }),
+      ]);
+      resultForm.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const observation = event.currentTarget.elements.observation.value.trim();
+        command('record-proof', {
+          proofRef: proof.id,
+          status: event.currentTarget.elements.status.value,
+          summary: event.currentTarget.elements.summary.value,
+          observations: observation ? [observation] : [],
+          evaluator: 'studio-operator',
+        });
+      });
+      card.append(resultForm);
+    }
+    cards.append(card);
+  }
+  content.append(section('Proof obligations', cards.childNodes.length ? cards : empty('No proof obligations exist for the current intent revision.')));
+
+  const registerForm = el('form', { className: 'proof-register-form' }, [
+    el('input', { attrs: { name: 'criterion', required: '', placeholder: 'Observable criterion' } }),
+    el('select', { attrs: { name: 'evaluatorType' } }, ['DETERMINISTIC', 'HUMAN', 'OBSERVATION'].map((value) => el('option', { text: value, attrs: { value } }))),
+    el('button', { className: 'button ghost', text: 'Add required proof', attrs: { type: 'submit' } }),
+  ]);
+  registerForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    command('register-proof', { targetRef: c.intent.id, criterion: event.currentTarget.elements.criterion.value, evaluatorType: event.currentTarget.elements.evaluatorType.value, required: true });
+  });
+  const assessButton = el('button', { className: 'button primary', text: 'Assess current intent', attrs: { type: 'button' } });
+  assessButton.addEventListener('click', () => command('assess-proofs'));
+  content.append(section('Add and assess', [registerForm, assessButton]));
+}
+
 function renderArchitecture(content) {
   const artifact = state.changeCase.artifacts.architecture;
   if (!artifact) return content.append(empty('Architecture is created after requirements quality passes.'));
@@ -232,21 +446,24 @@ function renderEvidence(content) {
 
 function renderCheckpoint() {
   const panel = document.querySelector('#checkpoint-panel'); const c = state.changeCase;
+  const checkpoint = caseUiModel(c, state.meta).checkpoint;
   panel.replaceChildren(el('h3', { text: 'Control point' }));
-  const last = c.gateHistory.at(-1);
-  if (c.status === 'PASSED') {
-    panel.append(el('div', { className: 'checkpoint-callout' }, [el('b', { text: 'Reference loop complete' }), el('p', { text: 'The full lineage is saved. Learning proposed a follow-up but did not silently rewrite enterprise truth.' })])); return;
+  if (c.status === 'STOPPED') {
+    panel.append(el('div', { className: 'checkpoint-callout' }, [
+      el('b', { text: checkpoint.title }),
+      el('p', { text: checkpoint.body }),
+      el('p', { text: 'No further changes can run. The proof result and stop decision remain saved for review.' }),
+    ])); return;
   }
   if (c.status === 'BLOCKED' || c.status === 'FAILED') {
-    panel.append(el('div', { className: 'checkpoint-callout' }, [el('b', { text: `${last?.gate ?? 'Gate'} blocked safely` }), el('p', { text: last?.findings?.[0]?.message ?? 'A blocking invariant failed.' }), el('p', { text: last?.findings?.[0]?.remediation ?? 'Repair the evidence or design before retrying.' })])); return;
+    panel.append(el('div', { className: 'checkpoint-callout' }, [el('b', { text: checkpoint.title }), el('p', { text: checkpoint.body }), el('p', { text: checkpoint.remediation })])); return;
   }
-  if (c.status === 'NEEDS_HUMAN' && c.currentStage === 'S9') {
-    panel.append(el('div', { className: 'checkpoint-callout' }, [el('b', { text: 'Independent release approval' }), el('p', { text: 'A HIGH-risk production-like release cannot be self-approved by the implementation principal.' })]));
+  panel.append(el('div', { className: 'checkpoint-callout' }, [el('b', { text: checkpoint.title }), el('p', { text: checkpoint.body })]));
+  if (checkpoint.control === 'APPROVE_RELEASE') {
     const button = el('button', { className: 'button primary', text: 'Approve as human governor', attrs: { type: 'button' } });
-    button.addEventListener('click', () => command('approve', { principal: 'actor-accountable-owner', roles: ['release-approver', 'control-owner'] })); panel.append(button); return;
+    button.addEventListener('click', () => command('approve', state.authenticated ? {} : { principal: 'actor-accountable-owner', roles: ['release-approver', 'control-owner'] })); panel.append(button); return;
   }
-  if (c.status === 'NEEDS_HUMAN' && c.currentStage === 'S10') {
-    panel.append(el('p', { text: 'Record a synthetic observation. The default proves technical success can coexist with a failed business outcome.' }));
+  if (checkpoint.control === 'RECORD_OBSERVATION') {
     const form = el('form', { className: 'observation-form' }, [
       el('label', { text: 'Manual-work reduction (%)' }, el('input', { attrs: { name: 'manual', type: 'number', value: '35', min: '0', max: '100' } })),
       el('label', { text: 'Control exceptions' }, el('input', { attrs: { name: 'control', type: 'number', value: '0', min: '0' } })),
@@ -254,14 +471,15 @@ function renderCheckpoint() {
     ]);
     form.addEventListener('submit', (event) => { event.preventDefault(); command('observe', { signals: { technicalHealthy: true, manualWorkReduction: Number(event.currentTarget.elements.manual.value), controlExceptions: Number(event.currentTarget.elements.control.value) } }); }); panel.append(form); return;
   }
-  const stage = state.meta.stages[c.currentStageIndex];
-  panel.append(el('div', { className: 'checkpoint-callout' }, [el('b', { text: stage ? `${stage.id} · ${stage.label}` : 'Ready' }), el('p', { text: stage ? `Next: execute the stage and evaluate ${stage.gate} — ${stage.gateLabel}.` : 'No stage remains.' })]));
+  if (checkpoint.control === 'NONE') return;
   panel.append(el('p', { text: `Mutation: ${c.mutationLabel}. Version ${c.version}; every command is idempotent and concurrency checked.` }));
 }
 
 document.querySelector('#new-case').addEventListener('click', showWelcome);
 
 try {
-  const [meta] = await Promise.all([api('/api/sdlc/meta'), refreshCases()]); state.meta = meta;
+  const [meta, projectResult, session] = await Promise.all([api('/api/sdlc/meta'), api('/api/v1/projects'), api('/auth/session')]);
+  state.meta = meta; state.projects = projectResult.data; state.authenticated = session.authenticated;
+  await refreshCases();
   if (state.cases.length) await loadCase(state.cases[0].id); else showWelcome();
 } catch (error) { notify(error.message); }

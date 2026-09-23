@@ -12,7 +12,7 @@ function event(type, actor, data) {
   return { ...value, contentHash: digest(value) };
 }
 
-export function createExecutionRun({ tenantId, profile, requestedBy, title, objective, requirements = [], sourceRefs = [] }) {
+export function createExecutionRun({ tenantId, projectId = null, profile, requestedBy, title, objective, requirements = [], sourceRefs = [] }) {
   if (!profile) throw new Error('A valid execution profile is required.');
   const cleanTitle = text(title, 160);
   const cleanObjective = text(objective, 4_000);
@@ -21,13 +21,19 @@ export function createExecutionRun({ tenantId, profile, requestedBy, title, obje
   const run = {
     id: `execution-run-${randomUUID()}`,
     tenantId,
+    projectId,
     version: 0,
     status: 'AWAITING_APPROVAL',
     title: cleanTitle,
     requestedBy: text(requestedBy, 120) || 'requester',
     createdAt,
     updatedAt: createdAt,
-    profile: { id: profile.id, label: profile.label, kind: profile.kind, version: profile.version },
+    profile: {
+      id: profile.id, label: profile.label, kind: profile.kind, version: profile.version,
+      ...(profile.credentialReference ? { credential: { reference: profile.credentialReference, version: profile.credentialVersion } } : {}),
+      ...(profile.providerEndpoint ? { providerDestinationHash: digest(profile.providerEndpoint) } : {}),
+      ...(profile.model ? { providerModel: profile.model } : {}),
+    },
     workItem: {
       id: `work-item-${randomUUID()}`,
       objective: cleanObjective,
@@ -42,17 +48,40 @@ export function createExecutionRun({ tenantId, profile, requestedBy, title, obje
   return run;
 }
 
-export function approveExecutionRun(run, { principal, roles = [] }) {
-  if (run.status !== 'AWAITING_APPROVAL') throw new Error('Execution run is not awaiting approval.');
+export function executionApprovalRequestHash(run) {
+  const profile = { id: run.profile?.id, version: run.profile?.version };
+  if (run.profile?.credential) profile.credential = run.profile.credential;
+  if (run.profile?.providerDestinationHash) profile.providerDestinationHash = run.profile.providerDestinationHash;
+  if (run.profile?.providerModel) profile.providerModel = run.profile.providerModel;
+  return digest({
+    workItem: run.workItem,
+    profile,
+  });
+}
+
+export function approveExecutionRun(run, { principal, roles = [], authorityGeneration = null }) {
+  const staleApprovalRecovery = run.status === 'INTERRUPTED'
+    && run.events.at(-1)?.type === 'ExecutionInterrupted'
+    && run.events.at(-1)?.data?.reason === 'execution_approval_stale';
+  if (run.status !== 'AWAITING_APPROVAL' && !staleApprovalRecovery) {
+    throw new Error('Execution run must be awaiting approval or require renewed approval after authority changed.');
+  }
   const actor = text(principal, 120);
   if (!actor) throw new Error('Approval principal is required.');
   if (actor === run.requestedBy) throw new Error('The requester cannot approve their own execution run.');
   if (!roles.includes('execution-approver')) throw new Error('Execution approval requires the execution-approver role.');
-  run.approval = { principal: actor, roles: [...new Set(roles)], approvedAt: now(), requestHash: digest(run.workItem) };
+  run.approval = {
+    principal: actor, roles: [...new Set(roles)], approvedAt: now(), requestHash: executionApprovalRequestHash(run),
+    authorityGeneration: Number.isSafeInteger(authorityGeneration) ? authorityGeneration : null,
+  };
+  if (staleApprovalRecovery) run.execution = null;
   run.status = 'APPROVED';
   run.version += 1;
   run.updatedAt = now();
-  run.events.push(event('ExecutionApproved', actor, { requestHash: run.approval.requestHash }));
+  run.events.push(event(staleApprovalRecovery ? 'ExecutionReapproved' : 'ExecutionApproved', actor, {
+    requestHash: run.approval.requestHash,
+    ...(staleApprovalRecovery ? { reason: 'execution_approval_stale' } : {}),
+  }));
   return run;
 }
 

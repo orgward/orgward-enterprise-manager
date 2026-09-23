@@ -1,27 +1,16 @@
 ---
 name: orgward-design
-description: Refine OrgWard requirements, UX, architecture, acceptance criteria or bounded implementation packets, including discoveries requiring governed design changes. Not a feature-implementation or release-approval skill.
+description: Turn an OrgWard product outcome or discovered behavior gap into a small implementation task and focused acceptance tests. Not for producing governance packets or paper coverage.
 ---
 
-Read product AGENTS.md, the selected backlog task, draft, vector batch and relevant
-source/workflow obligations. Paths below are repository-root relative.
-Read docs/engineering/WAYS-OF-WORKING.md and docs/engineering/CHANGE-CONTROL.md;
-use docs/engineering/prompts/design.md and
-docs/engineering/templates/implementation-packet.md. For semantic alterations use
-docs/engineering/templates/change-proposal.json.
+Read `AGENTS.md`, `TASKS.md` and the relevant runtime/UI code. State the actor-visible
+outcome, the smallest coherent implementation boundary and the important success,
+denial, conflict and restart cases. Add or refine the task in `TASKS.md` when needed.
 
-Derive the actor journey and independent success/denial/recovery oracle before
-code. Integrate exact schemas, operations/errors, transactions, permissions,
-migrations, UI states and observation adapters into the existing packet contract.
-Preserve shared identities, all-angle linkage and diagram/form workflow parity.
-Do not hardcode SDLC to the starter stages.
+Use historical product documents only to clarify intent. Do not create manifests,
+vector batches, change records or approval packets. If a requested change would
+weaken tenant isolation, secret handling or live-effect authority, make that tradeoff
+explicit instead of silently removing the safety behavior.
 
-A better requirement is legitimate: record why, classify impact and preserve old
-IDs/text/evidence. Update dependent contracts, vectors, UX and roadmap together;
-invalidate stale reviews. Never rehash a failed expectation simply to get green.
-New goal, safety relaxation or external authority requires the designated owner.
-Templates and comparator checks do not confer independent approval.
-
-Run npm run check:spec and npm run check:engineering for changed contracts/assets.
-Return ready-for-review, unresolved decisions and exact next slice; do not begin
-feature implementation from a draft or invent a reviewer's approval.
+Return an implementation-ready task and test outline. Continue into implementation
+when the user asked to build, rather than stopping at design paperwork.

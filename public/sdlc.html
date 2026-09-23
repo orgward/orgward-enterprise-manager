@@ -46,6 +46,7 @@
         </div>
         <form id="case-form" class="scenario-builder">
           <div class="form-heading"><span>Reference scenario</span><strong>Digital beneficial-owner maintenance</strong></div>
+          <label>Project<select name="projectId" id="case-project" required></select></label>
           <label>Business intent<textarea name="rawIntent" rows="3">Allow corporate customers to update beneficial-owner information digitally while preserving KYC/AML controls, data integrity, authorization, auditability, and downstream consistency.</textarea></label>
           <label>Scenario condition<select name="mutation" id="mutation-select"></select></label>
           <div id="mutation-expectation" class="mutation-expectation"></div>
@@ -70,6 +71,7 @@
           <button data-tab="context">Context</button>
           <button data-tab="impact">Impact</button>
           <button data-tab="requirements">Requirements</button>
+          <button data-tab="proofs">Proofs</button>
           <button data-tab="architecture">Architecture</button>
           <button data-tab="delivery">Delivery</button>
           <button data-tab="assurance">Assurance</button>

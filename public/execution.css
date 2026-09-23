@@ -19,6 +19,13 @@
 .execution-form label { display: grid; gap: 7px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
 .execution-form input, .execution-form textarea, .execution-form select, .approval-box input { width: 100%; color: var(--ink); background: #0d1218; border: 1px solid var(--exec-line); border-radius: 7px; padding: 11px; text-transform: none; letter-spacing: 0; }
 .execution-form .button { min-height: 44px; }
+.plan-task-editor { min-width: 0; display: grid; gap: 13px; border: 1px solid var(--exec-line); border-radius: 9px; padding: 16px; }
+.plan-task-editor legend, .plan-history summary { color: var(--ink); font-size: 12px; }
+.plan-task-editor select[multiple] { min-height: 100px; }
+.plan-editor .inline-action { flex-wrap: wrap; }
+.plan-history { margin: 18px 0; border: 1px solid var(--exec-line); border-radius: 8px; padding: 12px; }
+.plan-history section { border-top: 1px solid var(--exec-line); margin-top: 12px; }
+.plan-history h5 { margin-bottom: 5px; color: var(--ink); }
 .run-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
 .run-status { flex: 0 0 auto; border: 1px solid var(--exec-line); border-radius: 20px; padding: 7px 10px; font-size: 9px; }
 .status-AWAITING_APPROVAL { color: var(--amber); }.status-APPROVED, .status-RUNNING { color: var(--blue); }.status-SUCCEEDED { color: var(--mint-2); }.status-FAILED, .status-INTERRUPTED { color: var(--red); }
@@ -29,6 +36,7 @@
 .evidence-grid > div { border: 1px solid var(--exec-line); border-radius: 7px; padding: 11px; }.evidence-grid b, .evidence-grid span { display: block; }
 .evidence-grid b { color: var(--faint); font-size: 8px; text-transform: uppercase; }.evidence-grid span { margin-top: 5px; font-size: 11px; }
 .artifact-list { grid-column: 1/-1; color: var(--muted); font: 10px/1.7 ui-monospace, monospace; }
+.artifact-list a { color: var(--cyan); text-decoration-thickness: 1px; text-underline-offset: 2px; }
 .evidence-grid pre { grid-column: 1/-1; overflow: auto; background: #090d12; border-radius: 7px; padding: 12px; color: var(--mint-2); font: 10px/1.5 ui-monospace, monospace; }.evidence-grid pre.error-log { color: var(--red); }
 .run-events > div { display: flex; justify-content: space-between; gap: 20px; padding: 9px 0; border-bottom: 1px solid var(--exec-line); }.run-events b { font-size: 10px; }.run-events span { color: var(--faint); font-size: 9px; }
 @media (max-width: 760px) { .execution-shell { display: block; }.execution-sidebar { border-right: 0; border-bottom: 1px solid var(--exec-line); padding: 18px 15px; }.run-list { display: flex; overflow-x: auto; gap: 7px; }.run-link { flex: 0 0 270px; min-height: 60px; }.execution-main { padding: 26px 15px 50px; }.run-heading { flex-direction: column; }.evidence-grid { grid-template-columns: repeat(2,1fr); }.inline-action { flex-direction: column; }.inline-action .button { min-height: 44px; } }

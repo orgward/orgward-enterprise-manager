@@ -5,12 +5,22 @@
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
-    "check:spec": "node ops/check-spec.mjs --self-test",
-    "check:engineering": "node ops/check-engineering-workflow.mjs",
-    "test": "node --test tests/*.test.mjs tests/sdlc/*.test.mjs tests/execution/*.test.mjs",
-    "check": "node --check server.mjs && node --check src/model.mjs && node --check src/store.mjs && node --check src/execution/contracts.mjs && node --check src/execution/store.mjs && node --check src/execution/service.mjs && node --check src/sdlc/contracts.mjs && node --check src/sdlc/fixture.mjs && node --check src/sdlc/engine.mjs && node --check src/sdlc/execution-adapter.mjs && node --check src/sdlc/store.mjs && node --check workers/scaffold-node-service.mjs && node --check public/app.js && node --check public/map-state.js && node --check public/sdlc.js && node --check public/execution.js && node --check public/platform.js && npm test && npm run check:spec && npm run check:engineering"
+    "preflight": "node ops/preflight.mjs",
+    "check:legacy-spec": "node ops/check-spec.mjs --self-test",
+    "check:legacy-engineering": "node ops/check-engineering-workflow.mjs",
+    "test": "node ops/run-tests.mjs",
+    "check": "node --check server.mjs && node --check src/platform/install-config.mjs && node --check ops/preflight.mjs && node --check ops/database-recovery.mjs && node --check ops/build-release.mjs && node --check ops/install-release.mjs && node --check ops/qualify-release-install.mjs && node --check ops/qualify-release-caddy.mjs && node --check src/model.mjs && node --check src/store.mjs && node --check src/platform/postgres.mjs && node --check src/platform/postgres-stores.mjs && node --check src/platform/oidc.mjs && node --check src/platform/oidc-login.mjs && node --check src/platform/oidc-sessions.mjs && node --check src/platform/secrets.mjs && node --check src/execution/contracts.mjs && node --check src/execution/store.mjs && node --check src/execution/artifact-file.mjs && node --check src/execution/service.mjs && node --check src/sdlc/contracts.mjs && node --check src/sdlc/fixture.mjs && node --check src/sdlc/engine.mjs && node --check src/sdlc/execution-adapter.mjs && node --check src/sdlc/store.mjs && node --check ops/run-tests.mjs && node --check workers/scaffold-node-service.mjs && node --check public/shared-interactions.mjs && node --check public/coverage-dashboard.mjs && node --check public/process-plan-command.mjs && node --check public/app.js && node --check public/map-state.js && node --check public/sdlc-view.mjs && node --check public/sdlc.js && node --check public/execution.js && node --check public/platform.js && npm test",
+    "release:bundle": "node ops/build-release.mjs",
+    "release:install": "node ops/install-release.mjs",
+    "db:backup": "node ops/database-recovery.mjs backup",
+    "db:restore": "node ops/database-recovery.mjs restore",
+    "qualify:release-install": "node ops/qualify-release-install.mjs",
+    "qualify:release-caddy": "node ops/qualify-release-caddy.mjs"
   },
   "engines": {
     "node": ">=22"
+  },
+  "dependencies": {
+    "pg": "8.16.3"
   }
 }

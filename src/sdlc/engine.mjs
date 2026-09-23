@@ -3,6 +3,17 @@ import { EXPECTED_IMPACTS, referenceOrganization } from './fixture.mjs';
 
 const REQUIRED_CONTEXT_DOMAINS = ['strategy', 'business', 'process', 'ownership', 'information', 'application', 'integration', 'security', 'regulation', 'control', 'operations', 'code/runtime'];
 const ASSURANCE_DIMENSIONS = ['FUNCTIONAL', 'REQUIREMENTS', 'SECURITY', 'PRIVACY', 'DATA', 'ARCHITECTURE', 'REGULATORY_CONTROL', 'OPERATIONAL', 'PERFORMANCE', 'RESILIENCE', 'MAINTAINABILITY', 'AI_BEHAVIOR'];
+const CLARIFICATION_TARGETS = new Set(['desiredOutcomes', 'constraints', 'assumptions', 'nonGoals']);
+const PROOF_RESULT_STATUSES = new Set(['PASS', 'FAIL', 'INDETERMINATE', 'ERROR']);
+const PROOF_EVALUATOR_TYPES = new Set(['DETERMINISTIC', 'HUMAN', 'OBSERVATION']);
+export const PROOF_ACTION_ATTEMPT_LIMIT = 2;
+const PROOF_ACTION_DESTINATIONS = Object.freeze({
+  REPAIR: 'implementation',
+  CLARIFY: 'clarification',
+  REPLAN: 'planning',
+  REARCHITECT: 'architecture',
+  STOP: 'stopped',
+});
 
 const REQUIREMENT_SEED = [
   ['REQ-BUS-1', 'BUSINESS', 'Corporate customers can submit beneficial-owner changes digitally.', ['goal-digital-owner-update'], 'End-to-end submission succeeds for an authorized corporate representative.'],
@@ -38,12 +49,14 @@ export function createChangeCase(input = {}) {
   const createdAt = now();
   const mutation = MUTATIONS[input.mutation] ? input.mutation : 'none';
   const tenantId = safeText(input.tenantId, 80) || 'tenant-reference-bank';
+  const projectId = safeText(input.projectId, 80) || null;
   const caseId = id('change-case');
   const rawIntent = safeText(input.rawIntent) || 'Allow corporate customers to update beneficial-owner information digitally while preserving KYC/AML controls, data integrity, authorization, auditability, and downstream consistency.';
   const golden = input.mode !== 'custom';
   const changeCase = {
     id: caseId,
     tenantId,
+    projectId,
     title: safeText(input.title, 160) || 'Digital beneficial-owner maintenance',
     status: 'DRAFT',
     currentStageIndex: 0,
@@ -67,9 +80,13 @@ export function createChangeCase(input = {}) {
       successMeasures: input.successMeasures ?? (golden ? [{ id: 'measure-manual-work', name: 'Manual-work reduction', target: 50, unit: 'percent' }, { id: 'measure-control', name: 'Control outcome', target: 'PASS' }] : []),
       constraints: ['Synthetic data only', 'Production-like release requires human approval', 'No direct database access across system boundaries'],
       assumptions: ['Corporate representatives are already enrolled in the synthetic IAM service'],
+      nonGoals: [],
       proposedSolution: 'Add a governed digital change flow through owned APIs and control services.',
-      openQuestions: [], confidence: golden ? 'HIGH' : 'LOW', sourceRefs: ['request:raw-intent'],
+      openQuestions: [], confidence: golden ? 'HIGH' : 'LOW', sourceRefs: ['request:raw-intent'], revision: 1,
     },
+    intentHistory: [],
+    clarifications: [],
+    proofs: { obligations: [], results: [], assessments: [], actions: [], loopCounters: {} },
     enterpriseSnapshot: referenceOrganization(mutation),
     artifacts: {},
     evidenceLedger: [],
@@ -81,8 +98,456 @@ export function createChangeCase(input = {}) {
     idempotency: {},
     metrics: { tokens: 0, cost: 0, humanInterventions: 0, stagePasses: 0, stageFailures: 0 },
   };
+  changeCase.intent.contentHash = digest(Object.fromEntries(Object.entries(changeCase.intent).filter(([key]) => key !== 'contentHash')));
+  changeCase.intentHistory.push(structuredClone(changeCase.intent));
   changeCase.events.push(eventEnvelope(changeCase, 'ChangeCaseCreated', changeCase.createdBy, { mutation, intentId: changeCase.intent.id }));
   return changeCase;
+}
+
+export function commandRequestHash(command) {
+  return digest(Object.fromEntries(Object.entries(command).filter(([name]) => !['idempotencyKey', 'version'].includes(name))));
+}
+
+function commandKey(changeCase, command, action) {
+  const key = safeText(command.idempotencyKey, 160) || id(`${action}-key`);
+  const requestHash = commandRequestHash(command);
+  const prior = changeCase.idempotency[key];
+  if (prior && (prior.action !== action || prior.requestHash !== requestHash)) {
+    const error = new Error('Idempotency key was already used with a different command.');
+    error.statusCode = 409;
+    throw error;
+  }
+  return { key, requestHash, replayed: Boolean(prior) };
+}
+
+function finishCommand(changeCase, key, requestHash, action, actor, eventType, data) {
+  changeCase.version += 1;
+  changeCase.updatedAt = now();
+  changeCase.idempotency[key] = { action, requestHash, version: changeCase.version, at: changeCase.updatedAt };
+  changeCase.events.push(eventEnvelope(changeCase, eventType, actor, data, changeCase.events.at(-1)?.id));
+  return { changeCase, replayed: false };
+}
+
+function commandError(message, statusCode = 400) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+function intentHash(intent) {
+  return digest(Object.fromEntries(Object.entries(intent).filter(([key]) => key !== 'contentHash')));
+}
+
+export function normalizeChangeCase(changeCase) {
+  changeCase.clarifications ??= [];
+  changeCase.proofs ??= { obligations: [], results: [], assessments: [], actions: [], loopCounters: {} };
+  changeCase.proofs.obligations ??= [];
+  changeCase.proofs.results ??= [];
+  changeCase.proofs.assessments ??= [];
+  changeCase.proofs.actions ??= [];
+  changeCase.proofs.loopCounters ??= {};
+  changeCase.intent.nonGoals ??= [];
+  changeCase.intent.openQuestions ??= [];
+  changeCase.intent.revision ??= 1;
+  changeCase.intent.contentHash ??= intentHash(changeCase.intent);
+  changeCase.intentHistory ??= [structuredClone(changeCase.intent)];
+  return changeCase;
+}
+
+function proofFor(changeCase, proofRef) {
+  const proof = changeCase.proofs.obligations.find((entry) => entry.id === proofRef);
+  if (!proof) throw commandError('Proof obligation not found.', 404);
+  return proof;
+}
+
+function latestProofResult(changeCase, proofRef, intentRevision = changeCase.intent.revision) {
+  return changeCase.proofs.results.findLast((entry) => entry.proofRef === proofRef && entry.intentRevision === intentRevision) ?? null;
+}
+
+function proofResultIsIntact(result) {
+  if (!result?.contentHash) return false;
+  const { contentHash, ...payload } = result;
+  return contentHash === digest(payload);
+}
+
+function requireActiveProofWork(changeCase) {
+  if (changeCase.status === 'STOPPED') throw commandError('Case is STOPPED; no further proof work is allowed.', 409);
+}
+
+function proofActionFor(changeCase, actionRef) {
+  const action = changeCase.proofs.actions.find((entry) => entry.id === actionRef);
+  if (!action) throw commandError('Proof action not found.', 404);
+  return action;
+}
+
+function requireActionOwner(action, actor) {
+  if (!actor || actor !== action.owner) {
+    const error = new Error('Only the action owner can resume or complete this work.');
+    error.statusCode = 403;
+    throw error;
+  }
+}
+
+export function registerProofObligation(changeCase, command = {}) {
+  normalizeChangeCase(changeCase);
+  const { key, requestHash, replayed } = commandKey(changeCase, command, 'register-proof');
+  if (replayed) return { changeCase, replayed: true };
+  requireActiveProofWork(changeCase);
+  const targetRef = safeText(command.targetRef, 160) || changeCase.intent.id;
+  const knownTargets = new Set([changeCase.intent.id, ...(changeCase.artifacts.requirements?.requirements ?? []).map((entry) => entry.id)]);
+  if (!knownTargets.has(targetRef)) throw commandError('Proof target is not part of this change case.');
+  const criterion = safeText(command.criterion, 1_200);
+  if (!criterion) throw commandError('Proof criterion is required.');
+  const evaluatorType = safeText(command.evaluatorType, 40) || 'DETERMINISTIC';
+  if (!PROOF_EVALUATOR_TYPES.has(evaluatorType)) throw commandError('Proof evaluator type is invalid.');
+  const actor = safeText(command.actor, 120) || 'studio-operator';
+  const proof = {
+    id: id('proof'), targetRef, criterion, evaluatorType,
+    required: command.required !== false,
+    intentRevision: changeCase.intent.revision,
+    createdBy: actor, createdAt: now(),
+  };
+  changeCase.proofs.obligations.push(proof);
+  return finishCommand(changeCase, key, requestHash, 'register-proof', actor, 'ProofObligationRegistered', { proofRef: proof.id, targetRef, intentRevision: proof.intentRevision, required: proof.required });
+}
+
+export function recordProofResult(changeCase, command = {}) {
+  normalizeChangeCase(changeCase);
+  const { key, requestHash, replayed } = commandKey(changeCase, command, 'record-proof');
+  if (replayed) return { changeCase, replayed: true };
+  requireActiveProofWork(changeCase);
+  const proof = proofFor(changeCase, safeText(command.proofRef, 160));
+  if (changeCase.proofs.actions.some((entry) => entry.proofRef === proof.id && ['READY', 'IN_PROGRESS'].includes(entry.status))) {
+    throw commandError('Complete the pending proof action before recording another result.', 409);
+  }
+  if (proof.intentRevision !== changeCase.intent.revision) {
+    throw commandError(`Proof obligation targets intent revision ${proof.intentRevision}; current revision is ${changeCase.intent.revision}.`, 409);
+  }
+  const status = safeText(command.status, 40).toUpperCase();
+  if (!PROOF_RESULT_STATUSES.has(status)) throw commandError('Proof result status is invalid.');
+  const summary = safeText(command.summary, 1_200);
+  if (!summary) throw commandError('Proof result summary is required.');
+  const observations = Array.isArray(command.observations) ? command.observations.map((value) => safeText(value, 800)).filter(Boolean).slice(0, 50) : [];
+  if (status === 'PASS' && !observations.length) throw commandError('Passing proof requires at least one actual observation.');
+  const actor = safeText(command.actor, 120) || 'proof-runner';
+  const prior = latestProofResult(changeCase, proof.id);
+  const result = {
+    id: id('proof-result'), proofRef: proof.id, targetRef: proof.targetRef,
+    intentRevision: changeCase.intent.revision, status, summary, observations,
+    evaluator: safeText(command.evaluator, 160) || actor,
+    priorResultRef: prior?.id ?? null, recordedBy: actor, recordedAt: now(),
+  };
+  result.contentHash = digest(result);
+  changeCase.proofs.results.push(result);
+  return finishCommand(changeCase, key, requestHash, 'record-proof', actor, 'ProofResultRecorded', { proofRef: proof.id, resultRef: result.id, status, intentRevision: result.intentRevision });
+}
+
+export function assessProofs(changeCase, command = {}) {
+  normalizeChangeCase(changeCase);
+  const { key, requestHash, replayed } = commandKey(changeCase, command, 'assess-proofs');
+  if (replayed) return { changeCase, replayed: true };
+  requireActiveProofWork(changeCase);
+  const actor = safeText(command.actor, 120) || 'acceptance-controller';
+  const obligations = changeCase.proofs.obligations.filter((entry) => entry.intentRevision === changeCase.intent.revision);
+  const required = obligations.filter((entry) => entry.required);
+  const rows = obligations.map((proof) => ({ proof, result: latestProofResult(changeCase, proof.id) }));
+  const blockers = [];
+  if (!required.length) blockers.push({ code: 'NO_REQUIRED_PROOFS', proofRef: null, status: 'NOT_RUN' });
+  for (const clarification of changeCase.clarifications.filter((entry) => entry.intentRevision === changeCase.intent.revision && entry.status !== 'RECONCILED')) {
+    blockers.push({ code: 'UNRESOLVED_CLARIFICATION', clarificationRef: clarification.id, status: clarification.status });
+  }
+  for (const { proof, result } of rows.filter((entry) => entry.proof.required)) {
+    if (!result) blockers.push({ code: 'PROOF_NOT_RUN', proofRef: proof.id, status: 'NOT_RUN' });
+    else if (!proofResultIsIntact(result)) blockers.push({ code: 'PROOF_INTEGRITY_INVALID', proofRef: proof.id, resultRef: result.id, status: 'ERROR' });
+    else if (result.status !== 'PASS') blockers.push({ code: `PROOF_${result.status}`, proofRef: proof.id, resultRef: result.id, status: result.status });
+  }
+  const hasFailure = blockers.some((entry) => entry.status === 'FAIL');
+  const phase = !blockers.length ? 'ACCEPTED' : hasFailure ? 'REJECTED' : 'INCOMPLETE';
+  const assessment = {
+    id: id('acceptance'), intentRef: changeCase.intent.id, intentRevision: changeCase.intent.revision,
+    phase, accepted: phase === 'ACCEPTED',
+    requiredProofRefs: required.map((entry) => entry.id),
+    resultRefs: rows.flatMap(({ result }) => result ? [result.id] : []),
+    blockers,
+    coverage: { required: required.length, passed: rows.filter(({ proof, result }) => proof.required && result?.status === 'PASS' && proofResultIsIntact(result)).length, optional: obligations.length - required.length },
+    explanation: phase === 'ACCEPTED' ? 'Every required proof has a current passing result.' : phase === 'REJECTED' ? 'At least one required proof failed.' : 'Required proof evidence is missing, indeterminate or errored.',
+    assessedBy: actor, assessedAt: now(),
+  };
+  assessment.contentHash = digest(assessment);
+  changeCase.proofs.assessments.push(assessment);
+  return finishCommand(changeCase, key, requestHash, 'assess-proofs', actor, 'AcceptanceAssessed', { assessmentRef: assessment.id, phase, intentRevision: assessment.intentRevision });
+}
+
+export function routeProofResult(changeCase, command = {}) {
+  normalizeChangeCase(changeCase);
+  const { key, requestHash, replayed } = commandKey(changeCase, command, 'route-proof');
+  if (replayed) return { changeCase, replayed: true };
+  requireActiveProofWork(changeCase);
+  const proof = proofFor(changeCase, safeText(command.proofRef, 160));
+  const resultRef = safeText(command.resultRef, 160);
+  const result = changeCase.proofs.results.find((entry) => entry.id === resultRef);
+  if (!result || result.proofRef !== proof.id) throw commandError('Proof result not found.', 404);
+  if (proof.intentRevision !== changeCase.intent.revision || result.intentRevision !== changeCase.intent.revision) {
+    throw commandError('Only a result for the current intent revision can be routed.', 409);
+  }
+  if (latestProofResult(changeCase, proof.id)?.id !== result.id) {
+    throw commandError('Only the latest result for a proof can be routed.', 409);
+  }
+  if (!['FAIL', 'INDETERMINATE'].includes(result.status)) {
+    throw commandError('Only a failed or indeterminate proof result can be routed.', 409);
+  }
+  if (!proofResultIsIntact(result)) throw commandError('A proof result with invalid integrity cannot be routed.', 409);
+  const action = safeText(command.action, 40).toUpperCase();
+  const destination = PROOF_ACTION_DESTINATIONS[action];
+  if (!destination) throw commandError('Proof action is invalid.');
+  if (changeCase.proofs.actions.some((entry) => entry.resultRef === result.id)) {
+    throw commandError('This proof result already has a route.', 409);
+  }
+  if (changeCase.proofs.actions.some((entry) => entry.proofRef === proof.id && ['READY', 'IN_PROGRESS'].includes(entry.status))) {
+    throw commandError('This proof already has a pending action.', 409);
+  }
+  const attempts = changeCase.proofs.loopCounters[proof.id] ?? 0;
+  if (action !== 'STOP' && attempts >= PROOF_ACTION_ATTEMPT_LIMIT) {
+    throw commandError(`Proof loop limit ${PROOF_ACTION_ATTEMPT_LIMIT} is exhausted; an accountable owner may stop the work.`, 409);
+  }
+  const reason = safeText(command.reason, 1_200);
+  if (!reason) throw commandError('A routing reason is required.');
+  const actor = safeText(command.actor, 120) || 'studio-operator';
+  if (action === 'STOP' && actor !== changeCase.accountableOwner) {
+    const error = new Error('Only the accountable owner can stop work for a proof result.');
+    error.statusCode = 403;
+    throw error;
+  }
+  const routedAt = now();
+  const proofAction = {
+    id: id('proof-action'), proofRef: proof.id, resultRef: result.id,
+    intentRevision: changeCase.intent.revision, action, destination, reason,
+    status: action === 'STOP' ? 'COMPLETED' : 'READY',
+    owner: safeText(command.owner, 120) || changeCase.accountableOwner || actor,
+    routedBy: actor, routedAt, completedAt: action === 'STOP' ? routedAt : null,
+    attempt: null, startedAt: null, outcome: action === 'STOP' ? 'STOPPED' : null, completionSummary: null,
+    bound: 'ONE_ROUTE_PER_RESULT',
+  };
+  changeCase.proofs.actions.push(proofAction);
+  if (action === 'STOP') changeCase.status = 'STOPPED';
+  return finishCommand(changeCase, key, requestHash, 'route-proof', actor, 'ProofActionRouted', {
+    proofRef: proof.id, resultRef: result.id, actionRef: proofAction.id, action, destination,
+  });
+}
+
+export function resumeProofAction(changeCase, command = {}) {
+  normalizeChangeCase(changeCase);
+  const { key, requestHash, replayed } = commandKey(changeCase, command, 'resume-proof-action');
+  if (replayed) return { changeCase, replayed: true };
+  requireActiveProofWork(changeCase);
+  const action = proofActionFor(changeCase, safeText(command.actionRef, 160));
+  const actor = safeText(command.actor, 120);
+  requireActionOwner(action, actor);
+  if (action.action === 'STOP') throw commandError('A terminal stop action cannot be resumed.', 409);
+  if (['IN_PROGRESS', 'COMPLETED', 'FAILED'].includes(action.status)) return { changeCase, replayed: true };
+  if (action.status !== 'READY') throw commandError('Proof action is not ready to resume.', 409);
+  if (action.intentRevision !== changeCase.intent.revision) throw commandError('A proof action from a superseded intent cannot be resumed.', 409);
+  const attempts = changeCase.proofs.loopCounters[action.proofRef] ?? 0;
+  if (attempts >= PROOF_ACTION_ATTEMPT_LIMIT) throw commandError(`Proof loop limit ${PROOF_ACTION_ATTEMPT_LIMIT} is exhausted.`, 409);
+  action.status = 'IN_PROGRESS';
+  action.attempt = attempts + 1;
+  action.startedAt = now();
+  action.startedBy = actor;
+  changeCase.proofs.loopCounters[action.proofRef] = action.attempt;
+  return finishCommand(changeCase, key, requestHash, 'resume-proof-action', actor, 'ProofActionResumed', {
+    actionRef: action.id, proofRef: action.proofRef, resultRef: action.resultRef, attempt: action.attempt,
+  });
+}
+
+export function completeProofAction(changeCase, command = {}) {
+  normalizeChangeCase(changeCase);
+  const { key, requestHash, replayed } = commandKey(changeCase, command, 'complete-proof-action');
+  if (replayed) return { changeCase, replayed: true };
+  requireActiveProofWork(changeCase);
+  const action = proofActionFor(changeCase, safeText(command.actionRef, 160));
+  const actor = safeText(command.actor, 120);
+  requireActionOwner(action, actor);
+  if (['COMPLETED', 'FAILED'].includes(action.status)) return { changeCase, replayed: true };
+  if (action.status !== 'IN_PROGRESS') throw commandError('Proof action must be in progress before completion.', 409);
+  const outcome = safeText(command.outcome, 40).toUpperCase();
+  if (!['SUCCEEDED', 'FAILED'].includes(outcome)) throw commandError('Proof action outcome is invalid.');
+  const summary = safeText(command.summary, 1_200);
+  if (!summary) throw commandError('Proof action completion summary is required.');
+  action.status = outcome === 'SUCCEEDED' ? 'COMPLETED' : 'FAILED';
+  action.outcome = outcome;
+  action.completionSummary = summary;
+  action.completedAt = now();
+  action.completedBy = actor;
+  return finishCommand(changeCase, key, requestHash, 'complete-proof-action', actor, 'ProofActionCompleted', {
+    actionRef: action.id, proofRef: action.proofRef, resultRef: action.resultRef, attempt: action.attempt, outcome,
+  });
+}
+
+function workspaceAction(type, label, reason, references = {}) {
+  return { type, label, reason, ...references };
+}
+
+export function workspaceStatus(changeCase) {
+  normalizeChangeCase(changeCase);
+  const revision = changeCase.intent.revision;
+  const questions = changeCase.clarifications
+    .filter((entry) => entry.intentRevision === revision && entry.status !== 'RECONCILED')
+    .map((entry) => ({
+      id: entry.id, status: entry.status, question: entry.question, targetField: entry.targetField,
+      eligibleRespondent: entry.eligibleRespondent, answer: entry.answer?.value ?? null,
+    }));
+  const obligations = changeCase.proofs.obligations.filter((entry) => entry.intentRevision === revision);
+  const required = obligations.filter((entry) => entry.required);
+  const resultFor = (proofRef) => latestProofResult(changeCase, proofRef, revision);
+  const actionFor = (resultRef) => changeCase.proofs.actions.find((entry) => entry.resultRef === resultRef) ?? null;
+  const actionSummary = (entry) => entry ? {
+    id: entry.id, action: entry.action, destination: entry.destination, status: entry.status,
+    owner: entry.owner, attempt: entry.attempt, reason: entry.reason, outcome: entry.outcome,
+  } : null;
+  const proofGaps = required.flatMap((proof) => {
+    const result = resultFor(proof.id);
+    if (!result) return [{ proofRef: proof.id, criterion: proof.criterion, status: 'NOT_RUN', resultRef: null, summary: 'No result has been recorded.', action: null }];
+    if (!proofResultIsIntact(result)) return [{ proofRef: proof.id, criterion: proof.criterion, status: 'ERROR', resultRef: result.id, summary: 'The latest result failed its integrity check.', action: null }];
+    if (result.status === 'PASS') return [];
+    return [{ proofRef: proof.id, criterion: proof.criterion, status: result.status, resultRef: result.id, summary: result.summary, action: actionSummary(actionFor(result.id)) }];
+  });
+  const failedResults = changeCase.proofs.results
+    .filter((entry) => entry.intentRevision === revision && ['FAIL', 'INDETERMINATE', 'ERROR'].includes(entry.status))
+    .map((entry) => ({
+      id: entry.id, proofRef: entry.proofRef, status: entry.status, summary: entry.summary,
+      recordedAt: entry.recordedAt, action: actionSummary(actionFor(entry.id)),
+    }));
+
+  let nextAllowedAction;
+  if (changeCase.status === 'STOPPED') {
+    nextAllowedAction = workspaceAction('NONE', 'Work stopped', 'The accountable owner stopped this case; no further mutation is allowed.');
+  } else {
+    const openQuestion = questions.find((entry) => entry.status === 'OPEN');
+    const answeredQuestion = questions.find((entry) => entry.status === 'ANSWERED');
+    const pendingAction = changeCase.proofs.actions.find((entry) => entry.intentRevision === revision && entry.status === 'READY');
+    const runningAction = changeCase.proofs.actions.find((entry) => entry.intentRevision === revision && entry.status === 'IN_PROGRESS');
+    if (openQuestion) {
+      nextAllowedAction = workspaceAction('ANSWER_CLARIFICATION', 'Answer clarification', 'An eligible respondent must answer the open question.', { clarificationRef: openQuestion.id });
+    } else if (answeredQuestion) {
+      nextAllowedAction = workspaceAction('RECONCILE_CLARIFICATION', 'Reconcile clarification', 'The accountable owner must reconcile the saved answer into intent.', { clarificationRef: answeredQuestion.id });
+    } else if (runningAction) {
+      nextAllowedAction = workspaceAction('COMPLETE_PROOF_ACTION', 'Complete pending action', 'The claimed action needs a recorded outcome before reevaluation.', { actionRef: runningAction.id, proofRef: runningAction.proofRef });
+    } else if (pendingAction) {
+      nextAllowedAction = workspaceAction('RESUME_PROOF_ACTION', 'Resume pending action', 'A durable routed action is ready to be claimed exactly once.', { actionRef: pendingAction.id, proofRef: pendingAction.proofRef });
+    } else if (!required.length) {
+      nextAllowedAction = workspaceAction('REGISTER_PROOF', 'Add a required proof', 'Acceptance needs at least one required proof obligation.');
+    } else {
+      const gap = proofGaps[0];
+      if (gap?.status === 'NOT_RUN' || gap?.status === 'ERROR' || gap?.action) {
+        nextAllowedAction = workspaceAction('RECORD_PROOF_RESULT', 'Record proof result', gap?.action ? 'The routed action is complete; record fresh evaluation evidence.' : 'This required proof needs a current result.', { proofRef: gap.proofRef });
+      } else if (gap) {
+        const attempts = changeCase.proofs.loopCounters[gap.proofRef] ?? 0;
+        const allowedActions = attempts >= PROOF_ACTION_ATTEMPT_LIMIT ? ['STOP'] : Object.keys(PROOF_ACTION_DESTINATIONS);
+        nextAllowedAction = workspaceAction('ROUTE_PROOF_RESULT', 'Route failed proof', 'Choose one bounded response without changing the recorded result.', { proofRef: gap.proofRef, resultRef: gap.resultRef, allowedActions });
+      } else {
+        const currentResultRefs = obligations.flatMap((proof) => {
+          const result = resultFor(proof.id);
+          return result ? [result.id] : [];
+        });
+        const assessment = changeCase.proofs.assessments.findLast((entry) => entry.intentRevision === revision);
+        const assessmentIsCurrent = assessment
+          && assessment.resultRefs.length === currentResultRefs.length
+          && currentResultRefs.every((resultRef) => assessment.resultRefs.includes(resultRef));
+        if (!assessmentIsCurrent) {
+          nextAllowedAction = workspaceAction('ASSESS_PROOFS', 'Assess current proofs', 'All required proofs pass; derive acceptance from the current results.');
+        } else if (changeCase.status === 'PASSED') {
+          nextAllowedAction = workspaceAction('NONE', 'Workflow complete', 'The case and its current proof assessment are complete.');
+        } else if (changeCase.status === 'NEEDS_HUMAN') {
+          nextAllowedAction = workspaceAction('HUMAN_DECISION', 'Record human decision', 'The current stage requires an authorized human decision.');
+        } else if (['BLOCKED', 'FAILED'].includes(changeCase.status)) {
+          nextAllowedAction = workspaceAction('RESOLVE_GATE_BLOCKER', 'Resolve gate blocker', 'The current stage blocker must be repaired before the workflow can advance.');
+        } else {
+          nextAllowedAction = workspaceAction('ADVANCE_CASE', 'Continue workflow', 'Current required proofs are accepted; the next SDLC stage may run.');
+        }
+      }
+    }
+  }
+  return { questions, proofGaps, failedResults, nextAllowedAction };
+}
+
+function clarificationFor(changeCase, questionRef) {
+  const clarification = changeCase.clarifications.find((entry) => entry.id === questionRef);
+  if (!clarification) throw commandError('Clarification not found.', 404);
+  return clarification;
+}
+
+export function openClarification(changeCase, command = {}) {
+  normalizeChangeCase(changeCase);
+  const { key, requestHash, replayed } = commandKey(changeCase, command, 'clarify');
+  if (replayed) return { changeCase, replayed: true };
+  if (changeCase.artifacts.requirements) throw commandError('Intent clarification must be reconciled before requirements are generated.');
+  const question = safeText(command.question, 600);
+  const targetField = safeText(command.targetField, 80);
+  if (!question) throw commandError('Clarification question is required.');
+  if (!CLARIFICATION_TARGETS.has(targetField)) throw commandError('Clarification target field is invalid.');
+  const actor = safeText(command.actor, 120) || 'studio-operator';
+  const entry = {
+    id: id('clarification'), status: 'OPEN', question,
+    rationale: safeText(command.rationale, 600) || 'The answer changes the intended outcome or delivery boundary.',
+    targetField, intentRevision: changeCase.intent.revision,
+    eligibleRespondent: safeText(command.eligibleRespondent, 120) || changeCase.accountableOwner,
+    options: Array.isArray(command.options) ? command.options.map((value) => safeText(value, 240)).filter(Boolean).slice(0, 8) : [],
+    createdBy: actor, createdAt: now(), answer: null, reconciledAt: null,
+  };
+  changeCase.clarifications.push(entry);
+  return finishCommand(changeCase, key, requestHash, 'clarify', actor, 'ClarificationOpened', { clarificationRef: entry.id, intentRevision: entry.intentRevision, targetField });
+}
+
+export function answerClarification(changeCase, command = {}) {
+  normalizeChangeCase(changeCase);
+  const { key, requestHash, replayed } = commandKey(changeCase, command, 'answer-clarification');
+  if (replayed) return { changeCase, replayed: true };
+  const entry = clarificationFor(changeCase, safeText(command.questionRef, 120));
+  if (entry.status !== 'OPEN') throw commandError('Clarification is not open.');
+  const actor = safeText(command.actor, 120);
+  if (!actor || actor !== entry.eligibleRespondent) {
+    const error = new Error('Only the eligible respondent can answer this clarification.');
+    error.statusCode = 403;
+    throw error;
+  }
+  const value = safeText(command.answer, 1_200);
+  if (!value) throw commandError('Clarification answer is required.');
+  entry.status = 'ANSWERED';
+  entry.answer = { value, answeredBy: actor, answeredAt: now() };
+  return finishCommand(changeCase, key, requestHash, 'answer-clarification', actor, 'ClarificationAnswered', { clarificationRef: entry.id, intentRevision: entry.intentRevision });
+}
+
+export function reconcileClarification(changeCase, command = {}) {
+  normalizeChangeCase(changeCase);
+  const { key, requestHash, replayed } = commandKey(changeCase, command, 'reconcile-clarification');
+  if (replayed) return { changeCase, replayed: true };
+  if (changeCase.artifacts.requirements) throw commandError('Intent clarification must be reconciled before requirements are generated.');
+  const entry = clarificationFor(changeCase, safeText(command.questionRef, 120));
+  if (entry.status !== 'ANSWERED') throw commandError('Clarification must be answered before reconciliation.');
+  const actor = safeText(command.actor, 120);
+  if (!actor || actor !== changeCase.accountableOwner) {
+    const error = new Error('Only the accountable owner can reconcile intent.');
+    error.statusCode = 403;
+    throw error;
+  }
+  if (entry.intentRevision !== changeCase.intent.revision) {
+    const error = new Error(`Intent revision conflict: question targets ${entry.intentRevision}, current revision is ${changeCase.intent.revision}.`);
+    error.statusCode = 409;
+    throw error;
+  }
+  const resolution = safeText(command.resolution, 1_200) || entry.answer.value;
+  const values = changeCase.intent[entry.targetField];
+  if (!Array.isArray(values)) throw commandError('Clarification target is not editable.');
+  if (!values.includes(resolution)) values.push(resolution);
+  changeCase.intent.revision += 1;
+  entry.status = 'RECONCILED';
+  entry.reconciledAt = now();
+  entry.reconciledBy = actor;
+  entry.intentRevisionAfter = changeCase.intent.revision;
+  entry.resolution = resolution;
+  changeCase.intent.contentHash = intentHash(changeCase.intent);
+  changeCase.intentHistory.push(structuredClone(changeCase.intent));
+  return finishCommand(changeCase, key, requestHash, 'reconcile-clarification', actor, 'ClarificationReconciled', { clarificationRef: entry.id, priorIntentRevision: entry.intentRevision, intentRevision: changeCase.intent.revision, targetField: entry.targetField });
 }
 
 function intake(changeCase) {
@@ -299,14 +764,23 @@ function assurance(changeCase) {
   return findings.length ? fail('release-readiness', [bundle.id], findings) : pass('release-readiness', [bundle.id]);
 }
 
+export function releaseApprovalCandidate(changeCase) {
+  return (changeCase.approvals ?? []).findLast((approval) => approval.action === 'release'
+    && approval.status === 'APPROVED' && approval.principal !== 'actor-implementation-agent'
+    && Array.isArray(approval.roles) && approval.roles.includes('release-approver')
+    && approval.roles.includes('control-owner') && !approval.usedAt) ?? null;
+}
+
 function authorityAndRelease(changeCase) {
   const request = { principal: 'actor-implementation-agent', action: 'deploy', asset: 'beneficial-owner-reference-service', environment: 'production-like', risk: 'HIGH', autonomyLevel: 'L2' };
-  const validApproval = changeCase.approvals.find((approval) => approval.action === 'release' && approval.status === 'APPROVED' && approval.principal !== request.principal && approval.roles.includes('release-approver') && approval.roles.includes('control-owner') && !approval.usedAt);
+  const validApproval = releaseApprovalCandidate(changeCase);
   if (!validApproval) {
     changeCase.artifacts.authority = { request, decision: 'REQUIRE_HUMAN_APPROVAL', requiredRoles: ['release-approver', 'control-owner'] };
     return fail('release-authority', [changeCase.artifacts.assurance.releaseEvidenceBundle.id], [finding('RELEASE_APPROVAL_REQUIRED', 'HIGH', 'Protected production-like release requires independent human approval.', request.asset, 'Approve as a distinct release approver and control owner.')], 'NEEDS_HUMAN');
   }
   validApproval.usedAt = now();
+  const { contentHash: _oldApprovalHash, ...approvalPayload } = validApproval;
+  validApproval.contentHash = digest(approvalPayload);
   const draftBundle = changeCase.artifacts.assurance.releaseEvidenceBundle;
   const { contentHash: _draftHash, ...bundlePayload } = draftBundle;
   const finalBundle = { ...bundlePayload, id: id('release-evidence'), priorBundleRef: draftBundle.id, approvals: [validApproval.id], finalizedAt: now() };
@@ -349,11 +823,16 @@ const STAGE_HANDLERS = [intake, contextDiscovery, impactAnalysis, governanceAnal
 
 export function advanceCase(changeCase, command = {}) {
   const actor = safeText(command.actor, 120) || 'sdlc-orchestrator';
-  const idempotencyKey = safeText(command.idempotencyKey, 160) || id('idempotency');
-  if (changeCase.idempotency[idempotencyKey]) return { changeCase, replayed: true };
+  const { key: idempotencyKey, requestHash, replayed } = commandKey(changeCase, command, 'advance');
+  if (replayed) return { changeCase, replayed: true };
   if (changeCase.status === 'PASSED') return { changeCase, replayed: false };
+  if (changeCase.status === 'STOPPED') throw commandError('Case is STOPPED; no further work can be scheduled.', 409);
   if (['BLOCKED', 'FAILED'].includes(changeCase.status)) throw new Error(`Case is ${changeCase.status}; create a repaired case or resolve the blocking fixture.`);
   if (changeCase.status === 'NEEDS_HUMAN' && changeCase.currentStage !== 'S9' && changeCase.currentStage !== 'S10') throw new Error('Case requires an authorized human decision before it can advance.');
+  const currentRequiredProofs = changeCase.proofs.obligations.filter((entry) => entry.required && entry.intentRevision === changeCase.intent.revision);
+  if (currentRequiredProofs.length && workspaceStatus(changeCase).nextAllowedAction.type !== 'ADVANCE_CASE') {
+    throw commandError('Current required proof work must be accepted before the case can advance.', 409);
+  }
   const stage = stageAt(changeCase.currentStageIndex);
   if (!stage) throw new Error('No current stage.');
   const startedAt = now();
@@ -374,41 +853,45 @@ export function advanceCase(changeCase, command = {}) {
     changeCase.status = result.status === 'NEEDS_HUMAN' ? 'NEEDS_HUMAN' : 'BLOCKED';
   }
   changeCase.version += 1; changeCase.updatedAt = now();
-  changeCase.idempotency[idempotencyKey] = { action: 'advance', version: changeCase.version, at: changeCase.updatedAt };
+  changeCase.idempotency[idempotencyKey] = { action: 'advance', requestHash, version: changeCase.version, at: changeCase.updatedAt };
   return { changeCase, replayed: false };
 }
 
 export function runToCheckpoint(changeCase, command = {}) {
   const startVersion = changeCase.version;
+  const { key: idempotencyKey, requestHash, replayed } = commandKey(changeCase, command, 'run');
+  if (replayed) return { changeCase, replayed: true, steps: 0, startVersion, endVersion: changeCase.version };
   let steps = 0;
   while (!['BLOCKED', 'NEEDS_HUMAN', 'PASSED', 'FAILED'].includes(changeCase.status) && steps < 20 || (changeCase.status === 'DRAFT' && steps < 20)) {
-    advanceCase(changeCase, { actor: command.actor, idempotencyKey: `${command.idempotencyKey ?? id('run')}:${steps}` });
+    advanceCase(changeCase, { actor: command.actor, idempotencyKey: `${idempotencyKey}:${steps}` });
     steps += 1;
   }
-  return { changeCase, steps, startVersion, endVersion: changeCase.version };
+  changeCase.idempotency[idempotencyKey] = { action: 'run', requestHash, version: changeCase.version, at: changeCase.updatedAt };
+  return { changeCase, replayed: false, steps, startVersion, endVersion: changeCase.version };
 }
 
 export function approveRelease(changeCase, command = {}) {
   if (changeCase.currentStage !== 'S9') throw new Error('Release approval is available only at S9.');
   const principal = safeText(command.principal, 120);
   const roles = Array.isArray(command.roles) ? command.roles.map((role) => safeText(role, 80)) : [];
-  const key = safeText(command.idempotencyKey, 160) || id('approval-key');
-  if (changeCase.idempotency[key]) return { changeCase, replayed: true };
+  const { key, requestHash, replayed } = commandKey(changeCase, command, 'approve');
+  if (replayed) return { changeCase, replayed: true };
   if (!principal) throw new Error('Approval principal is required.');
   if (principal === 'actor-implementation-agent') throw new Error('The implementation principal cannot approve its own protected release.');
   if (!roles.includes('release-approver') || !roles.includes('control-owner')) throw new Error('Release approver and control owner roles are required.');
-  const approval = { id: id('approval'), action: 'release', principal, roles, status: 'APPROVED', evidenceBundleRef: changeCase.artifacts.assurance.releaseEvidenceBundle.id, approvedAt: now(), usedAt: null };
+  const authorityGeneration = Number.isSafeInteger(command.authorityGeneration) ? command.authorityGeneration : null;
+  const approval = { id: id('approval'), action: 'release', principal, roles, authorityGeneration, status: 'APPROVED', evidenceBundleRef: changeCase.artifacts.assurance.releaseEvidenceBundle.id, approvedAt: now(), usedAt: null };
   approval.contentHash = digest(approval); changeCase.approvals.push(approval);
   changeCase.metrics.humanInterventions += 1; changeCase.status = 'RUNNING'; changeCase.version += 1; changeCase.updatedAt = now();
-  changeCase.idempotency[key] = { action: 'approve', version: changeCase.version, at: changeCase.updatedAt };
+  changeCase.idempotency[key] = { action: 'approve', requestHash, version: changeCase.version, at: changeCase.updatedAt };
   changeCase.events.push(eventEnvelope(changeCase, 'ReleaseApprovalRecorded', principal, { approvalRef: approval.id }, changeCase.events.at(-1)?.id));
   return { changeCase, replayed: false };
 }
 
 export function recordObservation(changeCase, command = {}) {
   if (changeCase.currentStage !== 'S10') throw new Error('Outcome observation is available only at S10.');
-  const key = safeText(command.idempotencyKey, 160) || id('observation-key');
-  if (changeCase.idempotency[key]) return { changeCase, replayed: true };
+  const { key, requestHash, replayed } = commandKey(changeCase, command, 'observe');
+  if (replayed) return { changeCase, replayed: true };
   const signals = {
     technicalHealthy: command.signals?.technicalHealthy !== false,
     controlExceptions: Number.isFinite(Number(command.signals?.controlExceptions)) ? Number(command.signals.controlExceptions) : 0,
@@ -417,7 +900,7 @@ export function recordObservation(changeCase, command = {}) {
   };
   changeCase.artifacts.observation = { id: id('observation'), releaseRef: changeCase.artifacts.release.id, window: 'synthetic:first-30-days', signals, recordedAt: now(), contentHash: digest(signals) };
   changeCase.metrics.humanInterventions += 1; changeCase.status = 'RUNNING'; changeCase.version += 1; changeCase.updatedAt = now();
-  changeCase.idempotency[key] = { action: 'observe', version: changeCase.version, at: changeCase.updatedAt };
+  changeCase.idempotency[key] = { action: 'observe', requestHash, version: changeCase.version, at: changeCase.updatedAt };
   changeCase.events.push(eventEnvelope(changeCase, 'ReleaseObserved', safeText(command.actor, 120) || 'operations-observer', { observationRef: changeCase.artifacts.observation.id }, changeCase.events.at(-1)?.id));
   return { changeCase, replayed: false };
 }

@@ -1,25 +1,16 @@
 ---
 name: orgward-implement
-description: Implement an authorized bounded OrgWard packet with contracts, backend, usable UI and evidence-backed recovery tests. Not for status questions or unapproved packet drafts.
+description: Implement an OrgWard task in real state, API and UI code with focused behavior and recovery tests. Use for feature work, fixes and vertical slices.
 ---
 
-Paths below are repository-root relative. Read product AGENTS.md,
-docs/engineering/WAYS-OF-WORKING.md, the approved packet,
-dependency/review receipts and docs/engineering/prompts/implement.md. Confirm actual
-readiness; a vector or template is not approval. Use the existing product directory.
+Read `AGENTS.md`, `TASKS.md` and the affected code. Implement the smallest complete
+user-visible slice. Prefer behavior tests over generated vectors or structural
+metadata checks. Exercise relevant success, denial, conflict, isolation and restart
+paths, then run the focused tests when the slice is ready. Review the diff, repair
+findings, and run `npm run check` once at task end; rerun it after any fix to a
+failed full check.
 
-Implement the reviewed slice from independent seed/oracle and contract tests to
-durable domain/API/worker behavior and usable UI. Read-only work need not invent
-writes. Verify stored state, artifacts and actual effects independently of labels;
-exercise denial, races, restart and recovery. Preserve parent acceptance mappings
-and applicable bounded workflow contributions.
-
-If a failure exposes a specification flaw, retain it and follow
-docs/engineering/CHANGE-CONTROL.md. Pause affected semantics, not unrelated safe
-authorized work. Never weaken an oracle or bypass an unmet prerequisite silently.
-Use relevant installed framework/browser skills where applicable.
-
-Record actual model/effort, packet/source digests, commands, raw results and limits
-with docs/engineering/templates/evidence-receipt.md. Baseline npm run check is not
-full enterprise acceptance. Preserve user work; no push/deploy/live effect beyond
-current authority. Stop after the slice, or checkpoint on quota/blocker.
+Do not invent product completion from labels or mocks. Preserve unrelated user work,
+server-side secrets and explicit authority for external effects. Do not require a
+paper packet or pre-implementation review. Hand the finished diff to code review;
+record concrete failures and remaining tasks directly in `TASKS.md`.

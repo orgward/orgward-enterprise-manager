@@ -4,3 +4,5 @@ data/execution-runs/
 data/execution-workspaces/
 ops/checks/*.tmp
 *.log
+node_modules/
+dist/

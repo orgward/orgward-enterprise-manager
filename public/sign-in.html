@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#101714">
+    <title>Sign in · OrgWard Enterprise Studio</title>
+    <link rel="stylesheet" href="/sign-in.css">
+    <script type="module" src="/sign-in.js"></script>
+  </head>
+  <body>
+    <main class="sign-in-card">
+      <a class="brand" href="/" aria-label="OrgWard Enterprise Studio home">OrgWard <span>Enterprise Studio</span></a>
+      <span class="eyebrow">Private enterprise workspace</span>
+      <h1>Sign in to continue</h1>
+      <p>Your identity provider controls sign-in. OrgWard assigns tenant and workspace access from the verified identity.</p>
+      <p id="sign-in-status" class="sign-in-status" role="status" aria-live="polite"></p>
+      <a id="sign-in-link" class="sign-in-button" href="/auth/login">Continue with your organization</a>
+      <p class="sign-in-note">OrgWard never asks for your identity provider password.</p>
+    </main>
+  </body>
+</html>
