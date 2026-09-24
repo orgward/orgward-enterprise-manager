@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { createApp } from '../server.mjs';
-import { decodeStudioRoute, encodeStudioRoute, fieldErrorsFor } from '../public/shared-interactions.mjs';
+import {
+  decodeStudioRoute, encodeExecutionRoute, encodeStudioRoute, executionProcessTarget, executionProjectContext,
+  fieldErrorsFor, founderConversationAnnouncement,
+} from '../public/shared-interactions.mjs';
 
 async function start(root, options = {}) {
   const app = createApp({
@@ -315,6 +318,51 @@ test('shared interaction helpers retain drafts and round-trip linkable workspace
   assert.deepEqual(decodeStudioRoute(coverageRoute), { projectId, view: 'coverage', area: null, selectedId: null, types: [] });
   assert.deepEqual(decodeStudioRoute('/?project=bad&view=unknown&selected=%20&area=arbitrary'), { projectId: null, view: 'blueprint', area: null, selectedId: null, types: [] });
   assert.deepEqual(fieldErrorsFor({ fieldErrors: [{ field: 'payload.name', message: 'Name is required.' }] }, 'payload.name'), ['Name is required.']);
+});
+
+test('Execution navigation carries only a valid project in both selectors', () => {
+  const projectId = 'project-12345678-1234-1234-1234-123456789abc';
+  const projects = [{ id: projectId }, { id: 'project-abcdefab-cdef-abcd-efab-cdefabcdefab' }];
+  assert.equal(encodeExecutionRoute(projectId), `/execution.html?project=${projectId}`);
+  assert.equal(encodeExecutionRoute('invalid'), '/execution.html');
+  assert.deepEqual(executionProjectContext(`/execution.html?project=${projectId}`, projects), {
+    projectId, runProjectId: projectId, planningProjectId: projectId,
+  });
+  assert.deepEqual(executionProjectContext('/execution.html', projects), {
+    projectId: null, runProjectId: null, planningProjectId: null,
+  });
+  assert.deepEqual(executionProjectContext('/execution.html?project=invalid', projects), {
+    projectId: null, runProjectId: null, planningProjectId: null,
+  });
+  assert.deepEqual(executionProjectContext(`/execution.html?project=${projects[1].id}`, [projects[0]]), {
+    projectId: null, runProjectId: null, planningProjectId: null,
+  }, 'unavailable projects use the existing fallback');
+  const processId = 'process-customer-intake';
+  const processRoute = encodeExecutionRoute(projectId, { projectId, processId });
+  assert.equal(processRoute, `/execution.html?project=${projectId}&process=${processId}`);
+  assert.deepEqual(executionProcessTarget(processRoute, projects), {
+    requested: true, target: { projectId, processId },
+  });
+  assert.deepEqual(executionProcessTarget(`/execution.html?project=${projectId}&process=bad%20id`, projects), {
+    requested: true, target: null,
+  });
+  assert.deepEqual(executionProcessTarget(processRoute, [projects[1]]), { requested: true, target: null });
+  assert.deepEqual(executionProcessTarget(`/execution.html?project=${projectId}`, projects), { requested: false, target: null });
+});
+
+test('founder announcement reports only the current prompt or saved blueprint', () => {
+  const project = {
+    questionIndex: 2,
+    conversation: [
+      { role: 'assistant', content: 'What business do you want to create?' },
+      { role: 'user', content: 'A repair service.' },
+      { role: 'assistant', content: 'Who are the customers and what will you offer?' },
+    ],
+  };
+  assert.equal(founderConversationAnnouncement(project, { answerSaved: true }), 'Answer saved. Who are the customers and what will you offer?');
+  assert.doesNotMatch(founderConversationAnnouncement(project, { answerSaved: true }), /What business|A repair service/);
+  assert.equal(founderConversationAnnouncement(project), 'Current question. Who are the customers and what will you offer?');
+  assert.equal(founderConversationAnnouncement({ latestBlueprint: { version: 2 }, conversation: project.conversation }), 'Saved blueprint version 2 loaded. The proposed design is ready to review.');
 });
 
 test('product status shell uses live foundation data and accessible recovery controls', async (t) => {

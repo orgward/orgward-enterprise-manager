@@ -147,7 +147,7 @@ export class ProjectStore {
     return this.createWithCommand(project, commandId, payloadHash, principal);
   }
 
-  async updateWithCommand(id, tenantId, { commandId, operation = 'project.record-answer', payloadHash, expectedVersion, principal = null, apply }) {
+  async updateWithCommand(id, tenantId, { commandId, operation = 'project.record-answer', payloadHash, expectedVersion, principal = null, minimumProjectAccess = null, apply }) {
     return this.withWriteLock(async () => {
       let project;
       try { project = JSON.parse(await readFile(this.fileFor(id), 'utf8')); }
@@ -157,6 +157,12 @@ export class ProjectStore {
       if (principal && !membership) return null;
       if (membership && !['owner', 'editor'].includes(membership.access)) {
         const error = new Error('Project membership does not allow this action.');
+        error.statusCode = 403;
+        error.code = 'ACTION_FORBIDDEN';
+        throw error;
+      }
+      if (minimumProjectAccess === 'owner' && membership?.access !== 'owner') {
+        const error = new Error('Only a project owner can publish an internal blueprint baseline.');
         error.statusCode = 403;
         error.code = 'ACTION_FORBIDDEN';
         throw error;
@@ -191,11 +197,11 @@ export class ProjectStore {
     });
   }
 
-  async updateWithCommandForPrincipal(id, tenantId, command, principal) {
+  async updateWithCommandForPrincipal(id, tenantId, command, principal, { minimumProjectAccess = null } = {}) {
     if (!principal) {
       throw Object.assign(new Error('A verified project member is required.'), { statusCode: 403, code: 'ACTION_FORBIDDEN' });
     }
-    return this.updateWithCommand(id, tenantId, { ...command, principal });
+    return this.updateWithCommand(id, tenantId, { ...command, principal, minimumProjectAccess });
   }
 
   async listMembers(tenantId, projectId, actor, { operation = null } = {}) {

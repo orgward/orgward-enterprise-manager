@@ -33,22 +33,24 @@ function testLocalRoleAuthority() {
   };
 }
 
-function token(claimOverrides = {}, headerOverrides = {}) {
+function token(claimOverrides = {}, headerOverrides = {}, nowMs = Date.now()) {
   const header = Buffer.from(JSON.stringify({ alg: 'RS256', kid: 'test-key', ...headerOverrides })).toString('base64url');
+  const nowSeconds = Math.floor(nowMs / 1000);
   const claims = Buffer.from(JSON.stringify({
-    iss: issuer, aud: 'orgward-api', sub: 'alice', iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 300,
+    iss: issuer, aud: 'orgward-api', sub: 'alice', iat: nowSeconds, exp: nowSeconds + 300,
     orgward_tenant: 'tenant-a', groups: ['studio-editors'], ...claimOverrides,
   })).toString('base64url');
   const content = `${header}.${claims}`;
   return `${content}.${sign('RSA-SHA256', Buffer.from(content), privateKey).toString('base64url')}`;
 }
 
-function authenticator() {
+function authenticator({ clock } = {}) {
   return new OidcAuthenticator({
     issuer, audience: 'orgward-api', jwksUri: `${issuer}/.well-known/jwks.json`,
     roleMap: { 'studio-editors': ['workspace-write'], 'release-owners': ['release-approver', 'control-owner'] },
     tenantBindings: { 'tenant-a': 'tenant-a', 'tenant-b': 'tenant-b', 'provider-org-green': 'tenant-a' },
     fetchImpl: async () => new Response(JSON.stringify({ keys: [jwk] }), { status: 200, headers: { 'content-type': 'application/json' } }),
+    ...(clock ? { clock } : {}),
   });
 }
 
@@ -139,38 +141,41 @@ async function request(base, endpoint, { bearer, headers = {}, ...init } = {}) {
 }
 
 test('OIDC access tokens require a trusted signature, issuer, audience, validity and tenant; roles are server mapped', async () => {
-  const auth = authenticator();
-  const accessToken = token();
+  const verifierNowMs = Date.UTC(2026, 0, 1, 0, 0, 0);
+  const verifierNowSeconds = Math.floor(verifierNowMs / 1000);
+  const issue = (claims = {}, header = {}) => token(claims, header, verifierNowMs);
+  const auth = authenticator({ clock: () => verifierNowMs });
+  const accessToken = issue();
   const tokenClaims = JSON.parse(Buffer.from(accessToken.split('.')[1], 'base64url'));
   const identity = await auth.authenticate({ headers: { authorization: `Bearer ${accessToken}` } });
   assert.deepEqual(identity, {
     issuer, subject: 'alice', principal: alicePrincipal, displayName: 'alice', tenantId: 'tenant-a',
     roles: ['workspace-write'], actorType: 'human', expiresAt: tokenClaims.exp,
   });
-  const workload = await auth.authenticate({ headers: { authorization: `Bearer ${token({ sub: 'build-agent', orgward_actor_type: 'workload' })}` } });
+  const workload = await auth.authenticate({ headers: { authorization: `Bearer ${issue({ sub: 'build-agent', orgward_actor_type: 'workload' })}` } });
   assert.equal(workload.actorType, 'workload');
   assert.equal(workload.tenantId, 'tenant-a');
-  const mapped = await auth.authenticate({ headers: { authorization: `Bearer ${token({ orgward_tenant: 'provider-org-green' })}` } });
+  const mapped = await auth.authenticate({ headers: { authorization: `Bearer ${issue({ orgward_tenant: 'provider-org-green' })}` } });
   assert.equal(mapped.tenantId, 'tenant-a');
   await assert.rejects(() => auth.authenticate({
-    headers: { authorization: `Bearer ${token({ orgward_tenant: 'unconfigured-provider-org' })}` },
+    headers: { authorization: `Bearer ${issue({ orgward_tenant: 'unconfigured-provider-org' })}` },
   }), { statusCode: 401, code: 'AUTHENTICATION_REQUIRED' });
   for (const invalid of [
-    token({ iss: 'https://attacker.example.test' }),
-    token({ aud: 'other-api' }),
-    token({ exp: Math.floor(Date.now() / 1000) - 1 }),
-    token({ iat: undefined }),
-    token({ iat: '123' }),
-    token({ iat: Math.floor(Date.now() / 1000) + 61 }),
-    token({ iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) }),
-    token({ sub: 'build-agent', orgward_actor_type: 'workload', iat: undefined }),
-    token({ orgward_tenant: '../tenant-b' }),
-    token({}, { alg: 'none' }),
-    token({}, { kid: 'unknown-key' }),
+    issue({ iss: 'https://attacker.example.test' }),
+    issue({ aud: 'other-api' }),
+    issue({ exp: verifierNowSeconds - 1 }),
+    issue({ iat: undefined }),
+    issue({ iat: '123' }),
+    issue({ iat: verifierNowSeconds + 61 }),
+    issue({ iat: verifierNowSeconds, exp: verifierNowSeconds }),
+    issue({ sub: 'build-agent', orgward_actor_type: 'workload', iat: undefined }),
+    issue({ orgward_tenant: '../tenant-b' }),
+    issue({}, { alg: 'none' }),
+    issue({}, { kid: 'unknown-key' }),
   ]) {
     await assert.rejects(() => auth.authenticate({ headers: { authorization: `Bearer ${invalid}` } }), { statusCode: 401 });
   }
-  const forgedSignature = `${token().split('.').slice(0, 2).join('.')}.${Buffer.alloc(256, 7).toString('base64url')}`;
+  const forgedSignature = `${issue().split('.').slice(0, 2).join('.')}.${Buffer.alloc(256, 7).toString('base64url')}`;
   await assert.rejects(() => auth.authenticate({ headers: { authorization: `Bearer ${forgedSignature}` } }), { statusCode: 401 });
   const malformedHeader = `${Buffer.from('null').toString('base64url')}.${Buffer.from('{}').toString('base64url')}.x`;
   await assert.rejects(() => auth.authenticate({ headers: { authorization: `Bearer ${malformedHeader}` } }), { statusCode: 401 });

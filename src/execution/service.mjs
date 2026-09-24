@@ -1,12 +1,19 @@
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import http from 'node:http';
 import https from 'node:https';
 import { digest } from '../sdlc/contracts.mjs';
 import { CommandExecutionAdapter } from '../sdlc/execution-adapter.mjs';
 import { readWorkspaceArtifact } from './artifact-file.mjs';
-import { approveExecutionRun, createExecutionRun, executionApprovalRequestHash, executionEvent, executionRunView } from './contracts.mjs';
+import { buildBlueprintProposalPrompt, createGeneratedBlueprintProposal, createProcessTaskProposalContext } from './proposals.mjs';
+import {
+  approveExecutionRun,
+  createExecutionRun,
+  executionApprovalRequestHash,
+  executionEvent,
+  executionRunView,
+} from './contracts.mjs';
 import { ExecutionRunStore } from './store.mjs';
 
 const WORKER_LEASE_MS = 5_000;
@@ -29,19 +36,7 @@ function providerTransport(endpoint, { headers, body, signal, parseResponse }) {
   const target = new URL(endpoint);
   const client = target.protocol === 'https:' ? https : http;
   const request = client.request(target, { method: 'POST', headers, agent: false });
-  let connected = false;
-  let finished = false;
-  let handoffSettled = false;
-  let resolveHandoff;
-  let rejectHandoff;
-  const handedOff = new Promise((resolve, reject) => { resolveHandoff = resolve; rejectHandoff = reject; });
-  const markHandoff = () => {
-    if (connected && finished && !handoffSettled) { handoffSettled = true; resolveHandoff(); }
-  };
-  request.on('socket', (socket) => {
-    waitForProviderSocketConnection(socket, target.protocol, () => { connected = true; markHandoff(); });
-  });
-  request.once('finish', () => { finished = true; markHandoff(); });
+  let sent = false;
   const result = new Promise((resolve, reject) => {
     request.once('response', async (response) => {
       try {
@@ -60,15 +55,19 @@ function providerTransport(endpoint, { headers, body, signal, parseResponse }) {
     });
     request.once('error', reject);
   });
-  request.once('error', (error) => {
-    if (!handoffSettled) { handoffSettled = true; rejectHandoff(error); }
-  });
   const onAbort = () => request.destroy(new Error('provider request aborted'));
   if (signal?.aborted) onAbort();
   else signal?.addEventListener('abort', onAbort, { once: true });
   request.once('close', () => signal?.removeEventListener('abort', onAbort));
-  request.end(body);
-  return { handedOff, result, abort: () => request.destroy(new Error('provider request aborted')) };
+  return {
+    send() {
+      if (sent) throw new Error('provider request already sent');
+      sent = true;
+      request.end(body);
+    },
+    result,
+    abort: () => request.destroy(new Error('provider request aborted')),
+  };
 }
 
 function principalScopeUnavailable() {
@@ -188,12 +187,12 @@ export class ExecutionService {
     }
   }
   capabilities() { return [...this.profiles.values()].map(publicProfile); }
-  async #saveRun(run, { expectedVersion = null, principal = null, requiredPrincipalRoles = null, authzGeneration = null } = {}) {
+  async #saveRun(run, { expectedVersion = null, principal = null, requiredPrincipalRoles = null, authzGeneration = null, validateCurrent = null } = {}) {
     if (principal) {
       if (typeof this.store.saveForPrincipal !== 'function') throw principalScopeUnavailable();
-      return this.store.saveForPrincipal(run, { expectedVersion, principal, requiredPrincipalRoles, authzGeneration });
+      return this.store.saveForPrincipal(run, { expectedVersion, principal, requiredPrincipalRoles, authzGeneration, validateCurrent });
     }
-    return this.store.save(run, { expectedVersion });
+    return this.store.save(run, { expectedVersion, validateCurrent });
   }
   async cancelPrincipal({ tenantId, principal, projectId = null, reason = 'authorization_revoked' }) {
     const active = [...this.active.values()].filter((entry) => entry.tenantId === tenantId
@@ -285,10 +284,10 @@ export class ExecutionService {
       const workspace = path.resolve(configuredRoot, run.id);
       if (path.dirname(workspace) !== configuredRoot) return null;
       const contents = await readWorkspaceArtifact({
-        configuredRoot, runId: run.id, segments, expectedHash: record.contentHash,
+        configuredRoot, runId: run.id, segments, expectedHash: record.contentHash, hashAlgorithm: record.hashAlgorithm,
       });
       if (!contents) return null;
-      const artifact = { contents, fileName: path.posix.basename(relativePath), contentHash: record.contentHash };
+      const artifact = { contents, fileName: path.posix.basename(relativePath), contentHash: createHash('sha256').update(contents).digest('hex') };
       await onArtifact?.(artifact);
       return artifact;
     };
@@ -303,6 +302,11 @@ export class ExecutionService {
     return readAndDeliver(run);
   }
   async create(input) {
+    if (input && (Object.hasOwn(input, 'processTaskRef') || Object.hasOwn(input, 'proposalContext'))) {
+      throw Object.assign(new Error('Only a saved process-task request may establish immutable task linkage.'), {
+        statusCode: 400, code: 'INVALID_COMMAND', retryable: false,
+      });
+    }
     let profile = this.profiles.get(input.profileId);
     if (profile?.dynamicOpenAi) {
       if (input.scopePrincipal) {
@@ -324,6 +328,263 @@ export class ExecutionService {
     });
     return executionRunView(run);
   }
+  async createForProcessTask(input) {
+    if (typeof this.store.createForProcessTask !== 'function') {
+      throw Object.assign(new Error('Linked process task requests require PostgreSQL-backed execution storage.'), {
+        statusCode: 503, code: 'PROCESS_TASK_EXECUTION_UNAVAILABLE', retryable: false,
+      });
+    }
+    let profile = this.profiles.get(input.profileId);
+    if (!profile) throw Object.assign(new Error('Choose an available configured execution profile.'), { statusCode: 400, code: 'EXECUTION_PROFILE_NOT_FOUND' });
+    if (profile.dynamicOpenAi && (!this.secretStore || !input.tenantId)) {
+      throw Object.assign(new Error('OpenAI profiles require the server-side credential broker.'), {
+        statusCode: 503, code: 'BROKER_AUTHORITY_REQUIRED', retryable: false,
+      });
+    }
+    const requestHash = digest({
+      projectId: input.projectId, planId: input.planId, revision: input.revision,
+      planInstanceId: input.planInstanceId ?? null, taskId: input.taskId, profileId: input.profileId,
+      ...(profile.dynamicOpenAi ? {
+        profileSnapshot: {
+          kind: profile.kind, version: profile.version,
+          credentialReference: profile.credentialReference,
+          model: profile.model,
+          providerEndpoint: profile.providerEndpoint,
+        },
+      } : {}),
+    });
+    const result = await this.store.createForProcessTask({
+      tenantId: input.tenantId, projectId: input.projectId, principal: input.principal,
+      authzGeneration: input.authzGeneration, planId: input.planId, revision: input.revision,
+      planInstanceId: input.planInstanceId, taskId: input.taskId, commandId: input.commandId, requestHash,
+      buildRun: async ({ project, plan, task, processTaskRef, client }) => {
+        let runProfile = profile;
+        let proposalContext = null;
+        if (profile.dynamicOpenAi) {
+          const binding = await this.secretStore.resolveOpenAiBinding({
+            client, tenantId: input.tenantId, reference: profile.credentialReference, model: profile.model,
+          });
+          runProfile = { ...profile, credentialVersion: binding.version };
+          const pinnedBlueprint = project.blueprintVersions?.find((candidate) => candidate.id === processTaskRef.blueprintId
+            && candidate.version === processTaskRef.blueprintVersion);
+          proposalContext = createProcessTaskProposalContext({ blueprint: pinnedBlueprint, task, processTaskRef });
+        }
+        return createExecutionRun({
+          tenantId: input.tenantId, projectId: input.projectId, profile: runProfile, requestedBy: input.principal,
+          title: task.title, objective: task.detail,
+          requirements: [
+            ...task.inputs.map((entry) => `Use input: ${entry.label}`),
+            ...task.outputs.map((entry) => `Produce output: ${entry.label}`),
+          ],
+          sourceRefs: [
+            `process-plan:${plan.id}:revision:${plan.revision}`,
+            `task:${task.id}`,
+            ...task.inputs.map((entry) => `input:${entry.objectId}`),
+            ...task.outputs.map((entry) => `output:${entry.objectId}`),
+          ],
+          processTaskRef,
+          proposalContext,
+        });
+      },
+    });
+    return result ? { ...result, run: executionRunView(result.run) } : null;
+  }
+  async cancelProcessTaskRun(input) {
+    if (typeof this.store.cancelProcessTaskRun !== 'function') {
+      throw Object.assign(new Error('Linked process task cancellation requires PostgreSQL-backed execution storage.'), {
+        statusCode: 503, code: 'PROCESS_TASK_EXECUTION_UNAVAILABLE', retryable: false,
+      });
+    }
+    const result = await this.store.cancelProcessTaskRun({
+      tenantId: input.tenantId, projectId: input.projectId, runId: input.runId,
+      principal: input.principal, authzGeneration: input.authzGeneration,
+      version: input.version, commandId: input.commandId,
+      requestHash: digest({
+        tenantId: input.tenantId, projectId: input.projectId, runId: input.runId,
+        principal: input.principal, version: input.version,
+      }),
+    });
+    return result ? { ...result, run: executionRunView(result.run) } : null;
+  }
+  async pauseProcessTaskRun(input) {
+    if (typeof this.store.pauseProcessTaskRun !== 'function') {
+      throw Object.assign(new Error('Linked process-task pause requires PostgreSQL-backed execution storage.'), {
+        statusCode: 503, code: 'PROCESS_TASK_EXECUTION_UNAVAILABLE', retryable: false,
+      });
+    }
+    const result = await this.store.pauseProcessTaskRun({
+      tenantId: input.tenantId, projectId: input.projectId, runId: input.runId,
+      principal: input.principal, authzGeneration: input.authzGeneration,
+      version: input.version, commandId: input.commandId,
+      requestHash: digest({
+        tenantId: input.tenantId, projectId: input.projectId, runId: input.runId,
+        principal: input.principal, version: input.version,
+      }),
+    });
+    return result ? { ...result, run: executionRunView(result.run) } : null;
+  }
+  async amendPausedProcessTaskRun(input) {
+    if (typeof this.store.amendPausedProcessTaskRun !== 'function') {
+      throw Object.assign(new Error('Linked process-task amendment requires PostgreSQL-backed execution storage.'), {
+        statusCode: 503, code: 'PROCESS_TASK_EXECUTION_UNAVAILABLE', retryable: false,
+      });
+    }
+    const { tenantId, projectId, runId, principal, authzGeneration, version, commandId, objective, requirements, reason } = input;
+    const result = await this.store.amendPausedProcessTaskRun({
+      tenantId, projectId, runId, principal, authzGeneration, version, commandId, objective, requirements, reason,
+      requestHash: digest({ tenantId, projectId, runId, principal, version, objective, requirements, reason }),
+    });
+    return result ? { ...result, run: executionRunView(result.run) } : null;
+  }
+  async resumeProcessTaskRun(input) {
+    if (typeof this.store.resumeProcessTaskRun !== 'function') {
+      throw Object.assign(new Error('Linked process-task resume requires PostgreSQL-backed execution storage.'), {
+        statusCode: 503, code: 'PROCESS_TASK_EXECUTION_UNAVAILABLE', retryable: false,
+      });
+    }
+    const validateCurrentProfile = async (run, client) => {
+      const stale = (message) => Object.assign(new Error(message), {
+        statusCode: 409, code: 'EXECUTION_PROFILE_STALE', retryable: false,
+      });
+      const profile = this.profiles.get(run.profile?.id);
+      if (!profile || profile.kind !== run.profile?.kind || profile.version !== run.profile?.version) {
+        throw stale('The configured execution profile changed while this request was paused. Keep it paused and create a new request.');
+      }
+      if ((profile.providerEndpoint ? digest(profile.providerEndpoint) : null)
+        !== (run.profile.providerDestinationHash ?? null)) {
+        throw stale('The configured provider destination changed while this request was paused. Keep it paused and create a new request.');
+      }
+      if (profile.dynamicOpenAi) {
+        const credential = run.profile.credential;
+        if (!credential || credential.reference !== profile.credentialReference
+          || run.profile.providerModel !== profile.model || !this.secretStore || !client) {
+          throw stale('The pinned OpenAI profile or credential is no longer available. Keep it paused and create a new request.');
+        }
+        let binding;
+        try {
+          binding = await this.secretStore.resolveOpenAiBinding({
+            client, tenantId: input.tenantId, reference: credential.reference, model: profile.model,
+          });
+        } catch {
+          throw stale('The pinned OpenAI credential is no longer active. Keep it paused and create a new request.');
+        }
+        if (binding.version !== credential.version) {
+          throw stale('The OpenAI credential generation changed while this request was paused. Keep it paused and create a new request.');
+        }
+      } else {
+        const configured = profile.credentialReference
+          ? { reference: profile.credentialReference, version: profile.credentialVersion } : null;
+        const pinned = run.profile.credential ?? null;
+        if ((configured?.reference ?? null) !== (pinned?.reference ?? null)
+          || (configured?.version ?? null) !== (pinned?.version ?? null)) {
+          throw stale('The configured credential binding changed while this request was paused. Keep it paused and create a new request.');
+        }
+      }
+    };
+    const result = await this.store.resumeProcessTaskRun({
+      tenantId: input.tenantId, projectId: input.projectId, runId: input.runId,
+      principal: input.principal, authzGeneration: input.authzGeneration,
+      version: input.version, commandId: input.commandId,
+      reason: input.reason ?? null,
+      requestHash: digest({
+        tenantId: input.tenantId, projectId: input.projectId, runId: input.runId,
+        principal: input.principal, version: input.version, reason: input.reason ?? null,
+      }),
+      validateCurrentProfile,
+    });
+    return result ? { ...result, run: executionRunView(result.run) } : null;
+  }
+  async listProcessTaskInstances(input) {
+    if (typeof this.store.listProcessTaskInstancesForPrincipal !== 'function') {
+      throw Object.assign(new Error('Durable process task runtime storage is unavailable.'), {
+        statusCode: 503, code: 'PROCESS_TASK_RUNTIME_UNAVAILABLE', retryable: false,
+      });
+    }
+    return this.store.listProcessTaskInstancesForPrincipal(input);
+  }
+  async pauseProcessTaskInstance(input) {
+    if (typeof this.store.pauseProcessTaskInstance !== 'function') throw Object.assign(new Error('Durable process-instance pause requires PostgreSQL-backed execution storage.'), {
+      statusCode: 503, code: 'PROCESS_TASK_RUNTIME_UNAVAILABLE', retryable: false,
+    });
+    const { tenantId, projectId, planInstanceId, principal, authzGeneration, version, reason, commandId } = input;
+    const result = await this.store.pauseProcessTaskInstance({ ...input, requestHash: digest({ tenantId, projectId, planInstanceId, principal, version, reason }) });
+    return result;
+  }
+  async resumeProcessTaskInstance(input) {
+    if (typeof this.store.resumeProcessTaskInstance !== 'function') throw Object.assign(new Error('Durable process-instance resume requires PostgreSQL-backed execution storage.'), {
+      statusCode: 503, code: 'PROCESS_TASK_RUNTIME_UNAVAILABLE', retryable: false,
+    });
+    const { tenantId, projectId, planInstanceId, principal, version } = input;
+    return this.store.resumeProcessTaskInstance({ ...input, requestHash: digest({ tenantId, projectId, planInstanceId, principal, version }) });
+  }
+  async abandonUnverifiedProcessTaskInstance(input) {
+    if (typeof this.store.abandonUnverifiedProcessTaskInstance !== 'function') throw Object.assign(new Error('Unverified process-instance abandonment requires PostgreSQL-backed execution storage.'), {
+      statusCode: 503, code: 'PROCESS_TASK_RUNTIME_UNAVAILABLE', retryable: false,
+    });
+    const { tenantId, projectId, planInstanceId, principal, version, reason, evidence, acknowledgeDuplicateCostWork } = input;
+    return this.store.abandonUnverifiedProcessTaskInstance({ ...input, requestHash: digest({
+      tenantId, projectId, planInstanceId, principal, version, reason, evidence, acknowledgeDuplicateCostWork,
+    }) });
+  }
+  async startHumanProcessTask(input) {
+    if (typeof this.store.startHumanProcessTask !== 'function') {
+      throw Object.assign(new Error('Durable human task checkpoints require PostgreSQL-backed execution storage.'), {
+        statusCode: 503, code: 'PROCESS_TASK_RUNTIME_UNAVAILABLE', retryable: false,
+      });
+    }
+    return this.store.startHumanProcessTask({
+      ...input,
+      requestHash: digest({
+        projectId: input.projectId, planId: input.planId, revision: input.revision,
+        planInstanceId: input.planInstanceId, taskId: input.taskId, principal: input.principal,
+      }),
+    });
+  }
+  async completeHumanProcessTask(input) {
+    if (typeof this.store.completeHumanProcessTask !== 'function') {
+      throw Object.assign(new Error('Durable human task checkpoints require PostgreSQL-backed execution storage.'), {
+        statusCode: 503, code: 'PROCESS_TASK_RUNTIME_UNAVAILABLE', retryable: false,
+      });
+    }
+    return this.store.completeHumanProcessTask({
+      ...input,
+      requestHash: digest({
+        projectId: input.projectId, planId: input.planId, revision: input.revision,
+        planInstanceId: input.planInstanceId, taskId: input.taskId, principal: input.principal,
+        result: input.result, evidence: input.evidence,
+      }),
+    });
+  }
+  async escalateHumanProcessTask(input) {
+    if (typeof this.store.escalateHumanProcessTask !== 'function') {
+      throw Object.assign(new Error('Durable human task escalation requires PostgreSQL-backed execution storage.'), {
+        statusCode: 503, code: 'PROCESS_TASK_RUNTIME_UNAVAILABLE', retryable: false,
+      });
+    }
+    return this.store.escalateHumanProcessTask({
+      ...input,
+      requestHash: digest({
+        projectId: input.projectId, planId: input.planId, revision: input.revision,
+        planInstanceId: input.planInstanceId, taskId: input.taskId, principal: input.principal,
+        reason: input.reason, evidence: input.evidence ?? [],
+      }),
+    });
+  }
+  async resolveHumanProcessTaskEscalation(input) {
+    if (typeof this.store.resolveHumanProcessTaskEscalation !== 'function') {
+      throw Object.assign(new Error('Durable human task resolution requires PostgreSQL-backed execution storage.'), {
+        statusCode: 503, code: 'PROCESS_TASK_RUNTIME_UNAVAILABLE', retryable: false,
+      });
+    }
+    return this.store.resolveHumanProcessTaskEscalation({
+      ...input,
+      requestHash: digest({
+        projectId: input.projectId, planId: input.planId, revision: input.revision,
+        planInstanceId: input.planInstanceId, taskId: input.taskId, principal: input.principal,
+        disposition: input.disposition, reason: input.reason, evidence: input.evidence ?? [],
+      }),
+    });
+  }
   async approve(id, tenantId, command) {
     if (command.scopePrincipal && typeof this.store.withPrincipalAuthority !== 'function') throw principalScopeUnavailable();
     if (command.scopePrincipal && typeof this.store.saveForPrincipal !== 'function') throw principalScopeUnavailable();
@@ -338,11 +599,33 @@ export class ExecutionService {
     if (!run || run.tenantId !== tenantId) return null;
     if (command.version !== run.version) throw Object.assign(new Error(`Version conflict: expected ${run.version}.`), { statusCode: 409 });
     const persistedVersion = run.version;
+    const profile = this.profiles.get(run.profile?.id);
+    const validateCredentialBinding = profile?.dynamicOpenAi ? async (current, client) => {
+      const credential = current.profile?.credential;
+      const staleCredential = () => Object.assign(new Error('The OpenAI credential or profile changed before approval. Create a new execution request against the current binding.'), {
+        statusCode: 409, code: 'EXECUTION_PROFILE_STALE', retryable: false,
+      });
+      if (!credential || credential.reference !== profile.credentialReference
+        || current.profile?.providerModel !== profile.model || current.profile?.version !== profile.version
+        || !this.secretStore || !client) {
+        throw staleCredential();
+      }
+      let binding;
+      try {
+        binding = await this.secretStore.resolveOpenAiBinding({
+          client, tenantId, reference: credential.reference, model: profile.model,
+        });
+      } catch {
+        throw staleCredential();
+      }
+      if (binding.version !== credential.version) throw staleCredential();
+    } : null;
     approveExecutionRun(run, command);
     await this.#saveRun(run, {
       expectedVersion: persistedVersion, principal: command.scopePrincipal ?? null,
       requiredPrincipalRoles: command.scopePrincipal ? ['execution-approver'] : null,
       authzGeneration: command.scopePrincipal ? command.authorityGeneration : null,
+      validateCurrent: validateCredentialBinding,
     });
     return executionRunView(run);
   }
@@ -386,7 +669,8 @@ export class ExecutionService {
     }
     const requestHash = executionApprovalRequestHash(run);
     const legacyRequestHash = digest(run.workItem);
-    if (run.approval.requestHash !== requestHash && run.approval.requestHash !== legacyRequestHash) {
+    const validLegacyApproval = !run.interventionRevisions?.length && run.approval.requestHash === legacyRequestHash;
+    if (run.approval.requestHash !== requestHash && !validLegacyApproval) {
       throw new Error('Approved request no longer matches the work item and executor profile.');
     }
     if (run.profile.credential && profile.kind !== 'provider-http' && !profile.dynamicOpenAi) {
@@ -459,9 +743,11 @@ export class ExecutionService {
       const adapter = providerProfile ? null : this.commandAdapterFactory({ executable: profile.executable, args: profile.args, timeoutMs: profile.timeoutMs, name: profile.id, version: profile.version, environment: profile.environment, sandbox: profile.sandbox });
       const start = async () => {
       if (providerProfile) return { providerDispatchAuthorized: true };
+        const instructions = run.interventionRevisions?.at(-1) ?? run.workItem;
         const handle = await adapter.start(
-          { id: run.workItem.id, objective: run.workItem.objective, acceptanceCriteria: run.workItem.requirements },
-          { id: run.id, requirements: run.workItem.requirements, sourceRefs: run.workItem.sourceRefs, approval: run.approval },
+          { id: run.workItem.id, objective: instructions.objective, acceptanceCriteria: instructions.requirements },
+          { id: run.id, requirements: instructions.requirements, sourceRefs: run.workItem.sourceRefs, approval: run.approval,
+            interventionRevision: run.interventionRevisions?.at(-1)?.revision ?? null },
           { workspace, signal: active.controller.signal },
         );
         active.handle = handle;
@@ -539,8 +825,13 @@ export class ExecutionService {
         result.catch(() => {});
       }
       const result = await handle.result;
+      const generatedProposal = result.status === 'COMPLETED' && run.workItem?.proposalContext
+        ? createGeneratedBlueprintProposal(run, result.stdout) : null;
       terminalAttempted = true;
-      const execution = { ...result, stdout: redact(result.stdout), stderr: redact(result.stderr), ...(workspace ? { workspace } : {}) };
+      const execution = {
+        ...result, stdout: redact(result.stdout), stderr: redact(result.stderr),
+        ...(workspace ? { workspace } : {}), ...(generatedProposal ? { generatedProposal } : {}),
+      };
       terminalRun = await this.#finalizeTerminal(run, {
         tenantId, principal: command.scopePrincipal ?? null, workerId: active.workerId,
         dispatchStarted, commandPrincipal: command.principal ?? 'execution-worker',
@@ -554,7 +845,19 @@ export class ExecutionService {
       });
     } catch (error) {
       if (terminalAttempted || !runningCommitted || run.status !== 'RUNNING') throw error;
-      if (command.scopePrincipal && active.handle && !dispatchStarted) {
+      if (command.scopePrincipal && ['PROCESS_INSTANCE_PAUSED', 'PROVIDER_ATTEMPT_CANCELLED'].includes(error.code)
+        && typeof this.store.pauseUndispatchedProcessTaskRun === 'function') {
+        try {
+          terminalRun = await this.store.pauseUndispatchedProcessTaskRun({
+            tenantId, projectId: run.projectId, runId: id, principal: command.scopePrincipal,
+            authzGeneration: command.authorityGeneration, workerId: active.workerId, expectedVersion: run.version,
+          });
+          if (terminalRun) terminalAttempted = true;
+        } catch { /* Fall through to ordinary failure handling; the store remains fail closed. */ }
+      }
+      if (terminalRun?.status === 'PAUSED') {
+        // The run was known not to have crossed a provider handoff; release its worker lease below.
+      } else if (command.scopePrincipal && active.handle && !dispatchStarted) {
         preserveLeaseForRecovery = true;
         active.cancelReason = 'dispatch_commit_unknown';
         active.controller.abort();
@@ -622,9 +925,15 @@ export class ExecutionService {
     timeout.unref?.();
     try {
       return await this.useProviderCredential(run.id, { operation: ({ credential, signal }) => {
+        const instructions = run.interventionRevisions?.at(-1) ?? run.workItem;
         const requestBody = profile.dynamicOpenAi
-          ? { model: profile.model, input: `${run.workItem.objective}\n\nRequirements:\n${run.workItem.requirements.join('\n')}`, store: false, max_output_tokens: 2_000, tools: [] }
-          : { objective: run.workItem.objective, requirements: run.workItem.requirements };
+          ? { model: profile.model, input: run.workItem.proposalContext
+            ? buildBlueprintProposalPrompt({ task: {
+              id: run.processTaskRef.taskId, title: run.title, detail: instructions.objective,
+            }, proposalContext: run.workItem.proposalContext, amendedRequirements: instructions.requirements })
+            : `${instructions.objective}\n\nRequirements:\n${instructions.requirements.join('\n')}`,
+          store: false, max_output_tokens: 2_000, tools: [] }
+          : { objective: instructions.objective, requirements: instructions.requirements };
         return providerTransport(profile.providerEndpoint, {
           headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json', accept: 'application/json' },
           body: JSON.stringify(requestBody), signal,
@@ -639,6 +948,7 @@ export class ExecutionService {
       } });
     } catch (error) {
       if (error?.code === 'PROVIDER_OUTPUT_QUARANTINED') throw error;
+      if (['PROCESS_INSTANCE_PAUSED', 'PROVIDER_ATTEMPT_CANCELLED'].includes(error?.code)) throw error;
       if (error?.code === 'PROVIDER_OUTCOME_UNKNOWN') {
         throw Object.assign(new Error('The provider may have received this request. This run will not send it again; check provider state before creating a new run.'), {
           code: 'PROVIDER_OUTCOME_UNKNOWN',

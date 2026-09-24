@@ -3,13 +3,14 @@ import { readFile } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { addConversationTurn, createProject, editBlueprintObject, editProcessTaskGraph, graphForBlueprint, latestBlueprint, planProcessTaskGraph } from './src/model.mjs';
+import { addConversationTurn, applyBlueprintProposal, createProject, editBlueprintObject, editProcessTaskGraph, graphForBlueprint, latestBlueprint, planProcessTaskGraph, publishBlueprintInternally } from './src/model.mjs';
 import { ProjectStore } from './src/store.mjs';
 import { MUTATIONS, STAGES } from './src/sdlc/contracts.mjs';
 import { PROOF_ACTION_ATTEMPT_LIMIT, advanceCase, answerClarification, approveRelease, assessProofs, commandRequestHash, completeProofAction, createChangeCase, normalizeChangeCase, openClarification, reconcileClarification, recordObservation, recordProofResult, registerProofObligation, releaseApprovalCandidate, resumeProofAction, routeProofResult, runToCheckpoint, traceability, verifyEvidenceLedger, workspaceStatus } from './src/sdlc/engine.mjs';
 import { ChangeCaseStore } from './src/sdlc/store.mjs';
 import { EXECUTION_STATUSES } from './src/execution/contracts.mjs';
 import { ExecutionService } from './src/execution/service.mjs';
+import { verifyGeneratedBlueprintProposal } from './src/execution/proposals.mjs';
 import { PostgresPersistence } from './src/platform/postgres.mjs';
 import { OidcAuthenticator } from './src/platform/oidc.mjs';
 import { OidcLoginFlow } from './src/platform/oidc-login.mjs';
@@ -269,7 +270,7 @@ function validateMessagePayload(payload) {
 }
 
 function validateBlueprintEditPayload(payload) {
-  const allowed = new Set(['objectId', 'name', 'detail', 'ownerRoleName', 'trigger', 'proposedInstructions', 'proposedScopeStatements', 'proposedToolStatements', 'proposedEscalationRules']);
+  const allowed = new Set(['objectId', 'name', 'detail', 'ownerRoleName', 'trigger', 'capabilityId', 'proposedInstructions', 'proposedScopeStatements', 'proposedToolStatements', 'proposedEscalationRules', 'servesCustomerIds', 'enabledByCapabilityIds', 'inputInformationIds', 'outputInformationIds', 'inputDecisionIds', 'outputDecisionIds', 'resourceIds', 'systemIds', 'evidenceMetricIds', 'feedbackGoalId', 'feedbackDecisionIds', 'readInformationId', 'metricId', 'consumerLoopId', 'mitigatingControlId', 'capabilityMetricIds', 'assignedRoleIds', 'responsibilityIds', 'decisionMakerRoleId', 'decisionScopeIds', 'strategyGoalIds']);
   const unknown = Object.keys(payload).filter((field) => !allowed.has(field));
   if (unknown.length) throw apiFailure(400, 'INVALID_COMMAND', 'The blueprint edit contains unknown fields.', {
     fieldErrors: unknown.map((field) => ({ field: `payload.${field}`, message: 'This field is not accepted.' })),
@@ -307,13 +308,230 @@ function validateBlueprintEditPayload(payload) {
   };
   const proposedToolStatements = proposedList('proposedToolStatements');
   const proposedEscalationRules = proposedList('proposedEscalationRules');
+  let servesCustomerIds;
+  if (payload.servesCustomerIds !== undefined) {
+    if (!Array.isArray(payload.servesCustomerIds) || payload.servesCustomerIds.length > 32
+      || payload.servesCustomerIds.some((id) => typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(id))
+      || new Set(payload.servesCustomerIds).size !== payload.servesCustomerIds.length) {
+      throw apiFailure(400, 'INVALID_COMMAND', 'Choose up to 32 distinct valid customer references.', {
+        fieldErrors: [{ field: 'payload.servesCustomerIds', message: 'Choose up to 32 distinct customer IDs.' }],
+      });
+    }
+    servesCustomerIds = payload.servesCustomerIds;
+  }
+  let enabledByCapabilityIds;
+  if (payload.enabledByCapabilityIds !== undefined) {
+    if (!Array.isArray(payload.enabledByCapabilityIds) || payload.enabledByCapabilityIds.length > 32
+      || payload.enabledByCapabilityIds.some((id) => typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(id))
+      || new Set(payload.enabledByCapabilityIds).size !== payload.enabledByCapabilityIds.length) {
+      throw apiFailure(400, 'INVALID_COMMAND', 'Choose up to 32 distinct valid capability references.', {
+        fieldErrors: [{ field: 'payload.enabledByCapabilityIds', message: 'Choose up to 32 distinct capability IDs.' }],
+      });
+    }
+    enabledByCapabilityIds = payload.enabledByCapabilityIds;
+  }
+  const informationIds = (field) => {
+    if (payload[field] === undefined) return undefined;
+    if (!Array.isArray(payload[field]) || payload[field].length > 32
+      || payload[field].some((id) => typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(id))
+      || new Set(payload[field]).size !== payload[field].length) {
+      throw apiFailure(400, 'INVALID_COMMAND', 'Choose up to 32 distinct valid information references.', {
+        fieldErrors: [{ field: `payload.${field}`, message: 'Choose up to 32 distinct information record IDs.' }],
+      });
+    }
+    return payload[field];
+  };
+  const inputInformationIds = informationIds('inputInformationIds');
+  const outputInformationIds = informationIds('outputInformationIds');
+  const typedIds = (field, typeLabel) => {
+    if (payload[field] === undefined) return undefined;
+    if (!Array.isArray(payload[field]) || payload[field].length > 32
+      || payload[field].some((id) => typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(id))
+      || new Set(payload[field]).size !== payload[field].length) {
+      throw apiFailure(400, 'INVALID_COMMAND', `Choose up to 32 distinct valid ${typeLabel} references.`, {
+        fieldErrors: [{ field: `payload.${field}`, message: `Choose up to 32 distinct ${typeLabel} record IDs.` }],
+      });
+    }
+    return payload[field];
+  };
+  const resourceIds = typedIds('resourceIds', 'resource');
+  const systemIds = typedIds('systemIds', 'system');
+  const inputDecisionIds = typedIds('inputDecisionIds', 'decision input');
+  const outputDecisionIds = typedIds('outputDecisionIds', 'decision output');
+  let capabilityId;
+  if (payload.capabilityId !== undefined) {
+    if (payload.capabilityId !== null && (typeof payload.capabilityId !== 'string'
+      || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(payload.capabilityId))) {
+      throw apiFailure(400, 'INVALID_COMMAND', 'Choose one valid capability ID or clear the process capability link.', {
+        fieldErrors: [{ field: 'payload.capabilityId', message: 'Choose one capability record ID or no capability.' }],
+      });
+    }
+    capabilityId = payload.capabilityId;
+  }
+  let evidenceMetricIds;
+  if (payload.evidenceMetricIds !== undefined) {
+    if (!Array.isArray(payload.evidenceMetricIds) || payload.evidenceMetricIds.length > 32
+      || payload.evidenceMetricIds.some((id) => typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(id))
+      || new Set(payload.evidenceMetricIds).size !== payload.evidenceMetricIds.length) {
+      throw apiFailure(400, 'INVALID_COMMAND', 'Choose up to 32 distinct valid metric references.', {
+        fieldErrors: [{ field: 'payload.evidenceMetricIds', message: 'Choose up to 32 distinct metric record IDs.' }],
+      });
+    }
+    evidenceMetricIds = payload.evidenceMetricIds;
+  }
+  let feedbackGoalId;
+  if (payload.feedbackGoalId !== undefined) {
+    if (payload.feedbackGoalId !== null && (typeof payload.feedbackGoalId !== 'string'
+      || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(payload.feedbackGoalId))) {
+      throw apiFailure(400, 'INVALID_COMMAND', 'Choose one valid goal ID or clear the proposed steering goal.', {
+        fieldErrors: [{ field: 'payload.feedbackGoalId', message: 'Choose one goal record ID or no steering goal.' }],
+      });
+    }
+    feedbackGoalId = payload.feedbackGoalId;
+  }
+  let feedbackDecisionIds;
+  if (payload.feedbackDecisionIds !== undefined) {
+    if (!Array.isArray(payload.feedbackDecisionIds) || payload.feedbackDecisionIds.length > 32
+      || payload.feedbackDecisionIds.some((id) => typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(id))
+      || new Set(payload.feedbackDecisionIds).size !== payload.feedbackDecisionIds.length) {
+      throw apiFailure(400, 'INVALID_COMMAND', 'Choose up to 32 distinct valid decision IDs.', {
+        fieldErrors: [{ field: 'payload.feedbackDecisionIds', message: 'Choose up to 32 distinct decision record IDs.' }],
+      });
+    }
+    feedbackDecisionIds = payload.feedbackDecisionIds;
+  }
+  let capabilityMetricIds;
+  if (payload.capabilityMetricIds !== undefined) {
+    if (!Array.isArray(payload.capabilityMetricIds) || payload.capabilityMetricIds.length > 32
+      || payload.capabilityMetricIds.some((id) => typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(id))
+      || new Set(payload.capabilityMetricIds).size !== payload.capabilityMetricIds.length) {
+      throw apiFailure(400, 'INVALID_COMMAND', 'Choose up to 32 distinct valid metric references.', {
+        fieldErrors: [{ field: 'payload.capabilityMetricIds', message: 'Choose up to 32 distinct metric record IDs.' }],
+      });
+    }
+    capabilityMetricIds = payload.capabilityMetricIds;
+  }
+  let assignedRoleIds;
+  if (payload.assignedRoleIds !== undefined) {
+    if (!Array.isArray(payload.assignedRoleIds) || payload.assignedRoleIds.length > 32
+      || payload.assignedRoleIds.some((id) => typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(id))
+      || new Set(payload.assignedRoleIds).size !== payload.assignedRoleIds.length) {
+      throw apiFailure(400, 'INVALID_COMMAND', 'Choose up to 32 distinct valid role references.', {
+        fieldErrors: [{ field: 'payload.assignedRoleIds', message: 'Choose up to 32 distinct role IDs.' }],
+      });
+    }
+    assignedRoleIds = payload.assignedRoleIds;
+  }
+  let responsibilityIds;
+  if (payload.responsibilityIds !== undefined) {
+    if (!Array.isArray(payload.responsibilityIds) || payload.responsibilityIds.length > 32
+      || payload.responsibilityIds.some((id) => typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(id))
+      || new Set(payload.responsibilityIds).size !== payload.responsibilityIds.length) {
+      throw apiFailure(400, 'INVALID_COMMAND', 'Choose up to 32 distinct valid responsibility references.', {
+        fieldErrors: [{ field: 'payload.responsibilityIds', message: 'Choose up to 32 distinct goal, capability, process, or system IDs.' }],
+      });
+    }
+    responsibilityIds = payload.responsibilityIds;
+  }
+  let decisionMakerRoleId;
+  if (payload.decisionMakerRoleId !== undefined) {
+    if (payload.decisionMakerRoleId !== null && (typeof payload.decisionMakerRoleId !== 'string'
+      || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(payload.decisionMakerRoleId))) {
+      throw apiFailure(400, 'INVALID_COMMAND', 'Choose one valid role ID or clear the proposed decision maker.', {
+        fieldErrors: [{ field: 'payload.decisionMakerRoleId', message: 'Choose one role record ID or no decision maker.' }],
+      });
+    }
+    decisionMakerRoleId = payload.decisionMakerRoleId;
+  }
+  const decisionScopeIds = typedIds('decisionScopeIds', 'decision scope');
+  const strategyGoalIds = typedIds('strategyGoalIds', 'strategy goal');
+  let readInformationId;
+  if (payload.readInformationId !== undefined) {
+    if (payload.readInformationId !== null && (typeof payload.readInformationId !== 'string'
+      || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(payload.readInformationId))) {
+      throw apiFailure(400, 'INVALID_COMMAND', 'Choose one valid information record ID or clear the source.', {
+        fieldErrors: [{ field: 'payload.readInformationId', message: 'Choose one information record ID or no source.' }],
+      });
+    }
+    readInformationId = payload.readInformationId;
+  }
+  let metricId;
+  if (payload.metricId !== undefined) {
+    if (payload.metricId !== null && (typeof payload.metricId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(payload.metricId))) {
+      throw apiFailure(400, 'INVALID_COMMAND', 'Choose one valid metric record ID or clear the metric link.', {
+        fieldErrors: [{ field: 'payload.metricId', message: 'Choose one metric record ID or no metric.' }],
+      });
+    }
+    metricId = payload.metricId;
+  }
+  let consumerLoopId;
+  if (payload.consumerLoopId !== undefined) {
+    if (payload.consumerLoopId !== null && (typeof payload.consumerLoopId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(payload.consumerLoopId))) {
+      throw apiFailure(400, 'INVALID_COMMAND', 'Choose one valid feedback-loop ID or clear the consumer link.', {
+        fieldErrors: [{ field: 'payload.consumerLoopId', message: 'Choose one feedback-loop ID or no consumer.' }],
+      });
+    }
+    consumerLoopId = payload.consumerLoopId;
+  }
+  let mitigatingControlId;
+  if (payload.mitigatingControlId !== undefined) {
+    if (payload.mitigatingControlId !== null && (typeof payload.mitigatingControlId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(payload.mitigatingControlId))) {
+      throw apiFailure(400, 'INVALID_COMMAND', 'Choose one valid control ID or clear the mitigating control.', {
+        fieldErrors: [{ field: 'payload.mitigatingControlId', message: 'Choose one control ID or no control.' }],
+      });
+    }
+    mitigatingControlId = payload.mitigatingControlId;
+  }
   return { objectId, name: text('name', 120), detail: text('detail', 700),
     ...(payload.ownerRoleName === undefined ? {} : { ownerRoleName: text('ownerRoleName', 120) }),
     ...(payload.trigger === undefined ? {} : { trigger: text('trigger', 240) }),
     ...(payload.proposedInstructions === undefined ? {} : { proposedInstructions: text('proposedInstructions', 700) }),
     ...(proposedScopeStatements === undefined ? {} : { proposedScopeStatements }),
     ...(proposedToolStatements === undefined ? {} : { proposedToolStatements }),
-    ...(proposedEscalationRules === undefined ? {} : { proposedEscalationRules }) };
+    ...(proposedEscalationRules === undefined ? {} : { proposedEscalationRules }),
+    ...(servesCustomerIds === undefined ? {} : { servesCustomerIds }),
+    ...(enabledByCapabilityIds === undefined ? {} : { enabledByCapabilityIds }),
+    ...(inputInformationIds === undefined ? {} : { inputInformationIds }),
+    ...(outputInformationIds === undefined ? {} : { outputInformationIds }),
+    ...(inputDecisionIds === undefined ? {} : { inputDecisionIds }),
+    ...(outputDecisionIds === undefined ? {} : { outputDecisionIds }),
+    ...(resourceIds === undefined ? {} : { resourceIds }),
+    ...(systemIds === undefined ? {} : { systemIds }),
+    ...(capabilityId === undefined ? {} : { capabilityId }),
+    ...(evidenceMetricIds === undefined ? {} : { evidenceMetricIds }),
+    ...(feedbackGoalId === undefined ? {} : { feedbackGoalId }),
+    ...(feedbackDecisionIds === undefined ? {} : { feedbackDecisionIds }),
+    ...(capabilityMetricIds === undefined ? {} : { capabilityMetricIds }),
+    ...(assignedRoleIds === undefined ? {} : { assignedRoleIds }),
+    ...(responsibilityIds === undefined ? {} : { responsibilityIds }),
+    ...(decisionMakerRoleId === undefined ? {} : { decisionMakerRoleId }),
+    ...(decisionScopeIds === undefined ? {} : { decisionScopeIds }),
+    ...(strategyGoalIds === undefined ? {} : { strategyGoalIds }),
+    ...(readInformationId === undefined ? {} : { readInformationId }),
+    ...(metricId === undefined ? {} : { metricId }),
+    ...(consumerLoopId === undefined ? {} : { consumerLoopId }),
+    ...(mitigatingControlId === undefined ? {} : { mitigatingControlId }) };
+}
+
+function validateBlueprintPublicationPayload(payload) {
+  const keys = Object.keys(payload);
+  if (keys.length !== 3 || keys.some((key) => !['blueprintId', 'blueprintVersion', 'acknowledgeDisclosures'].includes(key))
+    || typeof payload.blueprintId !== 'string' || !/^blueprint-[a-f0-9-]{36}$/i.test(payload.blueprintId)
+    || !Number.isSafeInteger(payload.blueprintVersion) || payload.blueprintVersion < 1
+    || payload.acknowledgeDisclosures !== true) {
+    throw apiFailure(400, 'INVALID_COMMAND', 'Publication requires the exact blueprint ID and version plus explicit disclosure acknowledgment.', {
+      fieldErrors: [
+        { field: 'payload.blueprintId', message: 'Provide the saved blueprint ID.' },
+        { field: 'payload.blueprintVersion', message: 'Provide the saved blueprint version.' },
+        { field: 'payload.acknowledgeDisclosures', message: 'Set this field to true after reviewing the disclosures.' },
+      ],
+    });
+  }
+  return {
+    blueprintId: payload.blueprintId,
+    blueprintVersion: payload.blueprintVersion,
+    acknowledgeDisclosures: true,
+  };
 }
 
 function validateActorBindingPayload(payload) {
@@ -476,11 +694,18 @@ export function createApp({
   oidcBootstrapPrincipals = [],
   secretEncryptionKey = null,
   openAiValidationEndpoint = 'https://api.openai.com/v1/models',
+  openAiAdminApiKey = null,
+  openAiOrganizationId = null,
+  openAiTenantProjects = null,
+  openAiAdminEndpoint = 'https://api.openai.com',
   readOnly = false,
 } = {}) {
   const persistence = databaseUrl ? new PostgresPersistence({ databaseUrl, faults: persistenceFaults }) : null;
   const sessionStore = oidcSessionStore ?? (persistence ? new PostgresOidcSessionStore(persistence, { bootstrapPrincipals: oidcBootstrapPrincipals }) : null);
-  const secretStore = persistence ? new PostgresSecretStore(persistence, { encryptionKey: secretEncryptionKey, openAiValidationEndpoint }) : null;
+  const secretStore = persistence ? new PostgresSecretStore(persistence, {
+    encryptionKey: secretEncryptionKey, openAiValidationEndpoint, openAiAdminApiKey, openAiOrganizationId,
+    openAiTenantProjects, openAiAdminEndpoint,
+  }) : null;
   const store = injectedProjectStore ?? (persistence ? new PostgresProjectStore(persistence) : new ProjectStore(dataDirectory));
   const sdlcStore = injectedChangeCaseStore ?? (persistence ? new PostgresChangeCaseStore(persistence) : new ChangeCaseStore(sdlcDirectory));
   const executionStore = persistence ? new PostgresExecutionRunStore(persistence) : null;
@@ -517,7 +742,7 @@ export function createApp({
       if (request.method === 'GET' && pathname === '/readyz') {
         if (!persistence) return sendJson(response, 503, { status: 'not_ready', dependency: 'database' });
         try {
-          const probe = await persistence.pool.query('select max(version) as schema_version from orgward.schema_migrations');
+          const probe = await persistence.query('select max(version) as schema_version from orgward.schema_migrations');
           if (!probe.rows[0]?.schema_version || probe.rows[0].schema_version !== persistence.schemaVersion) {
             return sendJson(response, 503, { status: 'not_ready', dependency: 'database' });
           }
@@ -761,6 +986,23 @@ export function createApp({
             correlationId, meta: { asOf: new Date().toISOString(), partial: false },
           }),
         });
+      }
+
+      const managedCandidateMatch = pathname.match(/^\/api\/v1\/secrets\/(secret-[a-z0-9][a-z0-9._-]{0,79})\/openai-managed-candidate$/);
+      if (request.method === 'POST' && managedCandidateMatch) {
+        if (!secretStore) throw apiFailure(503, 'SECRET_VAULT_UNAVAILABLE', 'Encrypted secret references require PostgreSQL persistence.');
+        const body = validateCommand(await readJson(request));
+        rejectAuthorityClaims(body);
+        if (Object.keys(body.payload).some((field) => !['model', 'reason', 'expiresAt'].includes(field))) {
+          throw apiFailure(400, 'INVALID_COMMAND', 'Managed OpenAI provisioning accepts only model, reason and expiresAt.');
+        }
+        const result = await secretStore.provisionOpenAiCandidate({
+          tenantId: requestTenant(request), actor: request.identity?.principal,
+          actorAuthzGeneration: request.identity?.authzGeneration,
+          reference: managedCandidateMatch[1], commandId: body.commandId, expectedVersion: body.expectedVersion,
+          model: body.payload.model, reason: body.payload.reason, expiresAt: body.payload.expiresAt,
+        });
+        return sendApi(response, 200, result, { correlationId, meta: { replayed: Boolean(result.replayed) } });
       }
 
       const candidateMatch = pathname.match(/^\/api\/v1\/secrets\/(secret-[a-z0-9][a-z0-9._-]{0,79})\/openai-candidate\/(validate|activate)$/);
@@ -1277,6 +1519,107 @@ export function createApp({
         return sendApi(response, 200, projectView(result.project), { correlationId, event: result.project.events.at(-1), meta: { replayed: result.replayed } });
       }
 
+      const blueprintProposalApplyMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/blueprint-proposals\/(execution-run-[0-9a-f-]{36})\/apply$/);
+      if (request.method === 'POST' && blueprintProposalApplyMatch) {
+        requireWriteAccess(request);
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified workspace owner must apply a saved proposal.');
+        const body = validateCommand(await readJson(request));
+        const payloadKeys = Object.keys(body.payload);
+        if (payloadKeys.length !== 1 || payloadKeys[0] !== 'proposalHash'
+          || typeof body.payload.proposalHash !== 'string' || !/^[a-f0-9]{64}$/.test(body.payload.proposalHash)) {
+          throw apiFailure(400, 'INVALID_COMMAND', 'Applying a proposal requires its saved SHA-256 proposal hash.', {
+            fieldErrors: [{ field: 'payload.proposalHash', message: 'Provide the proposal hash shown in the review.' }],
+          });
+        }
+        requirePrincipalStoreMethod(store, 'updateWithCommandForPrincipal');
+        const tenantId = requestTenant(request);
+        const actor = requestActor(request);
+        const [projectId, runId] = [blueprintProposalApplyMatch[1], blueprintProposalApplyMatch[2]];
+        const run = await executionService.get(runId, tenantId, actor, { authzGeneration: request.identity.authzGeneration });
+        if (!run || run.projectId !== projectId) throw apiFailure(404, 'BLUEPRINT_PROPOSAL_NOT_FOUND', 'The saved proposal was not found in this project.');
+        const proposal = run.execution?.generatedProposal;
+        verifyGeneratedBlueprintProposal(run, proposal);
+        if (proposal.proposalHash !== body.payload.proposalHash) {
+          throw apiFailure(409, 'BLUEPRINT_PROPOSAL_HASH_MISMATCH', 'The proposal changed. Reload its saved review before applying.');
+        }
+        const command = {
+          operation: 'project.apply-execution-blueprint-proposal',
+          commandId: body.commandId,
+          payloadHash: payloadHash({ schemaVersion: body.schemaVersion, expectedVersion: body.expectedVersion, runId, proposalHash: proposal.proposalHash }),
+          expectedVersion: body.expectedVersion,
+          apply(project) {
+            normalizeProject(project, { tenantId, actor });
+            const latest = latestBlueprint(project);
+            if (!latest || latest.id !== proposal.blueprintId || latest.version !== proposal.blueprintVersion) {
+              throw apiFailure(409, 'BLUEPRINT_PROPOSAL_STALE', 'A newer blueprint version exists. Review the proposal against that version before applying.');
+            }
+            if (project.events.some((event) => event.type === 'BlueprintProposalApplied'
+              && event.data?.proposalHash === proposal.proposalHash)) {
+              throw apiFailure(409, 'BLUEPRINT_PROPOSAL_ALREADY_APPLIED', 'This proposal has already been applied.');
+            }
+            const blueprint = applyBlueprintProposal(project, proposal, actor);
+            project.version += 1;
+            project.updatedAt = blueprint.createdAt;
+            project.updatedBy = actor;
+            project.events.push(projectEvent(project, {
+              type: 'BlueprintProposalApplied', actor, commandId: body.commandId, correlationId,
+              data: {
+                proposalId: proposal.id, proposalHash: proposal.proposalHash, runId,
+                blueprintId: proposal.blueprintId, blueprintVersion: proposal.blueprintVersion,
+                appliedBlueprintId: blueprint.id, appliedBlueprintVersion: blueprint.version,
+                objectId: proposal.target.id, field: 'detail', epistemicStatus: 'proposed-design',
+                sourceIds: proposal.citations.map(({ id }) => id),
+                sourceHashes: proposal.citations.map(({ hash }) => hash),
+              },
+            }));
+          },
+        };
+        const result = await store.updateWithCommandForPrincipal(projectId, tenantId, command, actor, {
+          requiredPrincipalRoles: ['workspace-write'], authzGeneration: request.identity.authzGeneration,
+          minimumProjectAccess: 'owner',
+        });
+        if (!result) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
+        return sendApi(response, 200, projectView(result.project), { correlationId, event: result.project.events.at(-1), meta: { replayed: result.replayed } });
+      }
+
+      const blueprintPublicationMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/blueprint\/publications$/);
+      if (request.method === 'POST' && blueprintPublicationMatch) {
+        requireWriteAccess(request);
+        if (!request.identity) throw apiFailure(403, 'ACTION_FORBIDDEN', 'Publishing an internal blueprint baseline requires an authenticated workspace owner.');
+        const body = validateCommand(await readJson(request));
+        const payload = validateBlueprintPublicationPayload(body.payload);
+        requirePrincipalStoreMethod(store, 'updateWithCommandForPrincipal');
+        const tenantId = requestTenant(request);
+        const actor = requestActor(request);
+        const command = {
+          operation: 'project.publish-blueprint-internally',
+          commandId: body.commandId,
+          payloadHash: payloadHash({ schemaVersion: body.schemaVersion, expectedVersion: body.expectedVersion, payload }),
+          expectedVersion: body.expectedVersion,
+          apply(project) {
+            normalizeProject(project, { tenantId, actor });
+            const publication = publishBlueprintInternally(project, payload, actor);
+            project.version += 1;
+            project.updatedAt = publication.publishedAt;
+            project.updatedBy = actor;
+            const event = projectEvent(project, {
+              type: 'BlueprintInternalBaselinePublished', actor, commandId: body.commandId, correlationId,
+              data: {
+                publicationId: publication.id, blueprintId: publication.blueprintId,
+                blueprintVersion: publication.blueprintVersion, digest: publication.digest,
+              },
+            });
+            project.events.push(event);
+          },
+        };
+        const result = await store.updateWithCommandForPrincipal(blueprintPublicationMatch[1], tenantId, command, actor, {
+          requiredPrincipalRoles: ['workspace-write'], authzGeneration: request.identity.authzGeneration,
+          minimumProjectAccess: 'owner',
+        });
+        if (!result) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
+        return sendApi(response, 200, projectView(result.project), { correlationId, event: result.project.events.at(-1), meta: { replayed: result.replayed } });
+      }
+
       const processPlanMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/process-plans$/);
       if (request.method === 'POST' && processPlanMatch) {
         requireWriteAccess(request);
@@ -1330,12 +1673,13 @@ export function createApp({
         requireWriteAccess(request);
         const body = validateCommand(await readJson(request));
         const keys = Object.keys(body.payload);
-        if (keys.length !== 1 || keys[0] !== 'tasks' || !Array.isArray(body.payload.tasks)) {
-          throw apiFailure(400, 'INVALID_COMMAND', 'Provide task edits for this planning graph.', {
-            fieldErrors: [{ field: 'payload.tasks', message: 'Only a tasks array is accepted.' }],
+        if (keys.some((key) => !['tasks', 'humanCheckpoint'].includes(key)) || !keys.includes('tasks') || !Array.isArray(body.payload.tasks)) {
+          throw apiFailure(400, 'INVALID_COMMAND', 'Provide task edits and an optional human checkpoint insertion for this planning graph.', {
+            fieldErrors: [{ field: 'payload', message: 'Only a tasks array and optional humanCheckpoint object are accepted.' }],
           });
         }
-        const requestsActorBinding = body.payload.tasks.some((task) => task && typeof task === 'object' && task.actorId != null);
+        const requestsActorBinding = body.payload.tasks.some((task) => task && typeof task === 'object' && task.actorId != null)
+          || body.payload.humanCheckpoint?.actorId != null;
         if (requestsActorBinding && typeof store.persistence?.transaction !== 'function') {
           throw apiFailure(503, 'ACTOR_BINDING_UNAVAILABLE', 'Blueprint actor assignments require the PostgreSQL authorization registry.');
         }
@@ -1412,6 +1756,235 @@ export function createApp({
         return sendJson(response, 200, { statuses: EXECUTION_STATUSES, profiles: executionService.capabilities(), operationMode: readOnly ? 'read_only_legacy' : 'writable', productionReady: false });
       }
 
+      if (request.method === 'POST' && pathname === '/api/execution/process-task-runs') {
+        const body = validateCommand(await readJson(request), { versionRequired: false });
+        rejectAuthorityClaims(body);
+        const allowedEnvelope = new Set(['schemaVersion', 'commandId', 'payload']);
+        const payloadFields = new Set(['projectId', 'planId', 'revision', 'planInstanceId', 'taskId', 'profileId']);
+        const unknownEnvelope = Object.keys(body).filter((field) => !allowedEnvelope.has(field));
+        const unknownPayload = Object.keys(body.payload).filter((field) => !payloadFields.has(field));
+        if (unknownEnvelope.length || unknownPayload.length) {
+          throw apiFailure(400, 'INVALID_COMMAND', 'A linked task request accepts only its project, plan, task, optional existing instance, and configured profile.', {
+            fieldErrors: [
+              ...unknownEnvelope.map((field) => ({ field, message: 'This field is not accepted.' })),
+              ...unknownPayload.map((field) => ({ field: `payload.${field}`, message: 'This field is not accepted.' })),
+            ],
+          });
+        }
+        const { projectId, planId, revision, planInstanceId, taskId, profileId } = body.payload;
+        if (!/^project-[0-9a-f-]{36}$/i.test(projectId ?? '')
+          || !/^process-plan-[0-9a-f-]{36}$/i.test(planId ?? '')
+          || !Number.isSafeInteger(revision) || revision < 1
+          || (planInstanceId !== undefined && !/^[0-9a-f-]{36}$/i.test(planInstanceId ?? ''))
+          || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(taskId ?? '')
+          || !/^[a-z0-9][a-z0-9_-]{1,79}$/i.test(profileId ?? '')) {
+          throw apiFailure(400, 'INVALID_PROCESS_TASK_REQUEST', 'Choose a valid saved project, graph revision, task, and configured profile.');
+        }
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified workspace identity is required to request work from a saved task.');
+        const result = await executionService.createForProcessTask({
+          tenantId: requestTenant(request), projectId, planId, revision, planInstanceId,
+          taskId, profileId, commandId: body.commandId,
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration,
+        });
+        if (!result) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'The project or authorized membership was not found.');
+        return sendJson(response, result.replayed ? 200 : 201, { ...result.run, meta: { replayed: result.replayed } });
+      }
+
+      const executionCancelMatch = pathname.match(/^\/api\/execution\/runs\/(execution-run-[0-9a-f-]{36})\/cancel$/);
+      if (request.method === 'POST' && executionCancelMatch) {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified workspace identity is required to withdraw a linked task request.');
+        const body = await readJson(request);
+        rejectAuthorityClaims(body);
+        const validObject = body && typeof body === 'object' && !Array.isArray(body);
+        const unknown = validObject ? Object.keys(body).filter((field) => !['version', 'commandId', 'projectId'].includes(field)) : [];
+        if (!validObject || unknown.length || !Number.isSafeInteger(body.version) || body.version < 0
+          || !/^[a-z0-9][a-z0-9_.:-]{0,159}$/i.test(String(body.commandId ?? ''))
+          || !/^project-[0-9a-f-]{36}$/i.test(body.projectId ?? '')) {
+          throw apiFailure(400, 'INVALID_COMMAND', 'Cancellation requires the current run version, a stable command ID, and its project ID.', {
+            fieldErrors: unknown.map((field) => ({ field, message: 'This field is not accepted.' })),
+          });
+        }
+        const result = await executionService.cancelProcessTaskRun({
+          tenantId: requestTenant(request), projectId: body.projectId, runId: executionCancelMatch[1],
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration,
+          version: body.version, commandId: body.commandId,
+        });
+        if (!result) throw apiFailure(404, 'EXECUTION_RUN_NOT_FOUND', 'The linked execution run was not found in this project.');
+        return sendJson(response, 200, { ...result.run, meta: { replayed: result.replayed } });
+      }
+
+      const executionProcessTaskActionMatch = pathname.match(/^\/api\/execution\/runs\/(execution-run-[0-9a-f-]{36})\/(pause|resume)$/);
+      if (request.method === 'POST' && executionProcessTaskActionMatch) {
+        const action = executionProcessTaskActionMatch[2];
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', `A verified workspace identity is required to ${action} a linked task request.`);
+        const body = await readJson(request);
+        rejectAuthorityClaims(body);
+        const validObject = body && typeof body === 'object' && !Array.isArray(body);
+        const allowedFields = ['version', 'commandId', 'projectId', ...(action === 'resume' ? ['reason'] : [])];
+        const unknown = validObject ? Object.keys(body).filter((field) => !allowedFields.includes(field)) : [];
+        if (!validObject || unknown.length || !Number.isSafeInteger(body.version) || body.version < 0
+          || !/^[a-z0-9][a-z0-9_.:-]{0,159}$/i.test(String(body.commandId ?? ''))
+          || !/^project-[0-9a-f-]{36}$/i.test(body.projectId ?? '')
+          || (body.reason !== undefined && (typeof body.reason !== 'string' || !body.reason.trim() || body.reason.length > 500))) {
+          throw apiFailure(400, 'INVALID_COMMAND', `${action === 'pause' ? 'Pausing' : 'Resuming'} requires the current run version, a stable command ID, and its project ID. Owner recovery also requires a short reason.`, {
+            fieldErrors: unknown.map((field) => ({ field, message: 'This field is not accepted.' })),
+          });
+        }
+        const runId = executionProcessTaskActionMatch[1];
+        const actionRunner = action === 'pause'
+          ? executionService.pauseProcessTaskRun.bind(executionService)
+          : executionService.resumeProcessTaskRun.bind(executionService);
+        const result = await actionRunner({
+          tenantId: requestTenant(request), projectId: body.projectId, runId,
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration,
+          version: body.version, commandId: body.commandId, reason: body.reason,
+        });
+        if (!result) throw apiFailure(404, 'EXECUTION_RUN_NOT_FOUND', 'The linked execution run was not found in this project.');
+        return sendJson(response, 200, { ...result.run, meta: { replayed: result.replayed } });
+      }
+
+      const executionAmendMatch = pathname.match(/^\/api\/execution\/runs\/(execution-run-[0-9a-f-]{36})\/amend$/);
+      if (request.method === 'POST' && executionAmendMatch) {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified workspace identity is required to amend a paused linked task request.');
+        const body = await readJson(request);
+        rejectAuthorityClaims(body);
+        const validObject = body && typeof body === 'object' && !Array.isArray(body);
+        const allowed = ['version', 'commandId', 'projectId', 'objective', 'requirements', 'reason'];
+        const unknown = validObject ? Object.keys(body).filter((field) => !allowed.includes(field)) : [];
+        const validRequirements = Array.isArray(body?.requirements) && body.requirements.length <= 50
+          && body.requirements.every((entry) => typeof entry === 'string' && entry.trim().length > 0 && entry.length <= 500);
+        if (!validObject || unknown.length || !Number.isSafeInteger(body.version) || body.version < 0
+          || !/^[a-z0-9][a-z0-9_.:-]{0,159}$/i.test(String(body.commandId ?? ''))
+          || !/^project-[0-9a-f-]{36}$/i.test(body.projectId ?? '')
+          || typeof body.objective !== 'string' || !body.objective.trim() || body.objective.length > 4_000
+          || !validRequirements || typeof body.reason !== 'string' || !body.reason.trim() || body.reason.length > 1_000) {
+          throw apiFailure(400, 'INVALID_COMMAND', 'Amending requires the current run version, stable command ID, project, instruction snapshot, and reason.', {
+            fieldErrors: unknown.map((field) => ({ field, message: 'This field is not accepted.' })),
+          });
+        }
+        const result = await executionService.amendPausedProcessTaskRun({
+          tenantId: requestTenant(request), projectId: body.projectId, runId: executionAmendMatch[1],
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration,
+          version: body.version, commandId: body.commandId, objective: body.objective,
+          requirements: body.requirements, reason: body.reason,
+        });
+        if (!result) throw apiFailure(404, 'EXECUTION_RUN_NOT_FOUND', 'The linked execution run was not found in this project.');
+        return sendJson(response, 200, { ...result.run, meta: { replayed: result.replayed } });
+      }
+
+      if (request.method === 'GET' && pathname === '/api/execution/process-task-instances') {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified workspace identity is required to read process task runtime.');
+        const projectId = url.searchParams.get('projectId');
+        if (!/^project-[0-9a-f-]{36}$/i.test(projectId ?? '')) throw apiFailure(400, 'PROJECT_REQUIRED', 'Choose a project to read process task runtime.');
+        const instances = await executionService.listProcessTaskInstances({
+          tenantId: requestTenant(request), projectId, principal: requestActor(request),
+          authzGeneration: request.identity.authzGeneration,
+        });
+        if (instances === null) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'The project or authorized membership was not found.');
+        return sendJson(response, 200, { instances });
+      }
+
+      const processInstanceControlMatch = pathname.match(/^\/api\/execution\/process-task-instances\/(pause|resume|abandon-unverified)$/);
+      if (request.method === 'POST' && processInstanceControlMatch) {
+        const body = validateCommand(await readJson(request), { versionRequired: false });
+        rejectAuthorityClaims(body);
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified human identity is required to control this process instance.');
+        const action = processInstanceControlMatch[1];
+        const allowed = new Set(['projectId', 'planInstanceId', 'version',
+          ...(action === 'pause' || action === 'abandon-unverified' ? ['reason'] : []),
+          ...(action === 'abandon-unverified' ? ['evidence', 'acknowledgeDuplicateCostWork'] : [])]);
+        const unknown = Object.keys(body.payload).filter((field) => !allowed.has(field));
+        if (unknown.length || !/^project-[0-9a-f-]{36}$/i.test(body.payload.projectId ?? '')
+          || !/^[0-9a-f-]{36}$/i.test(body.payload.planInstanceId ?? '')
+          || !Number.isSafeInteger(body.payload.version) || body.payload.version < 0
+          || ((action === 'pause' || action === 'abandon-unverified') && (typeof body.payload.reason !== 'string'
+            || !body.payload.reason.trim() || body.payload.reason.length > (action === 'pause' ? 500 : 1000)))
+          || (action === 'abandon-unverified' && (body.payload.acknowledgeDuplicateCostWork !== true
+            || !Array.isArray(body.payload.evidence) || body.payload.evidence.length < 1 || body.payload.evidence.length > 20
+            || body.payload.evidence.some((entry) => typeof entry !== 'string' || !entry.trim() || entry.trim().length > 1000)))) {
+          throw apiFailure(400, 'INVALID_COMMAND', action === 'abandon-unverified'
+            ? 'Unverified abandonment requires the current instance version, reason, evidence, and duplicate-cost acknowledgement.'
+            : 'Process instance control requires its project, instance, current control version, and a pause reason.', {
+            fieldErrors: unknown.map((field) => ({ field: `payload.${field}`, message: 'This field is not accepted.' })),
+          });
+        }
+        const run = action === 'pause' ? executionService.pauseProcessTaskInstance.bind(executionService)
+          : action === 'resume' ? executionService.resumeProcessTaskInstance.bind(executionService)
+            : executionService.abandonUnverifiedProcessTaskInstance.bind(executionService);
+        const result = await run({
+          tenantId: requestTenant(request), projectId: body.payload.projectId,
+          planInstanceId: body.payload.planInstanceId, version: body.payload.version,
+          reason: body.payload.reason, evidence: body.payload.evidence,
+          acknowledgeDuplicateCostWork: body.payload.acknowledgeDuplicateCostWork, principal: requestActor(request),
+          authzGeneration: request.identity.authzGeneration, commandId: body.commandId,
+        });
+        if (!result) throw apiFailure(404, 'PROCESS_TASK_INSTANCE_NOT_FOUND', 'The process instance was not found in this project.');
+        return sendJson(response, 200, { planInstanceId: result.control.plan_instance_id,
+          status: result.control.status, version: Number(result.control.version),
+          reason: result.control.pause_reason, pauseBoundary: result.control.pause_boundary,
+          replayed: result.replayed, freshApprovalRequired: action === 'resume',
+          ...(action === 'abandon-unverified' ? { runIds: result.control.events.at(-1)?.data?.runIds ?? [],
+            attemptIds: result.control.events.at(-1)?.data?.attemptIds ?? [], evidence: result.control.events.at(-1)?.data?.evidence ?? [],
+            acknowledgeDuplicateCostWork: result.control.events.at(-1)?.data?.acknowledgeDuplicateCostWork === true } : {}) });
+      }
+
+      const humanTaskActionMatch = pathname.match(/^\/api\/execution\/process-task-instances\/(start|complete|escalate|resolve)$/);
+      if (request.method === 'POST' && humanTaskActionMatch) {
+        const body = validateCommand(await readJson(request), { versionRequired: false });
+        rejectAuthorityClaims(body);
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified human identity is required for this task action.');
+        const unknownEnvelope = Object.keys(body).filter((field) => !['schemaVersion', 'commandId', 'payload'].includes(field));
+        if (unknownEnvelope.length) throw apiFailure(400, 'INVALID_COMMAND', 'A human task action accepts only the command envelope and task payload.', {
+          fieldErrors: unknownEnvelope.map((field) => ({ field, message: 'This field is not accepted.' })),
+        });
+        const action = humanTaskActionMatch[1];
+        const allowed = new Set(['projectId', 'planId', 'revision', 'planInstanceId', 'taskId',
+          ...(action === 'complete' ? ['result', 'evidence'] : []),
+          ...(action === 'escalate' ? ['reason', 'evidence'] : []),
+          ...(action === 'resolve' ? ['disposition', 'reason', 'evidence'] : []),
+        ]);
+        const unknown = Object.keys(body.payload).filter((field) => !allowed.has(field));
+        if (unknown.length) throw apiFailure(400, 'INVALID_COMMAND', 'A human task action accepts only its saved task references and action details.', {
+          fieldErrors: unknown.map((field) => ({ field: `payload.${field}`, message: 'This field is not accepted.' })),
+        });
+        const { projectId, planId, revision, planInstanceId, taskId } = body.payload;
+        const startingHumanTask = action === 'start';
+        if (!/^project-[0-9a-f-]{36}$/i.test(projectId ?? '')
+          || !/^process-plan-[0-9a-f-]{36}$/i.test(planId ?? '')
+          || !Number.isSafeInteger(revision) || revision < 1
+          || (startingHumanTask && planInstanceId != null && !/^[0-9a-f-]{36}$/i.test(planInstanceId))
+          || (!startingHumanTask && !/^[0-9a-f-]{36}$/i.test(planInstanceId ?? ''))
+          || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(taskId ?? '')) {
+          throw apiFailure(400, 'INVALID_PROCESS_TASK_REFERENCE', 'Choose a valid saved plan revision, instance, and task.');
+        }
+        const command = {
+          tenantId: requestTenant(request), projectId, planId, revision, planInstanceId, taskId,
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration,
+          commandId: body.commandId,
+        };
+        if (startingHumanTask) {
+          const result = await executionService.startHumanProcessTask(command);
+          if (!result) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'The project or authorized membership was not found.');
+          return sendJson(response, result.replayed ? 200 : 201, { ...result.runtime, meta: { replayed: result.replayed } });
+        }
+        if (action === 'complete') {
+          const { result: taskResult, evidence } = body.payload;
+          const completed = await executionService.completeHumanProcessTask({ ...command, result: taskResult, evidence });
+          if (!completed) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'The project or authorized membership was not found.');
+          return sendJson(response, completed.replayed ? 200 : 201, { ...completed.runtime, meta: { replayed: completed.replayed } });
+        }
+        if (action === 'escalate') {
+          const { reason, evidence } = body.payload;
+          const escalated = await executionService.escalateHumanProcessTask({ ...command, reason, evidence });
+          if (!escalated) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'The project or authorized membership was not found.');
+          return sendJson(response, escalated.replayed ? 200 : 201, { ...escalated.runtime, meta: { replayed: escalated.replayed } });
+        }
+        const { disposition, reason, evidence } = body.payload;
+        const resolved = await executionService.resolveHumanProcessTaskEscalation({ ...command, disposition, reason, evidence });
+        if (!resolved) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'The project or authorized membership was not found.');
+        return sendJson(response, resolved.replayed ? 200 : 201, { ...resolved.runtime, meta: { replayed: resolved.replayed } });
+      }
+
       if (request.method === 'GET' && pathname === '/api/execution/runs') {
         const deliverRuns = (runs) => sendJson(response, 200, { runs });
         const runs = await executionService.list(
@@ -1424,6 +1997,12 @@ export function createApp({
 
       if (request.method === 'POST' && pathname === '/api/execution/runs') {
         const body = await readJson(request);
+        if (body && typeof body === 'object' && (Object.hasOwn(body, 'processTaskRef') || Object.hasOwn(body, 'proposalContext'))) {
+          return sendJson(response, 400, {
+            error: 'Only a saved process-task request may establish immutable task linkage or proposal source context.',
+            code: 'INVALID_COMMAND',
+          });
+        }
         if (request.identity) rejectAuthorityClaims(body);
         if (request.identity && !/^project-[0-9a-f-]{36}$/.test(body.projectId ?? '')) {
           throw apiFailure(400, 'PROJECT_REQUIRED', 'Choose a project for this execution run.');
@@ -1759,15 +2338,50 @@ export function createApp({
       }
     } catch (error) {
       if (pathname === '/auth/callback') return loginError(response, oidcLoginFlow ? new URL(oidcLoginFlow.redirectUri).protocol === 'https:' : false);
-      if (pathname.startsWith('/api/v1/')) return sendApiError(response, error, correlationId);
+      if (pathname.startsWith('/api/v1/') || pathname.startsWith('/api/execution/process-task-')
+        || /^\/api\/execution\/runs\/execution-run-[0-9a-f-]{36}\/(cancel|pause|resume|amend)$/.test(pathname)) {
+        return sendApiError(response, error, correlationId);
+      }
       const status = error.statusCode ?? (/required|valid JSON|too large|finished discovery|Invalid project|Invalid change case|Invalid execution|only at S|Case is|requires an authorized|awaiting approval|must be approved|cannot approve|valid execution profile/.test(error.message) ? 400 : 500);
       sendJson(response, status, { error: status === 500 ? 'Unexpected server error.' : error.message });
     }
   });
+  const closeServer = server.close.bind(server);
+  let serverCloseRequested = false;
+  let serverCloseComplete = false;
+  let serverCloseError;
+  const serverCloseCallbacks = [];
+  const finishServerClose = (error) => {
+    serverCloseComplete = true;
+    serverCloseError = error?.code === 'ERR_SERVER_NOT_RUNNING' ? undefined : error;
+    for (const closeCallback of serverCloseCallbacks.splice(0)) closeCallback(serverCloseError);
+  };
+  server.close = (callback) => {
+    if (callback) {
+      if (serverCloseComplete) queueMicrotask(() => callback(serverCloseError));
+      else serverCloseCallbacks.push(callback);
+    }
+    if (serverCloseRequested) return server;
+    serverCloseRequested = true;
+    if (!server.listening) { finishServerClose(); return server; }
+    return closeServer(finishServerClose);
+  };
+  persistence?.setRecoveryLockLostHandler(() => {
+    // Keep dependency-free liveness available; DB-backed work is fenced and workers stop.
+    void executionService.shutdown().catch(() => {});
+  });
   return {
     server, store, sdlcStore, executionService, persistence, importer, sessionStore, secretStore,
-    async init() { await Promise.all([store.init(), sdlcStore.init(), executionService.init({ recoverRunning: !readOnly })]); },
+    async init() {
+      await Promise.all([store.init(), sdlcStore.init(), executionService.init({ recoverRunning: !readOnly })]);
+      if (persistence && secretStore) {
+        await secretStore.recoverManagedProvisioning();
+        if (!readOnly) secretStore.startOpenAiRevocationReconciler();
+      }
+      if (persistence && !persistence.recoveryLockHealthy) throw persistence.recoveryLockLostError;
+    },
     async close() {
+      secretStore?.stopOpenAiRevocationReconciler();
       await executionService.shutdown();
       if (persistence) await persistence.close();
     },
@@ -1783,6 +2397,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   }
   const { host, port, authMode, dataDirectory, sdlcDirectory, executionDirectory, executionWorkspaceDirectory,
     enableLocalExecution, databaseUrl, secretEncryptionKey, openAiCredentialReference, openAiModel,
+    openAiAdminApiKey, openAiOrganizationId, openAiTenantProjects,
     legacyReadOnlyMode, oidc, roleMap, tenantBindings, bootstrapPrincipals } = config;
   const { issuer: oidcIssuer, audience: oidcAudience, jwksUri: oidcJwksUri, clientId: oidcClientId,
     redirectUri: oidcRedirectUri, authorizationEndpoint: oidcAuthorizationEndpoint, tokenEndpoint: oidcTokenEndpoint } = oidc;
@@ -1804,7 +2419,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     });
   }
   const executionProfiles = openAiCredentialReference ? [{ id: 'openai-current', kind: 'provider-openai', version: '1.0.0', label: `OpenAI · ${openAiModel}`, credentialReference: openAiCredentialReference, model: openAiModel }] : [];
-  const app = createApp({ dataDirectory, sdlcDirectory, executionDirectory, executionWorkspaceDirectory, enableLocalExecution, executionProfiles, databaseUrl, oidcAuthenticator, oidcLoginFlow, oidcBootstrapPrincipals: authMode === 'oidc' ? bootstrapPrincipals : [], secretEncryptionKey, readOnly: legacyReadOnlyMode });
+  const app = createApp({ dataDirectory, sdlcDirectory, executionDirectory, executionWorkspaceDirectory, enableLocalExecution, executionProfiles, databaseUrl, oidcAuthenticator, oidcLoginFlow, oidcBootstrapPrincipals: authMode === 'oidc' ? bootstrapPrincipals : [], secretEncryptionKey, openAiAdminApiKey, openAiOrganizationId, openAiTenantProjects, readOnly: legacyReadOnlyMode });
   const { server } = app;
   await app.init();
   let shuttingDown = false;

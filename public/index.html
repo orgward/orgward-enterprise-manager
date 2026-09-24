@@ -18,7 +18,7 @@
           <a href="/" aria-current="page">Enterprise design</a>
           <a href="/platform.html">Platform specification</a>
           <a href="/sdlc.html">SDLC reference</a>
-          <a href="/execution.html">Execution</a>
+          <a id="execution-nav" href="/execution.html">Execution</a>
         </nav>
         <div class="top-actions">
           <span id="foundation-badge" class="privacy" title="Identity status is reported by this installation"><span></span> Checking identity</span>
@@ -36,6 +36,7 @@
         <div id="app-state-actions" class="app-state-actions"></div>
       </section>
       <main id="app" aria-busy="true"></main>
+      <p id="founder-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
     </div>
 
     <template id="welcome-template">
@@ -99,8 +100,14 @@
             <div id="blueprint-view" role="tabpanel" aria-labelledby="blueprint-tab" tabindex="0"></div>
             <div id="coverage-view" role="tabpanel" aria-labelledby="coverage-tab" tabindex="0" hidden></div>
             <div id="map-view" role="tabpanel" aria-labelledby="map-tab" tabindex="0" hidden>
+              <div class="map-search">
+                <label for="map-search">Find an object in this design</label>
+                <input id="map-search" type="search" maxlength="120" autocomplete="off" placeholder="Search names, details, types, or areas" aria-describedby="map-search-status">
+                <p id="map-search-status" role="status" aria-live="polite" aria-atomic="true"></p>
+              </div>
               <div class="map-toolbar">
                 <div id="map-area-context" class="map-area-context" hidden></div>
+                <button id="map-results-jump" class="button ghost" type="button" aria-describedby="map-search-status">Skip controls to first map result</button>
                 <div id="type-filters" class="type-filters" aria-label="Filter map by object type"></div>
                 <div class="map-actions">
                   <div class="segmented" aria-label="Map display mode">

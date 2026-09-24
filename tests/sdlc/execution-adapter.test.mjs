@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -21,6 +22,8 @@ test('provider-neutral command adapter runs a bounded coding agent and captures 
   assert.equal(result.exitCode, 0);
   assert.match(result.stdout, /implemented WORK-REFERENCE/);
   assert.deepEqual(result.changedArtifacts.map((entry) => entry.path), ['src/bounded-change.json']);
+  const artifactBytes = await readFile(path.join(workspace, 'src/bounded-change.json'));
+  assert.equal(result.changedArtifacts[0].contentHash, createHash('sha256').update(artifactBytes).digest('hex'));
   assert.equal(result.evidenceHash.length, 64);
 });
 
@@ -69,9 +72,18 @@ test('command adapter stops the sandbox payload and its writes when the worker i
     { id: 'context-revoked' },
     { workspace, signal: controller.signal },
   );
-  await new Promise((resolve) => setTimeout(resolve, 125));
   const heartbeat = path.join(workspace, 'heartbeat.txt');
-  assert.ok((await readFile(heartbeat)).length > 0);
+  const heartbeatDeadline = Date.now() + 1_500;
+  let heartbeatBytes = 0;
+  while (Date.now() < heartbeatDeadline && heartbeatBytes === 0) {
+    try {
+      heartbeatBytes = (await readFile(heartbeat)).length;
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    if (heartbeatBytes === 0) await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.ok(heartbeatBytes > 0, 'the sandbox payload should start and write its first heartbeat');
   controller.abort();
   await assert.rejects(handle.result, { code: 'EXECUTION_REVOKED' });
   assert.ok(handle.child.exitCode !== null || handle.child.signalCode !== null);

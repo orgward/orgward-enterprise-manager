@@ -1,4 +1,5 @@
 import { constants as fsConstants } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { open, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { digest } from '../sdlc/contracts.mjs';
@@ -9,7 +10,7 @@ const MISSING_PATH_CODES = new Set(['EACCES', 'ELOOP', 'ENAMETOOLONG', 'ENOENT',
 
 // Resolve every component from an already-open parent directory. The optional
 // openFile dependency keeps syscall-boundary races deterministic in unit tests.
-export async function readWorkspaceArtifact({ configuredRoot, runId, segments, expectedHash }, { openFile = open } = {}) {
+export async function readWorkspaceArtifact({ configuredRoot, runId, segments, expectedHash, hashAlgorithm }, { openFile = open } = {}) {
   if (fsConstants.O_DIRECTORY == null || fsConstants.O_NOFOLLOW == null
     || typeof runId !== 'string' || !runId || runId === '.' || runId === '..'
     || runId.includes('/') || runId.includes('\\')
@@ -36,8 +37,12 @@ export async function readWorkspaceArtifact({ configuredRoot, runId, segments, e
     const metadata = await file.stat();
     if (!metadata.isFile() || metadata.nlink !== 1 || metadata.size > MAX_ARTIFACT_BYTES) return null;
     const contents = await file.readFile();
-    if (contents.length > MAX_ARTIFACT_BYTES || digest(contents) !== expectedHash) return null;
-    return contents;
+    if (contents.length > MAX_ARTIFACT_BYTES) return null;
+    const rawHash = createHash('sha256').update(contents).digest('hex');
+    if (hashAlgorithm === 'sha256-raw') return rawHash === expectedHash ? contents : null;
+    if (hashAlgorithm !== undefined) return null;
+    if (rawHash === expectedHash || digest(contents) === expectedHash) return contents;
+    return null;
   } catch (error) {
     if (MISSING_PATH_CODES.has(error?.code)) return null;
     throw error;

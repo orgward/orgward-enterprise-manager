@@ -23,12 +23,16 @@
 .plan-task-editor legend, .plan-history summary { color: var(--ink); font-size: 12px; }
 .plan-task-editor select[multiple] { min-height: 100px; }
 .plan-editor .inline-action { flex-wrap: wrap; }
+.process-plan-controls { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; margin-top: 12px; }
+.process-plan-controls .button { display: inline-flex; align-items: center; min-height: 44px; max-width: 100%; }
+.process-plan > label { display: grid; gap: 7px; width: min(100%, 480px); margin-top: 12px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+.process-plan > label select { width: 100%; min-width: 0; color: var(--ink); background: #0d1218; border: 1px solid var(--exec-line); border-radius: 7px; padding: 11px; text-transform: none; letter-spacing: 0; }
 .plan-history { margin: 18px 0; border: 1px solid var(--exec-line); border-radius: 8px; padding: 12px; }
 .plan-history section { border-top: 1px solid var(--exec-line); margin-top: 12px; }
 .plan-history h5 { margin-bottom: 5px; color: var(--ink); }
 .run-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
 .run-status { flex: 0 0 auto; border: 1px solid var(--exec-line); border-radius: 20px; padding: 7px 10px; font-size: 9px; }
-.status-AWAITING_APPROVAL { color: var(--amber); }.status-APPROVED, .status-RUNNING { color: var(--blue); }.status-SUCCEEDED { color: var(--mint-2); }.status-FAILED, .status-INTERRUPTED { color: var(--red); }
+.status-AWAITING_APPROVAL { color: var(--amber); }.status-APPROVED, .status-RUNNING { color: var(--blue); }.status-SUCCEEDED { color: var(--mint-2); }.status-FAILED, .status-INTERRUPTED, .status-CANCELLED { color: var(--red); }
 .run-section { border-top: 1px solid var(--exec-line); margin-top: 25px; padding-top: 20px; }.run-section h3 { font: 400 20px var(--serif); }
 .run-section p, .requirements { color: var(--muted); font-size: 12px; line-height: 1.65; }
 .inline-action { display: flex; gap: 8px; max-width: 570px; }.inline-action input { min-width: 0; }.inline-action .button { flex: 0 0 auto; }

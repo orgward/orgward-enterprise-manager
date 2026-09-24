@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { open } from 'node:fs/promises';
 import { mkdtemp, mkdir, readFile, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -6,6 +7,8 @@ import path from 'node:path';
 import test from 'node:test';
 import { digest } from '../../src/sdlc/contracts.mjs';
 import { readWorkspaceArtifact } from '../../src/execution/artifact-file.mjs';
+
+const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 
 test('artifact traversal stays anchored when a parent directory becomes a symlink at open time', async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'orgward-artifact-fd-'));
@@ -23,9 +26,19 @@ test('artifact traversal stays anchored when a parent directory becomes a symlin
 
   const beforeRace = await readWorkspaceArtifact({
     configuredRoot: root, runId, segments: ['nested', 'result.txt'],
-    expectedHash: digest(Buffer.from('workspace artifact')),
+    expectedHash: sha256(Buffer.from('workspace artifact')),
   });
   assert.equal(beforeRace.toString(), 'workspace artifact');
+  const legacy = await readWorkspaceArtifact({
+    configuredRoot: root, runId, segments: ['nested', 'result.txt'], expectedHash: digest(Buffer.from('workspace artifact')),
+  });
+  assert.equal(legacy.toString(), 'workspace artifact');
+  assert.equal(await readWorkspaceArtifact({
+    configuredRoot: root, runId, segments: ['nested', 'result.txt'], expectedHash: digest(Buffer.from('workspace artifact')), hashAlgorithm: 'sha256-unknown',
+  }), null);
+  assert.equal(await readWorkspaceArtifact({
+    configuredRoot: root, runId, segments: ['nested', 'result.txt'], expectedHash: digest(Buffer.from('workspace artifact')), hashAlgorithm: null,
+  }), null);
 
   let swapped = false;
   const raceOpen = async (filePath, flags) => {
@@ -37,7 +50,7 @@ test('artifact traversal stays anchored when a parent directory becomes a symlin
     return open(filePath, flags);
   };
   const escaped = await readWorkspaceArtifact({
-    configuredRoot: root, runId, segments: ['nested', 'result.txt'], expectedHash: digest(canary),
+    configuredRoot: root, runId, segments: ['nested', 'result.txt'], expectedHash: sha256(canary),
   }, { openFile: raceOpen });
   assert.equal(swapped, true);
   assert.equal(escaped, null);

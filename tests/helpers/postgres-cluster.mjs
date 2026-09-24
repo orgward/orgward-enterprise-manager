@@ -30,17 +30,31 @@ async function availablePort() {
   return port;
 }
 
+async function waitForChildExit(child, timeoutMs) {
+  if (child.exitCode !== null || child.signalCode !== null) return true;
+  return new Promise((resolve) => {
+    let finished = false;
+    const finish = (exited) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      child.off('exit', onExit);
+      resolve(exited);
+    };
+    const onExit = () => finish(true);
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    child.once('exit', onExit);
+    if (child.exitCode !== null || child.signalCode !== null) finish(true);
+  });
+}
+
 async function stopServer(child) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
-  await new Promise((resolve) => {
-    const onExit = () => { clearTimeout(timer); resolve(); };
-    const timer = setTimeout(() => { child.off('exit', onExit); resolve(); }, 5_000);
-    child.once('exit', onExit);
-    child.kill('SIGTERM');
-  });
-  if (child.exitCode === null && child.signalCode === null) {
-    child.kill('SIGKILL');
-    await new Promise((resolve) => child.once('exit', resolve));
+  child.kill('SIGTERM');
+  if (await waitForChildExit(child, 5_000)) return;
+  child.kill('SIGKILL');
+  if (!await waitForChildExit(child, 2_000)) {
+    throw new Error('Disposable PostgreSQL test server did not exit after SIGKILL.');
   }
 }
 
@@ -67,13 +81,14 @@ export async function startTestPostgresCluster() {
     const port = await availablePort();
     child = spawn(path.join(bin, 'postgres'), [
       '-D', data, '-h', '127.0.0.1', '-k', socket, '-p', String(port),
-      '-c', 'fsync=on', '-c', 'synchronous_commit=on', '-c', 'full_page_writes=on',
+      '-c', 'fsync=off', '-c', 'synchronous_commit=off', '-c', 'full_page_writes=off',
+      '-c', 'min_wal_size=32MB', '-c', 'max_wal_size=128MB',
     ], { env, stdio: ['ignore', 'pipe', 'pipe'] });
     child.stdout.on('data', (chunk) => log.push(chunk.toString()));
     child.stderr.on('data', (chunk) => log.push(chunk.toString()));
     const user = encodeURIComponent(process.env.USER || 'ubuntu');
     const baseUrl = `postgresql://${user}@127.0.0.1:${port}`;
-    admin = new Pool({ connectionString: `${baseUrl}/postgres`, max: 2 });
+    admin = new Pool({ connectionString: `${baseUrl}/postgres`, max: 2, connectionTimeoutMillis: 3_000 });
     admin.on('error', () => { /* A later fixture query reports database failure. */ });
     const deadline = Date.now() + 15_000;
     while (true) {
@@ -95,24 +110,11 @@ export async function startTestPostgresCluster() {
   }
 }
 
-export async function cleanupTestDatabases(admin, runId) {
-  const prefix = `orgward_test_${runId}_`;
-  const databases = await admin.query('select datname from pg_database where left(datname, length($1)) = $1 and datallowconn', [prefix]);
-  for (const { datname } of databases.rows) {
-    await admin.query('select pg_terminate_backend(pid) from pg_stat_activity where datname = $1 and pid <> pg_backend_pid()', [datname]);
-    await admin.query(`drop database if exists "${datname.replaceAll('"', '""')}" with (force)`);
-  }
-}
-
-export async function stopTestPostgresCluster(cluster, runId) {
+export async function stopTestPostgresCluster(cluster) {
   if (!cluster) return;
-  try {
-    if (runId) await cleanupTestDatabases(cluster.admin, runId);
-  } finally {
-    try { await cluster.admin.end(); }
-    finally {
-      try { await stopServer(cluster.child); }
-      finally { await rm(cluster.root, { recursive: true, force: true }); }
-    }
+  try { await cluster.admin.end(); }
+  finally {
+    try { await stopServer(cluster.child); }
+    finally { await rm(cluster.root, { recursive: true, force: true }); }
   }
 }

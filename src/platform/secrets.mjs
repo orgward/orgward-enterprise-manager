@@ -1,6 +1,8 @@
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { contentHash, verifyAggregateRow, verifyCommandRow } from './postgres.mjs';
 import { executionApprovalRequestHash } from '../execution/contracts.mjs';
+import { OpenAiManagedProvisioner } from './openai-managed-provisioning.mjs';
+import { revokeOrgwardCreatedOpenAiServiceAccount } from './openai-admin-revocation.mjs';
 
 function failure(statusCode, code, message) {
   return Object.assign(new Error(message), { statusCode, code });
@@ -76,7 +78,8 @@ function validateExpiry(expiresAt) {
 }
 
 export class PostgresSecretStore {
-  constructor(persistence, { encryptionKey = null, openAiValidationEndpoint = 'https://api.openai.com/v1/models' } = {}) {
+  constructor(persistence, { encryptionKey = null, openAiValidationEndpoint = 'https://api.openai.com/v1/models',
+    openAiAdminApiKey = null, openAiOrganizationId = null, openAiTenantProjects = null, openAiAdminEndpoint = 'https://api.openai.com' } = {}) {
     if (encryptionKey !== null && (!Buffer.isBuffer(encryptionKey) || encryptionKey.length !== 32)) {
       throw new Error('The secret encryption key must contain exactly 32 bytes.');
     }
@@ -91,7 +94,127 @@ export class PostgresSecretStore {
     }
     this.openAiValidationEndpoint = validationUrl.href.replace(/\/$/, '');
     this.encryptionKey = encryptionKey ? Buffer.from(encryptionKey) : null;
+    this.openAiOrganizationId = openAiOrganizationId;
+    this.openAiTenantProjects = openAiTenantProjects && Object.freeze({ ...openAiTenantProjects });
+    this.openAiAdminApiKey = openAiAdminApiKey;
+    this.openAiAdminEndpoint = openAiAdminEndpoint;
+    this.openAiManagedProvisioner = openAiAdminApiKey && openAiOrganizationId
+      ? new OpenAiManagedProvisioner({ adminApiKey: openAiAdminApiKey, organizationId: openAiOrganizationId, endpoint: openAiAdminEndpoint })
+      : null;
     this.onCredentialInvalidated = null;
+    this.onRevocationObligationsChanged = null;
+    this.revocationTimer = null;
+    this.revocationDrainActive = false;
+  }
+
+  startOpenAiRevocationReconciler({ intervalMs = 15_000 } = {}) {
+    if (this.revocationTimer) return;
+    const drain = () => { void this.reconcileOpenAiRevocationObligations().catch(() => {}); };
+    this.revocationTimer = setInterval(drain, intervalMs);
+    this.revocationTimer.unref?.();
+    drain();
+  }
+
+  stopOpenAiRevocationReconciler() {
+    if (this.revocationTimer) clearInterval(this.revocationTimer);
+    this.revocationTimer = null;
+  }
+
+  #wakeOpenAiRevocationReconciler() {
+    queueMicrotask(() => { void this.reconcileOpenAiRevocationObligations().catch(() => {}); });
+  }
+
+  async reconcileOpenAiRevocationObligations({ limit = 8, fetchImpl = fetch } = {}) {
+    if (!this.openAiAdminApiKey || this.revocationDrainActive) return 0;
+    this.revocationDrainActive = true;
+    let completed = 0;
+    try {
+      for (let index = 0; index < limit; index += 1) {
+        const claim = await this.#claimOpenAiRevocationObligation();
+        if (!claim) break;
+        const target = {
+          organizationId: claim.provider_organization_id,
+          projectId: claim.provider_project_id,
+          serviceAccountId: claim.provider_service_account_id,
+          apiKeyId: claim.provider_api_key_id,
+          provenance: claim.target_provenance,
+        };
+        if (target.organizationId !== this.openAiOrganizationId) {
+          await this.#releaseOpenAiRevocationClaim(claim);
+          continue;
+        }
+        const result = await revokeOrgwardCreatedOpenAiServiceAccount({
+          adminApiKey: this.openAiAdminApiKey, target, fetchImpl, endpoint: this.openAiAdminEndpoint,
+          beforeDelete: () => this.#renewOpenAiRevocationClaim(claim),
+        });
+        if (result.status === 'confirmed') {
+          await this.#confirmOpenAiRevocationObligation(claim, result);
+          completed += 1;
+        } else await this.#releaseOpenAiRevocationClaim(claim);
+      }
+    } finally {
+      this.revocationDrainActive = false;
+    }
+    return completed;
+  }
+
+  async #claimOpenAiRevocationObligation() {
+    const token = randomUUID();
+    return this.persistence.transaction(async (client) => {
+      const claimed = await client.query(`with due as (
+        select tenant_id,reference,credential_version from orgward.secret_upstream_revocation_obligations
+        where status='unconfirmed' and provider='openai'
+          and target_provenance='orgward_created_exclusive_service_account'
+          and provider_organization_id is not null and provider_project_id is not null
+          and provider_service_account_id is not null and provider_api_key_id is not null
+          and next_attempt_at <= clock_timestamp()
+          and (claim_until is null or claim_until <= clock_timestamp())
+        order by next_attempt_at,created_at
+        for update skip locked limit 1
+      ) update orgward.secret_upstream_revocation_obligations obligation
+        set claim_token=$1,claim_until=clock_timestamp()+interval '30 seconds',
+          attempt_count=attempt_count+1,last_attempt_at=clock_timestamp()
+        from due where obligation.tenant_id=due.tenant_id and obligation.reference=due.reference
+          and obligation.credential_version=due.credential_version
+        returning obligation.*`, [token]);
+      return claimed.rows[0] ?? null;
+    });
+  }
+
+  async #confirmOpenAiRevocationObligation(claim, result) {
+    await this.persistence.transaction(async (client) => {
+      const updated = await client.query(`update orgward.secret_upstream_revocation_obligations
+        set status='confirmed',confirmed_by=created_by,confirmed_at=clock_timestamp(),
+          confirmation_evidence=$5,claim_token=null,claim_until=null
+        where tenant_id=$1 and reference=$2 and credential_version=$3
+          and status='unconfirmed' and claim_token=$4
+        returning reference`, [claim.tenant_id, claim.reference, claim.credential_version, claim.claim_token,
+        `${result.evidence}:${result.serviceAccountId}`]);
+      if (updated.rowCount) await client.query(`update orgward.secret_references ref
+        set upstream_revocation_status='confirmed',updated_at=clock_timestamp()
+        where ref.tenant_id=$1 and ref.reference=$2 and ref.upstream_revocation_status='unconfirmed'
+          and not exists (select 1 from orgward.secret_upstream_revocation_obligations pending
+            where pending.tenant_id=ref.tenant_id and pending.reference=ref.reference and pending.status='unconfirmed')`,
+      [claim.tenant_id, claim.reference]);
+    });
+  }
+
+  async #releaseOpenAiRevocationClaim(claim) {
+    await this.persistence.query(`update orgward.secret_upstream_revocation_obligations
+      set claim_token=null,claim_until=null,
+        next_attempt_at=clock_timestamp()+least(interval '15 minutes', interval '5 seconds' * power(2, least(attempt_count - 1, 7)))
+      where tenant_id=$1 and reference=$2 and credential_version=$3
+        and status='unconfirmed' and claim_token=$4`,
+    [claim.tenant_id, claim.reference, claim.credential_version, claim.claim_token]);
+  }
+
+  async #renewOpenAiRevocationClaim(claim) {
+    const renewed = await this.persistence.query(`update orgward.secret_upstream_revocation_obligations
+      set claim_until=clock_timestamp()+interval '30 seconds'
+      where tenant_id=$1 and reference=$2 and credential_version=$3 and status='unconfirmed'
+        and claim_token=$4 and claim_until > clock_timestamp()
+      returning claim_token`, [claim.tenant_id, claim.reference, claim.credential_version, claim.claim_token]);
+    return renewed.rowCount === 1;
   }
 
   #requireEncryptionKey() {
@@ -145,12 +268,16 @@ export class PostgresSecretStore {
       const payloadHash = this.#payloadHash(tenantId, actor, 'secret.openai-candidate.stage', { reference, expectedVersion, value, model, reason: reason.trim(), expiresAt: expiry });
       const prior = await this.#priorCommand(client, { tenantId, operation: 'secret.openai-candidate.stage', commandId, payloadHash });
       if (prior) return { ...prior, replayed: true };
-      const current = await client.query('select version,status,candidate_generation from orgward.secret_references where tenant_id=$1 and reference=$2 for update', [tenantId, reference]);
+      const current = await client.query('select version,status,candidate_generation,candidate_provider_target_provenance from orgward.secret_references where tenant_id=$1 and reference=$2 for update', [tenantId, reference]);
       if ((current.rows[0]?.version ?? 0) !== expectedVersion) throw versionConflict(current.rows[0]?.version ?? 0);
+      if (current.rows[0]?.candidate_provider_target_provenance) throw failure(409, 'MANAGED_CANDIDATE_PRESENT', 'A managed OpenAI candidate must be activated or handled before another candidate can replace it.');
+      const pendingProvision = await client.query(`select 1 from orgward.secret_openai_provisioning_commands
+        where tenant_id=$1 and reference=$2 and status not in ('candidate_staged','candidate_activated','candidate_abandoned') limit 1`, [tenantId, reference]);
+      if (pendingProvision.rowCount) throw failure(409, 'OPENAI_PROVISIONING_UNRESOLVED', 'A managed OpenAI provisioning command is unresolved; a new candidate cannot replace it.');
       const version = (current.rows[0]?.candidate_generation ?? 0) + 1;
       const envelope = seal(this.encryptionKey, tenantId, reference, version, value);
       if (current.rowCount) {
-        await client.query(`update orgward.secret_references set candidate_version=$3,candidate_generation=$3,candidate_ciphertext=$4,candidate_nonce=$5,candidate_auth_tag=$6,candidate_model=$7,candidate_status='staged',candidate_validated_at=null,candidate_expires_at=$8,updated_by=$9,updated_at=now() where tenant_id=$1 and reference=$2`,
+        await client.query(`update orgward.secret_references set candidate_version=$3,candidate_generation=$3,candidate_ciphertext=$4,candidate_nonce=$5,candidate_auth_tag=$6,candidate_model=$7,candidate_status='staged',candidate_validated_at=null,candidate_expires_at=$8,candidate_provider_organization_id=null,candidate_provider_project_id=null,candidate_provider_service_account_id=null,candidate_provider_api_key_id=null,candidate_provider_target_provenance=null,updated_by=$9,updated_at=now() where tenant_id=$1 and reference=$2`,
           [tenantId, reference, version, envelope.ciphertext, envelope.nonce, envelope.authTag, model, expiry, actor]);
       } else {
         await client.query(`insert into orgward.secret_references (tenant_id,reference,version,status,created_by,updated_by,expires_at,candidate_version,candidate_generation,candidate_ciphertext,candidate_nonce,candidate_auth_tag,candidate_model,candidate_status,candidate_expires_at) values ($1,$2,0,'revoked',$3,$3,$4,$5,$5,$6,$7,$8,$9,'staged',$4)`,
@@ -161,6 +288,156 @@ export class PostgresSecretStore {
       return metadata;
     });
     return staged;
+  }
+
+  async provisionOpenAiCandidate({ tenantId, actor, actorAuthzGeneration, reference, commandId, expectedVersion, model, reason, expiresAt }) {
+    validateCommand({ tenantId, actor, actorAuthzGeneration, reference, commandId, reason });
+    this.#requireEncryptionKey();
+    if (!this.openAiManagedProvisioner || !this.openAiOrganizationId || !this.openAiTenantProjects) {
+      throw failure(503, 'OPENAI_MANAGED_PROVISIONING_DISABLED', 'Managed OpenAI credential provisioning is not configured for this installation.');
+    }
+    if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0 || typeof model !== 'string'
+      || !/^[A-Za-z0-9._:-]{1,100}$/.test(model)) {
+      throw failure(400, 'INVALID_COMMAND', 'A model and nonnegative expectedVersion are required.');
+    }
+    const projectId = this.openAiTenantProjects[tenantId];
+    if (!projectId) throw failure(403, 'OPENAI_PROJECT_NOT_CONFIGURED', 'Managed OpenAI provisioning is unavailable for this tenant.');
+    const expiry = validateExpiry(expiresAt);
+    const expiresInSeconds = Math.floor((Date.parse(expiry) - Date.now()) / 1000);
+    if (expiresInSeconds < 1 || expiresInSeconds > 31_536_000) {
+      throw failure(400, 'INVALID_CREDENTIAL_EXPIRY', 'Managed OpenAI API keys must expire within 31,536,000 seconds.');
+    }
+    const cleanReason = reason.trim();
+    const operation = 'secret.openai-managed-candidate.provision';
+    const payloadHash = this.#payloadHash(tenantId, actor, operation, { reference, expectedVersion, model, reason: cleanReason, expiresAt: expiry });
+    const providerResourceName = `orgward-${randomUUID()}`;
+    const intent = await this.persistence.transaction(async (client) => {
+      await requireTenantAdmin(client, { tenantId, actor, actorAuthzGeneration });
+      const prior = await this.#priorCommand(client, { tenantId, operation, commandId, payloadHash });
+      if (prior) {
+        const state = await client.query(`select reference,status,candidate_version,failure_code from orgward.secret_openai_provisioning_commands where tenant_id=$1 and command_id=$2`, [tenantId, commandId]);
+        return { replayed: true, ...(state.rows[0] ?? { status: 'unresolved', candidate_version: null, failure_code: 'persistence_failed' }) };
+      }
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${tenantId}:secret-reference:${reference}`]);
+      const current = await client.query('select * from orgward.secret_references where tenant_id=$1 and reference=$2 for update', [tenantId, reference]);
+      const currentVersion = current.rows[0]?.version ?? 0;
+      if (currentVersion !== expectedVersion) throw versionConflict(currentVersion);
+      if (current.rows[0]?.candidate_version != null) throw failure(409, 'CANDIDATE_ALREADY_STAGED', 'Activate or revoke the existing candidate before provisioning another one.');
+      const candidateVersion = (current.rows[0]?.candidate_generation ?? 0) + 1;
+      const pending = await client.query(`select 1 from orgward.secret_openai_provisioning_commands
+        where tenant_id=$1 and reference=$2 and status not in ('candidate_staged','candidate_activated','candidate_abandoned') limit 1`, [tenantId, reference]);
+      if (pending.rowCount) throw failure(409, 'OPENAI_PROVISIONING_UNRESOLVED', 'A previous managed OpenAI provisioning command is unresolved; it cannot be retried automatically.');
+      if (!current.rowCount) {
+        await client.query(`insert into orgward.secret_references
+          (tenant_id,reference,version,status,created_by,updated_by,expires_at)
+          values ($1,$2,0,'revoked',$3,$3,$4)`, [tenantId, reference, actor, expiry]);
+      }
+      await client.query(`insert into orgward.secret_openai_provisioning_commands
+        (tenant_id,reference,command_id,payload_hash,candidate_version,organization_id,project_id,model,expires_at,provider_resource_name,reason,actor,status)
+        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'intent_recorded')`,
+      [tenantId, reference, commandId, payloadHash, candidateVersion, this.openAiOrganizationId, projectId, model, expiry, providerResourceName, cleanReason, actor]);
+      const metadata = { reference, status: 'provisioning', candidateVersion };
+      await this.#recordCommand(client, { tenantId, operation, commandId, payloadHash, result: metadata });
+      return { replayed: false, status: 'intent_recorded', candidate_version: candidateVersion };
+    });
+    if (intent.replayed) return this.#provisioningResult(intent, true);
+
+    const job = { tenantId, actor, actorAuthzGeneration, reference, commandId, expectedVersion, projectId, model, expiry, expiresInSeconds,
+      candidateVersion: intent.candidate_version, provisioningName: providerResourceName };
+    let knownServiceAccountId = null;
+    let knownApiKeyId = null;
+    try {
+      await this.#provisionStep(job, 'intent_recorded', 'service_account_create_sent', async () => {});
+      const created = await this.openAiManagedProvisioner.createServiceAccount({ projectId, name: job.provisioningName });
+      knownServiceAccountId = created.serviceAccountId;
+      await this.persistence.transaction(async (client) => {
+        await requireTenantAdmin(client, { tenantId, actor, actorAuthzGeneration });
+        await this.#assertProvisioningReferenceCurrent(client, job);
+        const updated = await client.query(`update orgward.secret_openai_provisioning_commands set service_account_id=$3,status='service_account_created',updated_at=now()
+          where tenant_id=$1 and command_id=$2 and status='service_account_create_sent'`, [tenantId, commandId, created.serviceAccountId]);
+        if (!updated.rowCount) throw failure(409, 'PROVISIONING_STATE_INVALID', 'Managed OpenAI provisioning state changed after service-account creation.');
+      });
+
+      await this.#provisionStep(job, 'service_account_created', 'role_update_sent', async () => {});
+      await this.openAiManagedProvisioner.assignMemberRole({ projectId, serviceAccountId: created.serviceAccountId });
+      await this.persistence.transaction(async (client) => {
+        await requireTenantAdmin(client, { tenantId, actor, actorAuthzGeneration });
+        await this.#assertProvisioningReferenceCurrent(client, job);
+        const state = await client.query('select service_account_id from orgward.secret_openai_provisioning_commands where tenant_id=$1 and command_id=$2 and status=$3 for update', [tenantId, commandId, 'role_update_sent']);
+        if (!state.rowCount || state.rows[0].service_account_id !== created.serviceAccountId) throw failure(409, 'PROVISIONING_STATE_INVALID', 'Managed OpenAI provisioning state is incomplete.');
+        const updated = await client.query(`update orgward.secret_openai_provisioning_commands set status='service_account_ready',updated_at=now()
+          where tenant_id=$1 and command_id=$2 and status='role_update_sent'`, [tenantId, commandId]);
+        if (!updated.rowCount) throw failure(409, 'PROVISIONING_STATE_INVALID', 'Managed OpenAI provisioning state changed after role assignment.');
+      });
+
+      await this.#provisionStep(job, 'service_account_ready', 'api_key_create_sent', async () => {});
+      const key = await this.openAiManagedProvisioner.createScopedApiKey({
+        projectId, serviceAccountId: created.serviceAccountId, expiresInSeconds,
+        name: job.provisioningName,
+      });
+      knownApiKeyId = key.apiKeyId;
+      if (cleanReason.includes(key.value)) throw Object.assign(new Error('Audit reason conflicts with generated credential.'), { code: 'INVALID_COMMAND' });
+      await this.persistence.transaction(async (client) => {
+        await requireTenantAdmin(client, { tenantId, actor, actorAuthzGeneration });
+        await this.#assertProvisioningReferenceCurrent(client, job);
+        const state = await client.query(`select service_account_id,candidate_version,model,expires_at from orgward.secret_openai_provisioning_commands
+          where tenant_id=$1 and command_id=$2 and status='api_key_create_sent' for update`, [tenantId, commandId]);
+        if (!state.rowCount || state.rows[0].service_account_id !== created.serviceAccountId) throw failure(409, 'PROVISIONING_STATE_INVALID', 'Managed OpenAI provisioning state is incomplete.');
+        const envelope = seal(this.encryptionKey, tenantId, reference, state.rows[0].candidate_version, key.value);
+        const staged = await client.query(`update orgward.secret_references set candidate_version=$3,candidate_generation=$3,
+          candidate_ciphertext=$4,candidate_nonce=$5,candidate_auth_tag=$6,candidate_model=$7,
+          candidate_status='staged',candidate_validated_at=null,candidate_expires_at=least($8::timestamptz,to_timestamp($15::double precision)),
+          candidate_provider_organization_id=$9,candidate_provider_project_id=$10,
+          candidate_provider_service_account_id=$11,candidate_provider_api_key_id=$12,
+          candidate_provider_target_provenance='orgward_created_exclusive_service_account',updated_by=$13,updated_at=now()
+          where tenant_id=$1 and reference=$2 and version=$14 and candidate_version is null`,
+        [tenantId, reference, state.rows[0].candidate_version, envelope.ciphertext, envelope.nonce, envelope.authTag,
+          model, state.rows[0].expires_at, this.openAiOrganizationId, projectId, state.rows[0].service_account_id, key.apiKeyId,
+          actor, expectedVersion, key.expiresAt]);
+        if (!staged.rowCount) throw failure(409, 'CANDIDATE_STALE', 'The secret reference changed during managed credential provisioning.');
+        const recorded = await client.query(`update orgward.secret_openai_provisioning_commands set api_key_id=$3,status='candidate_staged',updated_at=now()
+          where tenant_id=$1 and command_id=$2 and status='api_key_create_sent'`, [tenantId, commandId, key.apiKeyId]);
+        if (!recorded.rowCount) throw failure(409, 'PROVISIONING_STATE_INVALID', 'Managed OpenAI provisioning state changed before completion.');
+      });
+      return { status: 'candidate_staged', candidateVersion: job.candidateVersion, reference, replayed: false };
+    } catch (error) {
+      const safeCode = error.code === 'INVALID_COMMAND' ? 'provider_response_invalid' : error.invalidResponse ? 'provider_response_invalid' : 'provider_response_ambiguous';
+      await this.persistence.transaction(async (client) => {
+        await client.query(`update orgward.secret_openai_provisioning_commands set status='unresolved',failure_code=$3,
+          service_account_id=coalesce(service_account_id,$4),api_key_id=coalesce(api_key_id,$5),updated_at=now()
+          where tenant_id=$1 and command_id=$2 and status<>'candidate_staged'`, [tenantId, commandId, safeCode,
+          error.serviceAccountId ?? knownServiceAccountId, error.apiKeyId ?? knownApiKeyId]);
+      });
+      return { status: 'unresolved', candidateVersion: job.candidateVersion, reference, replayed: false };
+    }
+  }
+
+  async #provisionStep(job, expectedStatus, sentStatus) {
+    await this.persistence.transaction(async (client) => {
+      await requireTenantAdmin(client, { tenantId: job.tenantId, actor: job.actor, actorAuthzGeneration: job.actorAuthzGeneration });
+      const updated = await client.query(`update orgward.secret_openai_provisioning_commands set status=$4,updated_at=now()
+        where tenant_id=$1 and command_id=$2 and status=$3 returning command_id`, [job.tenantId, job.commandId, expectedStatus, sentStatus]);
+      if (!updated.rowCount) throw failure(409, 'PROVISIONING_STATE_INVALID', 'Managed OpenAI provisioning cannot be resumed automatically.');
+    });
+  }
+
+  async #assertProvisioningReferenceCurrent(client, job) {
+    const current = await client.query(`select version,candidate_version from orgward.secret_references
+      where tenant_id=$1 and reference=$2 for share`, [job.tenantId, job.reference]);
+    if (!current.rowCount || current.rows[0].version !== job.expectedVersion || current.rows[0].candidate_version != null) {
+      throw failure(409, 'VERSION_CONFLICT', 'The secret reference changed before managed provisioning completed.');
+    }
+  }
+
+  #provisioningResult(row, replayed) {
+    return { status: row.status === 'candidate_staged' ? 'candidate_staged' : row.status === 'unresolved' ? 'unresolved' : 'provisioning',
+      reference: row.reference, candidateVersion: row.candidate_version, replayed };
+  }
+
+  async recoverManagedProvisioning() {
+    await this.persistence.query(`update orgward.secret_openai_provisioning_commands
+      set status='unresolved',failure_code=coalesce(failure_code,'provider_response_ambiguous'),updated_at=now()
+      where status not in ('candidate_staged','candidate_activated','candidate_abandoned','unresolved')`);
   }
 
   async validateOpenAiCandidate({ tenantId, actor, actorAuthzGeneration, reference, candidateVersion }) {
@@ -237,11 +514,24 @@ export class PostgresSecretStore {
       const upstreamStatus = hadOldCredential ? 'unconfirmed' : 'not_applicable';
       if (row.status === 'active') await this.#recordRevocationObligation(client, {
         tenantId, reference, credentialVersion: row.version, provider: row.active_provider, actor,
+        target: row.active_provider_target_provenance ? {
+          organizationId: row.active_provider_organization_id, projectId: row.active_provider_project_id,
+          serviceAccountId: row.active_provider_service_account_id, apiKeyId: row.active_provider_api_key_id,
+          provenance: row.active_provider_target_provenance,
+        } : null,
         reason: 'Credential generation replaced in OrgWard; upstream revocation was not confirmed.',
       });
       await this.#cancelBoundLeases(client, { tenantId, reference, reason: 'credential_rotated' });
-      const activated = await client.query(`update orgward.secret_references set version=$3,status='active',ciphertext=$4,nonce=$5,auth_tag=$6,expires_at=candidate_expires_at,active_provider='openai',active_model=candidate_model,candidate_version=null,candidate_ciphertext=null,candidate_nonce=null,candidate_auth_tag=null,candidate_model=null,candidate_status=null,candidate_validated_at=null,candidate_expires_at=null,upstream_revocation_status=$8,updated_by=$7,updated_at=now() where tenant_id=$1 and reference=$2 and candidate_expires_at > clock_timestamp() and candidate_validated_at > clock_timestamp() - interval '15 minutes' returning version`, [tenantId, reference, version, activeEnvelope.ciphertext, activeEnvelope.nonce, activeEnvelope.authTag, actor, upstreamStatus]);
+      const activated = await client.query(`update orgward.secret_references set version=$3,status='active',ciphertext=$4,nonce=$5,auth_tag=$6,expires_at=candidate_expires_at,active_provider='openai',active_model=candidate_model,
+        active_provider_organization_id=candidate_provider_organization_id,active_provider_project_id=candidate_provider_project_id,
+        active_provider_service_account_id=candidate_provider_service_account_id,active_provider_api_key_id=candidate_provider_api_key_id,
+        active_provider_target_provenance=candidate_provider_target_provenance,
+        candidate_version=null,candidate_ciphertext=null,candidate_nonce=null,candidate_auth_tag=null,candidate_model=null,candidate_status=null,candidate_validated_at=null,candidate_expires_at=null,
+        candidate_provider_organization_id=null,candidate_provider_project_id=null,candidate_provider_service_account_id=null,candidate_provider_api_key_id=null,candidate_provider_target_provenance=null,
+        upstream_revocation_status=$8,updated_by=$7,updated_at=now() where tenant_id=$1 and reference=$2 and candidate_expires_at > clock_timestamp() and candidate_validated_at > clock_timestamp() - interval '15 minutes' returning version`, [tenantId, reference, version, activeEnvelope.ciphertext, activeEnvelope.nonce, activeEnvelope.authTag, actor, upstreamStatus]);
       if (!activated.rowCount) throw failure(409, 'CANDIDATE_VALIDATION_STALE', 'The model access validation expired during activation. Validate the staged candidate again.');
+      await client.query(`update orgward.secret_openai_provisioning_commands set status='candidate_activated',updated_at=now()
+        where tenant_id=$1 and reference=$2 and candidate_version=$3 and status='candidate_staged'`, [tenantId, reference, candidateVersion]);
       const metadata = { reference, version, status: 'active', model: row.candidate_model, provider: 'openai', upstreamRevocationStatus: upstreamStatus, encryptionAvailable: true };
       const event = { eventId: `secret-event-${randomUUID()}`, tenantId, reference, version, type: hadOldCredential ? 'SecretReferenceRotated' : 'SecretReferenceCreated', actor, reason: reason.trim(), upstreamRevocationStatus: upstreamStatus, occurredAt: new Date().toISOString() };
       await client.query(`insert into orgward.secret_reference_events (event_id,tenant_id,reference,version,event_type,actor,reason,event,event_hash) values ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9)`, [event.eventId,tenantId,reference,version,event.type,actor,event.reason,JSON.stringify(event),contentHash(event)]);
@@ -249,12 +539,15 @@ export class PostgresSecretStore {
       return { ...metadata, replayed: false };
     });
     try { await Promise.resolve(this.onCredentialInvalidated?.({ tenantId, reference, version: result.version, reason: 'credential_rotated' })); } catch { /* Lease cancellation committed. */ }
+    if (result.version && expectedVersion > 0 && !result.replayed) this.#wakeOpenAiRevocationReconciler();
     return result;
   }
 
-  async resolveOpenAiBinding({ tenantId, reference, model }) {
+  async resolveOpenAiBinding({ tenantId, reference, model, client = null }) {
     if (!this.encryptionKey) throw failure(503, 'SECRET_ENCRYPTION_UNAVAILABLE', 'Provider credentials are unavailable.');
-    const result = await this.persistence.query(`select version,active_model from orgward.secret_references where tenant_id=$1 and reference=$2 and status='active' and active_provider='openai' and expires_at > clock_timestamp()`, [tenantId, reference]);
+    const queryable = client ?? this.persistence;
+    const lock = client ? ' for share' : '';
+    const result = await queryable.query(`select version,active_model from orgward.secret_references where tenant_id=$1 and reference=$2 and status='active' and active_provider='openai' and expires_at > clock_timestamp()${lock}`, [tenantId, reference]);
     if (!result.rowCount || result.rows[0].active_model !== model) throw failure(409, 'OPENAI_CREDENTIAL_UNAVAILABLE', 'No current validated OpenAI credential is available for this profile model.');
     return { reference, version: result.rows[0].version, model };
   }
@@ -287,7 +580,7 @@ export class PostgresSecretStore {
     `, [tenantId, operation, commandId, payloadHash, JSON.stringify(result), contentHash(result)]);
   }
 
-  async #authorizeLease(client, { tenantId, reference, expectedVersion, runId, projectId, principal, workerId, authzGeneration }) {
+  async #authorizeLease(client, { tenantId, reference, expectedVersion, runId, projectId, principal, workerId, authzGeneration, allowPauseRequested = false }) {
     if (!/^execution-run-[0-9a-f-]{36}$/.test(runId ?? '') || !/^project-[0-9a-f-]{36}$/.test(projectId ?? '')
       || !principal || !/^[a-f0-9-]{36}$/.test(workerId ?? '') || !Number.isSafeInteger(authzGeneration)) {
       throw failure(403, 'WORKER_LEASE_INVALID', 'The worker lease is no longer authorized.');
@@ -311,6 +604,20 @@ export class PostgresSecretStore {
     if (!actor || actor.status !== 'active' || !actor.roles.includes('workspace-write')
       || Number(actor.authz_generation) !== authzGeneration) {
       throw failure(403, 'WORKER_LEASE_INVALID', 'The worker lease is no longer authorized.');
+    }
+    const runHint = await client.query(`select state->'processTaskRef' as process_task_ref
+      from orgward.aggregates where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2`, [tenantId, runId]);
+    const processTaskRef = runHint.rows[0]?.process_task_ref;
+    if (processTaskRef?.planInstanceId) {
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        `${tenantId}:process-plan-instance:${processTaskRef.planInstanceId}`,
+      ]);
+      const control = await client.query(`select status,project_id from orgward.process_task_instance_controls
+        where tenant_id=$1 and plan_instance_id=$2 for update`, [tenantId, processTaskRef.planInstanceId]);
+      if (!control.rowCount || control.rows[0].project_id !== projectId
+        || (control.rows[0].status !== 'ACTIVE' && !(allowPauseRequested && control.rows[0].status === 'PAUSE_REQUESTED'))) {
+        throw failure(409, 'PROCESS_INSTANCE_PAUSED', 'Provider dispatch is fenced while this process instance is paused or pausing.');
+      }
     }
     const runRow = await client.query(`
       select * from orgward.aggregates
@@ -363,7 +670,7 @@ export class PostgresSecretStore {
     if (!leaseCheck.rows[0]?.active) throw failure(403, 'WORKER_LEASE_INVALID', 'The worker lease is no longer authorized.');
     const finalExpiryCheck = await client.query('select $1::timestamptz > clock_timestamp() as credential_valid', [secret.rows[0].expires_at]);
     if (!finalExpiryCheck.rows[0].credential_valid) throw failure(409, 'SECRET_CREDENTIAL_EXPIRED', 'The approved credential expired while authorizing provider use.');
-    return secret.rows[0];
+    return { ...secret.rows[0], processTaskRef: processTaskRef ?? null };
   }
 
   async #cancelBoundLeases(client, { tenantId, reference, reason }) {
@@ -381,13 +688,15 @@ export class PostgresSecretStore {
     `, [tenantId, reference, reason]);
   }
 
-  async #recordRevocationObligation(client, { tenantId, reference, credentialVersion, provider, actor, reason }) {
+  async #recordRevocationObligation(client, { tenantId, reference, credentialVersion, provider, actor, reason, target = null }) {
     if (!Number.isSafeInteger(credentialVersion) || credentialVersion < 1) return;
     await client.query(`insert into orgward.secret_upstream_revocation_obligations
-      (tenant_id,reference,credential_version,provider,status,reason,created_by)
-      values ($1,$2,$3,$4,'unconfirmed',$5,$6)
+      (tenant_id,reference,credential_version,provider,status,reason,created_by,
+        provider_organization_id,provider_project_id,provider_service_account_id,provider_api_key_id,target_provenance)
+      values ($1,$2,$3,$4,'unconfirmed',$5,$6,$7,$8,$9,$10,$11)
       on conflict (tenant_id,reference,credential_version) do nothing`,
-    [tenantId, reference, credentialVersion, provider === 'openai' ? 'openai' : 'unspecified', reason.slice(0, 500), actor]);
+    [tenantId, reference, credentialVersion, provider === 'openai' ? 'openai' : 'unspecified', reason.slice(0, 500), actor,
+      target?.organizationId ?? null, target?.projectId ?? null, target?.serviceAccountId ?? null, target?.apiKeyId ?? null, target?.provenance ?? null]);
   }
 
   async listForTenantAdmin({ tenantId, actor, actorAuthzGeneration, operation = null }) {
@@ -413,6 +722,14 @@ export class PostgresSecretStore {
         list.push({ credentialVersion: item.credential_version, provider: item.provider, status: item.status, createdAt: item.created_at.toISOString() });
         revocationsByReference.set(item.reference, list);
       }
+      const provisioning = await client.query(`select reference,command_id,status,candidate_version,updated_at
+        from orgward.secret_openai_provisioning_commands where tenant_id=$1 order by created_at`, [tenantId]);
+      const provisioningByReference = new Map();
+      for (const item of provisioning.rows) {
+        const list = provisioningByReference.get(item.reference) ?? [];
+        list.push({ commandId: item.command_id, status: item.status, candidateVersion: item.candidate_version, updatedAt: item.updated_at.toISOString() });
+        provisioningByReference.set(item.reference, list);
+      }
       const references = result.rows.map((row) => ({
         reference: row.reference, version: row.version, status: row.version === 0 && row.candidate_version != null ? 'candidate' : row.status,
         createdBy: row.created_by, updatedBy: row.updated_by,
@@ -422,6 +739,7 @@ export class PostgresSecretStore {
         candidate: row.candidate_version == null ? null : { version: row.candidate_version, model: row.candidate_model, status: row.candidate_status, validatedAt: row.candidate_validated_at?.toISOString() ?? null },
         upstreamRevocationStatus: row.upstream_revocation_status,
         upstreamRevocations: revocationsByReference.get(row.reference) ?? [],
+        managedProvisioning: provisioningByReference.get(row.reference) ?? [],
         encryptionAvailable: Boolean(this.encryptionKey),
       }));
       return operation ? operation(references) : references;
@@ -450,11 +768,14 @@ export class PostgresSecretStore {
       if (prior) return { reference: prior, replayed: true };
       await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${tenantId}:secret-reference:${reference}`]);
       const current = await client.query(`
-        select version,status,active_provider,upstream_revocation_status from orgward.secret_references
+        select version,status,active_provider,upstream_revocation_status,active_provider_organization_id,active_provider_project_id,
+          active_provider_service_account_id,active_provider_api_key_id,active_provider_target_provenance,candidate_version,candidate_provider_target_provenance
+        from orgward.secret_references
         where tenant_id = $1 and reference = $2 for update
       `, [tenantId, reference]);
       const currentVersion = current.rowCount ? current.rows[0].version : 0;
       if (currentVersion !== expectedVersion) throw versionConflict(currentVersion);
+      if (current.rows[0]?.candidate_provider_target_provenance) throw failure(409, 'MANAGED_CANDIDATE_PRESENT', 'A managed OpenAI candidate must be activated or handled before raw-key rotation.');
       const futureExpiry = await client.query('select $1::timestamptz > clock_timestamp() as future', [cleanExpiresAt]);
       if (!futureExpiry.rows[0].future) throw failure(400, 'INVALID_CREDENTIAL_EXPIRY', 'A future UTC credential expiry is required.');
       if (currentVersion > 0) await this.#cancelBoundLeases(client, { tenantId, reference, reason: 'credential_rotated' });
@@ -462,6 +783,11 @@ export class PostgresSecretStore {
       const upstreamStatus = current.rows[0]?.status === 'active' || current.rows[0]?.upstream_revocation_status === 'unconfirmed' ? 'unconfirmed' : 'not_applicable';
       if (current.rows[0]?.status === 'active') await this.#recordRevocationObligation(client, {
         tenantId, reference, credentialVersion: currentVersion, provider: current.rows[0].active_provider, actor,
+        target: current.rows[0].active_provider_target_provenance ? {
+          organizationId: current.rows[0].active_provider_organization_id, projectId: current.rows[0].active_provider_project_id,
+          serviceAccountId: current.rows[0].active_provider_service_account_id, apiKeyId: current.rows[0].active_provider_api_key_id,
+          provenance: current.rows[0].active_provider_target_provenance,
+        } : null,
         reason: 'Credential generation replaced in OrgWard; upstream revocation was not confirmed.',
       });
       const encrypted = seal(this.encryptionKey, tenantId, reference, version, value);
@@ -472,9 +798,13 @@ export class PostgresSecretStore {
         on conflict (tenant_id, reference) do update
         set version = excluded.version, status = 'active', ciphertext = excluded.ciphertext,
           nonce = excluded.nonce, auth_tag = excluded.auth_tag, expires_at = excluded.expires_at,
-          active_provider = null, active_model = null, upstream_revocation_status = excluded.upstream_revocation_status,
+          active_provider = null, active_model = null, active_provider_organization_id=null, active_provider_project_id=null,
+          active_provider_service_account_id=null, active_provider_api_key_id=null, active_provider_target_provenance=null,
+          upstream_revocation_status = excluded.upstream_revocation_status,
           candidate_version = null, candidate_ciphertext = null, candidate_nonce = null, candidate_auth_tag = null,
           candidate_model = null, candidate_status = null, candidate_validated_at = null, candidate_expires_at = null,
+          candidate_provider_organization_id=null,candidate_provider_project_id=null,candidate_provider_service_account_id=null,
+          candidate_provider_api_key_id=null,candidate_provider_target_provenance=null,
           updated_by = excluded.updated_by, updated_at = now()
         returning reference, version, status, created_by, updated_by, updated_at, expires_at
       `, [tenantId, reference, version, encrypted.ciphertext, encrypted.nonce, encrypted.authTag, actor, cleanExpiresAt, upstreamStatus]);
@@ -500,6 +830,7 @@ export class PostgresSecretStore {
     });
     if (outcome && !outcome.replayed && expectedVersion > 0) {
       try { await Promise.resolve(this.onCredentialInvalidated?.({ tenantId, reference, version: outcome.reference.version, reason: 'credential_rotated' })); } catch { /* Durable lease cancellation already committed. */ }
+      this.#wakeOpenAiRevocationReconciler();
     }
     return outcome;
   }
@@ -519,12 +850,17 @@ export class PostgresSecretStore {
       await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${tenantId}:secret-reference:${reference}`]);
       const current = await client.query(`
         select version, status, active_provider, ciphertext, nonce, auth_tag,
-          candidate_version, candidate_ciphertext, candidate_nonce, candidate_auth_tag, candidate_status
+          active_provider_organization_id,active_provider_project_id,active_provider_service_account_id,active_provider_api_key_id,active_provider_target_provenance,
+          candidate_version, candidate_ciphertext, candidate_nonce, candidate_auth_tag, candidate_status,
+          candidate_provider_target_provenance
         from orgward.secret_references
         where tenant_id = $1 and reference = $2 for update
       `, [tenantId, reference]);
       if (!current.rowCount) return null;
       if (current.rows[0].version !== expectedVersion) throw versionConflict(current.rows[0].version);
+      if (current.rows[0].candidate_provider_target_provenance) {
+        throw failure(409, 'MANAGED_CANDIDATE_PRESENT', 'A managed OpenAI candidate cannot be discarded until its provider target can be retained for confirmed revocation.');
+      }
       if (current.rows[0].status === 'revoked') {
         const metadata = { reference, version: current.rows[0].version, status: 'revoked', encryptionAvailable: Boolean(this.encryptionKey) };
         await this.#recordCommand(client, { tenantId, operation, commandId, payloadHash, result: metadata });
@@ -532,8 +868,16 @@ export class PostgresSecretStore {
       }
       const auditReason = this.#sanitizeRevocationReason({ tenantId, reference, row: current.rows[0], reason: cleanReason });
       const version = current.rows[0].version + 1;
+      if (current.rows[0].candidate_version != null) await client.query(`update orgward.secret_openai_provisioning_commands
+        set status='candidate_abandoned',updated_at=now()
+        where tenant_id=$1 and reference=$2 and candidate_version=$3 and status='candidate_staged'`, [tenantId, reference, current.rows[0].candidate_version]);
       if (current.rows[0].status === 'active') await this.#recordRevocationObligation(client, {
         tenantId, reference, credentialVersion: current.rows[0].version, provider: current.rows[0].active_provider, actor,
+        target: current.rows[0].active_provider_target_provenance ? {
+          organizationId: current.rows[0].active_provider_organization_id, projectId: current.rows[0].active_provider_project_id,
+          serviceAccountId: current.rows[0].active_provider_service_account_id, apiKeyId: current.rows[0].active_provider_api_key_id,
+          provenance: current.rows[0].active_provider_target_provenance,
+        } : null,
         reason: 'Credential revoked in OrgWard; upstream revocation was not confirmed.',
       });
       await this.#cancelBoundLeases(client, { tenantId, reference, reason: 'credential_revoked' });
@@ -541,9 +885,13 @@ export class PostgresSecretStore {
         update orgward.secret_references
         set version = $4, status = 'revoked', ciphertext = null, nonce = null, auth_tag = null,
           active_provider = null, active_model = null,
+          active_provider_organization_id=null,active_provider_project_id=null,active_provider_service_account_id=null,
+          active_provider_api_key_id=null,active_provider_target_provenance=null,
           upstream_revocation_status = 'unconfirmed',
           candidate_version = null, candidate_ciphertext = null, candidate_nonce = null, candidate_auth_tag = null,
           candidate_model = null, candidate_status = null, candidate_validated_at = null, candidate_expires_at = null,
+          candidate_provider_organization_id=null,candidate_provider_project_id=null,candidate_provider_service_account_id=null,
+          candidate_provider_api_key_id=null,candidate_provider_target_provenance=null,
           updated_by = $3, updated_at = now()
         where tenant_id = $1 and reference = $2
         returning updated_at
@@ -564,6 +912,7 @@ export class PostgresSecretStore {
     });
     if (outcome && !outcome.replayed && outcome.reference?.status === 'revoked') {
       try { await Promise.resolve(this.onCredentialInvalidated?.({ tenantId, reference, version: outcome.reference.version, reason: 'credential_revoked' })); } catch { /* Durable lease cancellation already committed. */ }
+      this.#wakeOpenAiRevocationReconciler();
     }
     return outcome;
   }
@@ -623,23 +972,24 @@ export class PostgresSecretStore {
         decipher.setAuthTag(row.auth_tag);
         const credential = Buffer.concat([decipher.update(row.ciphertext), decipher.final()]).toString('utf8');
         transport = operation(Object.freeze({ credential, reference, version: expectedVersion, signal: controller.signal }));
-        if (!transport || typeof transport.abort !== 'function' || !transport.handedOff || !transport.result
-          || typeof transport.handedOff.then !== 'function' || typeof transport.result.then !== 'function') {
-          throw failure(503, 'PROVIDER_TRANSPORT_UNAVAILABLE', 'Provider dispatch requires a handoff-aware transport.');
+        if (!transport || typeof transport.abort !== 'function' || typeof transport.send !== 'function' || !transport.result
+          || typeof transport.result.then !== 'function') {
+          throw failure(503, 'PROVIDER_TRANSPORT_UNAVAILABLE', 'Provider dispatch requires a deferred, handoff-aware transport.');
         }
-        transportStarted = true;
-        transport.result.catch(() => {});
-        await transport.handedOff;
-        await this.persistence.faults?.afterProviderDispatchHandoff?.({ tenantId, runId, attemptId });
-        await client.query(`update orgward.provider_dispatch_attempts
+        const handedOff = await client.query(`update orgward.provider_dispatch_attempts
           set status='handed_off',handed_off_at=now(),updated_at=now()
-          where tenant_id=$1 and run_id=$2 and attempt_id=$3 and status='reserved'`, [tenantId, runId, attemptId]);
+          where tenant_id=$1 and run_id=$2 and attempt_id=$3 and status='reserved' returning attempt_id`, [tenantId, runId, attemptId]);
+        if (!handedOff.rowCount) throw failure(409, 'PROVIDER_ATTEMPT_CANCELLED', 'The provider dispatch reservation is no longer available.');
       });
+      transportStarted = true;
+      transport.result.catch(() => {});
+      await this.persistence.faults?.afterProviderDispatchHandoff?.({ tenantId, runId, attemptId });
+      transport.send();
       output = await transport.result;
       if (Date.now() >= expiryMs) throw failure(409, 'SECRET_CREDENTIAL_EXPIRED', 'The approved credential expired during provider use.');
       if (containsSecret(output, reservation.credential)) throw failure(502, 'PROVIDER_OUTPUT_QUARANTINED', 'Provider output was quarantined by secret-leak detection.');
       await this.persistence.transaction(async (client) => {
-        await this.#authorizeLease(client, { tenantId, reference, expectedVersion, runId, projectId, principal, workerId, authzGeneration });
+        await this.#authorizeLease(client, { tenantId, reference, expectedVersion, runId, projectId, principal, workerId, authzGeneration, allowPauseRequested: true });
         await client.query(`update orgward.provider_dispatch_attempts
           set status='completed',finished_at=now(),updated_at=now()
           where tenant_id=$1 and run_id=$2 and attempt_id=$3 and status='handed_off'`, [tenantId, runId, attemptId]);
@@ -661,7 +1011,7 @@ export class PostgresSecretStore {
       }).catch(() => {});
       if (Date.now() >= expiryMs) throw failure(409, 'SECRET_CREDENTIAL_EXPIRED', 'The approved credential expired during provider use.');
       if (['PROVIDER_OUTPUT_QUARANTINED', 'SECRET_CREDENTIAL_EXPIRED'].includes(error?.code)) throw error;
-      if (['PROVIDER_ATTEMPT_CANCELLED', 'WORKER_LEASE_INVALID', 'SECRET_REFERENCE_INACTIVE', 'SECRET_CREDENTIAL_EXPIRED', 'SECRET_GENERATION_STALE', 'SECRET_BINDING_STALE'].includes(error?.code)) throw error;
+      if (['PROVIDER_ATTEMPT_CANCELLED', 'PROCESS_INSTANCE_PAUSED', 'WORKER_LEASE_INVALID', 'SECRET_REFERENCE_INACTIVE', 'SECRET_CREDENTIAL_EXPIRED', 'SECRET_GENERATION_STALE', 'SECRET_BINDING_STALE'].includes(error?.code)) throw error;
       throw Object.assign(new Error('The authorized provider operation failed.'), {
         statusCode: 502, code: 'PROVIDER_OUTCOME_UNKNOWN', retryable: false,
       });

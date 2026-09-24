@@ -153,6 +153,37 @@ export function parseInstallConfig(env = process.env, nodeVersion = process.vers
   if (openAiCredentialReference && !/^secret-[a-z0-9][a-z0-9._-]{0,79}$/.test(openAiCredentialReference)) add(issues, 'openai-reference', 'ORGWARD_OPENAI_CREDENTIAL_REFERENCE has an invalid format.', 'Use secret- followed by a lowercase identifier.');
   if (openAiModel && !/^[A-Za-z0-9._:-]{1,100}$/.test(openAiModel)) add(issues, 'openai-model', 'ORGWARD_OPENAI_MODEL has an invalid format.', 'Set it to the exact model ID from the provider configuration.');
 
+  const openAiAdminInlineConfigured = Object.hasOwn(env, 'ORGWARD_OPENAI_ADMIN_API_KEY') && env.ORGWARD_OPENAI_ADMIN_API_KEY !== undefined;
+  const openAiAdminKeyInput = protectedFileValue(
+    { ORGWARD_OPENAI_ADMIN_API_KEY_FILE: env.ORGWARD_OPENAI_ADMIN_API_KEY_FILE },
+    'ORGWARD_OPENAI_ADMIN_API_KEY', 'ORGWARD_OPENAI_ADMIN_API_KEY_FILE', issues, { maxBytes: 2_048 },
+  );
+  if (openAiAdminInlineConfigured) add(issues, 'openai-admin-key-source', 'ORGWARD_OPENAI_ADMIN_API_KEY is not accepted; the Admin API key must come from a protected file.', 'Remove the inline variable and configure ORGWARD_OPENAI_ADMIN_API_KEY_FILE as an absolute owner-only regular file.');
+  const openAiAdminApiKey = openAiAdminInlineConfigured ? null : openAiAdminKeyInput;
+  if (openAiAdminApiKey !== null && (openAiAdminApiKey.length < 8 || /[\r\n]/.test(openAiAdminApiKey))) {
+    add(issues, 'openai-admin-key', 'The protected OpenAI Admin API key file contains an invalid value.', 'Provide the Admin API key as one non-empty line in the protected file.');
+  }
+
+  const openAiOrganizationId = env.ORGWARD_OPENAI_ORGANIZATION_ID || null;
+  if (openAiOrganizationId && !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(openAiOrganizationId)) add(issues, 'openai-organization-id', 'ORGWARD_OPENAI_ORGANIZATION_ID has an invalid identifier.', 'Set it to the exact OpenAI organization ID.');
+  let openAiTenantProjects = null;
+  if (env.ORGWARD_OPENAI_TENANT_PROJECTS) {
+    const parsed = parseJsonObject(env.ORGWARD_OPENAI_TENANT_PROJECTS, 'ORGWARD_OPENAI_TENANT_PROJECTS', issues);
+    if (parsed) {
+      const entries = Object.entries(parsed);
+      const projects = entries.map(([, projectId]) => projectId);
+      if (!entries.length || entries.some(([tenantId, projectId]) => !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/.test(tenantId)
+        || typeof projectId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(projectId))
+        || new Set(projects).size !== projects.length) {
+        add(issues, 'openai-tenant-projects', 'ORGWARD_OPENAI_TENANT_PROJECTS must map valid OrgWard tenant IDs to unique OpenAI project IDs.', 'Provide a non-empty JSON object with one unique project ID per tenant.');
+      } else openAiTenantProjects = Object.freeze({ ...parsed });
+    }
+  }
+  const managedOpenAiConfigured = Boolean(openAiAdminApiKey || openAiOrganizationId || openAiTenantProjects);
+  if (managedOpenAiConfigured && (!openAiAdminApiKey || !openAiOrganizationId || !openAiTenantProjects)) {
+    add(issues, 'openai-managed-prerequisites', 'Managed OpenAI provisioning requires an Admin API key file, organization ID, and tenant-to-project mapping together.', 'Configure ORGWARD_OPENAI_ADMIN_API_KEY_FILE, ORGWARD_OPENAI_ORGANIZATION_ID, and ORGWARD_OPENAI_TENANT_PROJECTS, or omit all three to disable managed provisioning.');
+  }
+
   const oidc = {
     issuer: env.ORGWARD_OIDC_ISSUER || null,
     audience: env.ORGWARD_OIDC_AUDIENCE || null,
@@ -199,6 +230,7 @@ export function parseInstallConfig(env = process.env, nodeVersion = process.vers
     executionWorkspaceDirectory: path.resolve(env.ORGWARD_EXECUTION_WORKSPACE_DIR || path.join(ROOT, 'data', 'execution-workspaces')),
     enableLocalExecution: env.ORGWARD_ENABLE_LOCAL_EXECUTION === 'true',
     openAiCredentialReference, openAiModel, oidc, roleMap, tenantBindings, bootstrapPrincipals,
+    openAiAdminApiKey, openAiOrganizationId, openAiTenantProjects,
     legacyReadOnlyMode: allowLegacyJson,
   };
   if (openAiCredentialReference && (!databaseUrl || !secretEncryptionKey)) add(issues, 'openai-prerequisites', 'The OpenAI profile needs PostgreSQL and the secret encryption key.', 'Configure PostgreSQL and the secret encryption key through the inline or protected-file settings before opting in.');

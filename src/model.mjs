@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 export const AREA_DEFINITIONS = [
   ['purposeStrategy', 'Purpose & strategy'],
@@ -15,9 +15,32 @@ export const AREA_DEFINITIONS = [
 
 const VALID_STATUSES = new Set(['designed', 'unknown', 'out_of_scope']);
 const VALID_CONFIDENCE = new Set(['low', 'medium', 'high']);
+const BASIC_EDITABLE_BLUEPRINT_TYPES = new Set([
+  'goal', 'strategy', 'resource', 'information', 'system', 'risk', 'control', 'metric', 'feedback-loop', 'lifecycle',
+]);
+const OWNER_RELATION_EDITABLE_TYPES = new Set([
+  'goal', 'strategy', 'economics', 'capability', 'process', 'resource', 'information', 'system',
+  'risk', 'control', 'metric', 'feedback-loop', 'lifecycle',
+]);
+const DECISION_SCOPE_TARGET_TYPES = new Set([
+  'goal', 'strategy', 'customer', 'offering', 'economics', 'capability', 'process', 'resource',
+  'information', 'system', 'risk', 'control', 'metric', 'feedback-loop', 'lifecycle',
+]);
 
 function compact(value, max = 220) {
   return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+export function blueprintPublicationDigest(blueprint, disclosures) {
+  return createHash('sha256').update(canonicalJson({ blueprint, disclosures })).digest('hex');
 }
 
 function titleFromDescription(description) {
@@ -311,13 +334,74 @@ function editFailure(message, code = 'INVALID_BLUEPRINT_EDIT', statusCode = 400)
 
 function displayObjectForEdit(blueprint, object) {
   const roles = Object.values(blueprint.areas).flatMap((entry) => entry.items).filter((candidate) => candidate.type === 'role');
+  const objectsById = new Map(Object.values(blueprint.areas).flatMap((entry) => entry.items).map((candidate) => [candidate.id, candidate]));
   const legacy = Array.isArray(object.authority) ? object.authority : [];
   return {
     name: object.name,
     detail: object.detail,
     ...(object.owner ? { ownerRoleName: roles.find((role) => role.id === object.owner)?.name ?? null } : {}),
-    ...(object.type === 'process' ? { trigger: object.trigger ?? '' } : {}),
-    ...(object.type === 'role' ? { proposedInstructions: object.proposedInstructions ?? '', proposedScopeStatements: object.proposedScopeStatements ?? legacy.filter((value) => !(typeof value === 'string' && value.startsWith('decision-'))) } : {}),
+    ...(object.type === 'offering' ? { servesCustomerNames: (object.serves ?? []).map((customerId) => {
+      const customer = objectsById.get(customerId);
+      return customer?.type === 'customer' ? customer.name : 'Unknown customer';
+    }), enabledByCapabilityNames: (object.enabledBy ?? []).map((capabilityId) => {
+      const capability = objectsById.get(capabilityId);
+      return capability?.type === 'capability' ? capability.name : 'Unknown capability';
+    }).sort((a, b) => a.localeCompare(b)) } : {}),
+    ...(object.type === 'process' ? {
+      trigger: object.trigger ?? '',
+      capabilityName: objectsById.get(object.capability)?.type === 'capability' ? objectsById.get(object.capability).name : null,
+      inputInformationNames: (object.inputs ?? []).filter((id) => objectsById.get(id)?.type === 'information')
+        .map((id) => objectsById.get(id).name).sort((a, b) => a.localeCompare(b)),
+      outputInformationNames: (object.outputs ?? []).filter((id) => objectsById.get(id)?.type === 'information')
+        .map((id) => objectsById.get(id).name).sort((a, b) => a.localeCompare(b)),
+      inputDecisionNames: (object.inputs ?? []).filter((id) => objectsById.get(id)?.type === 'decision')
+        .map((id) => objectsById.get(id).name).sort((a, b) => a.localeCompare(b)),
+      outputDecisionNames: (object.outputs ?? []).filter((id) => objectsById.get(id)?.type === 'decision')
+        .map((id) => objectsById.get(id).name).sort((a, b) => a.localeCompare(b)),
+      resourceNames: (object.resources ?? []).filter((id) => objectsById.get(id)?.type === 'resource')
+        .map((id) => objectsById.get(id).name).sort((a, b) => a.localeCompare(b)),
+      systemNames: (object.systems ?? []).filter((id) => objectsById.get(id)?.type === 'system')
+        .map((id) => objectsById.get(id).name).sort((a, b) => a.localeCompare(b)),
+    } : {}),
+    ...(object.type === 'feedback-loop' ? {
+      evidenceMetricNames: (object.evidence ?? []).filter((id) => objectsById.get(id)?.type === 'metric')
+        .map((id) => objectsById.get(id).name).sort((a, b) => a.localeCompare(b)),
+      feedbackGoalName: objectsById.get(object.goal)?.type === 'goal' ? objectsById.get(object.goal).name : null,
+      feedbackDecisionNames: (object.decisionIds ?? []).filter((id) => objectsById.get(id)?.type === 'decision')
+        .map((id) => objectsById.get(id).name).sort((a, b) => a.localeCompare(b)),
+    } : {}),
+    ...(object.type === 'capability' ? {
+      capabilityMetricNames: (object.metrics ?? []).filter((id) => objectsById.get(id)?.type === 'metric')
+        .map((id) => objectsById.get(id).name).sort((a, b) => a.localeCompare(b)),
+    } : {}),
+    ...(object.type === 'metric' ? {
+      readInformationName: objectsById.get(object.reads)?.type === 'information' ? objectsById.get(object.reads).name : null,
+      consumerLoopName: objectsById.get(object.consumerLoop)?.type === 'feedback-loop' ? objectsById.get(object.consumerLoop).name : null,
+    } : {}),
+    ...(object.type === 'risk' ? {
+      mitigatingControlName: objectsById.get(object.control)?.type === 'control' ? objectsById.get(object.control).name : null,
+    } : {}),
+    ...(object.type === 'strategy' ? {
+      strategyGoalNames: (object.goals ?? []).filter((id) => objectsById.get(id)?.type === 'goal')
+        .map((id) => objectsById.get(id).name).sort((a, b) => a.localeCompare(b)),
+    } : {}),
+    ...(object.type === 'decision' ? {
+      decisionMakerRoleName: roles.find((role) => role.id === object.by)?.name ?? null,
+      decisionScopeNames: (object.scope ?? []).filter((id) => DECISION_SCOPE_TARGET_TYPES.has(objectsById.get(id)?.type))
+        .map((id) => objectsById.get(id).name).sort((a, b) => a.localeCompare(b)),
+    } : {}),
+    ...(['actor-human', 'actor-agent'].includes(object.type) ? {
+      assignedRoleNames: (object.assignedRoles ?? []).filter((id) => objectsById.get(id)?.type === 'role')
+        .map((id) => objectsById.get(id).name).sort((a, b) => a.localeCompare(b)),
+    } : {}),
+    ...(['goal', 'economics'].includes(object.type) ? {
+      metricName: objectsById.get(object.metric)?.type === 'metric' ? objectsById.get(object.metric).name : null,
+    } : {}),
+    ...(object.type === 'role' ? {
+      responsibilityNames: (object.responsibilities ?? []).filter((id) => ['goal', 'capability', 'process', 'system'].includes(objectsById.get(id)?.type))
+        .map((id) => objectsById.get(id).name).sort((a, b) => a.localeCompare(b)),
+      proposedInstructions: object.proposedInstructions ?? '', proposedScopeStatements: object.proposedScopeStatements ?? legacy.filter((value) => !(typeof value === 'string' && value.startsWith('decision-'))),
+    } : {}),
     ...(object.type === 'role' ? {
       proposedToolStatements: object.proposedToolStatements ?? [],
       proposedEscalationRules: object.proposedEscalationRules ?? [],
@@ -341,20 +425,44 @@ export function editBlueprintObject(project, payload, actor) {
     if (candidate) { original = candidate; areaKey = key; break; }
   }
   if (!original) editFailure('Blueprint object not found.', 'BLUEPRINT_OBJECT_NOT_FOUND', 404);
-  if (!['capability', 'process', 'role'].includes(original.type)) editFailure('Only capabilities, processes and roles can be edited in this workspace.', 'BLUEPRINT_OBJECT_NOT_EDITABLE', 400);
+  if (!['customer', 'offering', 'economics', 'capability', 'process', 'role', 'decision', 'actor-human', 'actor-agent'].includes(original.type)
+    && !BASIC_EDITABLE_BLUEPRINT_TYPES.has(original.type)) {
+    editFailure('This blueprint object type cannot be edited in this workspace.', 'BLUEPRINT_OBJECT_NOT_EDITABLE', 400);
+  }
 
-  const fields = {
-    capability: ['objectId', 'name', 'detail', 'ownerRoleName'],
-    process: ['objectId', 'name', 'detail', 'ownerRoleName', 'trigger'],
-    role: ['objectId', 'name', 'detail', 'proposedInstructions', 'proposedScopeStatements', 'proposedToolStatements', 'proposedEscalationRules'],
-  }[original.type];
+  const previousObjectsById = new Map(Object.values(previous.areas).flatMap((entry) => entry.items).map((candidate) => [candidate.id, candidate]));
+  const editableInformationSourceMetric = original.type === 'metric'
+    && (original.reads === null || original.reads === undefined || previousObjectsById.get(original.reads)?.type === 'information');
+  const fields = original.type === 'offering' ? ['objectId', 'name', 'detail', 'servesCustomerIds', 'enabledByCapabilityIds']
+    : original.type === 'capability' ? ['objectId', 'name', 'detail', 'ownerRoleName', 'capabilityMetricIds']
+    : ['actor-human', 'actor-agent'].includes(original.type) ? ['objectId', 'name', 'detail', 'assignedRoleIds']
+    : original.type === 'decision' ? ['objectId', 'name', 'detail', 'decisionMakerRoleId', 'decisionScopeIds']
+    : BASIC_EDITABLE_BLUEPRINT_TYPES.has(original.type) || ['customer', 'economics'].includes(original.type)
+    ? (original.type === 'strategy' ? ['objectId', 'name', 'detail', 'ownerRoleName', 'strategyGoalIds']
+      : ['goal', 'economics'].includes(original.type) ? ['objectId', 'name', 'detail', 'ownerRoleName', 'metricId']
+      : original.type === 'feedback-loop' ? ['objectId', 'name', 'detail', 'ownerRoleName', 'evidenceMetricIds', 'feedbackGoalId', 'feedbackDecisionIds']
+      : original.type === 'risk' ? ['objectId', 'name', 'detail', 'ownerRoleName', 'mitigatingControlId']
+      : original.type === 'metric' ? ['objectId', 'name', 'detail', 'ownerRoleName', ...(editableInformationSourceMetric ? ['readInformationId'] : []), 'consumerLoopId']
+        : OWNER_RELATION_EDITABLE_TYPES.has(original.type) ? ['objectId', 'name', 'detail', 'ownerRoleName'] : ['objectId', 'name', 'detail'])
+    : original.type === 'process' ? ['objectId', 'name', 'detail', 'ownerRoleName', 'trigger', 'capabilityId', 'inputInformationIds', 'outputInformationIds', 'inputDecisionIds', 'outputDecisionIds', 'resourceIds', 'systemIds']
+      : original.type === 'role' ? ['objectId', 'name', 'detail', 'responsibilityIds', 'proposedInstructions', 'proposedScopeStatements', 'proposedToolStatements', 'proposedEscalationRules']
+        : ['objectId', 'name', 'detail', 'ownerRoleName'];
   if (Object.keys(payload).some((field) => !fields.includes(field))) editFailure('The edit contains fields that do not apply to this object type.');
   if (typeof payload.name !== 'string' || !payload.name.trim() || payload.name.length > 120
     || typeof payload.detail !== 'string' || !payload.detail.trim() || payload.detail.length > 700) {
     editFailure('Provide a name of 1–120 characters and detail of 1–700 characters.');
   }
+  if (['actor-human', 'actor-agent'].includes(original.type)
+    && (payload.name !== original.name || payload.detail !== original.detail)) {
+    editFailure('Actor identity labels are fixed; only proposed organizational role links can be edited.');
+  }
   if (original.type === 'process' && (typeof payload.trigger !== 'string' || !payload.trigger.trim() || payload.trigger.length > 240)) {
     editFailure('Provide a process trigger of 1–240 characters.');
+  }
+  if (original.type === 'process' && payload.capabilityId !== undefined
+    && payload.capabilityId !== null && (typeof payload.capabilityId !== 'string'
+      || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(payload.capabilityId))) {
+    editFailure('Choose one valid capability record or clear the process capability link.', 'INVALID_BLUEPRINT_RELATION');
   }
   if (original.type === 'role' && (typeof payload.proposedInstructions !== 'string' || !payload.proposedInstructions.trim() || payload.proposedInstructions.length > 700)) {
     editFailure('Provide proposed instructions of 1–700 characters.');
@@ -362,6 +470,22 @@ export function editBlueprintObject(project, payload, actor) {
   if (original.type === 'role' && (!Array.isArray(payload.proposedScopeStatements) || !payload.proposedScopeStatements.length
     || payload.proposedScopeStatements.length > 12 || payload.proposedScopeStatements.some((statement) => typeof statement !== 'string' || !statement.trim() || statement.trim().length > 240))) {
     editFailure('Provide 1–12 proposed scope statements of 1–240 characters each.');
+  }
+  if (original.type === 'role' && payload.responsibilityIds !== undefined) {
+    const targetIds = payload.responsibilityIds;
+    if (!Array.isArray(targetIds) || targetIds.length > 32 || targetIds.some((id) => typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(id))
+      || new Set(targetIds).size !== targetIds.length) {
+      editFailure('Choose up to 32 distinct goal, capability, process, or system records.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    const eligibleTypes = new Set(['goal', 'capability', 'process', 'system']);
+    const eligible = new Map([...previousObjectsById.values()]
+      .filter((candidate) => eligibleTypes.has(candidate.type)).map((candidate) => [candidate.id, candidate]));
+    if (targetIds.some((id) => !eligible.has(id))) {
+      editFailure('Every responsibility must be an existing goal, capability, process, or system record.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    if (original.responsibilities !== undefined && !Array.isArray(original.responsibilities)) {
+      editFailure('The existing role responsibility references are invalid and cannot be replaced.', 'INVALID_BLUEPRINT_RELATION');
+    }
   }
   for (const field of ['proposedToolStatements', 'proposedEscalationRules']) {
     if (original.type === 'role' && payload[field] !== undefined && (!Array.isArray(payload[field]) || payload[field].length > 12
@@ -372,13 +496,309 @@ export function editBlueprintObject(project, payload, actor) {
 
   const next = structuredClone(previous);
   const itemValue = next.areas[areaKey].items.find((candidate) => candidate.id === payload.objectId);
+  if (original.type === 'strategy' && payload.strategyGoalIds !== undefined) {
+    const targetIds = payload.strategyGoalIds;
+    if (!Array.isArray(targetIds) || targetIds.length > 32 || targetIds.some((id) => typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(id))
+      || new Set(targetIds).size !== targetIds.length) {
+      editFailure('Choose up to 32 distinct strategy goal references.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    if (targetIds.some((id) => previousObjectsById.get(id)?.type !== 'goal')) {
+      editFailure('Every strategy link must target an existing goal record.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    if (itemValue.goals !== undefined && !Array.isArray(itemValue.goals)) {
+      editFailure('The existing strategy references are invalid and cannot be replaced.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    const existingGoalRefs = (itemValue.goals ?? []).filter((id) => previousObjectsById.has(id));
+    if (existingGoalRefs.length !== (itemValue.goals ?? []).length) {
+      editFailure('The existing strategy references include a missing record and cannot be replaced.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    const otherRefs = (itemValue.goals ?? []).filter((id) => previousObjectsById.get(id)?.type !== 'goal');
+    itemValue.goals = [...new Set([...otherRefs, ...targetIds])];
+  }
+  if (original.type === 'offering' && payload.servesCustomerIds !== undefined) {
+    const targetIds = payload.servesCustomerIds;
+    if (!Array.isArray(targetIds) || targetIds.length > 32 || targetIds.some((id) => typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(id))
+      || new Set(targetIds).size !== targetIds.length) {
+      editFailure('Choose up to 32 distinct customer records.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    const objects = Object.values(next.areas).flatMap((entry) => entry.items);
+    const customersById = new Map(objects.filter((candidate) => candidate.type === 'customer').map((candidate) => [candidate.id, candidate]));
+    if (targetIds.some((id) => !customersById.has(id))) {
+      editFailure('Every served target must be an existing customer record.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    itemValue.serves = [...targetIds];
+  }
+  if (original.type === 'offering' && payload.enabledByCapabilityIds !== undefined) {
+    const targetIds = payload.enabledByCapabilityIds;
+    if (!Array.isArray(targetIds) || targetIds.length > 32 || targetIds.some((id) => typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(id))
+      || new Set(targetIds).size !== targetIds.length) {
+      editFailure('Choose up to 32 distinct capability records.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    const objects = Object.values(next.areas).flatMap((entry) => entry.items);
+    const capabilitiesById = new Map(objects.filter((candidate) => candidate.type === 'capability').map((candidate) => [candidate.id, candidate]));
+    if (targetIds.some((id) => !capabilitiesById.has(id))) {
+      editFailure('Every offering enabler must be an existing capability record.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    itemValue.enabledBy = [...targetIds];
+  }
+  if (original.type === 'process') {
+    const objects = Object.values(next.areas).flatMap((entry) => entry.items);
+    const informationById = new Map(objects.filter((candidate) => candidate.type === 'information').map((candidate) => [candidate.id, candidate]));
+    for (const [field, relationField] of [['inputInformationIds', 'inputs'], ['outputInformationIds', 'outputs']]) {
+      if (payload[field] === undefined) continue;
+      if (itemValue[relationField] !== undefined && !Array.isArray(itemValue[relationField])) {
+        editFailure('Existing process flow references are invalid and cannot be replaced.', 'INVALID_BLUEPRINT_RELATION');
+      }
+      const targetIds = payload[field];
+      if (!Array.isArray(targetIds) || targetIds.length > 32 || targetIds.some((id) => typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(id))
+        || new Set(targetIds).size !== targetIds.length) {
+        editFailure('Choose up to 32 distinct information records.', 'INVALID_BLUEPRINT_RELATION');
+      }
+      if (targetIds.some((id) => !informationById.has(id))) {
+        editFailure('Every process information reference must target an existing information record.', 'INVALID_BLUEPRINT_RELATION');
+      }
+      const nonInformationRefs = (itemValue[relationField] ?? []).filter((id) => !informationById.has(id));
+      itemValue[relationField] = [...nonInformationRefs, ...targetIds];
+    }
+    const decisionsById = new Map(objects.filter((candidate) => candidate.type === 'decision').map((candidate) => [candidate.id, candidate]));
+    for (const [field, relationField] of [['inputDecisionIds', 'inputs'], ['outputDecisionIds', 'outputs']]) {
+      if (payload[field] === undefined) continue;
+      if (itemValue[relationField] !== undefined && !Array.isArray(itemValue[relationField])) {
+        editFailure('Existing process flow references are invalid and cannot be replaced.', 'INVALID_BLUEPRINT_RELATION');
+      }
+      const targetIds = payload[field];
+      if (!Array.isArray(targetIds) || targetIds.length > 32 || targetIds.some((id) => typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(id))
+        || new Set(targetIds).size !== targetIds.length) {
+        editFailure('Choose up to 32 distinct decision records.', 'INVALID_BLUEPRINT_RELATION');
+      }
+      if (targetIds.some((id) => !decisionsById.has(id))) {
+        editFailure('Every process decision reference must target an existing decision record.', 'INVALID_BLUEPRINT_RELATION');
+      }
+      const otherRefs = (itemValue[relationField] ?? []).filter((id) => !decisionsById.has(id));
+      itemValue[relationField] = [...otherRefs, ...targetIds];
+    }
+    for (const [field, relationField, type, label] of [
+      ['resourceIds', 'resources', 'resource', 'resource'],
+      ['systemIds', 'systems', 'system', 'system'],
+    ]) {
+      if (payload[field] === undefined) continue;
+      const targetIds = payload[field];
+      if (!Array.isArray(targetIds) || targetIds.length > 32 || targetIds.some((id) => typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(id))
+        || new Set(targetIds).size !== targetIds.length) {
+        editFailure(`Choose up to 32 distinct ${label} records.`, 'INVALID_BLUEPRINT_RELATION');
+      }
+      const typedTargets = new Map(objects.filter((candidate) => candidate.type === type).map((candidate) => [candidate.id, candidate]));
+      if (targetIds.some((id) => !typedTargets.has(id))) {
+        editFailure(`Every process ${label} reference must target an existing ${label} record.`, 'INVALID_BLUEPRINT_RELATION');
+      }
+      const otherRefs = (itemValue[relationField] ?? []).filter((id) => !typedTargets.has(id));
+      itemValue[relationField] = [...otherRefs, ...targetIds];
+    }
+    if (payload.systemIds !== undefined) {
+      // `process.systems` and `system.supports` are two stored views of the same
+      // proposed edge. Keep the edited process's reverse entries aligned while
+      // retaining every other target already listed by each system.
+      const selectedSystems = new Set(payload.systemIds);
+      for (const system of objects.filter((candidate) => candidate.type === 'system')) {
+        if (system.supports !== undefined && !Array.isArray(system.supports)) {
+          editFailure('Existing system support references are invalid and cannot be reconciled.', 'INVALID_BLUEPRINT_RELATION');
+        }
+        const otherSupports = (system.supports ?? []).filter((processId) => processId !== itemValue.id);
+        if (selectedSystems.has(system.id)) system.supports = [...otherSupports, itemValue.id];
+        else if (system.supports !== undefined) system.supports = otherSupports;
+      }
+    }
+    if (payload.capabilityId !== undefined) {
+      const selectedCapability = payload.capabilityId === null ? null : previousObjectsById.get(payload.capabilityId);
+      if (payload.capabilityId !== null && selectedCapability?.type !== 'capability') {
+        editFailure('A process capability link must target an existing capability record.', 'INVALID_BLUEPRINT_RELATION');
+      }
+      itemValue.capability = selectedCapability?.id ?? null;
+      for (const capability of objects.filter((candidate) => candidate.type === 'capability')) {
+        if (capability.realisers !== undefined && !Array.isArray(capability.realisers)) {
+          editFailure('Existing capability realiser references are invalid and cannot be reconciled.', 'INVALID_BLUEPRINT_RELATION');
+        }
+        const otherRealisers = (capability.realisers ?? []).filter((processId) => processId !== itemValue.id);
+        if (capability.id === selectedCapability?.id) capability.realisers = [...otherRealisers, itemValue.id];
+        else if (capability.realisers !== undefined) capability.realisers = otherRealisers;
+      }
+    }
+  }
+  if (original.type === 'feedback-loop' && payload.feedbackGoalId !== undefined) {
+    if (payload.feedbackGoalId !== null && (typeof payload.feedbackGoalId !== 'string'
+      || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(payload.feedbackGoalId))) {
+      editFailure('Choose one existing goal record or clear the proposed steering goal.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    if (payload.feedbackGoalId === null) {
+      if (itemValue.goal != null && previousObjectsById.get(itemValue.goal)?.type !== 'goal') {
+        editFailure('The existing feedback-loop goal reference is invalid and cannot be cleared.', 'INVALID_BLUEPRINT_RELATION');
+      }
+      itemValue.goal = null;
+    } else if (previousObjectsById.get(payload.feedbackGoalId)?.type !== 'goal') {
+      editFailure('A feedback-loop steering goal must be an existing goal record.', 'INVALID_BLUEPRINT_RELATION');
+    } else itemValue.goal = payload.feedbackGoalId;
+  }
+  if (original.type === 'feedback-loop' && payload.feedbackDecisionIds !== undefined) {
+    const targetIds = payload.feedbackDecisionIds;
+    if (!Array.isArray(targetIds) || targetIds.length > 32
+      || targetIds.some((id) => typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(id))
+      || new Set(targetIds).size !== targetIds.length) {
+      editFailure('Choose up to 32 distinct existing decision records.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    if (targetIds.some((id) => previousObjectsById.get(id)?.type !== 'decision')) {
+      editFailure('Every feedback-loop decision link must target an existing decision record.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    itemValue.decisionIds = [...targetIds];
+  }
+  if (original.type === 'feedback-loop' && payload.evidenceMetricIds !== undefined) {
+    const targetIds = payload.evidenceMetricIds;
+    if (!Array.isArray(targetIds) || targetIds.length > 32 || targetIds.some((id) => typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(id))
+      || new Set(targetIds).size !== targetIds.length) {
+      editFailure('Choose up to 32 distinct metric records.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    const objects = Object.values(next.areas).flatMap((entry) => entry.items);
+    const metricsById = new Map(objects.filter((candidate) => candidate.type === 'metric').map((candidate) => [candidate.id, candidate]));
+    if (targetIds.some((id) => !metricsById.has(id))) {
+      editFailure('Every feedback-loop evidence reference must target an existing metric record.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    const nonMetricEvidence = (itemValue.evidence ?? []).filter((id) => !metricsById.has(id));
+    itemValue.evidence = [...nonMetricEvidence, ...targetIds];
+  }
+  if (original.type === 'capability' && payload.capabilityMetricIds !== undefined) {
+    const targetIds = payload.capabilityMetricIds;
+    if (!Array.isArray(targetIds) || targetIds.length > 32 || targetIds.some((id) => typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(id))
+      || new Set(targetIds).size !== targetIds.length) {
+      editFailure('Choose up to 32 distinct metric records.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    const objects = Object.values(next.areas).flatMap((entry) => entry.items);
+    const metricsById = new Map(objects.filter((candidate) => candidate.type === 'metric').map((candidate) => [candidate.id, candidate]));
+    if (targetIds.some((id) => !metricsById.has(id))) {
+      editFailure('Every capability metric reference must target an existing metric record.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    if (itemValue.metrics !== undefined && !Array.isArray(itemValue.metrics)) {
+      editFailure('The existing capability metric references are invalid and cannot be replaced.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    const nonMetricRefs = (itemValue.metrics ?? []).filter((id) => !metricsById.has(id));
+    itemValue.metrics = [...nonMetricRefs, ...targetIds];
+  }
+  if (['actor-human', 'actor-agent'].includes(original.type) && payload.assignedRoleIds !== undefined) {
+    const targetIds = payload.assignedRoleIds;
+    if (!Array.isArray(targetIds) || targetIds.length > 32 || targetIds.some((id) => typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(id))
+      || new Set(targetIds).size !== targetIds.length) {
+      editFailure('Choose up to 32 distinct role records.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    const objects = Object.values(next.areas).flatMap((entry) => entry.items);
+    const rolesById = new Map(objects.filter((candidate) => candidate.type === 'role').map((candidate) => [candidate.id, candidate]));
+    if (targetIds.some((id) => !rolesById.has(id))) {
+      editFailure('Every actor assignment must target an existing role record.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    if (itemValue.assignedRoles !== undefined && !Array.isArray(itemValue.assignedRoles)) {
+      editFailure('The existing actor role references are invalid and cannot be replaced.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    const nonRoleRefs = (itemValue.assignedRoles ?? []).filter((id) => !rolesById.has(id));
+    itemValue.assignedRoles = [...nonRoleRefs, ...targetIds];
+  }
+  if (original.type === 'risk' && payload.mitigatingControlId !== undefined) {
+    if (payload.mitigatingControlId !== null && (typeof payload.mitigatingControlId !== 'string'
+      || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(payload.mitigatingControlId))) {
+      editFailure('Choose one existing control record or clear the mitigating control.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    const controls = Object.values(next.areas).flatMap((entry) => entry.items).filter((candidate) => candidate.type === 'control');
+    const controlsById = new Map(controls.map((candidate) => [candidate.id, candidate]));
+    if (payload.mitigatingControlId !== null && !controlsById.has(payload.mitigatingControlId)) {
+      editFailure('A risk mitigator must be an existing control record.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    for (const control of controls) {
+      const hasMitigations = Array.isArray(control.mitigates);
+      const otherRisks = (hasMitigations ? control.mitigates : []).filter((riskId) => riskId !== itemValue.id);
+      if (hasMitigations || control.id === payload.mitigatingControlId) {
+        control.mitigates = control.id === payload.mitigatingControlId
+          ? [...otherRisks, itemValue.id]
+          : otherRisks;
+      }
+    }
+    itemValue.control = payload.mitigatingControlId;
+  }
+  if (original.type === 'metric' && payload.readInformationId !== undefined) {
+    if (payload.readInformationId !== null && (typeof payload.readInformationId !== 'string'
+      || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(payload.readInformationId))) {
+      editFailure('Choose one existing information record or clear the information source.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    if (payload.readInformationId === null) {
+      if (previousObjectsById.get(itemValue.reads)?.type !== 'information') {
+        editFailure('Only a metric currently reading information can clear its information source.', 'INVALID_BLUEPRINT_RELATION');
+      }
+      itemValue.reads = null;
+    } else if (previousObjectsById.get(payload.readInformationId)?.type !== 'information') {
+      editFailure('The metric information source must be an existing information record.', 'INVALID_BLUEPRINT_RELATION');
+    } else {
+      itemValue.reads = payload.readInformationId;
+    }
+  }
+  if (original.type === 'metric' && payload.consumerLoopId !== undefined) {
+    if (payload.consumerLoopId !== null && (typeof payload.consumerLoopId !== 'string'
+      || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(payload.consumerLoopId))) {
+      editFailure('Choose one existing feedback loop or clear the consuming loop.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    if (payload.consumerLoopId === null) {
+      if (itemValue.consumerLoop != null && previousObjectsById.get(itemValue.consumerLoop)?.type !== 'feedback-loop') {
+        editFailure('Only a metric currently linked to a feedback loop can clear that link.', 'INVALID_BLUEPRINT_RELATION');
+      }
+      itemValue.consumerLoop = null;
+    } else if (previousObjectsById.get(payload.consumerLoopId)?.type !== 'feedback-loop') {
+      editFailure('A metric consumer must be an existing feedback-loop record.', 'INVALID_BLUEPRINT_RELATION');
+    } else {
+      itemValue.consumerLoop = payload.consumerLoopId;
+    }
+  }
+  if (['goal', 'economics'].includes(original.type) && payload.metricId !== undefined) {
+    if (payload.metricId !== null && (typeof payload.metricId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(payload.metricId))) {
+      editFailure('Choose one existing metric record or clear the metric link.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    if (payload.metricId !== null && previousObjectsById.get(payload.metricId)?.type !== 'metric') {
+      editFailure('The goal or economics metric link must target an existing metric record.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    itemValue.metric = payload.metricId;
+  }
+  if (original.type === 'decision' && payload.decisionMakerRoleId !== undefined) {
+    if (payload.decisionMakerRoleId !== null && (typeof payload.decisionMakerRoleId !== 'string'
+      || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(payload.decisionMakerRoleId))) {
+      editFailure('Choose one existing role or clear the proposed decision maker.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    if (payload.decisionMakerRoleId !== null && previousObjectsById.get(payload.decisionMakerRoleId)?.type !== 'role') {
+      editFailure('A decision maker must be an existing role record.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    itemValue.by = payload.decisionMakerRoleId;
+  }
+  if (original.type === 'decision' && payload.decisionScopeIds !== undefined) {
+    const targetIds = payload.decisionScopeIds;
+    if (!Array.isArray(targetIds) || targetIds.length > 32 || targetIds.some((id) => typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(id))
+      || new Set(targetIds).size !== targetIds.length) {
+      editFailure('Choose up to 32 distinct decision scope records.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    if (targetIds.some((id) => !DECISION_SCOPE_TARGET_TYPES.has(previousObjectsById.get(id)?.type))) {
+      editFailure('Every decision scope reference must target an existing business design record.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    if (itemValue.scope !== undefined && !Array.isArray(itemValue.scope)) {
+      editFailure('The existing decision scope references are invalid and cannot be replaced.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    const preservedRefs = (itemValue.scope ?? []).filter((id) => !DECISION_SCOPE_TARGET_TYPES.has(previousObjectsById.get(id)?.type));
+    itemValue.scope = [...preservedRefs, ...targetIds];
+  }
   let role = null;
-  if (original.type === 'capability' || original.type === 'process') {
-    const roleName = String(payload.ownerRoleName ?? '').trim();
-    const matches = Object.values(next.areas).flatMap((entry) => entry.items)
-      .filter((candidate) => candidate.type === 'role' && candidate.name.toLocaleLowerCase() === roleName.toLocaleLowerCase());
-    if (!roleName || matches.length !== 1) editFailure('Choose one existing role by its exact displayed name.', 'INVALID_BLUEPRINT_RELATION');
-    [role] = matches;
+  if (OWNER_RELATION_EDITABLE_TYPES.has(original.type)) {
+    const roleObjects = Object.values(next.areas).flatMap((entry) => entry.items).filter((candidate) => candidate.type === 'role');
+    if (Object.hasOwn(payload, 'ownerRoleName')) {
+      const roleName = String(payload.ownerRoleName ?? '').trim();
+      const matches = roleObjects.filter((candidate) => candidate.name.toLocaleLowerCase() === roleName.toLocaleLowerCase());
+      if (!roleName || matches.length !== 1) editFailure('Choose one existing role by its exact displayed name.', 'INVALID_BLUEPRINT_RELATION');
+      [role] = matches;
+    } else {
+      role = roleObjects.find((candidate) => candidate.id === itemValue.owner) ?? null;
+      if (!role && ['capability', 'process'].includes(original.type)) {
+        editFailure('Choose one existing role by its exact displayed name.', 'INVALID_BLUEPRINT_RELATION');
+      }
+    }
   }
   if (original.type === 'role') {
     const duplicate = Object.values(next.areas).flatMap((entry) => entry.items)
@@ -396,6 +816,11 @@ export function editBlueprintObject(project, payload, actor) {
     const validDecisionIds = new Set(Object.values(next.areas).flatMap((entry) => entry.items).filter((candidate) => candidate.type === 'decision').map((candidate) => candidate.id));
     const legacyLinks = Array.isArray(itemValue.authority) ? itemValue.authority.filter((value) => typeof value === 'string' && validDecisionIds.has(value)) : [];
     itemValue.proposedInstructions = payload.proposedInstructions;
+    if (payload.responsibilityIds !== undefined) {
+      const eligibleTypes = new Set(['goal', 'capability', 'process', 'system']);
+      const preservedRefs = (itemValue.responsibilities ?? []).filter((id) => !eligibleTypes.has(previousObjectsById.get(id)?.type));
+      itemValue.responsibilities = [...preservedRefs, ...payload.responsibilityIds];
+    }
     itemValue.proposedScopeStatements = payload.proposedScopeStatements.map((statement) => statement.trim());
     itemValue.proposedToolStatements = (payload.proposedToolStatements ?? itemValue.proposedToolStatements ?? []).map((statement) => statement.trim());
     itemValue.proposedEscalationRules = (payload.proposedEscalationRules ?? itemValue.proposedEscalationRules ?? []).map((statement) => statement.trim());
@@ -431,6 +856,42 @@ export function editBlueprintObject(project, payload, actor) {
   project.audit ??= [];
   project.audit.push({ at, action: 'blueprint.object-edited', actor, detail: `Edited ${itemValue.type} “${itemValue.name}” in blueprint v${next.version}.` });
   return next;
+}
+
+export function applyBlueprintProposal(project, proposal, actor) {
+  const previous = latestBlueprint(project);
+  if (!previous || previous.id !== proposal?.blueprintId || previous.version !== proposal?.blueprintVersion) {
+    editFailure('The proposal is pinned to an older blueprint version. Review it against the current design and request a new proposal.', 'BLUEPRINT_PROPOSAL_STALE', 409);
+  }
+  const target = Object.values(previous.areas ?? {}).flatMap((entry) => entry.items ?? [])
+    .find((object) => object.id === proposal?.target?.id);
+  if (!target || target.type !== 'information' || proposal.target?.field !== 'detail'
+    || target.name !== proposal.target.name || target.detail !== proposal.target.before
+    || typeof proposal.proposedDetail !== 'string' || !proposal.proposedDetail.trim()
+    || proposal.proposedDetail.length > 700 || !Array.isArray(proposal.citations) || !proposal.citations.length) {
+    editFailure('The proposal target or proposed detail is invalid for this saved blueprint.', 'BLUEPRINT_PROPOSAL_INVALID', 409);
+  }
+  const blueprint = editBlueprintObject(project, {
+    objectId: target.id, name: target.name, detail: proposal.proposedDetail,
+  }, actor);
+  const updatedTarget = Object.values(blueprint.areas).flatMap((entry) => entry.items).find((object) => object.id === target.id);
+  const proposalProvenance = {
+    proposalId: proposal.id,
+    runId: proposal.runId,
+    proposalHash: proposal.proposalHash,
+    sourceEnvelopeHash: proposal.sourceEnvelopeHash,
+    citations: proposal.citations.map(({ id, hash }) => ({ id, hash })),
+    note: 'Workspace owner applied review-only proposed design content; this does not establish evidence or execution authority.',
+  };
+  updatedTarget.provenance.push({
+    source: `execution-proposal:${proposal.id}`,
+    note: proposalProvenance.note,
+    proposalHash: proposal.proposalHash,
+    citations: proposalProvenance.citations,
+  });
+  blueprint.edit.proposalProvenance = proposalProvenance;
+  blueprint.integrity = validateBlueprint(blueprint);
+  return blueprint;
 }
 
 export function planProcessTaskGraph(project, processId, actor) {
@@ -496,7 +957,10 @@ export function editProcessTaskGraph(project, planId, payload, actor) {
     .sort((left, right) => (left.revision ?? 1) - (right.revision ?? 1));
   const current = revisions.at(-1);
   if (!current) throw Object.assign(new Error('Planning graph not found.'), { code: 'PROCESS_PLAN_NOT_FOUND', statusCode: 404 });
-  if (!Array.isArray(payload.tasks) || payload.tasks.length !== current.tasks.length || payload.tasks.length < 1 || payload.tasks.length > 32) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)
+    || Object.keys(payload).some((key) => !['tasks', 'humanCheckpoint'].includes(key))
+    || !Array.isArray(payload.tasks) || payload.tasks.length !== current.tasks.length || payload.tasks.length < 1
+    || payload.tasks.length + (payload.humanCheckpoint ? 1 : 0) > 32) {
     throw Object.assign(new Error('Provide one edit for every task in this graph (maximum 32).'), { code: 'INVALID_PROCESS_PLAN_EDIT', statusCode: 400 });
   }
   const blueprint = project.blueprintVersions?.find((candidate) => candidate.id === current.source.blueprintId
@@ -563,13 +1027,44 @@ export function editProcessTaskGraph(project, planId, payload, actor) {
   }
   if (supplied.size !== currentById.size) throw Object.assign(new Error('Task edits must include each task exactly once.'), { code: 'INVALID_PROCESS_PLAN_TASK', statusCode: 400 });
 
+  let insertedCheckpoint = null;
+  if (payload.humanCheckpoint !== undefined) {
+    const checkpoint = payload.humanCheckpoint;
+    if (!checkpoint || typeof checkpoint !== 'object' || Array.isArray(checkpoint)
+      || Object.keys(checkpoint).some((key) => !['beforeTaskId', 'title', 'detail', 'roleId', 'actorId'].includes(key))
+      || typeof checkpoint.beforeTaskId !== 'string' || !currentById.has(checkpoint.beforeTaskId)) {
+      throw Object.assign(new Error('Choose an existing task before which to insert the human checkpoint.'), { code: 'INVALID_PROCESS_PLAN_CHECKPOINT', statusCode: 400 });
+    }
+    if (typeof checkpoint.title !== 'string' || !checkpoint.title.trim() || checkpoint.title.trim().length > 120
+      || typeof checkpoint.detail !== 'string' || !checkpoint.detail.trim() || checkpoint.detail.trim().length > 700) {
+      throw Object.assign(new Error('Checkpoint title must be 1–120 characters and detail 1–700 characters.'), { code: 'INVALID_PROCESS_PLAN_TEXT', statusCode: 400 });
+    }
+    const human = blueprintById.get(checkpoint.actorId);
+    const role = blueprintById.get(checkpoint.roleId);
+    const linked = human?.type === 'actor-human' && role?.type === 'role'
+      && ((human.assignedRoles ?? []).includes(role.id)
+        || (blueprint.relations ?? []).some((relation) => relation.source === human.id
+          && relation.target === role.id && relation.type === 'assigned-to'));
+    if (!linked) throw Object.assign(new Error('Choose a human actor linked to the selected role in the pinned blueprint.'), { code: 'INVALID_PROCESS_PLAN_ACTOR_ROLE', statusCode: 400 });
+    const targetEdit = supplied.get(checkpoint.beforeTaskId);
+    const target = currentById.get(checkpoint.beforeTaskId);
+    const taskId = `task-human-checkpoint-${randomUUID()}`;
+    insertedCheckpoint = {
+      id: taskId, sourceProcessId: target.sourceProcessId, title: checkpoint.title.trim(), detail: checkpoint.detail.trim(),
+      trigger: '', status: 'planned', dependencies: [...targetEdit.dependencies],
+      inputs: structuredClone(target.inputs), outputs: structuredClone(target.outputs),
+      assignee: { kind: 'blueprint-actor', actorId: human.id, roleId: role.id },
+    };
+    supplied.set(checkpoint.beforeTaskId, { ...targetEdit, dependencies: [taskId] });
+  }
+
   const visiting = new Set();
   const visited = new Set();
   const visit = (taskId) => {
     if (visiting.has(taskId)) throw Object.assign(new Error('Task dependencies must not contain a cycle.'), { code: 'PROCESS_GRAPH_CYCLE', statusCode: 409 });
     if (visited.has(taskId)) return;
     visiting.add(taskId);
-    for (const dependency of supplied.get(taskId).dependencies) visit(dependency);
+    for (const dependency of (taskId === insertedCheckpoint?.id ? insertedCheckpoint.dependencies : supplied.get(taskId).dependencies)) visit(dependency);
     visiting.delete(taskId);
     visited.add(taskId);
   };
@@ -593,6 +1088,10 @@ export function editProcessTaskGraph(project, planId, payload, actor) {
       || JSON.stringify(updated.assignee) !== JSON.stringify(task.assignee)) changedTasks.push(task.id);
     return updated;
   });
+  if (insertedCheckpoint) {
+    next.tasks.splice(next.tasks.findIndex((task) => task.id === payload.humanCheckpoint.beforeTaskId), 0, insertedCheckpoint);
+    changedTasks.push(insertedCheckpoint.id);
+  }
   if (!changedTasks.length) throw Object.assign(new Error('This edit does not change the planned graph.'), { code: 'PROCESS_PLAN_EDIT_NO_CHANGE', statusCode: 400 });
   next.revision = (current.revision ?? 1) + 1;
   next.createdAt = new Date().toISOString();
@@ -605,7 +1104,9 @@ export function editProcessTaskGraph(project, planId, payload, actor) {
 function buildRelations(areas) {
   const relations = [];
   const add = (source, target, type) => relations.push({ id: `${source}--${type}--${target}`, source, target, type });
-  const decisions = new Set(Object.values(areas).flatMap((entry) => entry.items).filter((object) => object.type === 'decision').map((object) => object.id));
+  const objects = Object.values(areas).flatMap((entry) => entry.items);
+  const decisions = new Set(objects.filter((object) => object.type === 'decision').map((object) => object.id));
+  const goals = new Set(objects.filter((object) => object.type === 'goal').map((object) => object.id));
   for (const entry of Object.values(areas)) {
     for (const object of entry.items) {
       if (object.owner) add(object.owner, object.id, 'owns');
@@ -621,12 +1122,14 @@ function buildRelations(areas) {
       for (const target of object.resources ?? []) add(target, object.id, 'resources');
       for (const target of object.systems ?? []) add(target, object.id, 'supports');
       for (const target of object.supports ?? []) add(object.id, target, 'supports');
+      if (object.type === 'strategy') for (const target of object.goals ?? []) if (goals.has(target)) add(object.id, target, 'supports');
       for (const target of object.scope ?? []) add(object.id, target, 'governs');
       for (const target of object.mitigates ?? []) add(object.id, target, 'mitigates');
       if (object.control) add(object.control, object.id, 'mitigates');
       if (object.reads) add(object.reads, object.id, 'read-by');
       if (object.consumerLoop) add(object.id, object.consumerLoop, 'feeds');
       if (object.goal) add(object.id, object.goal, 'steers');
+      if (object.type === 'decision' && object.by) add(object.by, object.id, 'decides');
       for (const target of object.evidence ?? []) add(target, object.id, 'evidences');
       const legacyDecisionIds = (object.authority ?? []).filter((target) => typeof target === 'string' && decisions.has(target));
       for (const target of object.decisionIds ?? legacyDecisionIds) if (decisions.has(target)) add(target, object.id, 'authorises');
@@ -683,6 +1186,59 @@ export function validateBlueprint(blueprint) {
 
 export function latestBlueprint(project) {
   return project.blueprintVersions.at(-1) ?? null;
+}
+
+export function publishBlueprintInternally(project, payload, actor) {
+  const blueprint = latestBlueprint(project);
+  if (!blueprint) editFailure('A saved blueprint is required before publishing an internal baseline.', 'BLUEPRINT_NOT_FOUND', 409);
+  if (payload.blueprintId !== blueprint.id || payload.blueprintVersion !== blueprint.version) {
+    editFailure('Only the exact latest blueprint version can be published.', 'BLUEPRINT_PUBLICATION_NOT_LATEST', 409);
+  }
+  if (payload.acknowledgeDisclosures !== true) {
+    editFailure('Review and acknowledge the blueprint disclosures before publishing.', 'BLUEPRINT_DISCLOSURE_ACK_REQUIRED');
+  }
+
+  const validatedBlueprint = structuredClone(blueprint);
+  const derivedRelations = buildRelations(validatedBlueprint.areas);
+  const storedValidation = validateBlueprint(blueprint);
+  const relationKey = (relation) => canonicalJson(relation);
+  const storedRelations = [...(blueprint.relations ?? [])].sort((left, right) => relationKey(left).localeCompare(relationKey(right)));
+  const sortedDerivedRelations = [...derivedRelations].sort((left, right) => relationKey(left).localeCompare(relationKey(right)));
+  const relationsMatch = canonicalJson(storedRelations) === canonicalJson(sortedDerivedRelations);
+  const objects = Object.values(validatedBlueprint.areas).reduce((sum, area) => sum + area.items.length, 0);
+  const designedAreas = Object.values(validatedBlueprint.areas).filter((area) => area.status === 'designed').length;
+  const summaryMatches = blueprint.summary?.areaCount === Object.keys(validatedBlueprint.areas).length
+    && blueprint.summary?.objectCount === objects
+    && blueprint.summary?.relationCount === derivedRelations.length
+    && blueprint.summary?.designedAreas === designedAreas;
+  validatedBlueprint.relations = derivedRelations;
+  const validation = validateBlueprint(validatedBlueprint);
+  if (!storedValidation.valid || !validation.valid || !relationsMatch || !summaryMatches) {
+    editFailure('This blueprint has structural or schema errors and cannot be published.', 'BLUEPRINT_PUBLICATION_INVALID', 409);
+  }
+  const areas = AREA_DEFINITIONS.map(([key, label]) => ({ key, label, status: validatedBlueprint.areas[key].status }));
+  const snapshot = {
+    areas,
+    unknownAreas: areas.filter((area) => area.status === 'unknown'),
+    outOfScopeAreas: areas.filter((area) => area.status === 'out_of_scope'),
+    gaps: validation.gaps.map((gap) => structuredClone(gap)),
+    assumptions: [...(validatedBlueprint.assumptions ?? [])],
+    unknowns: [...(validatedBlueprint.unknowns ?? [])],
+  };
+  const digest = blueprintPublicationDigest(blueprint, snapshot);
+  const publishedAt = new Date().toISOString();
+  const publication = {
+    id: `blueprint-publication-${randomUUID()}`,
+    blueprintId: blueprint.id,
+    blueprintVersion: blueprint.version,
+    publishedAt,
+    publishedBy: actor,
+    digest,
+    disclosures: snapshot,
+  };
+  project.blueprintPublications ??= [];
+  project.blueprintPublications.push(publication);
+  return publication;
 }
 
 export function graphForBlueprint(blueprint) {

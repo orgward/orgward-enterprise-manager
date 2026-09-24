@@ -40,9 +40,11 @@ test('protected file inputs enforce source exclusivity, file safety, bounds, and
   t.after(() => rm(directory, { recursive: true, force: true }));
   const databaseFile = path.join(directory, 'database-url');
   const keyFile = path.join(directory, 'secret-key');
+  const adminFile = path.join(directory, 'openai-admin-key');
   const expectedDatabaseUrl = 'postgresql://orgward:private-canary@localhost/orgward';
   await writeFile(databaseFile, `${expectedDatabaseUrl}\n`, { mode: 0o600 });
   await writeFile(keyFile, `${KEY}\n`, { mode: 0o600 });
+  await writeFile(adminFile, 'sk-admin-fixture-secret\n', { mode: 0o600 });
   await chmod(databaseFile, 0o600);
   await chmod(keyFile, 0o600);
   const fileEnv = () => env(undefined, {
@@ -55,6 +57,19 @@ test('protected file inputs enforce source exclusivity, file safety, bounds, and
   assert.deepEqual(valid.issues, []);
   assert.equal(valid.config.databaseUrl, expectedDatabaseUrl);
   assert.deepEqual(valid.config.secretEncryptionKey, Buffer.from(KEY, 'base64'));
+
+  const managed = parseInstallConfig({ ...fileEnv(), ORGWARD_OPENAI_ADMIN_API_KEY_FILE: adminFile,
+    ORGWARD_OPENAI_ORGANIZATION_ID: 'org_fixture', ORGWARD_OPENAI_TENANT_PROJECTS: '{"tenant-a":"proj_a","tenant-b":"proj_b"}' });
+  assert.deepEqual(managed.issues, []);
+  assert.equal(managed.config.openAiAdminApiKey, 'sk-admin-fixture-secret');
+  assert.deepEqual(managed.config.openAiTenantProjects, { 'tenant-a': 'proj_a', 'tenant-b': 'proj_b' });
+  const inlineAdmin = parseInstallConfig({ ...fileEnv(), ORGWARD_OPENAI_ADMIN_API_KEY: 'sk-inline-do-not-report',
+    ORGWARD_OPENAI_ORGANIZATION_ID: 'org_fixture', ORGWARD_OPENAI_TENANT_PROJECTS: '{"tenant-a":"proj_a"}' });
+  assert.ok(inlineAdmin.issues.some((issue) => issue.check === 'openai-admin-key-source'));
+  assert.ok(!JSON.stringify(inlineAdmin.issues).includes('sk-inline-do-not-report'));
+  const reusedProject = parseInstallConfig({ ...fileEnv(), ORGWARD_OPENAI_ADMIN_API_KEY_FILE: adminFile,
+    ORGWARD_OPENAI_ORGANIZATION_ID: 'org_fixture', ORGWARD_OPENAI_TENANT_PROJECTS: '{"tenant-a":"proj_same","tenant-b":"proj_same"}' });
+  assert.ok(reusedProject.issues.some((issue) => issue.check === 'openai-tenant-projects'));
 
   const conflict = parseInstallConfig(env(expectedDatabaseUrl, {
     ORGWARD_DATABASE_URL_FILE: databaseFile,
@@ -161,7 +176,9 @@ test('liveness stays available while readiness fails on lost database', async (t
   t.after(async () => { await new Promise((resolve) => app.server.close(resolve)); await app.close(); });
   assert.equal((await fetch(`${base}/livez`)).status, 200);
   assert.equal((await fetch(`${base}/readyz`)).status, 200);
-  await database.close();
+  const recoveryLockPid = app.persistence.recoveryLockClient.processID;
+  assert.ok(Number.isInteger(recoveryLockPid));
+  await database.query('select pg_terminate_backend($1)', [recoveryLockPid]);
   assert.equal((await fetch(`${base}/livez`)).status, 200);
   const response = await fetch(`${base}/readyz`);
   assert.equal(response.status, 503);

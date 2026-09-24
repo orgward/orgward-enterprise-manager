@@ -68,6 +68,11 @@ test('HTTPS reverse proxy completes secure browser OIDC session and enforces ori
   const issuer = 'https://127.0.0.1';
   const jwk = { ...publicKey.export({ format: 'jwk' }), kid: 'https-journey', use: 'sig', alg: 'RS256' };
   const codes = new Map();
+  const loginIdentities = [
+    { subject: 'first-owner', providerTenant: 'idp-tenant' },
+    { subject: 'second-owner', providerTenant: 'idp-tenant-blue' },
+  ];
+  let authorizationCount = 0;
   let identityIssuer;
   const identityProvider = createHttpsServer({ key, cert }, (request, response) => {
     const url = new URL(request.url, issuer);
@@ -78,7 +83,8 @@ test('HTTPS reverse proxy completes secure browser OIDC session and enforces ori
     }
     if (url.pathname === '/authorize') {
       const code = `code-${createHash('sha256').update(url.searchParams.get('state')).digest('hex').slice(0, 12)}`;
-      codes.set(code, url.searchParams.get('nonce'));
+      const identity = loginIdentities[authorizationCount++] ?? loginIdentities[0];
+      codes.set(code, { nonce: url.searchParams.get('nonce'), identity });
       const callback = new URL(url.searchParams.get('redirect_uri'));
       callback.searchParams.set('state', url.searchParams.get('state'));
       callback.searchParams.set('code', code);
@@ -91,15 +97,15 @@ test('HTTPS reverse proxy completes secure browser OIDC session and enforces ori
       request.on('data', (chunk) => chunks.push(chunk));
       request.on('end', () => {
         const form = new URLSearchParams(Buffer.concat(chunks).toString());
-        const nonce = codes.get(form.get('code'));
+        const login = codes.get(form.get('code'));
         codes.delete(form.get('code'));
-        if (!nonce || form.get('client_id') !== clientId || !form.get('code_verifier')) {
+        if (!login || form.get('client_id') !== clientId || !form.get('code_verifier')) {
           response.writeHead(400); response.end('{}'); return;
         }
         const now = Math.floor(Date.now() / 1000);
         const header = Buffer.from(JSON.stringify({ alg: 'RS256', kid: 'https-journey' })).toString('base64url');
-        const claims = Buffer.from(JSON.stringify({ iss: identityIssuer, aud: clientId, sub: 'first-owner', iat: now, exp: now + 600,
-          nonce, orgward_tenant: 'idp-tenant', groups: [] })).toString('base64url');
+        const claims = Buffer.from(JSON.stringify({ iss: identityIssuer, aud: clientId, sub: login.identity.subject, iat: now, exp: now + 600,
+          nonce: login.nonce, orgward_tenant: login.identity.providerTenant, groups: [] })).toString('base64url');
         const content = `${header}.${claims}`;
         const idToken = `${content}.${sign('RSA-SHA256', Buffer.from(content), privateKey).toString('base64url')}`;
         response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -119,14 +125,19 @@ test('HTTPS reverse proxy completes secure browser OIDC session and enforces ori
     return new Response(result.body, { status: result.status, headers: result.headers });
   };
   const idAuthenticator = new OidcAuthenticator({ issuer: identityIssuer, audience: clientId,
-    jwksUri: `${identityIssuer}/keys`, roleMap: {}, tenantBindings: { 'idp-tenant': 'tenant-https' }, fetchImpl: tokenFetch });
+    jwksUri: `${identityIssuer}/keys`, roleMap: {}, tenantBindings: {
+      'idp-tenant': 'tenant-https', 'idp-tenant-blue': 'tenant-https-blue',
+    }, fetchImpl: tokenFetch });
   const loginFlow = new OidcLoginFlow({ clientId, redirectUri: `https://127.0.0.1:${publicPort}/auth/callback`,
     authorizationEndpoint: `${identityIssuer}/authorize`, tokenEndpoint: `${identityIssuer}/token`,
     identityAuthenticator: idAuthenticator, fetchImpl: tokenFetch });
   const secretCanary = Buffer.alloc(32, 27).toString('base64');
   const appOptions = { databaseUrl: postgres.databaseUrl, secretEncryptionKey: Buffer.alloc(32, 27),
     oidcAuthenticator: idAuthenticator, oidcLoginFlow: loginFlow,
-    oidcBootstrapPrincipals: [{ issuer: identityIssuer, subject: 'first-owner', tenantId: 'tenant-https' }] };
+    oidcBootstrapPrincipals: [
+      { issuer: identityIssuer, subject: 'first-owner', tenantId: 'tenant-https' },
+      { issuer: identityIssuer, subject: 'second-owner', tenantId: 'tenant-https-blue' },
+    ] };
   let app = createApp(appOptions);
   t.after(async () => {
     if (!app) return;
@@ -179,14 +190,85 @@ test('HTTPS reverse proxy completes secure browser OIDC session and enforces ori
   const created = await requestHttps(`${publicOrigin}/api/v1/projects`, { method: 'POST', ca: cert,
     headers: { origin: publicOrigin, cookie: `ow_session=${sessionId}`, 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) }, body: payload });
   assert.equal(created.status, 201, created.body);
+  const firstProject = JSON.parse(created.body).data;
+
+  const secondLogin = await requestHttps(`${publicOrigin}/auth/login?returnTo=%2F%3Fview%3Dmap`, { ca: cert });
+  assert.equal(secondLogin.status, 302);
+  const secondLoginCookie = (Array.isArray(secondLogin.headers['set-cookie']) ? secondLogin.headers['set-cookie'] : [secondLogin.headers['set-cookie']])[0];
+  const secondAuthorizationUrl = new URL(secondLogin.headers.location);
+  const secondAuthorization = await requestHttps(secondAuthorizationUrl, { ca: cert });
+  assert.equal(secondAuthorization.status, 302);
+  const secondCallbackUrl = new URL(secondAuthorization.headers.location);
+  const secondState = secondAuthorizationUrl.searchParams.get('state');
+  assert.equal(secondCallbackUrl.searchParams.get('state'), secondState);
+  const secondStateCookie = secondLoginCookie.match(/(?:^|;\s*)ow_login=([^;]+)/)[1];
+  const secondCallback = await requestHttps(secondCallbackUrl, { ca: cert, headers: { cookie: `ow_login=${secondStateCookie}` } });
+  assert.equal(secondCallback.status, 303);
+  const secondSessionCookie = (Array.isArray(secondCallback.headers['set-cookie']) ? secondCallback.headers['set-cookie'] : [secondCallback.headers['set-cookie']])
+    .find((value) => value.startsWith('ow_session='));
+  assert.ok(secondSessionCookie);
+  assert.match(secondSessionCookie, /; Secure/);
+  const secondSessionId = secondSessionCookie.match(/^ow_session=([^;]+)/)[1];
+  const secondSession = await requestHttps(`${publicOrigin}/auth/session`, { ca: cert, headers: { cookie: `ow_session=${secondSessionId}` } });
+  assert.equal(secondSession.status, 200);
+  const secondPrincipal = `oidc:${createHash('sha256').update(`${identityIssuer}\nsecond-owner`).digest('hex')}`;
+  assert.equal(JSON.parse(secondSession.body).principal, secondPrincipal);
+  const secondPayload = JSON.stringify({ schemaVersion: '1.0', commandId: 'https-proxy-blue-project', payload: { name: 'HTTPS proxy blue project' } });
+  const secondCreated = await requestHttps(`${publicOrigin}/api/v1/projects`, { method: 'POST', ca: cert,
+    headers: { origin: publicOrigin, cookie: `ow_session=${secondSessionId}`, 'content-type': 'application/json', 'content-length': Buffer.byteLength(secondPayload) }, body: secondPayload });
+  assert.equal(secondCreated.status, 201, secondCreated.body);
+  const secondProject = JSON.parse(secondCreated.body).data;
+  assert.equal(secondProject.tenantId, 'tenant-https-blue');
+
   const projectList = await requestHttps(`${publicOrigin}/api/v1/projects`, { ca: cert,
     headers: { cookie: `ow_session=${sessionId}` } });
   assert.equal(projectList.status, 200);
-  assert.equal(JSON.parse(projectList.body).data.length, 1);
+  assert.deepEqual(JSON.parse(projectList.body).data.map(({ id }) => id), [firstProject.id]);
+  const secondProjectList = await requestHttps(`${publicOrigin}/api/v1/projects`, { ca: cert,
+    headers: { cookie: `ow_session=${secondSessionId}` } });
+  assert.equal(secondProjectList.status, 200);
+  assert.deepEqual(JSON.parse(secondProjectList.body).data.map(({ id }) => id), [secondProject.id]);
   const wrongOrigin = await requestHttps(`${publicOrigin}/api/v1/projects`, { method: 'POST', ca: cert,
     headers: { origin: 'https://attacker.example', cookie: `ow_session=${sessionId}`, 'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) }, body: payload });
   assert.equal(wrongOrigin.status, 403);
   assert.equal(JSON.parse(wrongOrigin.body).error.code, 'CROSS_SITE_REQUEST_DENIED');
+
+  const stateAndAuditSnapshot = async (projectId) => {
+    const aggregate = await postgres.query(`select state_hash, state->>'version' as version from orgward.aggregates
+      where aggregate_kind='project' and aggregate_id=$1`, [projectId]);
+    const audit = await postgres.query(`select count(*)::int as count from orgward.audit_log where aggregate_id=$1`, [projectId]);
+    return { aggregate: aggregate.rows[0], auditCount: audit.rows[0].count };
+  };
+  const assertCookieTenantIsolation = async () => {
+    const cases = [
+      { sessionId, own: firstProject, other: secondProject, tenant: 'tenant-https-blue', principal: secondPrincipal },
+      { sessionId: secondSessionId, own: secondProject, other: firstProject, tenant: 'tenant-https',
+        principal: `oidc:${createHash('sha256').update(`${identityIssuer}\nfirst-owner`).digest('hex')}` },
+    ];
+    const before = await Promise.all([stateAndAuditSnapshot(firstProject.id), stateAndAuditSnapshot(secondProject.id)]);
+    for (const entry of cases) {
+      const forgedHeaders = {
+        cookie: `ow_session=${entry.sessionId}`,
+        'x-orgward-tenant': entry.tenant,
+        'x-orgward-principal': entry.principal,
+        'x-orgward-access': 'owner',
+      };
+      const ownList = await requestHttps(`${publicOrigin}/api/v1/projects`, { ca: cert, headers: forgedHeaders });
+      assert.equal(ownList.status, 200);
+      assert.deepEqual(JSON.parse(ownList.body).data.map(({ id }) => id), [entry.own.id]);
+      const concealedRead = await requestHttps(`${publicOrigin}/api/v1/projects/${entry.other.id}`, { ca: cert, headers: forgedHeaders });
+      assert.equal(concealedRead.status, 404);
+      const forbiddenPayload = JSON.stringify({ schemaVersion: '1.0', commandId: `cross-tenant-${entry.own.id}`,
+        expectedVersion: entry.other.version, payload: { content: 'Cross-tenant session mutation must not commit.' } });
+      const concealedMutation = await requestHttps(`${publicOrigin}/api/v1/projects/${entry.other.id}/messages`, { method: 'POST', ca: cert,
+        headers: { ...forgedHeaders, origin: publicOrigin, 'content-type': 'application/json', 'content-length': Buffer.byteLength(forbiddenPayload) },
+        body: forbiddenPayload });
+      assert.equal(concealedMutation.status, 404);
+    }
+    const after = await Promise.all([stateAndAuditSnapshot(firstProject.id), stateAndAuditSnapshot(secondProject.id)]);
+    assert.deepEqual(after, before, 'concealed cross-tenant reads and commands do not mutate aggregate state or audit');
+  };
+  await assertCookieTenantIsolation();
 
   await new Promise((resolve, reject) => app.server.close((error) => error ? reject(error) : resolve()));
   await app.close();
@@ -197,7 +279,12 @@ test('HTTPS reverse proxy completes secure browser OIDC session and enforces ori
   const restartedList = await requestHttps(`${publicOrigin}/api/v1/projects`, { ca: cert,
     headers: { cookie: `ow_session=${sessionId}` } });
   assert.equal(restartedList.status, 200);
-  assert.equal(JSON.parse(restartedList.body).data.length, 1);
+  assert.deepEqual(JSON.parse(restartedList.body).data.map(({ id }) => id), [firstProject.id]);
+  const restartedSecondList = await requestHttps(`${publicOrigin}/api/v1/projects`, { ca: cert,
+    headers: { cookie: `ow_session=${secondSessionId}` } });
+  assert.equal(restartedSecondList.status, 200);
+  assert.deepEqual(JSON.parse(restartedSecondList.body).data.map(({ id }) => id), [secondProject.id]);
+  await assertCookieTenantIsolation();
 
   const logout = await requestHttps(`${publicOrigin}/auth/logout`, { method: 'POST', ca: cert,
     headers: { origin: publicOrigin, cookie: `ow_session=${sessionId}` } });
@@ -207,7 +294,8 @@ test('HTTPS reverse proxy completes secure browser OIDC session and enforces ori
   const afterLogout = await requestHttps(`${publicOrigin}/api/v1/projects`, { ca: cert,
     headers: { cookie: `ow_session=${sessionId}` } });
   assert.equal(afterLogout.status, 401);
-  for (const response of [login, authorization, callback, created, projectList, wrongOrigin, logout, afterLogout]) {
+  for (const response of [login, authorization, callback, created, secondLogin, secondAuthorization, secondCallback, secondCreated,
+    projectList, secondProjectList, wrongOrigin, logout, afterLogout]) {
     assert.equal(response.body.includes(postgres.databaseUrl), false);
     assert.equal(response.body.includes(secretCanary), false);
   }

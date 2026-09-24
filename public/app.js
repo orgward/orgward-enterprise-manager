@@ -1,5 +1,5 @@
-import { connectedNodeIds, filterGraph, toggleType, zoomTransform } from './map-state.js';
-import { apiErrorFrom, decodeStudioRoute, encodeStudioRoute, fieldErrorsFor } from './shared-interactions.mjs';
+import { connectedNodeIds, filterGraph, focusFirstMapResult, focusSelectedMapControl, graphAccessibilityAttributes, mapControlPressed, searchGraph, shouldStartMapPan, toggleType, zoomTransform } from './map-state.js';
+import { apiErrorFrom, decodeStudioRoute, encodeExecutionRoute, encodeStudioRoute, fieldErrorsFor, founderConversationAnnouncement } from './shared-interactions.mjs';
 import { coverageAreaStateLabel, coverageForBlueprint } from './coverage-dashboard.mjs';
 import { compareBlueprintObjectVersions } from './blueprint-comparison.mjs';
 
@@ -9,12 +9,15 @@ const state = {
   view: 'blueprint',
   mapMode: 'graph',
   mapAreaFilter: null,
+  mapSearch: '',
   coverageReturnContext: null,
   activeTypes: new Set(),
   selectedId: null,
   transform: { x: 0, y: 0, k: 1 },
   foundation: null,
   sessionRoles: [],
+  sessionPrincipal: null,
+  projectAccess: null,
   draft: '',
   pendingCreate: null,
   pendingMessage: null,
@@ -22,6 +25,7 @@ const state = {
   blueprintEditDraft: null,
   pendingActorBinding: null,
   pendingActorBindingEnable: null,
+  pendingBlueprintPublication: null,
   requestedProjectId: null,
   restoringHistory: false,
 };
@@ -40,6 +44,7 @@ const appState = document.querySelector('#app-state');
 const appStateTitle = document.querySelector('#app-state-title');
 const appStateMessage = document.querySelector('#app-state-message');
 const appStateActions = document.querySelector('#app-state-actions');
+const founderAnnouncement = document.querySelector('#founder-announcement');
 const foundationBadge = document.querySelector('#foundation-badge');
 const signOutButton = document.querySelector('#sign-out');
 
@@ -153,9 +158,15 @@ function currentRoute() {
 }
 
 function syncRoute(mode = 'push') {
+  syncExecutionNavigation();
   if (state.restoringHistory || !mode) return;
   const url = encodeStudioRoute(currentRoute());
   window.history[mode === 'replace' ? 'replaceState' : 'pushState'](null, '', url);
+}
+
+function syncExecutionNavigation() {
+  const link = document.querySelector('#execution-nav');
+  if (link) link.href = encodeExecutionRoute(state.project?.id ?? null);
 }
 
 function hasUnsavedDraft() { return Boolean(state.draft.trim() || state.pendingBlueprintEdit || state.blueprintEditDraft || state.pendingActorBinding || state.pendingActorBindingEnable); }
@@ -175,6 +186,10 @@ function notify(message) {
   notify.timer = setTimeout(() => { toast.hidden = true; }, 3200);
 }
 
+function announceFounderConversation(project, options) {
+  founderAnnouncement.textContent = founderConversationAnnouncement(project, options);
+}
+
 async function refreshProjects() {
   const result = await api('/api/v1/projects');
   state.projects = result.data;
@@ -190,7 +205,9 @@ function showWelcome({ history = 'push' } = {}) {
   state.pendingActorBinding = null;
   state.pendingActorBindingEnable = null;
   state.project = null;
+  state.projectAccess = null;
   state.selectedId = null;
+  state.mapSearch = '';
   state.activeTypes = new Set();
   state.view = 'blueprint';
   state.mapAreaFilter = null;
@@ -222,9 +239,11 @@ async function createProject(event) {
     state.pendingCreate ??= { commandId: `project:${crypto.randomUUID()}`, name: input.value };
     const result = await api('/api/v1/projects', { method: 'POST', body: JSON.stringify(command({ name: state.pendingCreate.name }, undefined, state.pendingCreate.commandId)) });
     state.project = result.data;
+    state.projectAccess = result.data.createdBy === state.sessionPrincipal ? 'owner' : null;
     state.requestedProjectId = result.data.id;
     state.pendingCreate = null;
     renderStudio();
+    announceFounderConversation(state.project);
     syncRoute();
     await refreshProjectListAfterSave();
     setTimeout(() => document.querySelector('#message-input')?.focus(), 0);
@@ -237,13 +256,23 @@ async function createProject(event) {
 
 async function loadProject(id, { history = 'push', route = null } = {}) {
   if (!id) return showWelcome({ history });
-  if (state.project?.id !== id) { state.pendingBlueprintEdit = null; state.blueprintEditDraft = null; state.pendingActorBinding = null; state.pendingActorBindingEnable = null; }
+  if (state.project?.id !== id) { state.pendingBlueprintEdit = null; state.blueprintEditDraft = null; state.pendingActorBinding = null; state.pendingActorBindingEnable = null; state.mapSearch = ''; }
   state.requestedProjectId = id;
   try {
     showAppState('loading', 'Loading workspace', 'Restoring saved conversation, blueprint, and view state…');
     const result = await api(`/api/v1/projects/${id}`);
     if (state.requestedProjectId !== id) return;
     state.project = result.data;
+    state.projectAccess = null;
+    if (state.sessionPrincipal && state.sessionRoles.includes('workspace-write')) {
+      try {
+        const members = await api(`/api/v1/projects/${id}/members`);
+        state.projectAccess = members.data.find((member) => member.principal === state.sessionPrincipal)?.access ?? null;
+      } catch {
+        // Readers cannot open the owner/editor roster; publication remains hidden.
+      }
+    }
+    if (state.requestedProjectId !== id) return;
     const validTypes = new Set(state.project.graph.types);
     state.activeTypes = new Set(route?.types?.filter((type) => validTypes.has(type)) ?? state.project.graph.types);
     if (!state.activeTypes.size) state.activeTypes = new Set(state.project.graph.types);
@@ -252,6 +281,7 @@ async function loadProject(id, { history = 'push', route = null } = {}) {
     state.coverageReturnContext = null;
     state.view = state.project.latestBlueprint && ['map', 'coverage'].includes(route?.view) ? route.view : 'blueprint';
     renderStudio();
+    announceFounderConversation(state.project);
     hideAppState();
     syncRoute(history);
   } catch (error) {
@@ -325,6 +355,7 @@ async function sendMessage(event) {
     state.project = result.data;
     state.pendingMessage = null;
     state.draft = '';
+    if (!state.project.latestBlueprint) announceFounderConversation(state.project, { answerSaved: true });
     if (state.project.latestBlueprint) {
       state.activeTypes = new Set(state.project.graph.types);
       state.view = 'blueprint';
@@ -384,11 +415,104 @@ function returnToCoverage() {
   setView('coverage');
 }
 
+function appendPublicationDisclosure(list, values, emptyMessage, labelFor = (value) => value) {
+  if (!values.length) list.append(element('li', { text: emptyMessage }));
+  else for (const value of values) list.append(element('li', { text: labelFor(value) }));
+}
+
+function renderBlueprintPublication(coverage) {
+  const section = element('section', { className: 'blueprint-publication', attrs: { 'aria-labelledby': 'blueprint-publication-heading' } });
+  section.append(element('h4', { text: 'Internal design baseline', attrs: { id: 'blueprint-publication-heading' } }));
+  const latest = state.project.latestBlueprint;
+  const publication = (state.project.blueprintPublications ?? []).at(-1) ?? null;
+  if (publication) {
+    section.append(element('p', { text: latest.version > publication.blueprintVersion
+      ? `Published internal design baseline: blueprint v${publication.blueprintVersion}. Newer proposed draft: v${latest.version}.`
+      : `Published internal design baseline: blueprint v${publication.blueprintVersion}.` }));
+  } else {
+    section.append(element('p', { text: 'No internal design baseline has been published. This record will not mean complete, verified, ready, or operational.' }));
+  }
+  section.append(element('p', { text: `Review proposed blueprint v${latest.version} (${latest.title}) and these disclosures before publishing the internal baseline.` }));
+  section.append(element('p', { className: 'edit-help', text: 'Publication remains inside this private project. It does not verify evidence, grant permissions, enable assignments, or change operational status.' }));
+
+  const areas = Object.entries(latest.areas ?? {});
+  const unknownAreas = areas.filter(([, area]) => area.status === 'unknown');
+  const outOfScopeAreas = areas.filter(([, area]) => area.status === 'out_of_scope');
+  const disclosures = element('div', { className: 'publication-disclosures' });
+  const gaps = element('ul', { attrs: { 'aria-label': 'Open design gaps to record' } });
+  appendPublicationDisclosure(gaps, coverage.gaps, 'No open design gaps recorded; this does not mean verified.', (gap) => `${gap.severity} · ${gap.action}`);
+  disclosures.append(element('h5', { text: `Open design gaps (${coverage.gaps.length})` }), gaps);
+  const areaList = element('ul', { attrs: { 'aria-label': 'Unknown and out-of-scope areas to record' } });
+  appendPublicationDisclosure(areaList, unknownAreas, 'No areas marked unknown.', ([key, area]) => `${area.label ?? key} — unknown`);
+  appendPublicationDisclosure(areaList, outOfScopeAreas, 'No areas marked out of scope.', ([key, area]) => `${area.label ?? key} — out of scope`);
+  disclosures.append(element('h5', { text: 'Unknown and out-of-scope areas' }), areaList);
+  const assumptions = element('ul', { attrs: { 'aria-label': 'Untested assumptions to record' } });
+  appendPublicationDisclosure(assumptions, coverage.assumptions, 'No assumptions recorded; this does not mean verified.');
+  disclosures.append(element('h5', { text: `Untested assumptions (${coverage.assumptions.length})` }), assumptions);
+  const unknowns = element('ul', { attrs: { 'aria-label': 'Recorded unknowns to retain' } });
+  appendPublicationDisclosure(unknowns, coverage.unknowns, 'No recorded unknowns.');
+  disclosures.append(element('h5', { text: `Recorded unknowns (${coverage.unknowns.length})` }), unknowns);
+  section.append(disclosures);
+  if (state.projectAccess !== 'owner' || !state.sessionPrincipal || !state.sessionRoles.includes('workspace-write')) return section;
+
+  const form = element('form', { className: 'publication-acknowledgment' });
+  const acknowledgmentId = 'publication-disclosure-acknowledgment';
+  const checkbox = element('input', { attrs: { id: acknowledgmentId, name: 'acknowledgeDisclosures', type: 'checkbox', required: '' } });
+  form.append(element('label', { className: 'publication-acknowledgment-option', attrs: { for: acknowledgmentId } }, [
+    checkbox, element('span', { text: 'I reviewed the gaps, unknown and out-of-scope areas, assumptions, and recorded unknowns above.' }),
+  ]));
+  const message = element('p', { className: 'publication-message', attrs: { role: 'status', 'aria-live': 'polite' } });
+  const submit = element('button', { className: 'button primary', text: `Publish blueprint v${latest.version} as internal design baseline`, attrs: { type: 'submit' } });
+  form.append(submit, message);
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!checkbox.checked) return;
+    const projectId = state.project.id;
+    const payload = { blueprintId: latest.id, blueprintVersion: latest.version, acknowledgeDisclosures: true };
+    const existing = state.pendingBlueprintPublication?.projectId === projectId
+      && state.pendingBlueprintPublication.payload.blueprintId === latest.id ? state.pendingBlueprintPublication : null;
+    const pending = existing ?? {
+      projectId, payload, expectedVersion: state.project.version,
+      commandId: `blueprint-publication:${crypto.randomUUID()}`,
+    };
+    state.pendingBlueprintPublication = pending;
+    submit.disabled = true;
+    message.textContent = 'Saving the immutable publication record…';
+    try {
+      const result = await api(`/api/v1/projects/${projectId}/blueprint/publications`, {
+        method: 'POST', body: JSON.stringify(command(pending.payload, pending.expectedVersion, pending.commandId)),
+      });
+      if (state.project?.id !== projectId || state.requestedProjectId !== projectId) return;
+      state.pendingBlueprintPublication = null;
+      state.project = result.data;
+      state.projectAccess = 'owner';
+      renderCoverage();
+      notify(`Published blueprint v${latest.version} as an internal design baseline.`);
+    } catch (failure) {
+      message.textContent = `${failure.message}${failure.correlationId ? ` Reference ${failure.correlationId}.` : ''}`;
+      submit.disabled = false;
+      if (failure.code === 'VERSION_CONFLICT' || failure.code === 'BLUEPRINT_PUBLICATION_NOT_LATEST') {
+        state.pendingBlueprintPublication = null;
+        const reload = element('button', { className: 'button ghost', text: 'Reload the latest blueprint', attrs: { type: 'button' } });
+        reload.addEventListener('click', () => loadProject(projectId, { history: 'replace', route: { view: 'coverage' } }));
+        message.append(document.createTextNode(' '), reload);
+      } else if (failure.retryable || !failure.code) {
+        const retry = element('button', { className: 'button ghost', text: 'Retry publication', attrs: { type: 'button' } });
+        retry.addEventListener('click', () => form.requestSubmit());
+        message.append(document.createTextNode(' '), retry);
+      }
+    }
+  });
+  section.append(form);
+  return section;
+}
+
 function renderCoverage() {
   const target = document.querySelector('#coverage-view');
   if (!target || !state.project.latestBlueprint) return;
   const coverage = coverageForBlueprint(state.project.latestBlueprint);
   target.replaceChildren();
+  target.append(renderBlueprintPublication(coverage));
   target.append(element('div', { className: 'coverage-heading' }, [
     element('div', {}, [element('span', { className: 'eyebrow', text: 'Saved blueprint coverage' }), element('h3', { text: `Version ${coverage.blueprintVersion} · ${coverage.epistemicStatus.replaceAll('-', ' ')}` })]),
     element('p', { text: 'This is proposed design coverage. Founder chat and edit history provide provenance, not independent business evidence or verification.' }),
@@ -489,8 +613,18 @@ function renderBlueprint() {
 }
 
 function setupMapControls() {
+  const search = document.querySelector('#map-search');
+  search.value = state.mapSearch;
+  search.addEventListener('input', () => {
+    state.mapSearch = search.value;
+    renderMap();
+  });
   document.querySelector('#graph-mode').addEventListener('click', () => setMapMode('graph'));
   document.querySelector('#list-mode').addEventListener('click', () => setMapMode('list'));
+  document.querySelector('#map-results-jump').addEventListener('click', () => {
+    const canvas = document.querySelector(state.mapMode === 'graph' ? '#graph-canvas' : '#list-canvas');
+    focusFirstMapResult(canvas, state.mapMode);
+  });
   document.querySelector('#zoom-in').addEventListener('click', () => zoomBy(1.2));
   document.querySelector('#zoom-out').addEventListener('click', () => zoomBy(1 / 1.2));
   document.querySelector('#zoom-reset').addEventListener('click', () => { state.transform = { x: 0, y: 0, k: 1 }; renderGraph(); });
@@ -536,16 +670,32 @@ function renderMap() {
     });
     filters.append(button);
   }
+  const mapSearchStatus = document.querySelector('#map-search-status');
+  const matches = visibleGraph();
+  document.querySelector('#map-results-jump').disabled = matches.nodes.length === 0;
+  const total = state.project.graph.nodes.filter((node) => state.activeTypes.has(node.type)
+    && (!state.mapAreaFilter || node.area === state.mapAreaFilter)).length;
+  const selectedIsOutsideResults = state.selectedId && !matches.nodes.some((node) => node.id === state.selectedId);
+  if (state.mapSearch.trim()) {
+    mapSearchStatus.textContent = matches.nodes.length
+      ? `${matches.nodes.length} of ${total} objects match. Search covers names, details, types, and areas.${selectedIsOutsideResults ? ' The selected object remains open in details.' : ''}`
+      : `No objects match “${state.mapSearch.trim()}”. Clear the search or adjust the type filters.${selectedIsOutsideResults ? ' The selected object remains open in details.' : ''}`;
+  } else {
+    mapSearchStatus.textContent = `Showing ${total} objects. Search names, details, types, and areas.`;
+  }
   setMapMode(state.mapMode);
   renderDetail();
 }
 
 function visibleGraph() {
   const filtered = filterGraph(state.project.graph, state.activeTypes);
-  if (!state.mapAreaFilter) return filtered;
-  const nodes = filtered.nodes.filter((node) => node.area === state.mapAreaFilter);
-  const ids = new Set(nodes.map((node) => node.id));
-  return { ...filtered, nodes, links: filtered.links.filter((link) => ids.has(link.source) && ids.has(link.target)) };
+  let areaFiltered = filtered;
+  if (state.mapAreaFilter) {
+    const nodes = filtered.nodes.filter((node) => node.area === state.mapAreaFilter);
+    const ids = new Set(nodes.map((node) => node.id));
+    areaFiltered = { ...filtered, nodes, links: filtered.links.filter((link) => ids.has(link.source) && ids.has(link.target)) };
+  }
+  return searchGraph(areaFiltered, state.mapSearch);
 }
 
 function nodePositions(nodes) {
@@ -576,7 +726,7 @@ function renderGraph() {
   canvas.replaceChildren();
   const { nodes, links } = visibleGraph();
   const positions = nodePositions(nodes);
-  const svg = svgElement('svg', { viewBox: '0 0 1200 760', role: 'img', 'aria-label': `${nodes.length} organisational objects and ${links.length} relationships` });
+  const svg = svgElement('svg', { viewBox: '0 0 1200 760', ...graphAccessibilityAttributes(nodes.length, links.length) });
   const world = svgElement('g', { transform: transformValue() });
   const selected = state.selectedId;
   const neighbors = connectedNodeIds(links, selected);
@@ -592,7 +742,7 @@ function renderGraph() {
   }
   for (const node of nodes) {
     const position = positions.get(node.id);
-    const group = svgElement('g', { transform: `translate(${position.x} ${position.y})`, class: `graph-node${node.id === selected ? ' selected' : ''}${selected && !neighbors.has(node.id) ? ' dimmed' : ''}`, tabindex: '0', role: 'button', 'aria-label': `${node.type}: ${node.name}` });
+    const group = svgElement('g', { transform: `translate(${position.x} ${position.y})`, class: `graph-node${node.id === selected ? ' selected' : ''}${selected && !neighbors.has(node.id) ? ' dimmed' : ''}`, tabindex: '0', role: 'button', 'aria-label': `${node.type}: ${node.name}`, 'aria-pressed': mapControlPressed(node.id, selected) });
     group.append(svgElement('circle', { r: node.id === selected ? 12 : 9, fill: typeColors[node.type] ?? '#9daaa2' }));
     const label = svgElement('text', { x: '14', y: '4' }); label.textContent = node.name; group.append(label);
     const title = svgElement('title'); title.textContent = `${node.name} — ${node.detail}`; group.append(title);
@@ -623,7 +773,11 @@ function enablePanZoom(svg) {
     const point = { x: ((event.clientX - rect.left) / rect.width) * 1200, y: ((event.clientY - rect.top) / rect.height) * 760 };
     zoomBy(event.deltaY < 0 ? 1.12 : 1 / 1.12, point);
   }, { passive: false });
-  svg.addEventListener('pointerdown', (event) => { dragging = true; start = { x: event.clientX, y: event.clientY, tx: state.transform.x, ty: state.transform.y }; svg.classList.add('dragging'); svg.setPointerCapture(event.pointerId); });
+  svg.addEventListener('pointerdown', (event) => {
+    if (!shouldStartMapPan(event.target)) return;
+    dragging = true; start = { x: event.clientX, y: event.clientY, tx: state.transform.x, ty: state.transform.y };
+    svg.classList.add('dragging'); svg.setPointerCapture(event.pointerId);
+  });
   svg.addEventListener('pointermove', (event) => {
     if (!dragging) return;
     const rect = svg.getBoundingClientRect();
@@ -648,7 +802,7 @@ function renderList() {
   for (const [area, areaNodes] of groups) {
     const section = element('section', { className: 'list-area' }, [element('h3', { text: area })]);
     for (const node of areaNodes) {
-      const row = element('button', { className: `list-row${node.id === state.selectedId ? ' selected' : ''}`, attrs: { type: 'button' } }, [
+      const row = element('button', { className: `list-row${node.id === state.selectedId ? ' selected' : ''}`, attrs: { type: 'button', 'aria-pressed': mapControlPressed(node.id, state.selectedId) } }, [
         element('i', { className: `type-dot type-${node.type}` }), element('span', { text: node.type.replaceAll('-', ' ') }),
         element('strong', { text: node.name }), element('small', { text: node.status }),
       ]);
@@ -662,6 +816,8 @@ function selectNode(id) {
   state.selectedId = id;
   if (state.mapMode === 'graph') renderGraph(); else renderList();
   renderDetail();
+  const mapCanvas = document.querySelector(state.mapMode === 'graph' ? '#graph-canvas' : '#list-canvas');
+  focusSelectedMapControl(mapCanvas, state.mapMode, id);
   syncRoute('push');
 }
 
@@ -709,7 +865,8 @@ function versionComparisonFor(node) {
       output.append(element('p', { text: `Object status: ${result.fromStatus ?? 'unknown'} → ${result.toStatus ?? 'unknown'}.` }));
       if (result.fields.length) {
         const changes = element('ul', { attrs: { 'aria-label': 'Changed object fields' } });
-        const labels = { proposedInstructions: 'Proposed instructions', proposedScopeStatements: 'Proposed scope statements', proposedToolStatements: 'Proposed tool statements', proposedEscalationRules: 'Proposed escalation rules' };
+        const labels = { proposedInstructions: 'Proposed instructions', proposedScopeStatements: 'Proposed scope statements', proposedToolStatements: 'Proposed tool statements', proposedEscalationRules: 'Proposed escalation rules', capabilityName: 'Linked capability', inputDecisionNames: 'Decision inputs', outputDecisionNames: 'Decision outputs', feedbackGoalName: 'Steering goal', feedbackDecisionNames: 'Decisions guiding this feedback loop', decisionMakerRoleName: 'Decision maker role', decisionScopeNames: 'Business design in scope', strategyGoalNames: 'Goals this strategy supports' };
+        labels.responsibilityNames = 'Accountable responsibilities';
         const display = (value) => value === null || value === undefined ? 'Not recorded' : Array.isArray(value) ? (value.length ? value.join('; ') : 'None recorded') : String(value);
         for (const change of result.fields) changes.append(element('li', { text: `${labels[change.field] ?? change.field}: ${display(change.before)} → ${display(change.after)}` }));
         output.append(element('h5', { text: 'Changed object fields' }), changes);
@@ -745,15 +902,36 @@ function versionHistoryFor(node) {
     entry.append(element('small', { text: `Saved by ${edit.actor} · ${new Date(edit.at).toLocaleString()}` }));
     for (const key of edit.changedFields) {
       const label = key === 'ownerRoleName' ? 'Owner role'
+        : key === 'servesCustomerNames' ? 'Customers served'
+        : key === 'enabledByCapabilityNames' ? 'Enabling capabilities'
+        : key === 'inputInformationNames' ? 'Information inputs'
+        : key === 'outputInformationNames' ? 'Information outputs'
+        : key === 'inputDecisionNames' ? 'Decision inputs'
+        : key === 'outputDecisionNames' ? 'Decision outputs'
+        : key === 'feedbackGoalName' ? 'Steering goal'
+        : key === 'feedbackDecisionNames' ? 'Decisions guiding this feedback loop'
+        : key === 'capabilityName' ? 'Linked capability'
+        : key === 'evidenceMetricNames' ? 'Evidence metrics'
+        : key === 'capabilityMetricNames' ? 'Capability metrics'
+        : key === 'readInformationName' ? 'Information source'
+        : key === 'consumerLoopName' ? 'Feedback loop'
+        : key === 'mitigatingControlName' ? 'Mitigating control'
+        : key === 'assignedRoleNames' ? 'Organizational roles'
+        : key === 'responsibilityNames' ? 'Accountable responsibilities'
+        : key === 'metricName' ? 'Metric'
+        : key === 'decisionMakerRoleName' ? 'Decision maker role'
+          : key === 'decisionScopeNames' ? 'Business design in scope'
+            : key === 'strategyGoalNames' ? 'Goals this strategy supports'
         : key === 'proposedInstructions' ? 'Proposed instructions'
           : key === 'proposedScopeStatements' ? 'Proposed scope statements'
             : key === 'proposedToolStatements' ? 'Proposed tool statements'
               : key === 'proposedEscalationRules' ? 'Proposed escalation rules'
             : key[0].toUpperCase() + key.slice(1);
+      const display = (value) => value === null ? 'None' : Array.isArray(value) ? (value.length ? value.join(', ') : 'None') : (value || '—');
       entry.append(element('div', { className: 'history-diff' }, [
         element('b', { text: label }),
-        element('p', { text: `Before: ${edit.before[key] || '—'}` }),
-        element('p', { text: `After: ${edit.after[key] || '—'}` }),
+        element('p', { text: `Before: ${display(edit.before[key])}` }),
+        element('p', { text: `After: ${display(edit.after[key])}` }),
       ]));
     }
     const relationChanges = element('div', { className: 'history-links' }, [element('b', { text: 'Affected relationships' })]);
@@ -769,10 +947,10 @@ function versionHistoryFor(node) {
   return section;
 }
 
-function editField(form, labelText, name, value, { multiline = false, maxLength = 700, required = true } = {}) {
+function editField(form, labelText, name, value, { multiline = false, maxLength = 700, required = true, readOnly = false } = {}) {
   const id = `blueprint-edit-${name}`;
   const label = element('label', { text: labelText, attrs: { for: id } });
-  const control = element(multiline ? 'textarea' : 'input', { attrs: { id, name, ...(required ? { required: '' } : {}), maxlength: String(maxLength), 'aria-describedby': 'blueprint-edit-help' } });
+  const control = element(multiline ? 'textarea' : 'input', { attrs: { id, name, ...(required ? { required: '' } : {}), ...(readOnly ? { readonly: '' } : {}), maxlength: String(maxLength), 'aria-describedby': 'blueprint-edit-help' } });
   control.value = value ?? '';
   form.append(label, control);
   return control;
@@ -781,31 +959,370 @@ function editField(form, labelText, name, value, { multiline = false, maxLength 
 function renderBlueprintEditForm(node) {
   if (!state.sessionRoles.includes('workspace-write')) return null;
   const object = blueprintItem(state.project.latestBlueprint, node.id);
-  if (!object || !['capability', 'process', 'role'].includes(object.type)) return null;
+  if (!object || !['goal', 'strategy', 'customer', 'offering', 'economics', 'capability', 'process', 'role',
+    'decision', 'resource', 'information', 'system', 'risk', 'control', 'metric', 'feedback-loop', 'lifecycle', 'actor-human', 'actor-agent'].includes(object.type)) return null;
   const pending = state.pendingBlueprintEdit?.projectId === state.project.id && state.pendingBlueprintEdit?.payload.objectId === node.id ? state.pendingBlueprintEdit : null;
   const draft = state.blueprintEditDraft?.projectId === state.project.id && state.blueprintEditDraft?.objectId === node.id ? state.blueprintEditDraft.payload : null;
   const pendingPayload = pending?.payload;
   const form = element('form', { className: 'blueprint-edit-form' });
   form.append(element('h4', { text: 'Edit proposed design' }));
-  form.append(element('p', { className: 'edit-help', text: 'Saving creates a new immutable proposed version. This does not enable the process or grant authority.', attrs: { id: 'blueprint-edit-help' } }));
-  const name = editField(form, 'Name', 'name', pendingPayload?.name ?? draft?.name ?? object.name, { maxLength: 120 });
-  const detail = editField(form, 'Detail', 'detail', pendingPayload?.detail ?? draft?.detail ?? object.detail, { multiline: true, maxLength: 700 });
+  const currentReadSource = object.type === 'metric' ? blueprintItem(state.project.latestBlueprint, object.reads) : null;
+  const editsInformationSource = object.type === 'metric' && (currentReadSource?.type === 'information'
+    || object.reads === null || object.reads === undefined);
+  const editsMetricLink = ['goal', 'economics'].includes(object.type);
+  const identityActor = ['actor-human', 'actor-agent'].includes(object.type);
+  form.append(element('p', { className: 'edit-help', text: identityActor
+    ? 'Actor name and detail are fixed identity labels. Saving creates a new immutable proposed version. Role links are organizational design only and do not change identity, permissions, authority, or execution.'
+    : object.type === 'offering'
+    ? 'Saving creates a new immutable proposed version. Customer and capability links describe the proposed offering only; they do not grant access, assignments, or operational status.'
+    : object.type === 'strategy'
+      ? 'Saving creates a new immutable proposed version. Goal links track strategy design intent; they do not show goal achievement or grant authority to act.'
+    : object.type === 'decision'
+      ? 'Saving creates a new immutable proposed version. Decision maker and scope are proposed design only, not an endorsement or approval. They do not grant platform permissions, approval rights, agent actions, or execution authority.'
+    : object.type === 'process'
+      ? 'Saving creates a new immutable proposed version. Information and decision flows are separate design links; decision links do not approve decisions, trigger execution, or change permission state.'
+      : object.type === 'feedback-loop'
+        ? 'Saving creates a new immutable proposed version. The goal link records proposed steering intent, not evidence of achievement or approval. Evidence metrics remain design references and do not verify results or activate monitoring.'
+      : object.type === 'risk'
+        ? 'Saving creates a new immutable proposed version. A mitigating control is a proposed design relationship; it does not accept the risk or authorize operations.'
+        : object.type === 'capability'
+          ? 'Saving creates a new immutable proposed version. Capability metric links are proposed measurement references; they do not verify results or operational status.'
+        : editsInformationSource
+          ? 'Saving creates a new immutable proposed version. This proposes which information record the metric reads; it does not verify evidence or change operational status.'
+          : object.type === 'metric'
+            ? 'Saving creates a new immutable proposed version. Metric sources and feedback-loop links remain proposed references; they do not verify results or activate monitoring.'
+          : editsMetricLink
+            ? 'Saving creates a new immutable proposed version. Metric links are proposed design references; they do not verify results or change operational status.'
+      : 'Saving creates a new immutable proposed version. Text edits do not verify evidence or change links, ownership, assignments, or operational status.', attrs: { id: 'blueprint-edit-help' } }));
+  const name = editField(form, 'Name', 'name', pendingPayload?.name ?? draft?.name ?? object.name, { maxLength: 120, readOnly: identityActor });
+  const detail = editField(form, 'Detail', 'detail', pendingPayload?.detail ?? draft?.detail ?? object.detail, { multiline: true, maxLength: 700, readOnly: identityActor });
+  let servingCustomers = null;
+  let enablingCapabilities = null;
+  if (object.type === 'offering') {
+    servingCustomers = element('fieldset', { className: 'serving-customer-select', attrs: { 'aria-describedby': `serves-customer-help-${node.id}` } });
+    servingCustomers.append(element('legend', { text: 'Customers served' }));
+    servingCustomers.append(element('p', { className: 'edit-help', text: 'Select the customer groups this proposed offering serves.', attrs: { id: `serves-customer-help-${node.id}` } }));
+    const customers = Object.values(state.project.latestBlueprint.areas).flatMap((entry) => entry.items).filter((item) => item.type === 'customer');
+    const selected = new Set(pendingPayload?.servesCustomerIds ?? draft?.servesCustomerIds ?? object.serves ?? []);
+    for (const customer of customers) {
+      const id = `blueprint-serves-${node.id}-${customer.id}`;
+      const checkbox = element('input', { attrs: { id, name: 'servesCustomerIds', type: 'checkbox', value: customer.id } });
+      checkbox.checked = selected.has(customer.id);
+      servingCustomers.append(element('label', { className: 'serving-customer-option', attrs: { for: id } }, [
+        checkbox, element('span', { text: customer.name }),
+      ]));
+    }
+    if (!customers.length) servingCustomers.append(element('p', { className: 'edit-help', text: 'Add a customer record before linking an offering.' }));
+    form.append(servingCustomers);
+
+    enablingCapabilities = element('fieldset', { className: 'offering-enabledby-select', attrs: { 'aria-describedby': `enabled-by-capability-help-${node.id}` } });
+    enablingCapabilities.append(element('legend', { text: 'Capabilities this offering depends on' }));
+    enablingCapabilities.append(element('p', { className: 'edit-help', text: 'Select proposed capabilities that enable the offering design. These links do not activate services or grant authority.', attrs: { id: `enabled-by-capability-help-${node.id}` } }));
+    const capabilities = Object.values(state.project.latestBlueprint.areas).flatMap((entry) => entry.items).filter((item) => item.type === 'capability');
+    const selectedCapabilities = new Set(pendingPayload?.enabledByCapabilityIds ?? draft?.enabledByCapabilityIds ?? object.enabledBy ?? []);
+    for (const capability of capabilities) {
+      const id = `blueprint-enabled-by-${node.id}-${capability.id}`;
+      const checkbox = element('input', { attrs: { id, name: 'enabledByCapabilityIds', type: 'checkbox', value: capability.id } });
+      checkbox.checked = selectedCapabilities.has(capability.id);
+      enablingCapabilities.append(element('label', { className: 'offering-enabledby-option', attrs: { for: id } }, [
+        checkbox, element('span', { text: capability.name }),
+      ]));
+    }
+    if (!capabilities.length) enablingCapabilities.append(element('p', { className: 'edit-help', text: 'Add a capability record before linking an offering.' }));
+    form.append(enablingCapabilities);
+  }
   let ownerRole = null;
-  if (object.type === 'capability' || object.type === 'process') {
+  const ownerEditableTypes = ['goal', 'strategy', 'economics', 'capability', 'process', 'resource', 'information', 'system',
+    'risk', 'control', 'metric', 'feedback-loop', 'lifecycle'];
+  if (ownerEditableTypes.includes(object.type)) {
     ownerRole = element('select', { attrs: { id: 'blueprint-edit-ownerRoleName', name: 'ownerRoleName', required: '', 'aria-describedby': 'blueprint-edit-help' } });
     const roles = Object.values(state.project.latestBlueprint.areas).flatMap((entry) => entry.items).filter((item) => item.type === 'role');
     for (const role of roles) ownerRole.append(element('option', { text: role.name, attrs: { value: role.name } }));
     const currentRole = roles.find((role) => role.id === object.owner);
     ownerRole.value = pendingPayload?.ownerRoleName ?? draft?.ownerRoleName ?? currentRole?.name ?? '';
     form.append(element('label', { text: 'Owner role', attrs: { for: ownerRole.id } }), ownerRole);
+    form.append(element('p', { className: 'edit-help', text: 'Owner role is proposed accountability only. It does not grant platform access, task assignment authority, or permission to run work.' }));
   }
   let trigger = null;
   let instructions = null;
+  let responsibilitySelect = null;
   let scopeStatements = null;
   let toolStatements = null;
   let escalationRules = null;
-  if (object.type === 'process') trigger = editField(form, 'Process trigger', 'trigger', pendingPayload?.trigger ?? draft?.trigger ?? object.trigger, { maxLength: 240 });
+  let inputInformation = null;
+  let outputInformation = null;
+  let inputDecisions = null;
+  let outputDecisions = null;
+  let processResources = null;
+  let processSystems = null;
+  let processCapability = null;
+  let evidenceMetrics = null;
+  let feedbackGoal = null;
+  let feedbackDecisions = null;
+  let capabilityMetrics = null;
+  let informationSource = null;
+  let linkedMetric = null;
+  let linkedFeedbackLoop = null;
+  let mitigatingControl = null;
+  let assignedRoles = null;
+  let strategyGoals = null;
+  let decisionMaker = null;
+  let decisionScope = null;
+  if (object.type === 'strategy') {
+    const goals = Object.values(state.project.latestBlueprint.areas).flatMap((entry) => entry.items).filter((item) => item.type === 'goal');
+    strategyGoals = element('fieldset', { className: 'strategy-goal-select', attrs: { 'aria-describedby': `strategy-goal-help-${node.id}` } });
+    strategyGoals.append(element('legend', { text: 'Goals this strategy supports' }));
+    strategyGoals.append(element('p', { className: 'edit-help', text: 'Select existing goals this proposed strategy is intended to support. These links show design intent, not achievement.', attrs: { id: `strategy-goal-help-${node.id}` } }));
+    const selected = new Set(pendingPayload?.strategyGoalIds ?? draft?.strategyGoalIds
+      ?? (object.goals ?? []).filter((id) => blueprintItem(state.project.latestBlueprint, id)?.type === 'goal'));
+    for (const goal of goals) {
+      const id = `blueprint-strategy-goal-${node.id}-${goal.id}`;
+      const checkbox = element('input', { attrs: { id, name: 'strategyGoalIds', type: 'checkbox', value: goal.id } });
+      checkbox.checked = selected.has(goal.id);
+      strategyGoals.append(element('label', { className: 'strategy-goal-option', attrs: { for: id } }, [checkbox, element('span', { text: goal.name })]));
+    }
+    if (!goals.length) strategyGoals.append(element('p', { className: 'edit-help', text: 'Add a goal record before linking strategy intent.' }));
+    form.append(strategyGoals);
+  }
+  if (object.type === 'decision') {
+    decisionMaker = element('select', { attrs: { id: `blueprint-decision-maker-${node.id}`, name: 'decisionMakerRoleId', 'aria-describedby': `decision-maker-help-${node.id}` } });
+    decisionMaker.append(element('option', { text: 'No proposed decision maker', attrs: { value: '' } }));
+    const roles = Object.values(state.project.latestBlueprint.areas).flatMap((entry) => entry.items).filter((item) => item.type === 'role');
+    for (const role of roles) decisionMaker.append(element('option', { text: role.name, attrs: { value: role.id } }));
+    decisionMaker.value = pendingPayload && Object.hasOwn(pendingPayload, 'decisionMakerRoleId')
+      ? pendingPayload.decisionMakerRoleId ?? ''
+      : draft && Object.hasOwn(draft, 'decisionMakerRoleId') ? draft.decisionMakerRoleId ?? '' : object.by ?? '';
+    form.append(element('label', { text: 'Proposed decision maker role', attrs: { for: decisionMaker.id } }), decisionMaker,
+      element('p', { className: 'edit-help', text: 'This records who the design proposes should make the decision. It does not grant platform permissions, approval rights, agent actions, or execution authority.', attrs: { id: `decision-maker-help-${node.id}` } }));
+
+    const decisionScopeTypes = new Set(['goal', 'strategy', 'customer', 'offering', 'economics', 'capability', 'process', 'resource', 'information', 'system', 'risk', 'control', 'metric', 'feedback-loop', 'lifecycle']);
+    const targets = Object.values(state.project.latestBlueprint.areas).flatMap((entry) => entry.items).filter((item) => decisionScopeTypes.has(item.type));
+    decisionScope = element('fieldset', { className: 'decision-scope-select', attrs: { 'aria-describedby': `decision-scope-help-${node.id}` } });
+    decisionScope.append(element('legend', { text: 'Business design in scope' }));
+    decisionScope.append(element('p', { className: 'edit-help', text: 'Select the existing design records this proposed decision governs. This does not authorize changes or operations.', attrs: { id: `decision-scope-help-${node.id}` } }));
+    const selected = new Set(pendingPayload?.decisionScopeIds ?? draft?.decisionScopeIds
+      ?? (object.scope ?? []).filter((id) => decisionScopeTypes.has(blueprintItem(state.project.latestBlueprint, id)?.type)));
+    for (const target of targets) {
+      const id = `blueprint-decision-scope-${node.id}-${target.id}`;
+      const checkbox = element('input', { attrs: { id, name: 'decisionScopeIds', type: 'checkbox', value: target.id } });
+      checkbox.checked = selected.has(target.id);
+      decisionScope.append(element('label', { className: 'decision-scope-option', attrs: { for: id } }, [checkbox, element('span', { text: `${target.name} · ${target.type}` })]));
+    }
+    if (!targets.length) decisionScope.append(element('p', { className: 'edit-help', text: 'Add a business design record before defining decision scope.' }));
+    form.append(decisionScope);
+  }
+  if (['actor-human', 'actor-agent'].includes(object.type)) {
+    assignedRoles = element('fieldset', { className: 'actor-role-select', attrs: { 'aria-describedby': `assigned-roles-help-${node.id}` } });
+    assignedRoles.append(element('legend', { text: 'Proposed organizational roles' }));
+    assignedRoles.append(element('p', { className: 'edit-help', text: 'These links describe proposed organizational assignment only. They do not grant platform permissions or authority, or enable execution.', attrs: { id: `assigned-roles-help-${node.id}` } }));
+    const roles = Object.values(state.project.latestBlueprint.areas).flatMap((entry) => entry.items).filter((item) => item.type === 'role');
+    const selectedIds = pendingPayload?.assignedRoleIds ?? draft?.assignedRoleIds
+      ?? (object.assignedRoles ?? []).filter((id) => blueprintItem(state.project.latestBlueprint, id)?.type === 'role');
+    const selected = new Set(selectedIds);
+    for (const role of roles) {
+      const id = `blueprint-assigned-role-${node.id}-${role.id}`;
+      const checkbox = element('input', { attrs: { id, name: 'assignedRoleIds', type: 'checkbox', value: role.id } });
+      checkbox.checked = selected.has(role.id);
+      assignedRoles.append(element('label', { className: 'actor-role-option', attrs: { for: id } }, [checkbox, element('span', { text: role.name })]));
+    }
+    if (!roles.length) assignedRoles.append(element('p', { className: 'edit-help', text: 'Add a role record before linking an organizational assignment.' }));
+    form.append(assignedRoles);
+  }
+  if (object.type === 'process') {
+    trigger = editField(form, 'Process trigger', 'trigger', pendingPayload?.trigger ?? draft?.trigger ?? object.trigger, { maxLength: 240 });
+    processCapability = element('select', { attrs: { id: `blueprint-process-capability-${node.id}`, name: 'capabilityId', 'aria-describedby': `process-capability-help-${node.id}` } });
+    processCapability.append(element('option', { text: 'No linked capability', attrs: { value: '' } }));
+    const capabilities = Object.values(state.project.latestBlueprint.areas).flatMap((entry) => entry.items).filter((item) => item.type === 'capability');
+    for (const capability of capabilities) processCapability.append(element('option', { text: capability.name, attrs: { value: capability.id } }));
+    const selectedCapability = pendingPayload && Object.hasOwn(pendingPayload, 'capabilityId')
+      ? pendingPayload.capabilityId
+      : draft && Object.hasOwn(draft, 'capabilityId') ? draft.capabilityId : object.capability ?? null;
+    processCapability.value = selectedCapability ?? '';
+    form.append(element('label', { text: 'Proposed linked capability', attrs: { for: processCapability.id } }), processCapability);
+    form.append(element('p', { className: 'edit-help', text: 'This proposed process-to-capability link records design intent only. It does not assign work, activate a capability, or grant authority.', attrs: { id: `process-capability-help-${node.id}` } }));
+    const information = Object.values(state.project.latestBlueprint.areas).flatMap((entry) => entry.items).filter((item) => item.type === 'information');
+    const makeInformationPicker = (direction, relationIds) => {
+      const field = direction === 'input' ? 'inputInformationIds' : 'outputInformationIds';
+      const group = element('fieldset', { className: 'process-information-select', attrs: { 'aria-describedby': `${field}-help-${node.id}` } });
+      group.append(element('legend', { text: direction === 'input' ? 'Information inputs' : 'Information outputs' }));
+      group.append(element('p', { className: 'edit-help', text: direction === 'input'
+        ? 'Select existing information records this proposed process receives.'
+        : 'Select existing information records this proposed process produces. Decision outputs are edited separately.', attrs: { id: `${field}-help-${node.id}` } }));
+      const selectedIds = pendingPayload?.[field] ?? draft?.[field] ?? (object[relationIds] ?? []).filter((id) => information.some((item) => item.id === id));
+      const selected = new Set(selectedIds);
+      for (const record of information) {
+        const id = `blueprint-${field}-${node.id}-${record.id}`;
+        const checkbox = element('input', { attrs: { id, name: field, type: 'checkbox', value: record.id } });
+        checkbox.checked = selected.has(record.id);
+        group.append(element('label', { className: 'process-information-option', attrs: { for: id } }, [checkbox, element('span', { text: record.name })]));
+      }
+      if (!information.length) group.append(element('p', { className: 'edit-help', text: 'Add an information record before linking it to this process.' }));
+      form.append(group);
+      return group;
+    };
+    inputInformation = makeInformationPicker('input', 'inputs');
+    outputInformation = makeInformationPicker('output', 'outputs');
+    const decisions = Object.values(state.project.latestBlueprint.areas).flatMap((entry) => entry.items).filter((item) => item.type === 'decision');
+    const makeDecisionPicker = (direction, relationIds) => {
+      const field = direction === 'input' ? 'inputDecisionIds' : 'outputDecisionIds';
+      const group = element('fieldset', { className: 'process-decision-select', attrs: { 'aria-describedby': `${field}-help-${node.id}` } });
+      group.append(element('legend', { text: direction === 'input' ? 'Decision inputs' : 'Decision outputs' }));
+      group.append(element('p', { className: 'edit-help', text: direction === 'input'
+        ? 'Select existing decision records this proposed process receives as design context. This does not approve decisions or authorize execution.'
+        : 'Select existing decision records this proposed process is intended to produce. This does not approve a decision, trigger execution, or change permissions.', attrs: { id: `${field}-help-${node.id}` } }));
+      const selectedIds = pendingPayload?.[field] ?? draft?.[field]
+        ?? (object[relationIds] ?? []).filter((id) => decisions.some((item) => item.id === id));
+      const selected = new Set(selectedIds);
+      for (const decision of decisions) {
+        const id = `blueprint-${field}-${node.id}-${decision.id}`;
+        const checkbox = element('input', { attrs: { id, name: field, type: 'checkbox', value: decision.id } });
+        checkbox.checked = selected.has(decision.id);
+        group.append(element('label', { className: 'process-decision-option', attrs: { for: id } }, [checkbox, element('span', { text: decision.name })]));
+      }
+      if (!decisions.length) group.append(element('p', { className: 'edit-help', text: 'Add a decision record before linking it to this process.' }));
+      form.append(group);
+      return group;
+    };
+    inputDecisions = makeDecisionPicker('input', 'inputs');
+    outputDecisions = makeDecisionPicker('output', 'outputs');
+    const makeDependencyPicker = (type, field, relationIds) => {
+      const records = Object.values(state.project.latestBlueprint.areas).flatMap((entry) => entry.items).filter((item) => item.type === type);
+      const group = element('fieldset', { className: 'process-dependency-select', attrs: { 'aria-describedby': `${field}-help-${node.id}` } });
+      const label = type === 'resource' ? 'Resources' : 'Systems';
+      group.append(element('legend', { text: `Proposed ${label.toLowerCase()}` }));
+      group.append(element('p', { className: 'edit-help', text: `Select existing ${label.toLowerCase()} records linked to this proposed process. These design links do not allocate resources, operate systems, or grant authority.`, attrs: { id: `${field}-help-${node.id}` } }));
+      const selectedIds = pendingPayload?.[field] ?? draft?.[field] ?? (object[relationIds] ?? []).filter((id) => records.some((item) => item.id === id));
+      const selected = new Set(selectedIds);
+      for (const record of records) {
+        const id = `blueprint-${field}-${node.id}-${record.id}`;
+        const checkbox = element('input', { attrs: { id, name: field, type: 'checkbox', value: record.id } });
+        checkbox.checked = selected.has(record.id);
+        group.append(element('label', { className: 'process-dependency-option', attrs: { for: id } }, [checkbox, element('span', { text: record.name })]));
+      }
+      if (!records.length) group.append(element('p', { className: 'edit-help', text: `Add a ${type} record before linking it to this process.` }));
+      form.append(group);
+      return group;
+    };
+    processResources = makeDependencyPicker('resource', 'resourceIds', 'resources');
+    processSystems = makeDependencyPicker('system', 'systemIds', 'systems');
+  }
+  if (object.type === 'feedback-loop') {
+    feedbackGoal = element('select', { attrs: { id: `blueprint-feedback-goal-${node.id}`, name: 'feedbackGoalId', 'aria-describedby': `feedback-goal-help-${node.id}` } });
+    feedbackGoal.append(element('option', { text: 'No proposed steering goal', attrs: { value: '' } }));
+    const goals = Object.values(state.project.latestBlueprint.areas).flatMap((entry) => entry.items).filter((item) => item.type === 'goal');
+    for (const goal of goals) feedbackGoal.append(element('option', { text: goal.name, attrs: { value: goal.id } }));
+    feedbackGoal.value = pendingPayload && Object.hasOwn(pendingPayload, 'feedbackGoalId')
+      ? pendingPayload.feedbackGoalId ?? ''
+      : draft && Object.hasOwn(draft, 'feedbackGoalId') ? draft.feedbackGoalId ?? '' : object.goal ?? '';
+    form.append(element('label', { text: 'Proposed steering goal', attrs: { for: feedbackGoal.id } }), feedbackGoal,
+      element('p', { className: 'edit-help', text: 'Choose an optional existing goal this proposed loop steers toward. This link is not evidence of goal achievement or approval.', attrs: { id: `feedback-goal-help-${node.id}` } }));
+    feedbackDecisions = element('fieldset', { className: 'feedback-decision-select', attrs: { 'aria-describedby': `feedback-decisions-help-${node.id}` } });
+    feedbackDecisions.append(element('legend', { text: 'Decisions guiding this feedback loop (proposed)' }));
+    feedbackDecisions.append(element('p', { className: 'edit-help', text: 'Describes the intended design relationship; it does not approve a decision or authorize work.', attrs: { id: `feedback-decisions-help-${node.id}` } }));
+    const decisions = Object.values(state.project.latestBlueprint.areas).flatMap((entry) => entry.items).filter((item) => item.type === 'decision');
+    const selectedDecisions = new Set(pendingPayload?.feedbackDecisionIds ?? draft?.feedbackDecisionIds
+      ?? (object.decisionIds ?? []).filter((id) => decisions.some((decision) => decision.id === id)));
+    for (const decision of decisions) {
+      const id = `blueprint-feedback-decision-${node.id}-${decision.id}`;
+      const checkbox = element('input', { attrs: { id, name: 'feedbackDecisionIds', type: 'checkbox', value: decision.id } });
+      checkbox.checked = selectedDecisions.has(decision.id);
+      feedbackDecisions.append(element('label', { className: 'feedback-decision-option', attrs: { for: id } }, [checkbox, element('span', { text: decision.name })]));
+    }
+    if (!decisions.length) feedbackDecisions.append(element('p', { className: 'edit-help', text: 'Add a decision record before linking it to this feedback loop.' }));
+    form.append(feedbackDecisions);
+    evidenceMetrics = element('fieldset', { className: 'feedback-evidence-select', attrs: { 'aria-describedby': `evidence-metrics-help-${node.id}` } });
+    evidenceMetrics.append(element('legend', { text: 'Evidence metrics' }));
+    evidenceMetrics.append(element('p', { className: 'edit-help', text: 'Select existing metrics this proposed feedback loop uses as evidence. Decision inputs and outputs are edited separately.', attrs: { id: `evidence-metrics-help-${node.id}` } }));
+    const metrics = Object.values(state.project.latestBlueprint.areas).flatMap((entry) => entry.items).filter((item) => item.type === 'metric');
+    const selected = new Set(pendingPayload?.evidenceMetricIds ?? draft?.evidenceMetricIds ?? (object.evidence ?? []).filter((id) => metrics.some((item) => item.id === id)));
+    for (const metric of metrics) {
+      const id = `blueprint-evidence-metric-${node.id}-${metric.id}`;
+      const checkbox = element('input', { attrs: { id, name: 'evidenceMetricIds', type: 'checkbox', value: metric.id } });
+      checkbox.checked = selected.has(metric.id);
+      evidenceMetrics.append(element('label', { className: 'feedback-evidence-option', attrs: { for: id } }, [checkbox, element('span', { text: metric.name })]));
+    }
+    if (!metrics.length) evidenceMetrics.append(element('p', { className: 'edit-help', text: 'Add a metric record before linking evidence.' }));
+    form.append(evidenceMetrics);
+  }
+  if (object.type === 'capability') {
+    capabilityMetrics = element('fieldset', { className: 'capability-metrics-select', attrs: { 'aria-describedby': `capability-metrics-help-${node.id}` } });
+    capabilityMetrics.append(element('legend', { text: 'Capability metrics' }));
+    capabilityMetrics.append(element('p', { className: 'edit-help', text: 'Select existing metric records related to this proposed capability. These links do not verify performance.', attrs: { id: `capability-metrics-help-${node.id}` } }));
+    const metrics = Object.values(state.project.latestBlueprint.areas).flatMap((entry) => entry.items).filter((item) => item.type === 'metric');
+    const selectedIds = pendingPayload?.capabilityMetricIds ?? draft?.capabilityMetricIds
+      ?? (object.metrics ?? []).filter((id) => blueprintItem(state.project.latestBlueprint, id)?.type === 'metric');
+    const selected = new Set(selectedIds);
+    for (const metric of metrics) {
+      const id = `blueprint-capability-metric-${node.id}-${metric.id}`;
+      const checkbox = element('input', { attrs: { id, name: 'capabilityMetricIds', type: 'checkbox', value: metric.id } });
+      checkbox.checked = selected.has(metric.id);
+      capabilityMetrics.append(element('label', { className: 'capability-metric-option', attrs: { for: id } }, [checkbox, element('span', { text: metric.name })]));
+    }
+    if (!metrics.length) capabilityMetrics.append(element('p', { className: 'edit-help', text: 'Add a metric record before linking capability metrics.' }));
+    form.append(capabilityMetrics);
+  }
+  if (editsInformationSource) {
+    informationSource = element('select', { attrs: { id: `blueprint-read-source-${node.id}`, name: 'readInformationId', 'aria-describedby': `read-source-help-${node.id}` } });
+    informationSource.append(element('option', { text: 'No information source', attrs: { value: '' } }));
+    const informationRecords = Object.values(state.project.latestBlueprint.areas).flatMap((entry) => entry.items).filter((item) => item.type === 'information');
+    for (const record of informationRecords) informationSource.append(element('option', { text: record.name, attrs: { value: record.id } }));
+    informationSource.value = pendingPayload && Object.hasOwn(pendingPayload, 'readInformationId')
+      ? pendingPayload.readInformationId ?? ''
+      : draft && Object.hasOwn(draft, 'readInformationId') ? draft.readInformationId ?? '' : object.reads ?? '';
+    form.append(element('label', { text: 'Information source', attrs: { for: informationSource.id } }), informationSource,
+      element('p', { className: 'edit-help', text: 'Choose one information record or clear the source.', attrs: { id: `read-source-help-${node.id}` } }));
+  }
+  if (object.type === 'metric') {
+    linkedFeedbackLoop = element('select', { attrs: { id: `blueprint-feedback-loop-${node.id}`, name: 'consumerLoopId', 'aria-describedby': `feedback-loop-help-${node.id}` } });
+    linkedFeedbackLoop.append(element('option', { text: 'No feedback loop', attrs: { value: '' } }));
+    const feedbackLoops = Object.values(state.project.latestBlueprint.areas).flatMap((entry) => entry.items).filter((item) => item.type === 'feedback-loop');
+    for (const feedbackLoop of feedbackLoops) linkedFeedbackLoop.append(element('option', { text: feedbackLoop.name, attrs: { value: feedbackLoop.id } }));
+    linkedFeedbackLoop.value = pendingPayload && Object.hasOwn(pendingPayload, 'consumerLoopId')
+      ? pendingPayload.consumerLoopId ?? ''
+      : draft && Object.hasOwn(draft, 'consumerLoopId') ? draft.consumerLoopId ?? '' : object.consumerLoop ?? '';
+    form.append(element('label', { text: 'Feedback loop that consumes this metric', attrs: { for: linkedFeedbackLoop.id } }), linkedFeedbackLoop,
+      element('p', { className: 'edit-help', text: 'Choose one existing feedback loop or clear the proposed link. This does not activate monitoring.', attrs: { id: `feedback-loop-help-${node.id}` } }));
+  }
+  if (object.type === 'risk') {
+    mitigatingControl = element('select', { attrs: { id: `blueprint-mitigating-control-${node.id}`, name: 'mitigatingControlId', 'aria-describedby': `mitigating-control-help-${node.id}` } });
+    mitigatingControl.append(element('option', { text: 'No mitigating control', attrs: { value: '' } }));
+    const controls = Object.values(state.project.latestBlueprint.areas).flatMap((entry) => entry.items).filter((item) => item.type === 'control');
+    for (const control of controls) mitigatingControl.append(element('option', { text: control.name, attrs: { value: control.id } }));
+    mitigatingControl.value = pendingPayload && Object.hasOwn(pendingPayload, 'mitigatingControlId')
+      ? pendingPayload.mitigatingControlId ?? ''
+      : draft && Object.hasOwn(draft, 'mitigatingControlId') ? draft.mitigatingControlId ?? '' : object.control ?? '';
+    form.append(element('label', { text: 'Mitigating control', attrs: { for: mitigatingControl.id } }), mitigatingControl,
+      element('p', { className: 'edit-help', text: 'Choose one existing control or clear the proposed link. This does not accept the risk or grant authority.', attrs: { id: `mitigating-control-help-${node.id}` } }));
+  }
+  if (editsMetricLink) {
+    const group = element('fieldset', { className: 'goal-economics-metric-select', attrs: { 'aria-describedby': `metric-link-help-${node.id}` } });
+    group.append(element('legend', { text: 'Metric link' }));
+    group.append(element('p', { className: 'edit-help', text: 'Choose one existing metric or clear this proposed link.', attrs: { id: `metric-link-help-${node.id}` } }));
+    linkedMetric = element('select', { attrs: { id: `blueprint-metric-link-${node.id}`, name: 'metricId' } });
+    linkedMetric.append(element('option', { text: 'No metric', attrs: { value: '' } }));
+    const metrics = Object.values(state.project.latestBlueprint.areas).flatMap((entry) => entry.items).filter((item) => item.type === 'metric');
+    for (const metric of metrics) linkedMetric.append(element('option', { text: metric.name, attrs: { value: metric.id } }));
+    linkedMetric.value = pendingPayload && Object.hasOwn(pendingPayload, 'metricId')
+      ? pendingPayload.metricId ?? ''
+      : draft && Object.hasOwn(draft, 'metricId') ? draft.metricId ?? '' : object.metric ?? '';
+    group.append(element('label', { text: 'Metric', attrs: { for: linkedMetric.id } }), linkedMetric);
+    form.append(group);
+  }
   if (object.type === 'role') {
+    responsibilitySelect = element('fieldset', { className: 'role-responsibility-select', attrs: { 'aria-describedby': `role-responsibility-help-${node.id}` } });
+    responsibilitySelect.append(element('legend', { text: 'Accountable responsibilities' }));
+    responsibilitySelect.append(element('p', { className: 'edit-help', text: 'Select goals, capabilities, processes, and systems this role is accountable for. These are organizational design links only.', attrs: { id: `role-responsibility-help-${node.id}` } }));
+    const roleTargetTypes = new Set(['goal', 'capability', 'process', 'system']);
+    const roleTargets = Object.values(state.project.latestBlueprint.areas).flatMap((entry) => entry.items).filter((item) => roleTargetTypes.has(item.type));
+    const selectedResponsibilities = new Set(pendingPayload?.responsibilityIds ?? draft?.responsibilityIds ?? (object.responsibilities ?? []).filter((id) => roleTargetTypes.has(blueprintItem(state.project.latestBlueprint, id)?.type)));
+    for (const target of roleTargets) {
+      const id = `blueprint-role-responsibility-${node.id}-${target.id}`;
+      const checkbox = element('input', { attrs: { id, name: 'responsibilityIds', type: 'checkbox', value: target.id } });
+      checkbox.checked = selectedResponsibilities.has(target.id);
+      responsibilitySelect.append(element('label', { className: 'role-responsibility-option', attrs: { for: id } }, [checkbox, element('span', { text: `${target.name} · ${target.type}` })]));
+    }
+    if (!roleTargets.length) responsibilitySelect.append(element('p', { className: 'edit-help', text: 'Add a goal, capability, process, or system before linking a responsibility.' }));
+    form.append(responsibilitySelect);
     const existingScope = object.proposedScopeStatements ?? (object.authority ?? []).filter((value) => !(typeof value === 'string' && value.startsWith('decision-')));
     scopeStatements = editField(form, 'Proposed role scope statements (one per line)', 'proposedScopeStatements', (pendingPayload?.proposedScopeStatements ?? draft?.proposedScopeStatements ?? existingScope).join('\n'), { multiline: true, maxLength: 2900 });
     instructions = editField(form, 'Proposed instructions', 'proposedInstructions', pendingPayload?.proposedInstructions ?? draft?.proposedInstructions ?? object.proposedInstructions, { multiline: true, maxLength: 700 });
@@ -840,6 +1357,28 @@ function renderBlueprintEditForm(node) {
   form.append(error, recovery, latestVersion, save);
   const values = () => ({ objectId: node.id, name: name.value.trim(), detail: detail.value.trim(),
     ...(ownerRole ? { ownerRoleName: ownerRole.value } : {}), ...(trigger ? { trigger: trigger.value.trim() } : {}),
+    ...(servingCustomers ? { servesCustomerIds: [...servingCustomers.querySelectorAll('input[name="servesCustomerIds"]:checked')].map((control) => control.value).sort() } : {}),
+    ...(enablingCapabilities ? { enabledByCapabilityIds: [...enablingCapabilities.querySelectorAll('input[name="enabledByCapabilityIds"]:checked')].map((control) => control.value).sort() } : {}),
+    ...(inputInformation ? { inputInformationIds: [...inputInformation.querySelectorAll('input[name="inputInformationIds"]:checked')].map((control) => control.value).sort() } : {}),
+    ...(outputInformation ? { outputInformationIds: [...outputInformation.querySelectorAll('input[name="outputInformationIds"]:checked')].map((control) => control.value).sort() } : {}),
+    ...(inputDecisions ? { inputDecisionIds: [...inputDecisions.querySelectorAll('input[name="inputDecisionIds"]:checked')].map((control) => control.value).sort() } : {}),
+    ...(outputDecisions ? { outputDecisionIds: [...outputDecisions.querySelectorAll('input[name="outputDecisionIds"]:checked')].map((control) => control.value).sort() } : {}),
+    ...(processResources ? { resourceIds: [...processResources.querySelectorAll('input[name="resourceIds"]:checked')].map((control) => control.value).sort() } : {}),
+    ...(processSystems ? { systemIds: [...processSystems.querySelectorAll('input[name="systemIds"]:checked')].map((control) => control.value).sort() } : {}),
+    ...(processCapability ? { capabilityId: processCapability.value || null } : {}),
+    ...(evidenceMetrics ? { evidenceMetricIds: [...evidenceMetrics.querySelectorAll('input[name="evidenceMetricIds"]:checked')].map((control) => control.value).sort() } : {}),
+    ...(feedbackGoal ? { feedbackGoalId: feedbackGoal.value || null } : {}),
+    ...(feedbackDecisions ? { feedbackDecisionIds: [...feedbackDecisions.querySelectorAll('input[name="feedbackDecisionIds"]:checked')].map((control) => control.value).sort() } : {}),
+    ...(capabilityMetrics ? { capabilityMetricIds: [...capabilityMetrics.querySelectorAll('input[name="capabilityMetricIds"]:checked')].map((control) => control.value).sort() } : {}),
+    ...(assignedRoles ? { assignedRoleIds: [...assignedRoles.querySelectorAll('input[name="assignedRoleIds"]:checked')].map((control) => control.value).sort() } : {}),
+    ...(informationSource ? { readInformationId: informationSource.value || null } : {}),
+    ...(linkedMetric ? { metricId: linkedMetric.value || null } : {}),
+    ...(linkedFeedbackLoop ? { consumerLoopId: linkedFeedbackLoop.value || null } : {}),
+    ...(mitigatingControl ? { mitigatingControlId: mitigatingControl.value || null } : {}),
+    ...(decisionMaker ? { decisionMakerRoleId: decisionMaker.value || null } : {}),
+    ...(decisionScope ? { decisionScopeIds: [...decisionScope.querySelectorAll('input[name="decisionScopeIds"]:checked')].map((control) => control.value).sort() } : {}),
+    ...(strategyGoals ? { strategyGoalIds: [...strategyGoals.querySelectorAll('input[name="strategyGoalIds"]:checked')].map((control) => control.value).sort() } : {}),
+    ...(responsibilitySelect ? { responsibilityIds: [...responsibilitySelect.querySelectorAll('input[name="responsibilityIds"]:checked')].map((control) => control.value).sort() } : {}),
     ...(instructions ? { proposedInstructions: instructions.value.trim() } : {}),
     ...(scopeStatements ? { proposedScopeStatements: scopeStatements.value.split('\n').map((line) => line.trim()).filter(Boolean) } : {}),
     ...(toolStatements ? { proposedToolStatements: toolStatements.value.split('\n').map((line) => line.trim()).filter(Boolean) } : {}),
@@ -849,6 +1388,28 @@ function renderBlueprintEditForm(node) {
     const current = blueprintItem(state.project.latestBlueprint, node.id);
     const unchanged = payload.name === current.name && payload.detail === current.detail
       && (!ownerRole || payload.ownerRoleName === Object.values(state.project.latestBlueprint.areas).flatMap((entry) => entry.items).find((item) => item.id === current.owner)?.name)
+      && (!servingCustomers || JSON.stringify(payload.servesCustomerIds) === JSON.stringify([...(current.serves ?? [])].sort()))
+      && (!enablingCapabilities || JSON.stringify(payload.enabledByCapabilityIds) === JSON.stringify([...(current.enabledBy ?? [])].sort()))
+      && (!inputInformation || JSON.stringify(payload.inputInformationIds) === JSON.stringify([...(current.inputs ?? []).filter((id) => blueprintItem(state.project.latestBlueprint, id)?.type === 'information')].sort()))
+      && (!outputInformation || JSON.stringify(payload.outputInformationIds) === JSON.stringify([...(current.outputs ?? []).filter((id) => blueprintItem(state.project.latestBlueprint, id)?.type === 'information')].sort()))
+      && (!inputDecisions || JSON.stringify(payload.inputDecisionIds) === JSON.stringify([...(current.inputs ?? []).filter((id) => blueprintItem(state.project.latestBlueprint, id)?.type === 'decision')].sort()))
+      && (!outputDecisions || JSON.stringify(payload.outputDecisionIds) === JSON.stringify([...(current.outputs ?? []).filter((id) => blueprintItem(state.project.latestBlueprint, id)?.type === 'decision')].sort()))
+      && (!processResources || JSON.stringify(payload.resourceIds) === JSON.stringify([...(current.resources ?? []).filter((id) => blueprintItem(state.project.latestBlueprint, id)?.type === 'resource')].sort()))
+      && (!processSystems || JSON.stringify(payload.systemIds) === JSON.stringify([...(current.systems ?? []).filter((id) => blueprintItem(state.project.latestBlueprint, id)?.type === 'system')].sort()))
+      && (!processCapability || payload.capabilityId === (blueprintItem(state.project.latestBlueprint, current.capability)?.type === 'capability' ? current.capability : null))
+      && (!evidenceMetrics || JSON.stringify(payload.evidenceMetricIds) === JSON.stringify([...(current.evidence ?? []).filter((id) => blueprintItem(state.project.latestBlueprint, id)?.type === 'metric')].sort()))
+      && (!feedbackGoal || payload.feedbackGoalId === (blueprintItem(state.project.latestBlueprint, current.goal)?.type === 'goal' ? current.goal : null))
+      && (!feedbackDecisions || JSON.stringify(payload.feedbackDecisionIds) === JSON.stringify([...(current.decisionIds ?? []).filter((id) => blueprintItem(state.project.latestBlueprint, id)?.type === 'decision')].sort()))
+      && (!capabilityMetrics || JSON.stringify(payload.capabilityMetricIds) === JSON.stringify([...(current.metrics ?? []).filter((id) => blueprintItem(state.project.latestBlueprint, id)?.type === 'metric')].sort()))
+      && (!assignedRoles || JSON.stringify(payload.assignedRoleIds) === JSON.stringify([...(current.assignedRoles ?? []).filter((id) => blueprintItem(state.project.latestBlueprint, id)?.type === 'role')].sort()))
+      && (!informationSource || payload.readInformationId === (blueprintItem(state.project.latestBlueprint, current.reads)?.type === 'information' ? current.reads : null))
+      && (!linkedMetric || payload.metricId === (current.metric ?? null))
+      && (!linkedFeedbackLoop || payload.consumerLoopId === (current.consumerLoop ?? null))
+      && (!mitigatingControl || payload.mitigatingControlId === (current.control ?? null))
+      && (!decisionMaker || payload.decisionMakerRoleId === (current.by ?? null))
+      && (!decisionScope || JSON.stringify(payload.decisionScopeIds) === JSON.stringify([...(current.scope ?? []).filter((id) => ['goal', 'strategy', 'customer', 'offering', 'economics', 'capability', 'process', 'resource', 'information', 'system', 'risk', 'control', 'metric', 'feedback-loop', 'lifecycle'].includes(blueprintItem(state.project.latestBlueprint, id)?.type))].sort()))
+      && (!strategyGoals || JSON.stringify(payload.strategyGoalIds) === JSON.stringify([...(current.goals ?? []).filter((id) => blueprintItem(state.project.latestBlueprint, id)?.type === 'goal')].sort()))
+      && (!responsibilitySelect || JSON.stringify(payload.responsibilityIds) === JSON.stringify([...(current.responsibilities ?? []).filter((id) => ['goal', 'capability', 'process', 'system'].includes(blueprintItem(state.project.latestBlueprint, id)?.type))].sort()))
       && (!trigger || payload.trigger === current.trigger)
       && (!instructions || payload.proposedInstructions === current.proposedInstructions)
       && (!scopeStatements || JSON.stringify(payload.proposedScopeStatements) === JSON.stringify(current.proposedScopeStatements ?? (current.authority ?? []).filter((value) => !(typeof value === 'string' && value.startsWith('decision-')))))
@@ -958,7 +1519,8 @@ function renderActorBindingPanel(node) {
         const byId = new Map(items.map((item) => [item.id, item]));
         const decisions = new Set(items.filter((item) => item.type === 'decision').map((item) => item.id));
         const linkedDecisions = blueprint.relations.filter((relation) => relation.target === selectedRole.id && relation.type === 'authorises').map((relation) => byId.get(relation.source)?.name).filter(Boolean);
-        const responsibilities = (selectedRole.responsibilities ?? []).map((id) => byId.get(id)?.name).filter(Boolean);
+        const responsibilities = (selectedRole.responsibilities ?? []).filter((id) => ['goal', 'capability', 'process', 'system'].includes(byId.get(id)?.type))
+          .map((id) => byId.get(id)?.name).filter(Boolean);
         const scope = selectedRole.proposedScopeStatements ?? (selectedRole.authority ?? []).filter((value) => !(typeof value === 'string' && value.startsWith('decision-')));
         const tools = selectedRole.proposedToolStatements ?? [];
         const escalations = selectedRole.proposedEscalationRules ?? [];
@@ -1154,6 +1716,17 @@ function renderDetail() {
   const content = [type, element('h3', { text: node.name }), element('p', { text: node.detail }), meta,
     element('p', { text: `Evidence: ${node.provenance?.at(-1)?.note ?? 'No provenance recorded'}` }), connections,
     versionHistoryFor(node)];
+  const savedProcess = node.type === 'process' ? blueprintItem(state.project.latestBlueprint, node.id) : null;
+  if (savedProcess?.type === 'process') {
+    const planLink = element('a', {
+      className: 'button', text: 'Plan this process in Execution',
+      attrs: { href: encodeExecutionRoute(state.project.id, { projectId: state.project.id, processId: savedProcess.id }) },
+    });
+    planLink.addEventListener('click', (event) => {
+      if (!allowRouteChange()) event.preventDefault();
+    });
+    content.push(planLink);
+  }
   const editForm = renderBlueprintEditForm(node);
   if (editForm) content.push(editForm);
   const actorBindingPanel = renderActorBindingPanel(node);
@@ -1198,6 +1771,7 @@ try {
   const [foundation, , session] = await Promise.all([api('/api/v1/foundation'), refreshProjects(), fetch('/auth/session').then((response) => response.json())]);
   state.foundation = foundation.data;
   state.sessionRoles = session.roles ?? [];
+  state.sessionPrincipal = session.principal ?? null;
   foundationBadge.lastChild.textContent = ` ${state.foundation.identity.status === 'development_unverified' ? 'Development identity' : 'Authenticated workspace'}`;
   signOutButton.hidden = !session.authenticated;
   const route = decodeStudioRoute(window.location.href);

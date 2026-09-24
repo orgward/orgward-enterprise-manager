@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { lstat, mkdir, mkdtemp, open, realpath, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -61,7 +62,7 @@ async function snapshot(directoryHandle, {
         }
         budget.bytes += contents.length - openedInfo.size;
         if (budget.bytes > MAX_ARTIFACT_TOTAL_BYTES) throw new Error('Execution workspace exceeds the artifact inspection limit.');
-        output.set(child.split(path.sep).join('/'), digest(contents));
+        output.set(child.split(path.sep).join('/'), createHash('sha256').update(contents).digest('hex'));
       } finally { await file.close(); }
     }
   }
@@ -236,7 +237,8 @@ export class CommandExecutionAdapter {
       terminate: () => terminate('revoked'),
       result: result.then(async (exit) => {
         const after = await snapshot(workspaceHandle, this.snapshotFileSystem);
-        const changedArtifacts = [...after].filter(([file, hash]) => before.get(file) !== hash).map(([file, contentHash]) => ({ path: file, contentHash }));
+        const changedArtifacts = [...after].filter(([file, hash]) => before.get(file) !== hash)
+          .map(([file, contentHash]) => ({ path: file, contentHash, hashAlgorithm: 'sha256-raw' }));
         return {
           adapter: { port: 'ExecutionPort', implementation: this.name, version: this.version },
           status: exit.code === 0 ? 'COMPLETED' : 'FAILED', exitCode: exit.code, signal: exit.signal,

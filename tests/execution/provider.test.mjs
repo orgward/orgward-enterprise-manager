@@ -278,18 +278,17 @@ test('handoff wins the shared lease gate before revocation and restart never red
   const run = await createApprovedRun(app, projectId, 'dispatch wins gate');
   armed = true;
   const execution = api(app, `/api/execution/runs/${run.id}/execute`, 'worker', { method: 'POST', body: { version: run.version } });
-  await Promise.all([handoffEntered, seen]);
+  await handoffEntered;
   const liveLease = await app.persistence.query(`select lease_until > clock_timestamp() + interval '20 seconds' as beyond_provider_handoff_bound
     from orgward.execution_worker_leases where tenant_id='tenant-a' and run_id=$1`, [run.id]);
-  assert.equal(liveLease.rows[0].beyond_provider_handoff_bound, true, 'provider lease outlives the bounded handoff while its row is locked');
-  let revokeFinished = false;
-  const revocation = api(secondApp, `/api/v1/projects/${projectId}/members/${principal('worker')}/revoke`, 'admin', { method: 'POST', body: {} })
-    .then((value) => { revokeFinished = true; return value; });
-  await new Promise((resolve) => setTimeout(resolve, 75));
-  assert.equal(revokeFinished, false, 'revocation waits for the transport handoff transaction');
-  releaseHandoff();
-  const revoked = await revocation;
+  assert.equal(liveLease.rows[0].beyond_provider_handoff_bound, true, 'the provider lease remains valid while the committed send is deferred');
+  const handedOff = await app.persistence.query(`select status from orgward.provider_dispatch_attempts
+    where tenant_id='tenant-a' and run_id=$1`, [run.id]);
+  assert.equal(handedOff.rows[0].status, 'handed_off', 'the provider handoff is durably recorded before the send hook');
+  const revoked = await api(secondApp, `/api/v1/projects/${projectId}/members/${principal('worker')}/revoke`, 'admin', { method: 'POST', body: {} });
   assert.equal(revoked.status, 200, JSON.stringify(revoked.body));
+  releaseHandoff();
+  await seen;
   releaseProvider();
   const outcome = await execution;
   assert.notEqual(outcome.body.status, 'SUCCEEDED');
@@ -345,19 +344,15 @@ test('restart turns a reserved attempt with an expired lease into unknown and pr
   assert.equal(getFixtureRequestCount(), 0);
 });
 
-test('handoff transaction failure persists unknown and restart never repeats a possibly sent request', async (t) => {
-  let markProviderSeen;
-  const providerSeen = new Promise((resolve) => { markProviderSeen = resolve; });
+test('failure after durable handoff but before transport send persists unknown and prevents redispatch', async (t) => {
   let failAfterHandoff = true;
   const setupResult = await setup(t, async ({ response }) => {
-    markProviderSeen();
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ result: 'provider may have processed this request' }));
   }, { persistenceFaults: { afterProviderDispatchHandoff: async () => {
     if (!failAfterHandoff) return;
     failAfterHandoff = false;
-    await providerSeen;
-    throw new Error('simulated transaction failure after transport handoff');
+    throw new Error('simulated failure after durable handoff and before deferred transport send');
   } } });
   let { app } = setupResult;
   const { projectId, getFixtureRequestCount, restart } = setupResult;
@@ -367,7 +362,7 @@ test('handoff transaction failure persists unknown and restart never repeats a p
   assert.notEqual(first.body.status, 'SUCCEEDED');
   assert.match(first.body.execution.error, /provider may have received this request/i);
   assert.match(first.body.execution.error, /run will not send it again/i);
-  assert.equal(getFixtureRequestCount(), 1);
+  assert.equal(getFixtureRequestCount(), 0, 'the deferred transport is not sent when the post-handoff hook fails');
   const runEvents = await app.persistence.query(`select state->'events' as events from orgward.aggregates
     where tenant_id='tenant-a' and aggregate_kind='execution_run' and aggregate_id=$1`, [run.id]);
   assert.ok(runEvents.rows[0].events.some((event) => event.type === 'ExecutionFailed'
@@ -385,7 +380,7 @@ test('handoff transaction failure persists unknown and restart never repeats a p
   assert.equal(current.status, 200);
   const retry = await api(app, `/api/execution/runs/${run.id}/execute`, 'worker', { method: 'POST', body: { version: current.body.version } });
   assert.notEqual(retry.status, 200);
-  assert.equal(getFixtureRequestCount(), 1);
+  assert.equal(getFixtureRequestCount(), 0, 'restart never sends an attempt whose outcome is unknown');
 });
 
 test('credential expiry blocks provider dispatch and aborts an in-flight provider request', async (t) => {

@@ -12,6 +12,18 @@ update focused behavior tests, implement the behavior across state/API/UI as nee
 review the implementation diff, then run `npm run check` before marking the task
 complete. Keep task status honest.
 
+Follow the priority phases in `TASKS.md`: finish the saved/editable business
+design and the founder-to-operating end-to-end journey before standalone broad
+security, resilience and operations qualification. Keep the necessary authority,
+tenant isolation, secret, effect-boundary, intervention and audit controls inside
+each customer flow; defer no release gate. PR numbers are stable identifiers, and
+the order of active queue sections determines the next task. Mark implementation
+tasks separately from production gates, whose evidence and status remain in their
+own ledger. Follow the active cursor in `TASKS.md`: PR-01–PR-05 are complete,
+PR-06 is first open, and PR-07 follows. Older increment narratives and archived
+backlogs cannot reset that cursor; change it only when the task checkbox is
+supported by passing behavior checks and the implementation review.
+
 Do not require change records, manifests, generated vectors, packet digests or
 review receipts before ordinary implementation. The files under `contracts/`,
 `docs/production/` and older `ops/checks/` remain useful design history, but they

@@ -13,10 +13,19 @@ const defaultExpiry = new Date(Date.now() + 60 * 60_000).toISOString();
 
 function brokerOperation(operation) {
   return (context) => {
-    const result = new Promise((resolve, reject) => setImmediate(() => {
-      Promise.resolve().then(() => operation(context)).then(resolve, reject);
-    }));
-    return { handedOff: Promise.resolve(), result, abort() {} };
+    let resolveResult;
+    let rejectResult;
+    let started = false;
+    const result = new Promise((resolve, reject) => { resolveResult = resolve; rejectResult = reject; });
+    return {
+      result,
+      send() {
+        if (started) throw new Error('Provider transport may only be handed off once.');
+        started = true;
+        setImmediate(() => Promise.resolve().then(() => operation(context)).then(resolveResult, rejectResult));
+      },
+      abort() {},
+    };
   };
 }
 
@@ -42,8 +51,8 @@ function authenticator() {
   };
 }
 
-async function start(databaseUrl, encryptionKey, openAiValidationEndpoint) {
-  const app = createApp({ databaseUrl, oidcAuthenticator: authenticator(), secretEncryptionKey: encryptionKey, ...(openAiValidationEndpoint ? { openAiValidationEndpoint } : {}) });
+async function start(databaseUrl, encryptionKey, openAiValidationEndpoint, additionalOptions = {}) {
+  const app = createApp({ databaseUrl, oidcAuthenticator: authenticator(), secretEncryptionKey: encryptionKey, ...(openAiValidationEndpoint ? { openAiValidationEndpoint } : {}), ...additionalOptions });
   await app.init();
   for (const [subject, tenantId, roles] of [
     ['alice', 'tenant-a', ['tenant-admin', 'workspace-read', 'workspace-write', 'execution-approver']],
@@ -416,8 +425,11 @@ test('OpenAI candidate validation stages encrypted key, denies cross-tenant acce
   assert.equal(validateThird.status, 200);
   const activateThird = await send(app, '/api/v1/secrets/secret-openai/openai-candidate/activate', 'alice', { method: 'POST', body: { schemaVersion: '1.0', commandId: 'openai-activate-third', expectedVersion: 2, payload: { candidateVersion: 3, reason: 'Activate third generation' } } });
   assert.equal(activateThird.status, 200);
-  const obligations = await app.persistence.query(`select credential_version,status from orgward.secret_upstream_revocation_obligations where tenant_id='tenant-a' and reference='secret-openai' order by credential_version`);
-  assert.deepEqual(obligations.rows, [{ credential_version: 1, status: 'unconfirmed' }, { credential_version: 2, status: 'unconfirmed' }]);
+  const obligations = await app.persistence.query(`select credential_version,status,provider_organization_id,provider_project_id,provider_service_account_id,provider_api_key_id,target_provenance from orgward.secret_upstream_revocation_obligations where tenant_id='tenant-a' and reference='secret-openai' order by credential_version`);
+  assert.deepEqual(obligations.rows, [
+    { credential_version: 1, status: 'unconfirmed', provider_organization_id: null, provider_project_id: null, provider_service_account_id: null, provider_api_key_id: null, target_provenance: null },
+    { credential_version: 2, status: 'unconfirmed', provider_organization_id: null, provider_project_id: null, provider_service_account_id: null, provider_api_key_id: null, target_provenance: null },
+  ]);
   const listed = await send(app, '/api/v1/secrets', 'alice');
   assert.equal(JSON.stringify(await listed.json()).includes(canary), false);
   await close(app); app = await start(postgres.databaseUrl, key, `http://127.0.0.1:${fixture.address().port}/v1/models`);
@@ -461,4 +473,376 @@ test('OpenAI candidate validation stages encrypted key, denies cross-tenant acce
     await app.persistence.query(`update orgward.secret_references set ciphertext=$3,nonce=$4,auth_tag=$5 where tenant_id=$1 and reference=$2 and status='active' and ciphertext is null`, ['tenant-a', 'secret-corrupt-envelope', originalEnvelope.rows[0].ciphertext, originalEnvelope.rows[0].nonce, originalEnvelope.rows[0].auth_tag]);
     await app.persistence.query(`alter table orgward.secret_references add constraint secret_references_check ${constraint.rows[0].definition}`);
   }
+});
+
+test('tenant admins can provision scoped managed OpenAI candidates with durable no-replay recovery', async (t) => {
+  const postgres = await startPostgres();
+  const generatedKey = 'sk-managed-fixture-secret-value';
+  const observed = [];
+  const providerAccounts = new Set();
+  const revocationRequests = [];
+  let app;
+  let failNextOperation = null;
+  let revokeAuthorityDuringNextKeyCreate = false;
+  let omitNextApiKeyExpiry = false;
+  let serviceAccountNumber = 0;
+  const adminFixture = createServer(async (request, response) => {
+    const buffers = [];
+    for await (const chunk of request) buffers.push(chunk);
+    const raw = Buffer.concat(buffers).toString('utf8');
+    const payload = raw ? JSON.parse(raw) : null;
+    let data, status = 200, expectedState = null;
+    if (request.method === 'GET' && /\/service_accounts\/[^/]+$/.test(request.url)) {
+      revocationRequests.push({ method: request.method, url: request.url });
+      const serviceAccountId = request.url.split('/').at(-1);
+      if (providerAccounts.has(serviceAccountId)) data = { id: serviceAccountId };
+      else { status = 404; data = { error: 'service account missing' }; }
+    } else if (request.method === 'DELETE' && /\/service_accounts\/[^/]+$/.test(request.url)) {
+      revocationRequests.push({ method: request.method, url: request.url });
+      const serviceAccountId = request.url.split('/').at(-1);
+      providerAccounts.delete(serviceAccountId);
+      data = { id: serviceAccountId, deleted: true };
+    } else if (request.method === 'POST' && /\/service_accounts$/.test(request.url)) {
+      expectedState = 'service_account_create_sent';
+      data = { id: `svc_acct_${++serviceAccountNumber}`, role: 'none', api_key: null };
+    } else if (request.method === 'POST' && /\/service_accounts\/[^/]+$/.test(request.url)) {
+      expectedState = 'role_update_sent';
+      data = { id: request.url.split('/').at(-1), role: 'member' };
+    } else if (request.method === 'POST' && /\/api_keys$/.test(request.url)) {
+      expectedState = 'api_key_create_sent';
+      const createdAt = Math.floor(Date.now() / 1000);
+      data = { id: `key_fixture_${serviceAccountNumber}`, value: generatedKey, created_at: createdAt };
+      if (!omitNextApiKeyExpiry) data.expires_at = createdAt + payload.expires_in_seconds;
+      else omitNextApiKeyExpiry = false;
+    } else if (request.method === 'GET' && request.url === '/v1/models/gpt-managed-fixture') {
+      observed.push({ method: request.method, url: request.url, authorization: request.headers.authorization });
+      data = { id: 'gpt-managed-fixture' };
+    } else {
+      status = 404;
+      data = { error: 'fixture route missing' };
+    }
+    if (expectedState) {
+      const job = await app.persistence.query(`select status,provider_resource_name from orgward.secret_openai_provisioning_commands
+        where status=$1 order by created_at desc limit 1`, [expectedState]);
+      observed.push({ method: request.method, url: request.url, payload, authorization: request.headers.authorization,
+        intentStatus: job.rows[0]?.status, persistedName: job.rows[0]?.provider_resource_name });
+      if (revokeAuthorityDuringNextKeyCreate && expectedState === 'api_key_create_sent') {
+        revokeAuthorityDuringNextKeyCreate = false;
+        await app.persistence.query(`update orgward.oidc_principals set roles=array_remove(roles,'tenant-admin'),
+          authz_generation=authz_generation+1,updated_at=now() where tenant_id='tenant-a' and principal=$1`, [principal('alice')]);
+      }
+      if (failNextOperation === expectedState) {
+        failNextOperation = null;
+        status = 503;
+        data = { error: 'fixture unavailable' };
+      }
+    }
+    if (status === 200 && request.method === 'POST' && /\/service_accounts$/.test(request.url)) providerAccounts.add(data.id);
+    response.writeHead(status, { 'content-type': 'application/json' });
+    response.end(JSON.stringify(data));
+  });
+  await new Promise((resolve) => adminFixture.listen(0, '127.0.0.1', resolve));
+  t.after(async () => { await close(app); await new Promise((resolve) => adminFixture.close(resolve)); });
+  const adminEndpoint = `http://127.0.0.1:${adminFixture.address().port}`;
+  const options = {
+    openAiAdminApiKey: 'sk-admin-key-fixture-only',
+    openAiOrganizationId: 'org_fixture',
+    openAiTenantProjects: { 'tenant-a': 'proj_tenant_a', 'tenant-b': 'proj_tenant_b' },
+    openAiAdminEndpoint: adminEndpoint,
+  };
+  const validationEndpoint = `${adminEndpoint}/v1/models`;
+  app = await start(postgres.databaseUrl, Buffer.alloc(32, 5), validationEndpoint, options);
+  const managedExpiry = new Date(Date.now() + 60 * 60_000).toISOString();
+  const body = (commandId, expectedVersion = 0, overrides = {}) => ({
+    schemaVersion: '1.0', commandId, expectedVersion,
+    payload: { model: 'gpt-managed-fixture', reason: 'Provision a managed test credential', expiresAt: managedExpiry, ...overrides },
+  });
+
+  const denied = await send(app, '/api/v1/secrets/secret-managed-denied/openai-managed-candidate', 'writer', { method: 'POST', body: body('managed-denied') });
+  assert.equal(denied.status, 403);
+  assert.equal(observed.length, 0, 'non-admin authority produces no provider request');
+
+  const injectedProject = await send(app, '/api/v1/secrets/secret-managed-injected/openai-managed-candidate', 'alice', {
+    method: 'POST', body: body('managed-injected', 0, { projectId: 'proj_tenant_b' }),
+  });
+  assert.equal(injectedProject.status, 400);
+  assert.equal(observed.length, 0, 'request cannot choose a provider project');
+
+  const created = await send(app, '/api/v1/secrets/secret-managed-success/openai-managed-candidate', 'alice', { method: 'POST', body: body('managed-success') });
+  assert.equal(created.status, 200, JSON.stringify(await created.clone().json()));
+  const createdBody = await created.json();
+  assert.deepEqual(createdBody.data, { status: 'candidate_staged', candidateVersion: 1, reference: 'secret-managed-success', replayed: false });
+  assert.equal(JSON.stringify(createdBody).includes(generatedKey), false);
+  assert.deepEqual(observed.slice(0, 3).map(({ url, intentStatus }) => ({ url, intentStatus })), [
+    { url: '/v1/organization/projects/proj_tenant_a/service_accounts', intentStatus: 'service_account_create_sent' },
+    { url: '/v1/organization/projects/proj_tenant_a/service_accounts/svc_acct_1', intentStatus: 'role_update_sent' },
+    { url: '/v1/organization/projects/proj_tenant_a/service_accounts/svc_acct_1/api_keys', intentStatus: 'api_key_create_sent' },
+  ]);
+  assert.equal(observed[0].persistedName, observed[0].payload.name, 'opaque resource name is durable before account creation');
+  assert.equal(observed[0].payload.create_service_account_only, true);
+  assert.equal(observed[0].payload.api_key, undefined);
+  assert.deepEqual(observed[2].payload.scopes, ['api.model.read', 'api.responses.write']);
+  assert.ok(observed[2].payload.expires_in_seconds > 0 && observed[2].payload.expires_in_seconds <= 31_536_000);
+  assert.ok(observed.slice(0, 3).every((item) => item.authorization === 'Bearer sk-admin-key-fixture-only'));
+  const persisted = await app.persistence.query(`select candidate_ciphertext,candidate_provider_organization_id,candidate_provider_project_id,
+    candidate_provider_service_account_id,candidate_provider_api_key_id,candidate_provider_target_provenance
+    from orgward.secret_references where tenant_id='tenant-a' and reference='secret-managed-success'`);
+  assert.equal(persisted.rows[0].candidate_ciphertext.includes(Buffer.from(generatedKey)), false);
+  assert.deepEqual(persisted.rows[0], {
+    candidate_ciphertext: persisted.rows[0].candidate_ciphertext,
+    candidate_provider_organization_id: 'org_fixture', candidate_provider_project_id: 'proj_tenant_a',
+    candidate_provider_service_account_id: 'svc_acct_1', candidate_provider_api_key_id: 'key_fixture_1',
+    candidate_provider_target_provenance: 'orgward_created_exclusive_service_account',
+  });
+
+  const replay = await send(app, '/api/v1/secrets/secret-managed-success/openai-managed-candidate', 'alice', { method: 'POST', body: body('managed-success') });
+  assert.deepEqual((await replay.json()).data, { status: 'candidate_staged', reference: 'secret-managed-success', candidateVersion: 1, replayed: true });
+  assert.equal(observed.length, 3, 'idempotent replay issues no provider request');
+
+  const activeBeforeManagedCandidate = await send(app, '/api/v1/secrets/secret-managed-cancel', 'alice', {
+    method: 'PUT', body: rotateBody('managed-cancel-base', 0, 'sk-managed-cancel-base'),
+  });
+  assert.equal(activeBeforeManagedCandidate.status, 200);
+  const stagedAlongsideActive = await send(app, '/api/v1/secrets/secret-managed-cancel/openai-managed-candidate', 'alice', {
+    method: 'POST', body: body('managed-cancel-candidate', 1),
+  });
+  assert.equal(stagedAlongsideActive.status, 200);
+  assert.equal((await stagedAlongsideActive.json()).data.status, 'candidate_staged');
+  const discardManagedCandidate = await send(app, '/api/v1/secrets/secret-managed-cancel/revoke', 'alice', {
+    method: 'POST', body: { schemaVersion: '1.0', commandId: 'managed-cancel-revoke', expectedVersion: 1, payload: { reason: 'Retire active credential' } },
+  });
+  assert.equal(discardManagedCandidate.status, 409);
+  assert.equal((await discardManagedCandidate.json()).error.code, 'MANAGED_CANDIDATE_PRESENT');
+  const preservedCandidate = await app.persistence.query(`select candidate_provider_service_account_id,candidate_provider_api_key_id,
+    candidate_provider_target_provenance from orgward.secret_references where tenant_id='tenant-a' and reference='secret-managed-cancel'`);
+  assert.deepEqual(preservedCandidate.rows[0], {
+    candidate_provider_service_account_id: 'svc_acct_2', candidate_provider_api_key_id: 'key_fixture_2',
+    candidate_provider_target_provenance: 'orgward_created_exclusive_service_account',
+  }, 'revoke refuses to clear a managed candidate without retaining a revocation obligation');
+
+  const validate = await send(app, '/api/v1/secrets/secret-managed-success/openai-candidate/validate', 'alice', {
+    method: 'POST', body: { schemaVersion: '1.0', commandId: 'managed-success-validate', expectedVersion: 0, payload: { candidateVersion: 1 } },
+  });
+  assert.equal(validate.status, 200, JSON.stringify(await validate.clone().json()));
+  assert.equal(observed.at(-1).authorization, `Bearer ${generatedKey}`);
+  const activate = await send(app, '/api/v1/secrets/secret-managed-success/openai-candidate/activate', 'alice', {
+    method: 'POST', body: { schemaVersion: '1.0', commandId: 'managed-success-activate', expectedVersion: 0, payload: { candidateVersion: 1, reason: 'Activate fixture candidate' } },
+  });
+  assert.equal(activate.status, 200, JSON.stringify(await activate.clone().json()));
+  const active = await app.persistence.query(`select active_provider_organization_id,active_provider_project_id,active_provider_service_account_id,
+    active_provider_api_key_id,active_provider_target_provenance from orgward.secret_references where tenant_id='tenant-a' and reference='secret-managed-success'`);
+  assert.deepEqual(active.rows[0], {
+    active_provider_organization_id: 'org_fixture', active_provider_project_id: 'proj_tenant_a',
+    active_provider_service_account_id: 'svc_acct_1', active_provider_api_key_id: 'key_fixture_1',
+    active_provider_target_provenance: 'orgward_created_exclusive_service_account',
+  });
+  const localRevoke = await send(app, '/api/v1/secrets/secret-managed-success/revoke', 'alice', {
+    method: 'POST', body: { schemaVersion: '1.0', commandId: 'managed-success-local-revoke', expectedVersion: 1, payload: { reason: 'Retire managed credential' } },
+  });
+  assert.equal(localRevoke.status, 200);
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const status = await app.persistence.query(`select status from orgward.secret_upstream_revocation_obligations where tenant_id='tenant-a' and reference='secret-managed-success'`);
+    if (status.rows[0]?.status === 'confirmed') break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.deepEqual(revocationRequests.map(({ method, url }) => ({ method, url })), [
+    { method: 'GET', url: '/v1/organization/projects/proj_tenant_a/service_accounts/svc_acct_1' },
+    { method: 'DELETE', url: '/v1/organization/projects/proj_tenant_a/service_accounts/svc_acct_1' },
+  ]);
+  assert.equal(providerAccounts.has('svc_acct_1'), false, 'the exact created service account was deleted');
+  const obligation = await app.persistence.query(`select provider_organization_id,provider_project_id,provider_service_account_id,provider_api_key_id,target_provenance,status
+    from orgward.secret_upstream_revocation_obligations where tenant_id='tenant-a' and reference='secret-managed-success'`);
+  assert.deepEqual(obligation.rows[0], {
+    provider_organization_id: 'org_fixture', provider_project_id: 'proj_tenant_a',
+    provider_service_account_id: 'svc_acct_1', provider_api_key_id: 'key_fixture_1',
+    target_provenance: 'orgward_created_exclusive_service_account', status: 'confirmed',
+  });
+
+  const crossTenantStart = observed.length;
+  const crossTenant = await send(app, '/api/v1/secrets/secret-managed-tenant-b/openai-managed-candidate', 'other-admin', { method: 'POST', body: body('managed-tenant-b') });
+  assert.equal(crossTenant.status, 200, JSON.stringify(await crossTenant.clone().json()));
+  assert.match(observed[crossTenantStart].url, /\/projects\/proj_tenant_b\/service_accounts$/);
+
+  for (const [index, phase] of ['service_account_create_sent', 'role_update_sent', 'api_key_create_sent'].entries()) {
+    const reference = `secret-managed-failure-${index}`;
+    const commandId = `managed-failure-${index}`;
+    failNextOperation = phase;
+    const result = await send(app, `/api/v1/secrets/${reference}/openai-managed-candidate`, 'alice', { method: 'POST', body: body(commandId) });
+    assert.equal(result.status, 200);
+    assert.equal((await result.json()).data.status, 'unresolved');
+    const countAtFailure = observed.length;
+    const retry = await send(app, `/api/v1/secrets/${reference}/openai-managed-candidate`, 'alice', { method: 'POST', body: body(commandId) });
+    assert.equal((await retry.json()).data.status, 'unresolved');
+    assert.equal(observed.length, countAtFailure, `replay does not repeat ${phase}`);
+  }
+
+  const sentJobs = await app.persistence.query(`select reference,command_id,service_account_id from orgward.secret_openai_provisioning_commands
+    where tenant_id='tenant-a' and status='unresolved' and command_id in ('managed-failure-0','managed-failure-1','managed-failure-2') order by command_id`);
+  assert.equal(sentJobs.rowCount, 3);
+  assert.equal(sentJobs.rows[0].service_account_id, null);
+  assert.ok(sentJobs.rows[1].service_account_id);
+  assert.ok(sentJobs.rows[2].service_account_id);
+  await app.persistence.query(`update orgward.secret_openai_provisioning_commands set status='service_account_create_sent' where command_id='managed-failure-0'`);
+  await app.persistence.query(`update orgward.secret_openai_provisioning_commands set status='role_update_sent' where command_id='managed-failure-1'`);
+  await app.persistence.query(`update orgward.secret_openai_provisioning_commands set status='api_key_create_sent' where command_id='managed-failure-2'`);
+  const callsBeforeRestart = observed.length;
+  await close(app);
+  app = await start(postgres.databaseUrl, Buffer.alloc(32, 5), validationEndpoint, options);
+  const afterRestart = await app.persistence.query(`select count(*)::int as count from orgward.secret_openai_provisioning_commands
+    where tenant_id='tenant-a' and status='unresolved' and command_id in ('managed-failure-0','managed-failure-1','managed-failure-2')`);
+  assert.equal(afterRestart.rows[0].count, 3);
+  for (let index = 0; index < 3; index += 1) {
+    const retry = await send(app, `/api/v1/secrets/secret-managed-failure-${index}/openai-managed-candidate`, 'alice', { method: 'POST', body: body(`managed-failure-${index}`) });
+    assert.equal((await retry.json()).data.status, 'unresolved');
+  }
+  assert.equal(observed.length, callsBeforeRestart, 'restart recovery does not replay possibly completed provider effects');
+
+  omitNextApiKeyExpiry = true;
+  const invalidExpiryResponse = await send(app, '/api/v1/secrets/secret-managed-invalid-expiry/openai-managed-candidate', 'alice', {
+    method: 'POST', body: body('managed-invalid-expiry'),
+  });
+  assert.equal(invalidExpiryResponse.status, 200);
+  assert.equal((await invalidExpiryResponse.json()).data.status, 'unresolved');
+  const invalidExpiryState = await app.persistence.query(`select status,service_account_id,api_key_id,failure_code
+    from orgward.secret_openai_provisioning_commands where tenant_id='tenant-a' and command_id='managed-invalid-expiry'`);
+  assert.deepEqual(invalidExpiryState.rows[0], {
+    status: 'unresolved', service_account_id: `svc_acct_${serviceAccountNumber}`,
+    api_key_id: `key_fixture_${serviceAccountNumber}`, failure_code: 'provider_response_invalid',
+  });
+  const noCandidateFromInvalidExpiry = await app.persistence.query(`select candidate_ciphertext,candidate_version
+    from orgward.secret_references where tenant_id='tenant-a' and reference='secret-managed-invalid-expiry'`);
+  assert.equal(noCandidateFromInvalidExpiry.rows[0].candidate_ciphertext, null);
+  assert.equal(noCandidateFromInvalidExpiry.rows[0].candidate_version, null);
+
+  const authRaceStart = observed.length;
+  revokeAuthorityDuringNextKeyCreate = true;
+  const authRace = await send(app, '/api/v1/secrets/secret-managed-auth-race/openai-managed-candidate', 'alice', {
+    method: 'POST', body: body('managed-auth-race'),
+  });
+  assert.equal(authRace.status, 200, JSON.stringify(await authRace.clone().json()));
+  assert.equal((await authRace.json()).data.status, 'unresolved');
+  assert.equal(observed.length - authRaceStart, 3, 'authority loss after key creation prevents validation and activation work');
+  const authRaceState = await app.persistence.query(`select status,service_account_id,api_key_id,failure_code
+    from orgward.secret_openai_provisioning_commands where tenant_id='tenant-a' and command_id='managed-auth-race'`);
+  assert.deepEqual(authRaceState.rows[0], {
+    status: 'unresolved', service_account_id: `svc_acct_${serviceAccountNumber}`,
+    api_key_id: `key_fixture_${serviceAccountNumber}`, failure_code: 'provider_response_ambiguous',
+  }, 'exact IDs returned during an authority race are retained on the unresolved command');
+  const noCandidateFromRace = await app.persistence.query(`select candidate_version from orgward.secret_references
+    where tenant_id='tenant-a' and reference='secret-managed-auth-race'`);
+  assert.equal(noCandidateFromRace.rows[0].candidate_version, null);
+});
+
+test('eligible OpenAI revocations are leased across instances and reconciled after a lost delete response', async (t) => {
+  const postgres = await startPostgres();
+  const existingAccounts = new Set(['svcacct_restart', 'svcacct_clean']);
+  const providerCalls = [];
+  let loseNextDeleteResponse = true;
+  const adminFixture = createServer(async (request, response) => {
+    providerCalls.push({ method: request.method, url: request.url, authorization: request.headers.authorization });
+    const accountId = decodeURIComponent(request.url.split('/').at(-1));
+    if (request.method === 'GET' && request.url.startsWith('/v1/organization/projects/proj_exact/service_accounts/')) {
+      if (!existingAccounts.has(accountId)) { response.writeHead(404); response.end(); return; }
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ id: accountId }));
+      return;
+    }
+    if (request.method === 'DELETE' && request.url.startsWith('/v1/organization/projects/proj_exact/service_accounts/')) {
+      existingAccounts.delete(accountId);
+      if (accountId === 'svcacct_restart' && loseNextDeleteResponse) {
+        loseNextDeleteResponse = false;
+        response.writeHead(500); response.end('{}'); return;
+      }
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ id: accountId, deleted: true }));
+      return;
+    }
+    response.writeHead(404); response.end();
+  });
+  await new Promise((resolve) => adminFixture.listen(0, '127.0.0.1', resolve));
+  const adminEndpoint = `http://127.0.0.1:${adminFixture.address().port}`;
+  const options = { openAiAdminApiKey: 'server-admin-fixture-key', openAiOrganizationId: 'org_exact',
+    openAiTenantProjects: { 'tenant-a': 'proj_exact' }, openAiAdminEndpoint: adminEndpoint };
+  let first, second, restarted;
+  t.after(async () => {
+    if (first) await close(first);
+    if (second) await close(second);
+    if (restarted) await close(restarted);
+    await new Promise((resolve) => adminFixture.close(resolve));
+    await postgres.close();
+  });
+  first = await start(postgres.databaseUrl, Buffer.alloc(32, 6), null, options);
+  second = await start(postgres.databaseUrl, Buffer.alloc(32, 6), null, options);
+  first.secretStore.stopOpenAiRevocationReconciler();
+  second.secretStore.stopOpenAiRevocationReconciler();
+
+  for (const reference of ['secret-reconcile-restart', 'secret-reconcile-clean']) {
+    const created = await send(first, `/api/v1/secrets/${reference}`, 'alice', { method: 'PUT',
+      body: rotateBody(`${reference}-create`, 0, `sk-${reference}-value`) });
+    assert.equal(created.status, 200);
+  }
+  const actor = principal('alice');
+  const insertObligation = async ({ reference, version = 1, accountId, apiKeyId = 'key_fixture', organizationId = 'org_exact', projectId = 'proj_exact', provenance = 'orgward_created_exclusive_service_account' }) => first.persistence.query(`
+    insert into orgward.secret_upstream_revocation_obligations
+      (tenant_id,reference,credential_version,provider,status,reason,created_by,
+       provider_organization_id,provider_project_id,provider_service_account_id,provider_api_key_id,target_provenance)
+    values ('tenant-a',$1,$2,'openai','unconfirmed','fixture obligation',$3,$4,$5,$6,$7,$8)
+  `, [reference, version, actor, organizationId, projectId, accountId, apiKeyId, provenance]);
+  await insertObligation({ reference: 'secret-reconcile-restart', accountId: 'svcacct_restart' });
+  await insertObligation({ reference: 'secret-reconcile-restart', version: 2, accountId: null, apiKeyId: null, organizationId: null, projectId: null, provenance: null });
+  await insertObligation({ reference: 'secret-reconcile-clean', accountId: 'svcacct_clean' });
+  await first.persistence.query(`update orgward.secret_references set upstream_revocation_status='unconfirmed' where tenant_id='tenant-a' and reference in ('secret-reconcile-restart','secret-reconcile-clean')`);
+
+  let releaseGet;
+  const getGate = new Promise((resolve) => { releaseGet = resolve; });
+  const originalListener = adminFixture.listeners('request')[0];
+  // The first lookup stays open long enough for the other app instance to race the same due item.
+  let gatePending = true;
+  let firstLookupStarted = false;
+  const gatedListener = async (request, response) => {
+    if (gatePending && request.method === 'GET' && request.url.includes('svcacct_restart')) {
+      gatePending = false;
+      firstLookupStarted = true;
+      await getGate;
+    }
+    return originalListener(request, response);
+  };
+  adminFixture.removeAllListeners('request');
+  adminFixture.on('request', gatedListener);
+  const one = first.secretStore.reconcileOpenAiRevocationObligations();
+  for (let attempt = 0; attempt < 50 && !firstLookupStarted; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(firstLookupStarted, true, 'one instance claimed and began the exact account lookup');
+  const two = second.secretStore.reconcileOpenAiRevocationObligations();
+  releaseGet();
+  await Promise.all([one, two]);
+  assert.equal(providerCalls.filter((call) => call.url.includes('svcacct_restart') && call.method === 'DELETE').length, 1);
+  assert.equal(existingAccounts.has('svcacct_restart'), false);
+  const ambiguous = await first.persistence.query(`select status,attempt_count,claim_token is null as released from orgward.secret_upstream_revocation_obligations where tenant_id='tenant-a' and reference='secret-reconcile-restart' and credential_version=1`);
+  assert.deepEqual(ambiguous.rows[0], { status: 'unconfirmed', attempt_count: 1, released: true });
+
+  const rawOnly = await first.persistence.query(`select status,attempt_count from orgward.secret_upstream_revocation_obligations where tenant_id='tenant-a' and reference='secret-reconcile-restart' and credential_version=2`);
+  assert.deepEqual(rawOnly.rows[0], { status: 'unconfirmed', attempt_count: 0 });
+  await first.persistence.query(`update orgward.secret_upstream_revocation_obligations set next_attempt_at=clock_timestamp() where tenant_id='tenant-a' and reference='secret-reconcile-restart' and credential_version=1`);
+  await close(first); first = null;
+  await close(second); second = null;
+  restarted = await start(postgres.databaseUrl, Buffer.alloc(32, 6), null, options);
+  restarted.secretStore.stopOpenAiRevocationReconciler();
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const status = await restarted.persistence.query(`select status from orgward.secret_upstream_revocation_obligations where tenant_id='tenant-a' and reference='secret-reconcile-restart' and credential_version=1`);
+    if (status.rows[0].status === 'confirmed') break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const restartedResult = await restarted.persistence.query(`select status,confirmation_evidence from orgward.secret_upstream_revocation_obligations where tenant_id='tenant-a' and reference='secret-reconcile-restart' and credential_version=1`);
+  assert.equal(restartedResult.rows[0].status, 'confirmed');
+  assert.equal(restartedResult.rows[0].confirmation_evidence, 'exact_project_account_absent:svcacct_restart');
+  const heldSummary = await restarted.persistence.query(`select upstream_revocation_status from orgward.secret_references where tenant_id='tenant-a' and reference='secret-reconcile-restart'`);
+  assert.equal(heldSummary.rows[0].upstream_revocation_status, 'unconfirmed', 'an unresolved legacy/raw generation prevents a false confirmed summary');
+
+  const clean = await restarted.persistence.query(`select o.status,r.upstream_revocation_status,o.confirmation_evidence
+    from orgward.secret_upstream_revocation_obligations o join orgward.secret_references r using (tenant_id,reference)
+    where o.tenant_id='tenant-a' and o.reference='secret-reconcile-clean'`);
+  assert.deepEqual(clean.rows[0], { status: 'confirmed', upstream_revocation_status: 'confirmed', confirmation_evidence: 'exact_delete_response:svcacct_clean' });
+  assert.ok(providerCalls.every(({ authorization }) => authorization === 'Bearer server-admin-fixture-key'));
 });

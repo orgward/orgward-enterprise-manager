@@ -3,10 +3,12 @@ import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
+import { assertNoRestoreGuard } from './recovery-guard.mjs';
 
-const { Pool } = pg;
+const { Pool, Client } = pg;
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MIGRATIONS = path.join(ROOT, 'migrations');
+export const RECOVERY_ADVISORY_LOCK_KEY = 0x4f72675761726431n.toString();
 
 function canonicalValue(value) {
   if (Array.isArray(value)) return value.map(canonicalValue);
@@ -75,25 +77,89 @@ export async function recordEvent(client, { tenantId, kind, id, version, command
 export class PostgresPersistence {
   constructor({ databaseUrl, faults = {} }) {
     if (!databaseUrl) throw new Error('ORGWARD_DATABASE_URL is required for PostgreSQL persistence.');
+    this.databaseUrl = databaseUrl;
     this.pool = new Pool({ connectionString: databaseUrl, max: 10, idleTimeoutMillis: 30_000, connectionTimeoutMillis: 5_000 });
     this.pool.on('error', () => { /* A later query reports database unavailability through the safe API boundary. */ });
     this.faults = faults;
     this.initialization = null;
     this.schemaVersion = null;
+    this.recoveryLockClient = null;
+    this.recoveryLockHealthy = false;
+    this.recoveryLockLostError = null;
+    this.recoveryLockLostHandler = null;
+    this.poolShutdown = null;
+    this.releasingRecoveryLock = false;
   }
 
   async init() {
-    this.initialization ??= this.#migrate().catch((error) => {
+    this.initialization ??= this.#acquireRecoverySharedLock().then(async () => {
+      await assertNoRestoreGuard(this.recoveryLockClient);
+      await this.#migrate();
+    }).catch(async (error) => {
       this.initialization = null;
+      await this.#releaseRecoveryLock().catch(() => {});
       throw error;
     });
     return this.initialization;
   }
 
+  async #acquireRecoverySharedLock() {
+    if (this.recoveryLockClient) return;
+    const client = new Client({ connectionString: this.databaseUrl, connectionTimeoutMillis: 5_000 });
+    await client.connect();
+    try {
+      const result = await client.query('select pg_try_advisory_lock_shared($1::bigint) as acquired', [RECOVERY_ADVISORY_LOCK_KEY]);
+      if (!result.rows[0].acquired) throw Object.assign(new Error('A database recovery operation is active; service startup is refused.'), { code: 'RECOVERY_OPERATION_ACTIVE' });
+      this.recoveryLockClient = client;
+      this.recoveryLockHealthy = true;
+      this.releasingRecoveryLock = false;
+      client.on('error', () => this.#markRecoveryLockLost(client));
+      client.on('end', () => this.#markRecoveryLockLost(client));
+    } catch (error) {
+      await client.end().catch(() => {});
+      throw error;
+    }
+  }
+
+  async #releaseRecoveryLock() {
+    const client = this.recoveryLockClient;
+    const wasHealthy = this.recoveryLockHealthy;
+    this.recoveryLockClient = null;
+    this.releasingRecoveryLock = true;
+    this.recoveryLockHealthy = false;
+    if (!client) return;
+    try {
+      if (wasHealthy) await client.query('select pg_advisory_unlock_shared($1::bigint)', [RECOVERY_ADVISORY_LOCK_KEY]);
+    } catch { /* A lost lock session has already released its server-side lock. */ }
+    finally { await client.end().catch(() => {}); }
+  }
+
+  setRecoveryLockLostHandler(handler) {
+    this.recoveryLockLostHandler = typeof handler === 'function' ? handler : null;
+  }
+
+  #markRecoveryLockLost(client) {
+    if (this.releasingRecoveryLock || client !== this.recoveryLockClient || !this.recoveryLockHealthy) return;
+    this.recoveryLockHealthy = false;
+    this.recoveryLockLostError = Object.assign(new Error('The service database recovery fence is unavailable.'), {
+      statusCode: 503, code: 'RECOVERY_LOCK_UNAVAILABLE', retryable: false,
+    });
+    this.poolShutdown ??= this.pool.end().catch(() => {});
+    try { this.recoveryLockLostHandler?.(); } catch { /* Runtime remains fenced even if shutdown signaling fails. */ }
+  }
+
+  #assertRecoveryLock() {
+    if (!this.recoveryLockHealthy) throw this.recoveryLockLostError
+      ?? Object.assign(new Error('The service database recovery fence is unavailable.'), { statusCode: 503, code: 'RECOVERY_LOCK_UNAVAILABLE', retryable: false });
+  }
+
   async #migrate() {
+    this.#assertRecoveryLock();
     const client = await this.pool.connect();
     try {
       await client.query('begin');
+      await client.query('select pg_advisory_xact_lock_shared($1::bigint)', [RECOVERY_ADVISORY_LOCK_KEY]);
+      this.#assertRecoveryLock();
       await client.query('select pg_advisory_xact_lock($1)', [684_027_401]);
       await client.query('create schema if not exists orgward');
       await client.query(`
@@ -121,6 +187,7 @@ export class PostgresPersistence {
         await client.query(sql);
         await client.query('insert into orgward.schema_migrations (version, checksum) values ($1, $2)', [version, checksum]);
       }
+      this.#assertRecoveryLock();
       await client.query('commit');
       this.schemaVersion = files.at(-1)?.slice(0, -4) ?? null;
     } catch (error) {
@@ -133,10 +200,13 @@ export class PostgresPersistence {
 
   async transaction(operation) {
     await this.init();
+    this.#assertRecoveryLock();
     const client = await this.pool.connect();
     try {
       await client.query('begin');
       await client.query("set local statement_timeout = '10s'");
+      await client.query('select pg_advisory_xact_lock_shared($1::bigint)', [RECOVERY_ADVISORY_LOCK_KEY]);
+      this.#assertRecoveryLock();
       const result = await operation(client);
       await client.query('commit');
       return result;
@@ -150,7 +220,20 @@ export class PostgresPersistence {
 
   async query(text, values) {
     await this.init();
-    return this.pool.query(text, values);
+    this.#assertRecoveryLock();
+    const client = await this.pool.connect();
+    try {
+      await client.query('begin');
+      await client.query("set local statement_timeout = '10s'");
+      await client.query('select pg_advisory_xact_lock_shared($1::bigint)', [RECOVERY_ADVISORY_LOCK_KEY]);
+      this.#assertRecoveryLock();
+      const result = await client.query(text, values);
+      await client.query('commit');
+      return result;
+    } catch (error) {
+      await client.query('rollback').catch(() => {});
+      throw error;
+    } finally { client.release(); }
   }
 
   async afterCommit(context) {
@@ -169,7 +252,8 @@ export class PostgresPersistence {
 
   async status() {
     await this.init();
-    const result = await this.pool.query('select max(applied_at) applied_at from orgward.schema_migrations');
+    this.#assertRecoveryLock();
+    const result = await this.query('select max(applied_at) applied_at from orgward.schema_migrations');
     return { status: 'postgresql_transactional', schemaVersion: this.schemaVersion, migratedAt: result.rows[0].applied_at?.toISOString() ?? null };
   }
 
@@ -185,6 +269,7 @@ export class PostgresPersistence {
   async close() {
     if (this.closed) return;
     this.closed = true;
-    await this.pool.end();
+    try { await this.#releaseRecoveryLock(); }
+    finally { await (this.poolShutdown ??= this.pool.end()); }
   }
 }

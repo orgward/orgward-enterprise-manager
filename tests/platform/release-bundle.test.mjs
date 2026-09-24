@@ -330,7 +330,11 @@ test('private release bundle extracts cleanly and runs against disposable Postgr
   assert.equal(lock.packages['node_modules/pg'].version, packageJson.dependencies.pg);
   assert.ok(await readFile(path.join(directory, 'ops/preflight.mjs')));
   assert.ok(await readFile(path.join(directory, 'ops/database-recovery.mjs')));
+  assert.ok(await readFile(path.join(directory, 'ops/recovery-files.mjs')));
   assert.ok(await readFile(path.join(directory, 'migrations/012-secret-revocation-obligations.sql')));
+  assert.ok(await readFile(path.join(directory, 'migrations/016-openai-service-account-revocation-targets.sql')));
+  assert.ok(await readFile(path.join(directory, 'migrations/017-managed-openai-candidate-provisioning.sql')));
+  assert.ok(await readFile(path.join(directory, 'migrations/018-openai-revocation-reconciler.sql')));
   assert.ok(await readFile(path.join(directory, 'public/platform.html')));
   assert.ok(await readFile(path.join(directory, 'workers/scaffold-node-service.mjs')));
   const configTemplate = await readFile(path.join(directory, 'config.example.env'), 'utf8');
@@ -348,6 +352,13 @@ test('private release bundle extracts cleanly and runs against disposable Postgr
   assert.match(installGuide, /ORGWARD_RELEASE_SIGNING_KEY_FILE/);
   assert.match(installGuide, /ORGWARD_RESTORE_DATABASE_URL_FILE/);
   assert.match(installGuide, /pg_restore --single-transaction/);
+  assert.match(installGuide, /ORGWARD_DATA_DIR=\/absolute\/new-filesystem-staging-root\/projects/);
+  assert.match(installGuide, /ORGWARD_SDLC_DATA_DIR=\/absolute\/new-filesystem-staging-root\/sdlc/);
+  assert.match(installGuide, /ORGWARD_EXECUTION_DATA_DIR=\/absolute\/new-filesystem-staging-root\/execution-runs/);
+  assert.match(installGuide, /ORGWARD_EXECUTION_WORKSPACE_DIR=\/absolute\/new-filesystem-staging-root\/execution-workspaces/);
+  assert.match(installGuide, /restore target isolated from production.*npm run preflight/);
+  assert.match(installGuide, /quiesced window/);
+  assert.match(installGuide, /512 MiB/);
   const manifest = JSON.parse(await readFile(path.join(directory, 'release-manifest.json'), 'utf8'));
   for (const [relative, expectedHash] of Object.entries(manifest.files)) {
     const content = await readFile(path.join(directory, relative));
