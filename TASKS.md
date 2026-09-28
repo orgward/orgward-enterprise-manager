@@ -292,6 +292,23 @@ or product source/test change occurred. Evidence:
 window's native focus staying in browser chrome; PR-06 remains first open, with
 cursor and release gates unchanged.
 
+PR-06 Orca native-focus follow-ups (2026-09-28): one attempt stopped before
+input because its temporary harness selected an `h1` inside the empty dynamic
+`#execution-main`. After correcting the selector to the static sidebar heading,
+a native click left DOM focus on `BODY`, and one native Tab reached
+`#new-run`; this follows from clicking a heading that occurs after the skip link
+in document order. Orca spoke only the Chrome window title, not the page control.
+A subsequent launch using the previously successful Chrome for Testing binary
+did not expose its DevTools endpoint within eight seconds, so no page or task
+action ran. All fixtures were cleaned. No Bob escalation, provider/external
+request, retry, or product source/test change occurred. Evidence:
+`/tmp/orgward-pr06-cross-session-announcement-proof-10/attempt-summary.txt`,
+`/tmp/orgward-pr06-cross-session-announcement-proof-11/baseline-tab-diagnostic.json`,
+and `/tmp/orgward-pr06-cross-session-announcement-proof-12/attempt-summary.txt`.
+These attempts do not demonstrate a product defect or establish the required
+cross-session Orca announcement. PR-06 remains first open; cursor and release
+gates are unchanged.
+
 PR-06 task profile empty-state copy (2026-09-28): saved task cards now distinguish
 an empty server execution-profile list, directing users to an OrgWard administrator,
 from existing profiles that cannot serve the task because model profiles require
