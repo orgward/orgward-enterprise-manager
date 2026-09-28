@@ -955,8 +955,10 @@ class PostgresDocumentStore {
     return state;
   }
 
-  async authorizeExecutionDispatch({ tenantId, projectId, principal, authzGeneration, runId, expectedVersion, workerId, leaseDurationMs = 5_000, start }) {
-    if (this.kind !== 'execution_run' || typeof start !== 'function') throw projectAccessDenied();
+  async authorizeExecutionDispatch({ tenantId, projectId, principal, authzGeneration, runId, expectedVersion, workerId,
+    leaseDurationMs = 5_000, start, validateCurrentProfile = null }) {
+    if (this.kind !== 'execution_run' || typeof start !== 'function'
+      || (validateCurrentProfile !== null && typeof validateCurrentProfile !== 'function')) throw projectAccessDenied();
     if (!/^[a-f0-9-]{36}$/.test(workerId ?? '') || !Number.isInteger(leaseDurationMs)
       || leaseDurationMs < 1_000 || leaseDurationMs > 60_000) throw new Error('The execution worker lease is invalid.');
     return this.persistence.transaction(async (client) => {
@@ -1012,6 +1014,7 @@ class PostgresDocumentStore {
         || Number(approverMembership.rows[0].generation) !== approval.projectMembershipGeneration) {
         throw conflict('Execution approval is stale after a project membership change; obtain a new approval.', run.version, 'EXECUTION_APPROVAL_STALE');
       }
+      if (validateCurrentProfile) await validateCurrentProfile(run, client);
       const lease = await client.query(`
         select worker_id from orgward.execution_worker_leases
         where tenant_id = $1 and run_id = $2 and lease_until > now()
@@ -1899,6 +1902,117 @@ export class PostgresChangeCaseStore extends PostgresDocumentStore {
 
 export class PostgresExecutionRunStore extends PostgresDocumentStore {
   constructor(persistence) { super(persistence, 'execution_run'); }
+
+  #deepSeekProfile(row) {
+    return row ? {
+      id: row.profile_id, revision: Number(row.revision), label: row.label, model: row.model_id,
+      credentialReference: row.credential_reference, maxOutputTokens: Number(row.max_output_tokens),
+      enabled: row.enabled, createdBy: row.created_by, updatedBy: row.updated_by,
+      updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at),
+    } : null;
+  }
+
+  async listTenantDeepSeekProfiles({ tenantId, principal, authzGeneration, tenantAdminOnly = false }) {
+    return this.persistence.transaction(async (client) => {
+      await requirePrincipalAuthority(client, {
+        tenantId, principal, authzGeneration,
+        roles: tenantAdminOnly ? ['tenant-admin'] : [],
+        anyRoleGroups: tenantAdminOnly ? [] : [['workspace-read', 'workspace-write', 'tenant-admin']],
+        ...(tenantAdminOnly ? { actorType: 'human' } : {}),
+      });
+      const result = await client.query(`select * from orgward.tenant_deepseek_profiles
+        where tenant_id=$1 order by profile_id`, [tenantId]);
+      return result.rows.map((row) => this.#deepSeekProfile(row));
+    });
+  }
+
+  async getTenantDeepSeekProfile({ client = null, tenantId, profileId }) {
+    if (!tenantId || !profileId) return null;
+    const read = async (queryable) => {
+      const result = await queryable.query(`select * from orgward.tenant_deepseek_profiles
+        where tenant_id=$1 and profile_id=$2 for share`, [tenantId, profileId]);
+      return result.rowCount ? this.#deepSeekProfile(result.rows[0]) : null;
+    };
+    return client ? read(client) : this.persistence.transaction(read);
+  }
+
+  async saveTenantDeepSeekProfile({ tenantId, principal, authzGeneration, commandId, expectedRevision,
+    profileId, label, model, credentialReference, maxOutputTokens, enabled, reason, validateCredential,
+    assertProfileIdAvailable }) {
+    if (!tenantId || !principal || !/^[a-z0-9][a-z0-9_-]{1,79}$/i.test(profileId ?? '')
+      || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0
+      || typeof label !== 'string' || label.trim().length < 1 || label.trim().length > 120
+      || !/^[A-Za-z0-9._:-]{1,100}$/.test(model ?? '')
+      || !/^secret-[a-z0-9][a-z0-9._-]{0,79}$/.test(credentialReference ?? '')
+      || !Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 64 || maxOutputTokens > 512
+      || typeof enabled !== 'boolean' || typeof reason !== 'string' || !reason.trim() || reason.trim().length > 500
+      || typeof validateCredential !== 'function' || typeof assertProfileIdAvailable !== 'function') {
+      throw Object.assign(new Error('The DeepSeek profile command is invalid.'), { statusCode: 400, code: 'INVALID_DEEPSEEK_PROFILE' });
+    }
+    const operation = 'execution.deepseek-profile.put';
+    const payload = { profileId, expectedRevision, label: label.trim(), model, credentialReference,
+      maxOutputTokens, enabled, reason: reason.trim() };
+    const payloadHash = contentHash(canonicalJson({ tenantId, principal, ...payload }));
+    let outcome;
+    try {
+      outcome = await this.persistence.transaction(async (client) => {
+        await requirePrincipalAuthority(client, {
+          tenantId, principal, roles: ['tenant-admin'], actorType: 'human', authzGeneration,
+        });
+        assertProfileIdAvailable({ profileId });
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${tenantId}:${operation}:${commandId}`]);
+        const prior = await client.query(`select * from orgward.command_results
+          where tenant_id=$1 and operation=$2 and command_id=$3`, [tenantId, operation, commandId]);
+        if (prior.rowCount) {
+          if (prior.rows[0].payload_hash !== payloadHash) throw conflict('This command ID was already used with different profile input.', null, 'IDEMPOTENCY_CONFLICT');
+          const result = verifyCommandRow(prior.rows[0]);
+          if (result.profile?.id !== profileId || result.profile?.revision !== expectedRevision + 1) {
+            throw persistenceIntegrity('A DeepSeek profile command result does not match its profile revision.');
+          }
+          return { ...result, replayed: true };
+        }
+        if (enabled) await validateCredential({ client, tenantId, reference: credentialReference });
+        const currentResult = await client.query(`select * from orgward.tenant_deepseek_profiles
+          where tenant_id=$1 and profile_id=$2 for update`, [tenantId, profileId]);
+        const current = currentResult.rowCount ? this.#deepSeekProfile(currentResult.rows[0]) : null;
+        const currentRevision = current?.revision ?? 0;
+        if (currentRevision !== expectedRevision) {
+          throw conflict('The DeepSeek profile changed. Reload it before saving.', currentRevision, 'VERSION_CONFLICT');
+        }
+        const revision = currentRevision + 1;
+        const saved = await client.query(`insert into orgward.tenant_deepseek_profiles
+          (tenant_id,profile_id,revision,label,model_id,credential_reference,max_output_tokens,enabled,created_by,updated_by,updated_at)
+          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,clock_timestamp())
+          on conflict (tenant_id,profile_id) do update set revision=excluded.revision,label=excluded.label,
+            model_id=excluded.model_id,credential_reference=excluded.credential_reference,
+            max_output_tokens=excluded.max_output_tokens,enabled=excluded.enabled,updated_by=excluded.updated_by,updated_at=excluded.updated_at
+          returning *`, [tenantId, profileId, revision, label.trim(), model, credentialReference,
+          maxOutputTokens, enabled, principal]);
+        const profile = this.#deepSeekProfile(saved.rows[0]);
+        const event = {
+          eventId: `event-${randomUUID()}`, schemaVersion: '1.0', tenantId, aggregateId: profileId,
+          aggregateVersion: revision, type: 'TenantDeepSeekProfileSaved', actor: principal,
+          occurredAt: new Date().toISOString(), correlationId: commandId, causationId: commandId,
+          data: { profileId, revision, label: profile.label, model: profile.model,
+            credentialReference: profile.credentialReference, maxOutputTokens, enabled, reason: reason.trim() },
+          evidenceRefs: [],
+        };
+        await recordEvent(client, { tenantId, kind: 'tenant_deepseek_profile', id: profileId,
+          version: revision, commandId, event });
+        const result = { profile };
+        await client.query(`insert into orgward.command_results
+          (tenant_id,operation,command_id,payload_hash,aggregate_kind,aggregate_id,result,result_hash)
+          values ($1,$2,$3,$4,'tenant_deepseek_profile',$5,$6::jsonb,$7)`,
+        [tenantId, operation, commandId, payloadHash, profileId, canonicalJson(result), contentHash(result)]);
+        return { ...result, replayed: false };
+      });
+    } catch (error) {
+      if (error.code === '23505') throw conflict('A conflicting DeepSeek profile write was committed.', null, 'IDEMPOTENCY_CONFLICT');
+      throw error;
+    }
+    if (!outcome.replayed) await this.persistence.afterCommit({ operation, commandId, tenantId });
+    return outcome;
+  }
 
   async compileSoftwareDeliveryDraft({
     tenantId, projectId, caseId, principal, authzGeneration, expectedProjectVersion,

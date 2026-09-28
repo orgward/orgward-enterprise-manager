@@ -190,6 +190,7 @@ function validateProfile(profile) {
     dynamicDeepSeek: deepSeekProvider,
     model: modelProvider ? profile.model : null,
     maxOutputTokens: deepSeekProvider ? deepSeekMaxOutputTokens : (openAiProvider ? 2_000 : null),
+    managedCatalogRevision: Number.isSafeInteger(profile.managedCatalogRevision) ? profile.managedCatalogRevision : null,
     sandbox: {
       executable: profile.sandbox?.executable ?? '/usr/bin/bwrap',
       readOnlyFiles: [...(profile.sandbox?.readOnlyFiles ?? [])],
@@ -199,7 +200,16 @@ function validateProfile(profile) {
 }
 
 function publicProfile(profile) {
-  return { id: profile.id, label: profile.label, description: profile.description, kind: profile.kind, version: profile.version, approvalRequired: true };
+  return { id: profile.id, label: profile.label, description: profile.description, kind: profile.kind, version: profile.version,
+    ...(Number.isSafeInteger(profile.managedCatalogRevision) ? { catalogRevision: profile.managedCatalogRevision } : {}), approvalRequired: true };
+}
+
+function tenantDeepSeekProfileConfig(record) {
+  return {
+    id: record.id, label: record.label, kind: 'provider-deepseek', version: `tenant-deepseek-r${record.revision}`,
+    credentialReference: record.credentialReference, model: record.model,
+    deepSeekMaxOutputTokens: record.maxOutputTokens, managedCatalogRevision: record.revision,
+  };
 }
 
 function redact(value) {
@@ -272,6 +282,60 @@ export class ExecutionService {
     }
   }
   capabilities() { return [...this.profiles.values()].map(publicProfile); }
+  async capabilitiesForPrincipal({ tenantId, principal, authzGeneration }) {
+    if (typeof this.store.listTenantDeepSeekProfiles !== 'function') return this.capabilities();
+    const managed = await this.store.listTenantDeepSeekProfiles({ tenantId, principal, authzGeneration });
+    return [...this.profiles.values(), ...managed.filter((profile) => profile.enabled)
+      .map((profile) => validateProfile(tenantDeepSeekProfileConfig(profile)))].map(publicProfile);
+  }
+  async tenantDeepSeekProfiles({ tenantId, principal, authzGeneration }) {
+    if (typeof this.store.listTenantDeepSeekProfiles !== 'function') throw Object.assign(new Error('Tenant DeepSeek profile management requires PostgreSQL storage.'), {
+      statusCode: 503, code: 'EXECUTION_PROFILE_CATALOG_UNAVAILABLE', retryable: false,
+    });
+    return this.store.listTenantDeepSeekProfiles({ tenantId, principal, authzGeneration, tenantAdminOnly: true });
+  }
+  async saveTenantDeepSeekProfile(input) {
+    if (typeof this.store.saveTenantDeepSeekProfile !== 'function' || !this.secretStore) {
+      throw Object.assign(new Error('Tenant DeepSeek profiles require PostgreSQL and the encrypted credential broker.'), {
+        statusCode: 503, code: 'EXECUTION_PROFILE_CATALOG_UNAVAILABLE', retryable: false,
+      });
+    }
+    return this.store.saveTenantDeepSeekProfile({ ...input, validateCredential: ({ client, tenantId, reference }) =>
+      this.secretStore.resolveGenericCredentialBinding({ client, tenantId, reference }),
+    assertProfileIdAvailable: ({ profileId }) => {
+      if (this.profiles.has(profileId)) throw Object.assign(new Error('This profile ID is reserved by an installation profile.'), {
+        statusCode: 409, code: 'EXECUTION_PROFILE_ID_RESERVED', retryable: false,
+      });
+    } });
+  }
+  async #profileForRun(run, tenantId, client = null) {
+    if (!run?.profile?.id) return null;
+    const configured = this.profiles.get(run.profile.id);
+    if (configured) return configured;
+    if (!/^tenant-deepseek-r[1-9][0-9]*$/.test(run.profile.version ?? '')
+      || typeof this.store.getTenantDeepSeekProfile !== 'function') return null;
+    const profile = await this.store.getTenantDeepSeekProfile({ client, tenantId, profileId: run.profile.id });
+    if (!profile?.enabled || run.profile.version !== `tenant-deepseek-r${profile.revision}`) return null;
+    return validateProfile(tenantDeepSeekProfileConfig(profile));
+  }
+  async #validateCurrentProviderProfile(run, tenantId, client) {
+    const stale = () => Object.assign(new Error('The pinned model profile or credential is no longer current. Create a new request against the current profile and credential.'), {
+      statusCode: 409, code: 'EXECUTION_PROFILE_STALE', retryable: false,
+    });
+    const profile = await this.#profileForRun(run, tenantId, client);
+    if (!profile || !isModelProvider(profile) || profile.kind !== run.profile?.kind
+      || profile.version !== run.profile?.version
+      || (profile.providerEndpoint ? digest(profile.providerEndpoint) : null) !== (run.profile?.providerDestinationHash ?? null)
+      || profile.model !== run.profile?.providerModel
+      || (profile.dynamicDeepSeek && profile.maxOutputTokens !== run.profile?.providerMaxOutputTokens)
+      || !run.profile?.credential || run.profile.credential.reference !== profile.credentialReference
+      || !this.secretStore || !client) throw stale();
+    let binding;
+    try { binding = await resolveModelCredentialBinding(this.secretStore, profile, { client, tenantId }); }
+    catch { throw stale(); }
+    if (binding.version !== run.profile.credential.version) throw stale();
+    return profile;
+  }
   async #saveRun(run, { expectedVersion = null, principal = null, requiredPrincipalRoles = null, authzGeneration = null, validateCurrent = null } = {}) {
     if (principal) {
       if (typeof this.store.saveForPrincipal !== 'function') throw principalScopeUnavailable();
@@ -453,9 +517,19 @@ export class ExecutionService {
         statusCode: 503, code: 'PROCESS_TASK_EXECUTION_UNAVAILABLE', retryable: false,
       });
     }
-    let profile = this.profiles.get(input.profileId);
-    if (!profile) throw Object.assign(new Error('Choose an available configured execution profile.'), { statusCode: 400, code: 'EXECUTION_PROFILE_NOT_FOUND' });
-    if (isModelProvider(profile) && (!this.secretStore || !input.tenantId)) {
+    const configuredProfile = this.profiles.get(input.profileId);
+    const managedDeepSeek = !configuredProfile;
+    if (managedDeepSeek && (typeof this.store.getTenantDeepSeekProfile !== 'function'
+      || !Number.isSafeInteger(input.profileRevision) || input.profileRevision < 1)) {
+      throw Object.assign(new Error('Choose a current tenant execution profile and reload before requesting approval.'), {
+        statusCode: 409, code: 'EXECUTION_PROFILE_STALE', retryable: false,
+      });
+    }
+    const profile = configuredProfile;
+    if (configuredProfile && input.profileRevision !== undefined) throw Object.assign(new Error('Installation profiles do not accept a tenant catalog revision.'), {
+      statusCode: 400, code: 'INVALID_PROCESS_TASK_REQUEST', retryable: false,
+    });
+    if (((profile && isModelProvider(profile)) || managedDeepSeek) && (!this.secretStore || !input.tenantId)) {
       throw Object.assign(new Error('Model provider profiles require the server-side credential broker.'), {
         statusCode: 503, code: 'BROKER_AUTHORITY_REQUIRED', retryable: false,
       });
@@ -465,7 +539,7 @@ export class ExecutionService {
     if (input.repositoryId && !repository) throw Object.assign(new Error('This local repository is not configured for the selected project.'), {
       statusCode: 404, code: 'LOCAL_REPOSITORY_NOT_FOUND', retryable: false,
     });
-    if (repository && (isModelProvider(profile) || profile.kind === 'provider-http')) throw Object.assign(new Error('Local repository tasks require an approved local command profile.'), {
+    if (repository && (managedDeepSeek || isModelProvider(profile) || profile.kind === 'provider-http')) throw Object.assign(new Error('Local repository tasks require an approved local command profile.'), {
       statusCode: 400, code: 'LOCAL_REPOSITORY_PROFILE_INVALID', retryable: false,
     });
     if (repository && (repository.kind === 'git') !== Boolean(input.repositoryRefId)) throw Object.assign(new Error('Choose an explicitly allowed Git ref for this repository.'), {
@@ -501,6 +575,7 @@ export class ExecutionService {
       planInstanceId: input.planInstanceId ?? null, taskId: input.taskId, profileId: input.profileId,
       ...(repositoryRef ? { repository: repositoryRef, repositoryRefId: input.repositoryRefId ?? null,
         repositoryCommitOid: input.repositoryCommitOid ?? null } : {}),
+      ...(managedDeepSeek ? { managedProfileRevision: input.profileRevision } : {}),
       ...(isModelProvider(profile) ? {
         profileSnapshot: {
           kind: profile.kind, version: profile.version,
@@ -528,13 +603,24 @@ export class ExecutionService {
           });
         }
         let runProfile = profile;
+        if (managedDeepSeek) {
+          const managedProfile = await this.store.getTenantDeepSeekProfile({
+            client, tenantId: input.tenantId, profileId: input.profileId,
+          });
+          if (!managedProfile?.enabled || managedProfile.revision !== input.profileRevision) {
+            throw Object.assign(new Error('The tenant DeepSeek profile changed or was disabled. Reload the profile before requesting approval.'), {
+              statusCode: 409, code: 'EXECUTION_PROFILE_STALE', retryable: false,
+            });
+          }
+          runProfile = validateProfile(tenantDeepSeekProfileConfig(managedProfile));
+        }
         let proposalContext = null;
         let taskGuidance = null;
-        if (isModelProvider(profile)) {
-          const binding = await resolveModelCredentialBinding(this.secretStore, profile, {
+        if (isModelProvider(runProfile)) {
+          const binding = await resolveModelCredentialBinding(this.secretStore, runProfile, {
             client, tenantId: input.tenantId,
           });
-          runProfile = { ...profile, credentialVersion: binding.version };
+          runProfile = { ...runProfile, credentialVersion: binding.version };
           const pinnedBlueprint = project.blueprintVersions?.find((candidate) => candidate.id === processTaskRef.blueprintId
             && candidate.version === processTaskRef.blueprintVersion);
           taskGuidance = createProcessTaskGuidanceSnapshot({ blueprint: pinnedBlueprint, plan, task, processTaskRef });
@@ -646,7 +732,8 @@ export class ExecutionService {
       const stale = (message) => Object.assign(new Error(message), {
         statusCode: 409, code: 'EXECUTION_PROFILE_STALE', retryable: false,
       });
-      const profile = this.profiles.get(run.profile?.id);
+      const managed = /^tenant-deepseek-r[1-9][0-9]*$/.test(run.profile?.version ?? '');
+      const profile = managed ? await this.#profileForRun(run, input.tenantId, client) : this.profiles.get(run.profile?.id);
       if (!profile || profile.kind !== run.profile?.kind || profile.version !== run.profile?.version) {
         throw stale('The configured execution profile changed while this request was paused. Keep it paused and create a new request.');
       }
@@ -820,24 +907,10 @@ export class ExecutionService {
     if (!run || run.tenantId !== tenantId) return null;
     if (command.version !== run.version) throw Object.assign(new Error(`Version conflict: expected ${run.version}.`), { statusCode: 409 });
     const persistedVersion = run.version;
-    const profile = this.profiles.get(run.profile?.id);
-    const validateCredentialBinding = isModelProvider(profile) ? async (current, client) => {
-      const credential = current.profile?.credential;
-      const staleCredential = () => Object.assign(new Error('The model provider credential or profile changed before approval. Create a new execution request against the current binding.'), {
-        statusCode: 409, code: 'EXECUTION_PROFILE_STALE', retryable: false,
-      });
-      if (!credential || credential.reference !== profile.credentialReference
-        || current.profile?.providerModel !== profile.model
-        || (profile.dynamicDeepSeek && current.profile?.providerMaxOutputTokens !== profile.maxOutputTokens)
-        || current.profile?.version !== profile.version
-        || !this.secretStore || !client) {
-        throw staleCredential();
-      }
-      let binding;
-      try { binding = await resolveModelCredentialBinding(this.secretStore, profile, { client, tenantId }); }
-      catch { throw staleCredential(); }
-      if (binding.version !== credential.version) throw staleCredential();
-    } : null;
+    const managedProfile = /^tenant-deepseek-r[1-9][0-9]*$/.test(run.profile?.version ?? '');
+    const configuredProfile = this.profiles.get(run.profile?.id);
+    const validateCredentialBinding = isModelProvider(configuredProfile) || managedProfile
+      ? async (current, client) => this.#validateCurrentProviderProfile(current, tenantId, client) : null;
     approveExecutionRun(run, command);
     await this.#saveRun(run, {
       expectedVersion: persistedVersion, principal: command.scopePrincipal ?? null,
@@ -861,7 +934,7 @@ export class ExecutionService {
     if (!run || run.tenantId !== tenantId) return null;
     if (command.version !== run.version) throw Object.assign(new Error(`Version conflict: expected ${run.version}.`), { statusCode: 409 });
     if (run.status !== 'APPROVED') throw new Error('Execution run must be approved before it can execute.');
-    const profile = this.profiles.get(run.profile.id);
+    let profile = await this.#profileForRun(run, tenantId);
     if (!profile || profile.version !== run.profile.version) {
       throw Object.assign(new Error('The executor profile changed after approval. Create a new execution run against the current profile and approve it.'), {
         statusCode: 409, code: 'EXECUTION_PROFILE_STALE', retryable: false,
@@ -1001,6 +1074,8 @@ export class ExecutionService {
             authzGeneration: command.authorityGeneration,
             runId: id, expectedVersion: run.version, workerId: active.workerId,
             leaseDurationMs: workerLeaseDurationMs, start,
+            validateCurrentProfile: isModelProvider(profile)
+              ? (current, client) => this.#validateCurrentProviderProfile(current, tenantId, client) : null,
           });
           dispatchAcknowledged = true;
           active.dispatchAuthorizationPending = false;

@@ -1850,6 +1850,8 @@ async function requestTaskApproval({ project, plan, task, selectedInstance, prof
         taskId: task.id, profileId,
         ...(selectedInstance !== 'new' ? { planInstanceId: selectedInstance } : {}),
       };
+      const selectedProfile = state.meta?.profiles?.find((entry) => entry.id === profileId);
+      if (Number.isSafeInteger(selectedProfile?.catalogRevision)) payload.profileRevision = selectedProfile.catalogRevision;
       if (repositorySelectionId) {
         const repository = state.localRepositories.find((entry) => (entry.selectionId ?? entry.id) === repositorySelectionId);
         if (!repository) throw new Error('Reload the project to select a current local repository snapshot.');

@@ -350,8 +350,129 @@ test('tenant administrators manage encrypted credential references with rotation
   assert.match(source, /installation operator must configure the profile with this same reference and selected model/);
   assert.match(source, /generic form does not validate the credential or model access/);
   assert.match(source, /server encryption key must be configured for the stored credential to be usable/);
+  assert.match(source, /Tenant DeepSeek profiles/);
+  assert.match(source, /https:\/\/api\.deepseek\.com\/responses/);
+  assert.match(source, /Existing generic credential reference/);
+  assert.match(source, /does not test credential or model access/);
+  assert.match(source, /deepseek-profile-create/);
+  assert.match(source, /name="profileId" required pattern="\[a-z0-9\]/);
+  assert.match(source, /form\.elements\.profileId\.value\.trim\(\)\.toLowerCase\(\)/);
+  assert.doesNotMatch(source, /deepseek-profile-create[\s\S]{0,200}name="(?:endpoint|headers|executable|value)"/);
   assert.doesNotMatch(source, /Generic fixed-version credentials remain available for server-configured fixture providers/);
   assert.doesNotMatch(source, /secret-canary/);
+});
+
+test('tenant DeepSeek profiles are revisioned, tenant scoped, secret safe, and restart durable', async (t) => {
+  const postgres = await startPostgres();
+  const encryptionKey = Buffer.alloc(32, 0x6b);
+  let app = await start(postgres.databaseUrl, encryptionKey, null, { executionProfiles: [
+    { id: 'fixture-locked-profile', label: 'Installation profile', kind: 'command', executable: '/bin/true', workspaceRoot: '/tmp' },
+  ] });
+  t.after(async () => { if (app) await close(app); await postgres.close(); });
+
+  const credential = 'fixture-only-deepseek-credential';
+  const storedCredential = await send(app, '/api/v1/secrets/secret-deepseek', 'alice', {
+    method: 'PUT', body: rotateBody('deepseek-secret-fixture', 0, credential),
+  });
+  assert.equal(storedCredential.status, 200);
+  const deniedList = await send(app, '/api/execution/deepseek-profiles', 'writer');
+  assert.equal(deniedList.status, 403);
+  const deniedWrite = await send(app, '/api/execution/deepseek-profiles/team-agent', 'writer', {
+    method: 'PUT', body: { schemaVersion: '1.0', commandId: 'deepseek-forbidden', expectedRevision: 0,
+      payload: { label: 'Team agent', model: 'deepseek-fixture', credentialReference: 'secret-deepseek',
+        maxOutputTokens: 128, enabled: true, reason: 'Not an administrator' } },
+  });
+  assert.equal(deniedWrite.status, 403);
+
+  const profileCommand = {
+    schemaVersion: '1.0', commandId: 'deepseek-profile-create', expectedRevision: 0,
+    payload: { label: 'Team agent', model: 'deepseek-fixture', credentialReference: 'secret-deepseek',
+      maxOutputTokens: 128, enabled: true, reason: 'Create a tenant fixture profile' },
+  };
+  const reservedId = await send(app, '/api/execution/deepseek-profiles/fixture-locked-profile', 'alice', {
+    method: 'PUT', body: { ...profileCommand, commandId: 'deepseek-reserved-id' },
+  });
+  assert.equal(reservedId.status, 409);
+  assert.equal((await reservedId.json()).error.code, 'EXECUTION_PROFILE_ID_RESERVED');
+  const deniedReservedId = await send(app, '/api/execution/deepseek-profiles/fixture-locked-profile', 'writer', {
+    method: 'PUT', body: { ...profileCommand, commandId: 'deepseek-denied-reserved-id' },
+  });
+  assert.equal(deniedReservedId.status, 403);
+  assert.equal((await deniedReservedId.json()).error.code, 'ACTION_FORBIDDEN');
+  const forbiddenEndpoint = await send(app, '/api/execution/deepseek-profiles/unsafe-endpoint', 'alice', {
+    method: 'PUT', body: { ...profileCommand, commandId: 'deepseek-forbidden-endpoint',
+      payload: { ...profileCommand.payload, endpoint: 'https://attacker.example/responses' } },
+  });
+  assert.equal(forbiddenEndpoint.status, 400);
+  const crossTenantSecret = await send(app, '/api/execution/deepseek-profiles/team-agent', 'other-admin', {
+    method: 'PUT', body: { ...profileCommand, commandId: 'deepseek-cross-tenant',
+      payload: { ...profileCommand.payload, credentialReference: 'secret-deepseek' } },
+  });
+  assert.equal(crossTenantSecret.status, 409);
+  assert.equal((await crossTenantSecret.json()).error.code, 'SECRET_CREDENTIAL_UNAVAILABLE');
+  const created = await send(app, '/api/execution/deepseek-profiles/team-agent', 'alice', {
+    method: 'PUT', body: profileCommand,
+  });
+  assert.equal(created.status, 201);
+  const createdBody = await created.json();
+  assert.equal(createdBody.profile.revision, 1);
+  assert.equal(createdBody.profile.enabled, true);
+  assert.equal(JSON.stringify(createdBody).includes(credential), false);
+  const replay = await send(app, '/api/execution/deepseek-profiles/team-agent', 'alice', {
+    method: 'PUT', body: profileCommand,
+  });
+  assert.equal(replay.status, 200);
+  assert.equal((await replay.json()).replayed, true);
+  const reusedId = await send(app, '/api/execution/deepseek-profiles/team-agent', 'alice', {
+    method: 'PUT', body: { ...profileCommand, payload: { ...profileCommand.payload, label: 'Changed command' } },
+  });
+  assert.equal(reusedId.status, 409);
+  assert.equal((await reusedId.json()).error.code, 'IDEMPOTENCY_CONFLICT');
+  const stale = await send(app, '/api/execution/deepseek-profiles/team-agent', 'alice', {
+    method: 'PUT', body: { ...profileCommand, commandId: 'deepseek-stale-update',
+      payload: { ...profileCommand.payload, label: 'Stale update' } },
+  });
+  assert.equal(stale.status, 409);
+  assert.equal((await stale.json()).error.code, 'VERSION_CONFLICT');
+  await app.persistence.query(`update orgward.secret_references set expires_at=clock_timestamp() - interval '1 second'
+    where tenant_id='tenant-a' and reference='secret-deepseek'`);
+  const expiredCredential = await send(app, '/api/execution/deepseek-profiles/expired-binding', 'alice', {
+    method: 'PUT', body: { ...profileCommand, commandId: 'deepseek-expired-reference',
+      payload: { ...profileCommand.payload, reason: 'Reject an expired binding' } },
+  });
+  assert.equal(expiredCredential.status, 409);
+  assert.equal((await expiredCredential.json()).error.code, 'SECRET_CREDENTIAL_UNAVAILABLE');
+  const listed = await send(app, '/api/execution/deepseek-profiles', 'alice');
+  assert.equal((await listed.json()).profiles[0].id, 'team-agent');
+  const profileAudit = await app.persistence.query(`select event->>'type' as type,event->'data' as data
+    from orgward.audit_log where tenant_id='tenant-a' and aggregate_kind='tenant_deepseek_profile'
+      and aggregate_id='team-agent' order by aggregate_version`);
+  assert.equal(profileAudit.rows.length, 1);
+  assert.equal(profileAudit.rows[0].type, 'TenantDeepSeekProfileSaved');
+  assert.equal(profileAudit.rows[0].data.revision, 1);
+  assert.equal(JSON.stringify(profileAudit.rows).includes(credential), false);
+  const disableExpiredProfile = await send(app, '/api/execution/deepseek-profiles/team-agent', 'alice', {
+    method: 'PUT', body: { ...profileCommand, commandId: 'deepseek-disable-expired', expectedRevision: 1,
+      payload: { ...profileCommand.payload, enabled: false, reason: 'Disable after credential expiry' } },
+  });
+  assert.equal(disableExpiredProfile.status, 200);
+  assert.equal((await disableExpiredProfile.json()).profile.revision, 2);
+  const disabledCapabilities = await send(app, '/api/execution/meta', 'alice');
+  assert.equal((await disabledCapabilities.json()).profiles.some((entry) => entry.id === 'team-agent'), false,
+    'disabled profiles are omitted from execution capabilities');
+  await app.persistence.query(`update orgward.secret_references set expires_at=clock_timestamp() + interval '1 hour'
+    where tenant_id='tenant-a' and reference='secret-deepseek'`);
+  const isolated = await send(app, '/api/execution/deepseek-profiles', 'other-admin');
+  assert.deepEqual((await isolated.json()).profiles, []);
+
+  await close(app);
+  app = await start(postgres.databaseUrl, encryptionKey, null, { executionProfiles: [
+    { id: 'fixture-locked-profile', label: 'Installation profile', kind: 'command', executable: '/bin/true', workspaceRoot: '/tmp' },
+  ] });
+  const restored = await send(app, '/api/execution/deepseek-profiles', 'alice');
+  assert.equal((await restored.json()).profiles[0].revision, 2);
+  const capabilities = await send(app, '/api/execution/meta', 'alice');
+  assert.equal((await capabilities.json()).profiles.some((entry) => entry.id === 'team-agent'), false);
 });
 
 test('OpenAI candidate validation stages encrypted key, denies cross-tenant access, and activates with explicit unconfirmed revocation state', async (t) => {

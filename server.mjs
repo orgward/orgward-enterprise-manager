@@ -1941,7 +1941,44 @@ export function createApp({
       }
 
       if (request.method === 'GET' && pathname === '/api/execution/meta') {
-        return sendJson(response, 200, { statuses: EXECUTION_STATUSES, profiles: executionService.capabilities(), operationMode: readOnly ? 'read_only_legacy' : 'writable', productionReady: false });
+        const profiles = request.identity
+          ? await executionService.capabilitiesForPrincipal({ tenantId: requestTenant(request), principal: requestActor(request),
+            authzGeneration: request.identity.authzGeneration })
+          : executionService.capabilities();
+        return sendJson(response, 200, { statuses: EXECUTION_STATUSES, profiles, operationMode: readOnly ? 'read_only_legacy' : 'writable', productionReady: false });
+      }
+
+      if (request.method === 'GET' && pathname === '/api/execution/deepseek-profiles') {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified tenant administrator identity is required.');
+        const profiles = await executionService.tenantDeepSeekProfiles({ tenantId: requestTenant(request),
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration });
+        return sendJson(response, 200, { profiles });
+      }
+
+      const deepSeekProfileMatch = pathname.match(/^\/api\/execution\/deepseek-profiles\/([a-z0-9][a-z0-9_-]{1,79})$/);
+      if (request.method === 'PUT' && deepSeekProfileMatch) {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified tenant administrator identity is required.');
+        const body = await readJson(request);
+        const allowedEnvelope = new Set(['schemaVersion', 'commandId', 'expectedRevision', 'payload']);
+        const allowedPayload = new Set(['label', 'model', 'credentialReference', 'maxOutputTokens', 'enabled', 'reason']);
+        const unknown = Object.keys(body ?? {}).filter((field) => !allowedEnvelope.has(field));
+        const unknownPayload = Object.keys(body?.payload ?? {}).filter((field) => !allowedPayload.has(field));
+        if (!body || typeof body !== 'object' || Array.isArray(body) || unknown.length || unknownPayload.length
+          || body.schemaVersion !== '1.0' || !/^[a-z0-9][a-z0-9_.:-]{0,159}$/i.test(body.commandId ?? '')
+          || !Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 0
+          || !body.payload || typeof body.payload !== 'object' || Array.isArray(body.payload)) {
+          throw apiFailure(400, 'INVALID_DEEPSEEK_PROFILE', 'Provide a versioned profile command with only the supported fixed-DeepSeek profile fields.', {
+            fieldErrors: [...unknown.map((field) => ({ field, message: 'This field is not accepted.' })),
+              ...unknownPayload.map((field) => ({ field: `payload.${field}`, message: 'This field is not accepted.' }))],
+          });
+        }
+        const result = await executionService.saveTenantDeepSeekProfile({
+          tenantId: requestTenant(request), principal: requestActor(request),
+          authzGeneration: request.identity.authzGeneration, profileId: deepSeekProfileMatch[1],
+          commandId: body.commandId, expectedRevision: body.expectedRevision, ...body.payload,
+        });
+        return sendJson(response, result.replayed ? 200 : body.expectedRevision === 0 ? 201 : 200,
+          { ...result, profile: result.profile });
       }
 
       if (request.method === 'GET' && pathname === '/api/execution/local-repositories') {
@@ -1957,7 +1994,7 @@ export function createApp({
         const body = validateCommand(await readJson(request), { versionRequired: false });
         rejectAuthorityClaims(body);
         const allowedEnvelope = new Set(['schemaVersion', 'commandId', 'payload']);
-        const payloadFields = new Set(['projectId', 'planId', 'revision', 'planInstanceId', 'taskId', 'profileId', 'repositoryId', 'repositoryRefId', 'repositoryCommitOid', 'snapshotDigest']);
+        const payloadFields = new Set(['projectId', 'planId', 'revision', 'planInstanceId', 'taskId', 'profileId', 'profileRevision', 'repositoryId', 'repositoryRefId', 'repositoryCommitOid', 'snapshotDigest']);
         const unknownEnvelope = Object.keys(body).filter((field) => !allowedEnvelope.has(field));
         const unknownPayload = Object.keys(body.payload).filter((field) => !payloadFields.has(field));
         if (unknownEnvelope.length || unknownPayload.length) {
@@ -1974,7 +2011,8 @@ export function createApp({
           || !Number.isSafeInteger(revision) || revision < 1
           || (planInstanceId !== undefined && !/^[0-9a-f-]{36}$/i.test(planInstanceId ?? ''))
           || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(taskId ?? '')
-          || !/^[a-z0-9][a-z0-9_-]{1,79}$/i.test(profileId ?? '')) {
+          || !/^[a-z0-9][a-z0-9_-]{1,79}$/i.test(profileId ?? '')
+          || (body.payload.profileRevision !== undefined && (!Number.isSafeInteger(body.payload.profileRevision) || body.payload.profileRevision < 1))) {
           throw apiFailure(400, 'INVALID_PROCESS_TASK_REQUEST', 'Choose a valid saved project, graph revision, task, and configured profile.');
         }
         if ((body.payload.repositoryId === undefined) !== (body.payload.snapshotDigest === undefined)
@@ -1990,6 +2028,7 @@ export function createApp({
         const result = await executionService.createForProcessTask({
           tenantId: requestTenant(request), projectId, planId, revision, planInstanceId,
           taskId, profileId, commandId: body.commandId,
+          profileRevision: body.payload.profileRevision,
           repositoryId: body.payload.repositoryId, repositoryRefId: body.payload.repositoryRefId,
           repositoryCommitOid: body.payload.repositoryCommitOid,
           snapshotDigest: body.payload.snapshotDigest,
@@ -2786,6 +2825,7 @@ export function createApp({
     } catch (error) {
       if (pathname === '/auth/callback') return loginError(response, oidcLoginFlow ? new URL(oidcLoginFlow.redirectUri).protocol === 'https:' : false);
       if (pathname.startsWith('/api/v1/') || pathname.startsWith('/api/execution/process-task-')
+        || pathname.startsWith('/api/execution/deepseek-profiles')
         || /^\/api\/sdlc\/cases\/change-case-[0-9a-f-]{36}\/(?:software-delivery-plans(?:\/|$)|compile-software-plan$)/.test(pathname)
         || /^\/api\/execution\/runs\/execution-run-[0-9a-f-]{36}\/(cancel|pause|resume|amend)$/.test(pathname)) {
         return sendApiError(response, error, correlationId);

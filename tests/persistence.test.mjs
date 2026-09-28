@@ -6446,6 +6446,14 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     value: 'fixture-deepseek-credential', reason: 'Create generic DeepSeek fixture credential',
     expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
   });
+  const managedDeepSeekProfile = await request(app.base, '/api/execution/deepseek-profiles/tenant-deepseek-saved', {
+    ...as('alice'), method: 'PUT', body: JSON.stringify({ schemaVersion: '1.0', commandId: 'tenant-deepseek-profile-create',
+      expectedRevision: 0, payload: { label: 'Saved DeepSeek profile', model: 'deepseek-fixture',
+        credentialReference: 'secret-process-task-deepseek', maxOutputTokens: 160, enabled: true,
+        reason: 'Configure the tenant process-task profile' } }),
+  }, 201);
+  assert.equal(managedDeepSeekProfile.profile.revision, 1);
+  assert.equal(managedDeepSeekProfile.profile.credentialReference, 'secret-process-task-deepseek');
   await app.persistence.query(`update orgward.secret_references set active_provider='openai', active_model='gpt-fixture'
     where tenant_id='tenant-a' and reference='secret-process-task-openai'`);
   const originalResolveOpenAiBinding = app.secretStore.resolveOpenAiBinding.bind(app.secretStore);
@@ -6731,7 +6739,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   const staleOpenAiApproval = await request(app.base, `/api/execution/runs/${openAiRequestForStaleApproval.id}/approve`, {
     ...as('bob'), method: 'POST', body: JSON.stringify({ version: openAiRequestForStaleApproval.version }),
   }, 409);
-  assert.match(staleOpenAiApproval.error, /credential or profile changed before approval/i);
+  assert.match(staleOpenAiApproval.error, /pinned model profile or credential is no longer current/i);
   assert.equal(providerCallCount, 0, 'approval of a rotated pinned generation performs no provider call');
 
   const openAiSuccessfulRequest = await taskRequest('process-task-openai-current-success', {
@@ -7459,6 +7467,55 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     ...as('bob'), method: 'POST', body: JSON.stringify({ version: freshNewInstanceRequest.version }),
   });
   assert.equal(freshNewInstanceApproval.status, 'APPROVED', 'a retry is a distinct process instance with fresh independent approval');
+
+  const managedDeepSeekRun = await taskRequest('process-task-deepseek-managed-after-restart', {
+    ...planInput, profileId: 'tenant-deepseek-saved', profileRevision: 1,
+  });
+  assert.equal(managedDeepSeekRun.profile.version, 'tenant-deepseek-r1');
+  assert.equal(managedDeepSeekRun.profile.providerModel, 'deepseek-fixture');
+  assert.equal(managedDeepSeekRun.profile.providerMaxOutputTokens, 160);
+  assert.equal(managedDeepSeekRun.profile.credential.version, 1);
+  const managedDeepSeekApproval = await request(app.base, `/api/execution/runs/${managedDeepSeekRun.id}/approve`, {
+    ...as('bob'), method: 'POST', body: JSON.stringify({ version: managedDeepSeekRun.version }),
+  });
+  await app.secretStore.put({
+    tenantId: 'tenant-a', actor: principal('alice'), actorAuthzGeneration: await authzGeneration(app, 'alice'),
+    reference: 'secret-process-task-deepseek', commandId: 'process-task-deepseek-secret-v2', expectedVersion: 1,
+    value: 'fixture-deepseek-credential-rotated', reason: 'Rotate the generic fixture credential',
+    expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+  });
+  const rotatedCredentialDispatch = await request(app.base, `/api/execution/runs/${managedDeepSeekRun.id}/execute`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: managedDeepSeekApproval.version }),
+  }, 409);
+  assert.match(rotatedCredentialDispatch.error, /credential binding changed after approval/i);
+  assert.equal((await app.persistence.query(`select 1 from orgward.provider_dispatch_attempts
+    where tenant_id='tenant-a' and run_id=$1`, [managedDeepSeekRun.id])).rowCount, 0,
+  'a rotated generic credential fences dispatch before any provider attempt');
+  const managedDeepSeekCurrentRun = await taskRequest('process-task-deepseek-current-after-rotation', {
+    ...planInput, profileId: 'tenant-deepseek-saved', profileRevision: 1,
+  });
+  assert.equal(managedDeepSeekCurrentRun.profile.credential.version, 2);
+  const managedDeepSeekCurrentApproval = await request(app.base, `/api/execution/runs/${managedDeepSeekCurrentRun.id}/approve`, {
+    ...as('bob'), method: 'POST', body: JSON.stringify({ version: managedDeepSeekCurrentRun.version }),
+  });
+  const updatedManagedDeepSeekProfile = await request(app.base, '/api/execution/deepseek-profiles/tenant-deepseek-saved', {
+    ...as('alice'), method: 'PUT', body: JSON.stringify({ schemaVersion: '1.0', commandId: 'tenant-deepseek-profile-update',
+      expectedRevision: 1, payload: { label: 'Saved DeepSeek profile', model: 'deepseek-next-fixture',
+        credentialReference: 'secret-process-task-deepseek', maxOutputTokens: 160, enabled: true,
+        reason: 'Rotate the selected model profile revision' } }),
+  });
+  assert.equal(updatedManagedDeepSeekProfile.profile.revision, 2);
+  const managedDeepSeekStaleDispatch = await request(app.base, `/api/execution/runs/${managedDeepSeekCurrentRun.id}/execute`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: managedDeepSeekCurrentApproval.version }),
+  }, 409);
+  assert.match(managedDeepSeekStaleDispatch.error, /executor profile changed after approval/i);
+  assert.equal((await app.persistence.query(`select 1 from orgward.provider_dispatch_attempts
+    where tenant_id='tenant-a' and run_id=$1`, [managedDeepSeekCurrentRun.id])).rowCount, 0,
+  'a changed tenant profile fences dispatch before any provider attempt');
+  const managedRunAfterRestart = await request(app.base, `/api/execution/runs/${managedDeepSeekRun.id}`, as('alice'));
+  assert.equal(managedRunAfterRestart.profile.version, 'tenant-deepseek-r1');
+  assert.equal((await request(app.base, '/api/execution/meta', as('alice'))).profiles
+    .find((profile) => profile.id === 'tenant-deepseek-saved').catalogRevision, 2);
 
   const deepSeekUnknownRun = await taskRequest('process-task-deepseek-unknown-request', {
     ...planInput, profileId: 'process-task-deepseek',

@@ -2045,6 +2045,24 @@ repair check superseded it.
   resilience and operations qualification, while keeping authorization, tenant
   isolation, safe tool bounds and auditable state transitions in the path.
 
+  PR-06 tenant-managed DeepSeek profile setup (2026-09-28): tenant administrators
+  can create, revise and disable per-tenant DeepSeek profiles in PostgreSQL. The
+  server fixes the provider and endpoint; the UI exposes only profile ID, label,
+  model, an existing generic credential reference, bounded output tokens and
+  enablement, and explains that saving does not test provider access. Writes check
+  current human tenant-admin authority, installation-profile ID collisions,
+  expected revision, idempotency and audit/outbox in one transaction, and require
+  a same-tenant active generic credential when enabling. Disabled profiles can
+  still be disabled after their credential expires. Linked runs pin the profile
+  revision and credential generation; current-profile checks fence approval,
+  resume and dispatch, and focused dispatch regressions verify rotated credentials
+  and revised profiles fail before provider-attempt creation. The focused profile
+  API/restart test passed 1/1 (1.94s), the saved-task/restart journey passed 1/1
+  (16.15s), and the served Administration test passed 1/1 (2.83s), with zero
+  skips. `git diff --check` passed. No live provider or browser was used; no full
+  `npm run check` was run because PR-06 remains open. PR-06 cursor, checkbox and
+  release-gate statuses remain unchanged.
+
   PR-06 customer-facing unknown provider outcome (bounded; 2026-09-28; PR-06
   remains open): terminal run JSON now carries only
   `providerDiagnostic: { outcome: 'outcome_unknown' }` when the durable dispatch

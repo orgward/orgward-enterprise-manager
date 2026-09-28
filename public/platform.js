@@ -45,7 +45,7 @@ const capabilityCopy = {
   },
 };
 
-const state = { view: 'command', foundation: null, error: null, loading: true, inspectorTrigger: null, importBusy: false, importResult: null, importCommand: null, identityAdmin: null, identityAction: null, secretAdmin: null, secretAction: null, session: null, sharing: { projects: [], projectId: '', members: [], loading: false, error: null, message: '', busy: false } };
+const state = { view: 'command', foundation: null, error: null, loading: true, inspectorTrigger: null, importBusy: false, importResult: null, importCommand: null, identityAdmin: null, identityAction: null, secretAdmin: null, secretAction: null, deepSeekAdmin: null, deepSeekAction: null, session: null, sharing: { projects: [], projectId: '', members: [], loading: false, error: null, message: '', busy: false } };
 const canvas = document.querySelector('#platform-canvas');
 const inspector = document.querySelector('#spec-inspector');
 const dialog = document.querySelector('#command-dialog');
@@ -241,6 +241,14 @@ function renderAdministration() {
     : state.secretAdmin?.records
       ? secretRows
       : '<p class="muted-copy">Secret reference management is available to tenant administrators.</p>';
+  const deepSeekRows = state.deepSeekAdmin?.profiles?.length
+    ? `<ul class="import-results" aria-label="Tenant DeepSeek profiles">${state.deepSeekAdmin.profiles.map((profile) => `<li><div><b>${escapeHtml(profile.label)}</b> · <code>${escapeHtml(profile.id)}</code><br>${escapeHtml(profile.model)} · ${escapeHtml(profile.maxOutputTokens)} output tokens · revision ${profile.revision} · ${profile.enabled ? 'enabled' : 'disabled'}<br><small>Credential reference ${escapeHtml(profile.credentialReference)} · updated ${escapeHtml(new Date(profile.updatedAt).toLocaleString())}. Credential values are never displayed.</small><form class="deepseek-profile-form" data-profile-id="${escapeHtml(profile.id)}"><input type="hidden" name="expectedRevision" value="${profile.revision}"><label>Display name<input name="label" maxlength="120" value="${escapeHtml(profile.label)}" required></label><label>DeepSeek model ID<input name="model" maxlength="100" value="${escapeHtml(profile.model)}" required pattern="[A-Za-z0-9._:-]+"></label><label>Existing generic credential reference<input name="credentialReference" maxlength="87" value="${escapeHtml(profile.credentialReference)}" required pattern="secret-[a-z0-9][a-z0-9._-]{0,79}"></label><label>Maximum output tokens<input name="maxOutputTokens" type="number" min="64" max="512" step="1" value="${profile.maxOutputTokens}" required></label><label><input type="checkbox" name="enabled" ${profile.enabled ? 'checked' : ''}> Enabled</label><label>Reason<input name="reason" maxlength="500" required></label><button class="platform-button" type="submit" ${state.deepSeekAction?.busy ? 'disabled' : ''}>Save revision ${profile.revision + 1}</button></form></div></li>`).join('')}</ul>`
+    : state.deepSeekAdmin?.profiles ? '<p class="muted-copy">No tenant DeepSeek profiles are configured.</p>' : '';
+  const deepSeekAdminContent = state.deepSeekAdmin?.error
+    ? `<p class="muted-copy" role="status">${escapeHtml(state.deepSeekAdmin.error)}</p>`
+    : state.deepSeekAdmin?.profiles
+      ? deepSeekRows
+      : '<p class="muted-copy">Tenant DeepSeek profile management is available to tenant administrators.</p>';
   const itemDetails = importResult?.data?.items?.length
     ? `<ul class="import-results" aria-label="Legacy import record results">${importResult.data.items.slice(0, 20).map((item) => `<li><code>${escapeHtml(item.sourcePath)}</code><span>${escapeHtml(item.status)}${item.errorCode ? ` · ${escapeHtml(item.errorCode)}` : ''}</span></li>`).join('')}</ul>${importResult.data.items.length > 20 ? `<p class="muted-copy">Showing 20 of ${escapeHtml(importResult.data.items.length)} records.</p>` : ''}`
     : '';
@@ -253,6 +261,7 @@ function renderAdministration() {
     <section class="panel"><header class="panel-head"><h2>First-release status · ${gateSummary}</h2><span>${statusChip(productGates.status)} ${escapeHtml(productGates.source)}</span></header><div class="panel-body"><div class="health-row">${statusChip(identity.status)}<div><b>Identity</b><small>${escapeHtml(identity.description)}</small></div><button class="platform-button" type="button" data-capability="enterpriseIdentity">View specification</button></div><div class="health-row">${statusChip(persistence.status)}<div><b>Persistence</b><small>${escapeHtml(persistence.description)}${persistence.schemaVersion ? ` Schema ${escapeHtml(persistence.schemaVersion)}.` : ''}</small></div><button class="platform-button" type="button" data-capability="persistence">View details</button></div>${Object.entries(sources).map(([name, source]) => `<div class="health-row">${statusChip(source.status)}<div><b>${escapeHtml(name)}</b><small>${freshness(source)}</small></div><span>${source.count ?? '—'}</span></div>`).join('')}</div></section>
     <section class="panel panel-spaced"><header class="panel-head"><h2>Identity access</h2><span>${state.identityAdmin?.records ? `${state.identityAdmin.records.length} verified` : 'Tenant admin'}</span></header><div class="panel-body"><p class="muted-copy">Local persisted roles are authoritative. Signed provider groups do not grant or remove OrgWard roles; a tenant administrator must replace a user's exact role set here. Provider group-only changes take effect in OrgWard only after this local update until a trusted provider-sync adapter exists. New identities receive no roles by default. The only automatic enrollment is a one-time minimal grant to an operator-configured exact issuer, subject, and mapped tenant.</p>${identityAdminContent}${state.identityAdmin?.records?.some((entry) => entry.status === 'active' && entry.principal !== state.session?.principal) ? `<form id="identity-revoke-form"><label for="identity-revoke-select">Identity to revoke</label><select id="identity-revoke-select" name="principal" required><option value="">Choose another active identity…</option>${state.identityAdmin.records.filter((entry) => entry.status === 'active' && entry.principal !== state.session?.principal).map((entry) => `<option value="${escapeHtml(entry.principal)}" data-generation="${entry.authzGeneration}">${escapeHtml(entry.displayName)} · ${escapeHtml(entry.actorType)} · generation ${entry.authzGeneration}</option>`).join('')}</select><label for="identity-revoke-reason">Revocation reason</label><input id="identity-revoke-reason" name="reason" maxlength="500" required aria-describedby="identity-revoke-help"><small id="identity-revoke-help">Revocation is transactional, cancels sessions and active worker leases, and cannot remove the last tenant administrator.</small><button class="platform-button primary" type="submit" ${state.identityAction?.busy ? 'disabled' : ''}>${state.identityAction?.busy ? 'Revoking…' : 'Revoke identity'}</button></form>` : ''}<p class="muted-copy" role="status" aria-live="polite">${state.identityAction?.message ? escapeHtml(state.identityAction.message) : ''}</p></div></section>
     <section class="panel panel-spaced"><header class="panel-head"><h2>Provider credentials</h2><span>${state.secretAdmin?.records ? `${state.secretAdmin.records.length} references` : 'Tenant admin'}</span></header><div class="panel-body"><p class="muted-copy">Values are encrypted in PostgreSQL and are never returned by the API or shown in reference details. A server-configured <code>ORGWARD_SECRET_ENCRYPTION_KEY</code> is required for encrypted credential storage and use. Generic encrypted references can serve an operator-configured DeepSeek model profile or supported fixed-version providers. For DeepSeek, the installation operator must configure the profile with this same reference and selected model. The generic form does not validate the credential or model access. OpenAI credentials use staged validation against the fixed OpenAI model endpoint; activation invalidates old leases. Replacing a prior credential records its upstream revocation as unconfirmed; first activation has no predecessor.</p>${secretAdminContent}${state.secretAdmin?.records ? `<form id="openai-candidate-form"><h3>Stage OpenAI credential</h3><label>Reference ID<input name="reference" required pattern="secret-[a-z0-9][a-z0-9._-]{0,79}" maxlength="87" placeholder="secret-openai"></label><label>OpenAI model ID<input name="model" required maxlength="100" placeholder="gpt-…"></label><label>Credential value<input name="value" type="password" minlength="8" maxlength="65536" autocomplete="new-password" required></label><label>Credential expiry<input name="expiresAt" type="datetime-local" required></label><label>Reason<input name="reason" maxlength="500" required></label><button class="platform-button primary" type="submit" ${state.secretAction?.busy ? 'disabled' : ''}>Stage encrypted candidate</button></form><form id="secret-reference-form"><details><summary>Generic encrypted credential · DeepSeek profile or fixed-version provider</summary><p class="muted-copy">This form stores a generic encrypted reference; it cannot confirm provider or model access. For DeepSeek, ask the installation operator to configure the profile with the same reference and selected model. The server encryption key must be configured for the stored credential to be usable.</p><label for="secret-reference-id">Reference ID</label><input id="secret-reference-id" name="reference" required pattern="secret-[a-z0-9][a-z0-9._-]{0,79}" maxlength="87" placeholder="secret-provider"><label for="secret-reference-value">Credential value</label><input id="secret-reference-value" name="value" type="password" minlength="8" maxlength="65536" autocomplete="new-password" required><label for="secret-reference-expiry">Credential expiry</label><input id="secret-reference-expiry" name="expiresAt" type="datetime-local" required><label for="secret-reference-reason">Reason</label><input id="secret-reference-reason" name="reason" maxlength="500" required><button class="platform-button" type="submit">Store generic encrypted credential</button></details></form>` : ''}<p class="muted-copy" role="status" aria-live="polite">${state.secretAction?.message ? escapeHtml(state.secretAction.message) : ''}</p></div></section>
+    <section class="panel panel-spaced"><header class="panel-head"><h2>Tenant DeepSeek profiles</h2><span>${state.deepSeekAdmin?.profiles ? `${state.deepSeekAdmin.profiles.length} profiles` : 'Tenant admin'}</span></header><div class="panel-body"><p class="muted-copy">Profiles select a DeepSeek model and an existing encrypted generic credential reference. The provider and official <code>https://api.deepseek.com/responses</code> endpoint are fixed by the server. Saving does not test credential or model access. Each profile change advances its revision; pending approvals pinned to an older revision become stale.</p>${deepSeekAdminContent}${state.deepSeekAdmin?.profiles ? `<form id="deepseek-profile-create"><h3>Add DeepSeek profile</h3><label>Profile ID<input name="profileId" required pattern="[a-z0-9][a-z0-9_-]{1,79}" maxlength="80"></label><label>Display name<input name="label" maxlength="120" required></label><label>DeepSeek model ID<input name="model" maxlength="100" required pattern="[A-Za-z0-9._:-]+"></label><label>Existing generic credential reference<input name="credentialReference" maxlength="87" required pattern="secret-[a-z0-9][a-z0-9._-]{0,79}"></label><label>Maximum output tokens<input name="maxOutputTokens" type="number" min="64" max="512" step="1" value="256" required></label><label><input type="checkbox" name="enabled" checked> Enabled</label><label>Reason<input name="reason" maxlength="500" required></label><button class="platform-button primary" type="submit" ${state.deepSeekAction?.busy ? 'disabled' : ''}>Add profile</button></form>` : ''}<p class="muted-copy" role="status" aria-live="polite">${state.deepSeekAction?.message ? escapeHtml(state.deepSeekAction.message) : ''}</p></div></section>
     <section class="panel panel-spaced"><header class="panel-head"><h2>Legacy JSON import</h2><span>${canImport ? 'Transactional and restart-safe' : 'Unavailable in this mode'}</span></header><div class="panel-body"><p class="muted-copy">Preview configured legacy project, change-case, and execution-run directories before importing. Apply preserves valid IDs and source hashes, skips unchanged records, and quarantines invalid or conflicting records without overwriting PostgreSQL state.</p>${importSummary}<div class="page-actions import-actions"><button class="platform-button" type="button" data-import-mode="dry-run" ${canImport && !state.importBusy ? '' : 'disabled'}>${state.importBusy ? 'Working…' : 'Preview import'}</button><button class="platform-button primary" type="button" data-import-mode="apply" ${canImport && !state.importBusy ? '' : 'disabled'}>Import valid records</button></div><p class="muted-copy" role="status" aria-live="polite">${state.importBusy ? 'Checking configured legacy records…' : canImport ? 'No files are changed or deleted by this import.' : 'Start the server with PostgreSQL to use legacy import.'}</p></div></section>`;
 }
 
@@ -331,10 +340,15 @@ async function loadFoundation() {
     signOutButton.hidden = !authenticated;
     state.identityAdmin = null;
     state.secretAdmin = null;
+    state.deepSeekAdmin = null;
     if (sessionResponse.roles?.includes('tenant-admin')) {
-      const [identities, secrets] = await Promise.allSettled([api('/api/v1/identities'), api('/api/v1/secrets')]);
+      const [identities, secrets, deepSeekProfiles] = await Promise.allSettled([
+        api('/api/v1/identities'), api('/api/v1/secrets'), api('/api/execution/deepseek-profiles'),
+      ]);
       state.identityAdmin = identities.status === 'fulfilled' ? { records: identities.value.data } : { error: identities.reason.message };
       state.secretAdmin = secrets.status === 'fulfilled' ? { records: secrets.value.data } : { error: secrets.reason.message };
+      state.deepSeekAdmin = deepSeekProfiles.status === 'fulfilled'
+        ? { profiles: deepSeekProfiles.value.profiles } : { error: deepSeekProfiles.reason.message };
     }
     if (authenticated) {
       try {
@@ -536,6 +550,37 @@ async function revokeSecretReference(event) {
   }
 }
 
+async function saveDeepSeekProfile(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  if (state.deepSeekAction?.busy) return;
+  const creating = form.id === 'deepseek-profile-create';
+  const profileId = creating ? form.elements.profileId.value.trim().toLowerCase() : form.dataset.profileId;
+  const expectedRevision = creating ? 0 : Number(form.elements.expectedRevision.value);
+  const reason = form.elements.reason.value.trim();
+  const payload = {
+    label: form.elements.label.value.trim(), model: form.elements.model.value.trim(),
+    credentialReference: form.elements.credentialReference.value.trim(),
+    maxOutputTokens: Number(form.elements.maxOutputTokens.value), enabled: form.elements.enabled.checked, reason,
+  };
+  if (!profileId || !Number.isSafeInteger(expectedRevision) || !reason) return;
+  state.deepSeekAction = { message: 'Saving tenant profile revision…', busy: true };
+  render();
+  try {
+    const result = await api(`/api/execution/deepseek-profiles/${encodeURIComponent(profileId)}`, {
+      method: 'PUT', body: JSON.stringify({
+        schemaVersion: '1.0', commandId: `deepseek-profile-${crypto.randomUUID()}`,
+        expectedRevision, payload,
+      }),
+    });
+    state.deepSeekAction = { message: `${result.profile.label} saved at revision ${result.profile.revision}. Provider access was not tested.`, busy: false };
+    await loadFoundation();
+  } catch (error) {
+    state.deepSeekAction = { message: `Profile save failed: ${error.message}. Reload before resolving a version conflict.`, busy: false };
+    render();
+  }
+}
+
 document.addEventListener('click', (event) => {
   const revokeMember = event.target.closest('[data-revoke-member]');
   if (revokeMember) { revokeProjectMember(revokeMember.dataset.revokeMember); return; }
@@ -557,6 +602,7 @@ document.addEventListener('submit', (event) => {
   if (event.target.matches('.identity-role-form')) replaceIdentityRoles(event);
   if (event.target.id === 'project-member-form') saveProjectMember(event);
   if (event.target.id === 'secret-reference-form') storeSecretReference(event);
+  if (event.target.id === 'deepseek-profile-create' || event.target.matches('.deepseek-profile-form')) saveDeepSeekProfile(event);
   if (event.target.id === 'openai-candidate-form') stageOpenAiCandidate(event);
   if (event.target.matches('.secret-revoke-form')) revokeSecretReference(event);
 });
