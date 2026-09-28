@@ -623,6 +623,10 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(executionSource, /repositoryCommitOid = repository\.commitOid/);
   assert.match(executionSource, /repository\.refLabel.*repository\.commitOid\.slice\(0, 12\)/);
   assert.match(executionSource, /function renderRepositoryCandidate\(candidate\)/);
+  assert.match(executionSource, /Saved \$\{streams\} is bounded; earlier output may be omitted/);
+  assert.match(executionSource, /no output truncation metadata, so whether earlier stdout or stderr was omitted is unknown/);
+  assert.match(executionSource, /execution\.adapter\?\.port === 'ExecutionPort'/);
+  assert.match(executionSource, /execution\.stdoutTruncated === true \|\| execution\.stderrTruncated === true/);
   assert.match(executionSource, /candidate\.source\.identity.*candidate\.source\.ref.*candidate\.source\.commitOid/);
   assert.doesNotMatch(executionSource, /repository-push/);
   assert.match(executionSource, /repository-source\?path=/);
@@ -641,6 +645,9 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(executionSource, /has not written changes back to the configured repository or pushed them/);
   assert.match(executionSource, /Candidate path changes/);
   assert.match(executionSource, /verification\.treeDigest/);
+  assert.match(executionSource, /Saved verification \$\{streams\} was truncated to the bounded capture/);
+  assert.match(executionSource, /The output hash covers only the saved stdout and stderr/);
+  assert.match(executionSource, /has no truncation metadata, so whether its output was truncated is unknown/);
   const executionCss = await fetch(`${base}/execution.css`);
   assert.equal(executionCss.status, 200);
   const executionStyles = await executionCss.text();

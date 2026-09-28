@@ -182,7 +182,9 @@ export class CommandExecutionAdapter {
     const child = spawn(this.bwrapExecutable, args, {
       cwd: root, shell: false, detached: true, stdio, env: {},
     });
-    let stdout = ''; let stderr = ''; let settled = false; let termination = null;
+    let stdout = ''; let stderr = ''; let stdoutCharacters = 0; let stderrCharacters = 0;
+    let stdoutTruncated = false; let stderrTruncated = false;
+    let settled = false; let termination = null;
     let timer = null; let killTimer = null;
     const terminate = (reason) => {
       termination ??= reason;
@@ -202,8 +204,18 @@ export class CommandExecutionAdapter {
     const onAbort = () => terminate('revoked');
     signal?.addEventListener('abort', onAbort, { once: true });
     const result = new Promise((resolve, reject) => {
-      child.stdout.on('data', (chunk) => { stdout = `${stdout}${chunk}`.slice(-this.maxOutputBytes); });
-      child.stderr.on('data', (chunk) => { stderr = `${stderr}${chunk}`.slice(-this.maxOutputBytes); });
+      child.stdout.on('data', (chunk) => {
+        const text = chunk.toString();
+        stdoutCharacters += text.length;
+        if (stdoutCharacters > this.maxOutputBytes) stdoutTruncated = true;
+        stdout = `${stdout}${text}`.slice(-this.maxOutputBytes);
+      });
+      child.stderr.on('data', (chunk) => {
+        const text = chunk.toString();
+        stderrCharacters += text.length;
+        if (stderrCharacters > this.maxOutputBytes) stderrTruncated = true;
+        stderr = `${stderr}${text}`.slice(-this.maxOutputBytes);
+      });
       child.on('spawn', () => { timer = setTimeout(() => terminate('timeout'), this.timeoutMs); timer.unref?.(); if (signal?.aborted) onAbort(); });
       child.on('error', (error) => {
         if (!settled) {
@@ -243,6 +255,7 @@ export class CommandExecutionAdapter {
           adapter: { port: 'ExecutionPort', implementation: this.name, version: this.version },
           status: exit.code === 0 ? 'COMPLETED' : 'FAILED', exitCode: exit.code, signal: exit.signal,
           startedAt, completedAt: now(), contextHash: context.contentHash, changedArtifacts,
+          stdoutTruncated, stderrTruncated,
           stdout: exit.stdout, stderr: exit.stderr, evidenceHash: digest({ code: exit.code, changedArtifacts, contextHash: context.contentHash }),
         };
       }).finally(() => closeWorkspace()),

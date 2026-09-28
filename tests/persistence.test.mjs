@@ -6349,7 +6349,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   const openAiFixtureSecret = 'fixture-openai-credential-never-returned';
   const repositoryVerification = {
     id: 'local-node-check', version: '2', executable: process.execPath,
-    args: ['-e', "const fs=require('node:fs');const assert=require('node:assert/strict');assert.equal(fs.readFileSync('src/change.js','utf8'),'after\\n');assert.equal(fs.readFileSync('added.txt','utf8'),'added by local agent');assert.equal(fs.existsSync('remove.txt'),false);assert.equal(fs.statSync('src/change.js').mode & 0o111,0);assert.notEqual(fs.statSync('mode-only.txt').mode & 0o111,0);process.stdout.write('candidate verified')"],
+    args: ['-e', "const fs=require('node:fs');const assert=require('node:assert/strict');assert.equal(fs.readFileSync('src/change.js','utf8'),'after\\n');assert.equal(fs.readFileSync('added.txt','utf8'),'added by local agent');assert.equal(fs.existsSync('remove.txt'),false);assert.equal(fs.statSync('src/change.js').mode & 0o111,0);assert.notEqual(fs.statSync('mode-only.txt').mode & 0o111,0);process.stdout.write('S'.repeat(25_000)+'stdout-tail');process.stderr.write('E'.repeat(25_000)+'stderr-tail')"],
   };
   const profiles = [
     {
@@ -6587,10 +6587,16 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(repositoryExecuted.execution.repositoryCandidate.verification.id, 'local-node-check');
   assert.equal(repositoryExecuted.execution.repositoryCandidate.verification.status, 'COMPLETED');
   assert.equal(repositoryExecuted.execution.repositoryCandidate.verification.exitCode, 0);
+  assert.equal(repositoryExecuted.execution.repositoryCandidate.verification.stdoutTruncated, true);
+  assert.equal(repositoryExecuted.execution.repositoryCandidate.verification.stderrTruncated, true);
+  assert.equal(repositoryExecuted.execution.repositoryCandidate.verification.stdout.length, 20_000);
+  assert.equal(repositoryExecuted.execution.repositoryCandidate.verification.stderr.length, 20_000);
+  assert.ok(repositoryExecuted.execution.repositoryCandidate.verification.stdout.endsWith('stdout-tail'));
+  assert.ok(repositoryExecuted.execution.repositoryCandidate.verification.stderr.endsWith('stderr-tail'));
   assert.equal(repositoryExecuted.execution.repositoryCandidate.verification.commandHash,
     digest({ executable: repositoryVerification.executable, args: repositoryVerification.args }));
   assert.equal(repositoryExecuted.execution.repositoryCandidate.verification.outputHash,
-    digest({ stdout: 'candidate verified', stderr: '' }));
+    digest({ stdout: `${'S'.repeat(20_000 - 'stdout-tail'.length)}stdout-tail`, stderr: `${'E'.repeat(20_000 - 'stderr-tail'.length)}stderr-tail` }));
   assert.equal(repositoryExecuted.execution.repositoryCandidate.verification.treeDigest,
     repositoryExecuted.execution.repositoryCandidate.treeDigest, 'verification is bound to the exact candidate tree');
   assert.equal(await readFile(path.join(repositoryRoot, 'src', 'change.js'), 'utf8'), 'changed after task pin\n',
@@ -6967,6 +6973,10 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   const repositoryCandidateAfterRestart = await request(app.base, `/api/execution/runs/${repositoryRun.id}`, as('alice'));
   assert.deepEqual(repositoryCandidateAfterRestart.execution.repositoryCandidate, repositoryExecuted.execution.repositoryCandidate,
     'the pinned local repository candidate and verification receipt survive application restart');
+  assert.equal(repositoryCandidateAfterRestart.execution.repositoryCandidate.verification.stdoutTruncated, true);
+  assert.equal(repositoryCandidateAfterRestart.execution.repositoryCandidate.verification.stderrTruncated, true);
+  assert.equal(repositoryCandidateAfterRestart.execution.repositoryCandidate.verification.outputHash,
+    repositoryExecuted.execution.repositoryCandidate.verification.outputHash);
   const repositoryCandidateFile = await fetch(`${app.base}/api/execution/runs/${repositoryRun.id}/artifact?path=${encodeURIComponent('src/change.js')}`, as('alice'));
   assert.equal(repositoryCandidateFile.status, 200);
   assert.equal(repositoryCandidateFile.headers.get('x-content-sha256'), createHash('sha256').update('after\n').digest('hex'));

@@ -21,10 +21,28 @@ test('provider-neutral command adapter runs a bounded coding agent and captures 
   assert.equal(result.status, 'COMPLETED');
   assert.equal(result.exitCode, 0);
   assert.match(result.stdout, /implemented WORK-REFERENCE/);
+  assert.equal(result.stdoutTruncated, false);
+  assert.equal(result.stderrTruncated, false);
   assert.deepEqual(result.changedArtifacts.map((entry) => entry.path), ['src/bounded-change.json']);
   const artifactBytes = await readFile(path.join(workspace, 'src/bounded-change.json'));
   assert.equal(result.changedArtifacts[0].contentHash, createHash('sha256').update(artifactBytes).digest('hex'));
   assert.equal(result.evidenceHash.length, 64);
+});
+
+test('command adapter flags capped stdout and stderr while retaining their bounded tails', async (t) => {
+  const workspace = await mkdtemp(path.join(tmpdir(), 'orgward-agent-adapter-output-cap-'));
+  t.after(() => rm(workspace, { recursive: true, force: true }));
+  const adapter = new CommandExecutionAdapter({
+    executable: process.execPath,
+    args: ['-e', "process.stdout.write('S'.repeat(25_000)+'stdout-tail');process.stderr.write('E'.repeat(25_000)+'stderr-tail')"],
+  });
+  const result = await adapter.execute({ id: 'WORK-OUTPUT-CAP', objective: 'Capture bounded output.' }, {}, { workspace });
+  assert.equal(result.stdout.length, 20_000);
+  assert.equal(result.stderr.length, 20_000);
+  assert.ok(result.stdout.endsWith('stdout-tail'));
+  assert.ok(result.stderr.endsWith('stderr-tail'));
+  assert.equal(result.stdoutTruncated, true);
+  assert.equal(result.stderrTruncated, true);
 });
 
 test('command adapter rejects PATH lookup and therefore cannot invoke an ambiguous executable', () => {

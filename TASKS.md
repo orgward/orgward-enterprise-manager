@@ -4694,6 +4694,23 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   `/tmp/orgward-tests-Aw8aoC/node-test.tap.log`. No cursor, task checkbox or release
   gate changed.
 
+  Verification-output disclosure follow-on (2026-09-28): bounded command capture
+  now records whether stdout and stderr were truncated while preserving the
+  existing output limit and tail. Saved local-repository verification receipts
+  persist per-stream flags; their output digest is explicitly identified as
+  covering only the saved stdout and stderr. Candidate review distinguishes
+  truncated, complete and legacy-with-unknown output status. The ordinary run
+  evidence view also identifies truncated command streams and legacy adapter
+  records with missing metadata, without labeling current provider output as
+  unknown. Focused adapter tests passed 6/6 (0.76s runner), the PostgreSQL
+  candidate/restart journey passed 1/1 (15.66s), and served-client assertions
+  passed 1/1 (final run 0.72s); zero failures or skips. `git diff --check` passed.
+  Logs: `/tmp/orgward-tests-5LFj0t/node-test.tap.log`,
+  `/tmp/orgward-tests-fIbGbH/node-test.tap.log`, and
+  `/tmp/orgward-tests-cSFX55/node-test.tap.log`. No full check was run because
+  PR-08 remains open; this is truthful output disclosure, not reproducible-build
+  evidence. PR-06 cursor, task checkboxes and release gates remain unchanged.
+
 - [ ] PR-09 — Authorized environments, release and rollback (T-33–T-35; E-10).
   Let a user review an exact candidate, approve a protected environment action,
   observe its result and recover through rollback. Bind authority to principals,

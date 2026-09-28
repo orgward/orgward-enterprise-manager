@@ -2531,6 +2531,14 @@ function renderRepositoryCandidate(candidate) {
   if (candidate.verification) {
     const verification = candidate.verification;
     content.push(el('p', { text: `Verification ${verification.id} v${verification.version} · ${verification.status} · exit ${verification.exitCode} · tree ${verification.treeDigest} · command ${verification.commandHash} · output ${verification.outputHash}` }));
+    if (typeof verification.stdoutTruncated !== 'boolean' || typeof verification.stderrTruncated !== 'boolean') {
+      content.push(el('p', { className: 'muted', text: 'This saved verification record has no truncation metadata, so whether its output was truncated is unknown. The output hash covers the saved stdout and stderr.' }));
+    } else if (verification.stdoutTruncated || verification.stderrTruncated) {
+      const streams = [verification.stdoutTruncated ? 'stdout' : null, verification.stderrTruncated ? 'stderr' : null].filter(Boolean).join(' and ');
+      content.push(el('p', { className: 'muted', text: `Saved verification ${streams} was truncated to the bounded capture. The output hash covers only the saved stdout and stderr.` }));
+    } else {
+      content.push(el('p', { className: 'muted', text: 'Verification output was not truncated. The output hash covers the saved stdout and stderr.' }));
+    }
     if (verification.stdout) content.push(el('pre', { className: 'execution-output', text: verification.stdout }));
     if (verification.stderr) content.push(el('pre', { className: 'execution-output execution-error', text: verification.stderr }));
   }
@@ -2691,6 +2699,13 @@ function executionEvidence(execution, runId) {
     el('div', {}, [el('b', { text: 'Evidence hash' }), el('span', { text: execution.evidenceHash?.slice(0, 18) ?? 'n/a' })]),
   ]);
   if (providerDiagnostic) wrap.append(el('p', { className: 'muted provider-outcome-diagnostic', text: providerDiagnostic }));
+  if (execution.stdoutTruncated === true || execution.stderrTruncated === true) {
+    const streams = [execution.stdoutTruncated ? 'stdout' : null, execution.stderrTruncated ? 'stderr' : null].filter(Boolean).join(' and ');
+    wrap.append(el('p', { className: 'muted', text: `Saved ${streams} is bounded; earlier output may be omitted.` }));
+  } else if (execution.adapter?.port === 'ExecutionPort'
+    && (typeof execution.stdoutTruncated !== 'boolean' || typeof execution.stderrTruncated !== 'boolean')) {
+    wrap.append(el('p', { className: 'muted', text: 'This saved run has no output truncation metadata, so whether earlier stdout or stderr was omitted is unknown.' }));
+  }
   if (execution.changedArtifacts?.length) {
     const list = el('ul', { className: 'artifact-list' });
     for (const entry of execution.changedArtifacts) {

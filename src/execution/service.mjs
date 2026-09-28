@@ -1078,12 +1078,17 @@ export class ExecutionService {
             name: verificationConfig.id, version: verificationConfig.version ?? '1.0.0', sandbox: profile.sandbox });
           const checked = await verificationAdapter.execute({ id: `verify-${run.workItem.id}`, objective: 'Verify the exact captured candidate tree.' },
             { id: run.id, candidateTreeDigest, repositoryId: repositoryConfig.id }, { workspace, signal: active.controller.signal });
-          const verificationStdout = redact(checked.stdout).slice(0, 20_000);
-          const verificationStderr = redact(checked.stderr).slice(0, 20_000);
+          const redactedVerificationStdout = redact(checked.stdout);
+          const redactedVerificationStderr = redact(checked.stderr);
+          const verificationStdoutTruncated = checked.stdoutTruncated === true || redactedVerificationStdout.length > 20_000;
+          const verificationStderrTruncated = checked.stderrTruncated === true || redactedVerificationStderr.length > 20_000;
+          const verificationStdout = redactedVerificationStdout.slice(0, 20_000);
+          const verificationStderr = redactedVerificationStderr.slice(0, 20_000);
           verification = { id: verificationConfig.id, version: verificationConfig.version ?? '1.0.0',
             commandHash: verificationCommandHash,
             treeDigest: candidateTreeDigest, status: checked.status, exitCode: checked.exitCode,
             stdout: verificationStdout, stderr: verificationStderr,
+            stdoutTruncated: verificationStdoutTruncated, stderrTruncated: verificationStderrTruncated,
             outputHash: digest({ stdout: verificationStdout, stderr: verificationStderr }) };
           if (checked.status !== 'COMPLETED' || checked.exitCode !== 0) result = { ...result, status: 'FAILED', exitCode: checked.exitCode };
           const afterVerification = await captureLocalRepositorySnapshot(workspace, { excludeGitDirectory: false });
