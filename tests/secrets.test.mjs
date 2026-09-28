@@ -346,8 +346,11 @@ test('tenant administrators manage encrypted credential references with rotation
   assert.match(source, /Provider credentials/);
   assert.match(source, /type="password"/);
   assert.match(source, /Generic encrypted credential · DeepSeek profile or fixed-version provider/);
-  assert.match(source, /Generic encrypted references can serve an operator-configured DeepSeek model profile or supported fixed-version providers/);
-  assert.match(source, /installation operator must configure the profile with this same reference and selected model/);
+  assert.match(source, /Generic encrypted references can serve a tenant-managed DeepSeek profile or an installation-supplied operator profile/);
+  assert.match(source, /tenant-managed DeepSeek profile or an installation-supplied operator profile/);
+  assert.match(source, /href=\"#tenant-deepseek-profiles\"/);
+  assert.match(source, /Tenant administrators can create and manage profiles here/);
+  assert.match(source, /Installation-supplied operator profiles are configured separately by the installation operator/);
   assert.match(source, /generic form does not validate the credential or model access/);
   assert.match(source, /server encryption key must be configured for the stored credential to be usable/);
   assert.match(source, /Tenant DeepSeek profiles/);

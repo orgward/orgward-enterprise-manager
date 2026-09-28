@@ -5134,3 +5134,15 @@ work here; do not create metadata-only completion loops.
   `/tmp/orgward-pr06-managed-profile-proof-20260928-prepared/attempt-summary-1790633379644b62ea665a1b.json`.
   PR-06 remains first open; task checkboxes, cursor and release gates are
   unchanged.
+
+PR-06 tenant-managed DeepSeek credential guidance (2026-09-28): provider
+credential copy now directs tenant administrators to create or update their own
+DeepSeek profile with the saved generic credential reference, links to the
+profile section by stable anchor, and describes installation-supplied operator
+profiles as a separate option. The profile section itself now states the
+tenant-managed flow and operator-profile distinction. Focused test
+`tenant administrators manage encrypted credential references with rotation,
+isolation, and restart recovery` passed 1/1 (0 failures/skips; 2.57s TAP
+subtest, 2.94s command duration). No provider or credentials were used; no
+full-suite check was run. `git diff --check` passed. PR-06 remains active;
+task checkboxes, cursor and release gates are unchanged.
