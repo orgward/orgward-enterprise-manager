@@ -33,7 +33,9 @@ export function deepSeekOutcomeDiagnosticCopy(value) {
       parserLabel,
       transportLabel === undefined ? null : `DeepSeek ${transportLabel}`,
     ].filter(Boolean).join('; ') : '';
-    return `Outcome unknown.${safeDetails ? ` ${safeDetails}.` : ''} An external request may have been received. Delivery is unverified. Reconcile with the provider before retrying.`;
+    const credentialGuidance = diagnostic?.httpStatus === 401
+      ? ' An administrator should check and verify the saved provider credential; this status alone does not identify the cause.' : '';
+    return `Outcome unknown.${safeDetails ? ` ${safeDetails}.` : ''}${credentialGuidance} An external request may have been received. Delivery is unverified. Reconcile with the provider before retrying.`;
   }
   const diagnostic = deepSeekOutcomeDiagnostic(value);
   if (!diagnostic) return null;
@@ -55,5 +57,7 @@ export function deepSeekOutcomeDiagnosticCopy(value) {
     parserLabel === undefined ? null : `response parsing failed (${parserLabel})`,
     transportLabel === undefined ? null : `DeepSeek ${transportLabel}`,
   ].filter(Boolean).join('; ');
-  return `${cause}. Delivery remains unverified; this run cannot be retried.`;
+  const credentialGuidance = diagnostic.httpStatus === 401
+    ? ' An administrator should check and verify the saved provider credential; this status alone does not identify the cause.' : '';
+  return `${cause}.${credentialGuidance} Delivery remains unverified; this run cannot be retried.`;
 }

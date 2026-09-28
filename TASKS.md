@@ -61,6 +61,20 @@ and concurrency 2. The current VPS has 2 CPUs and low `/tmp` tmpfs headroom, so
 these settings are unchanged. Preserve skip and failure details in receipts; this
 workflow change does not mark any task, test or release gate complete.
 
+PR-06 DeepSeek HTTP 401 guidance (2026-09-28): the fresh synthetic
+`deepseek-current` provider dispatch returned one `outcome_unknown` attempt with
+allowlisted DeepSeek HTTP 401; it was not retried, and the provider response
+body was unavailable, so the exact cause is not established. The saved-result
+copy tells administrators to verify the saved provider credential while keeping
+delivery unverified and requiring reconciliation before retry. Other statuses
+retain their existing no-retry guidance.
+Triggering diagnostic evidence:
+`/tmp/orgward-pr06-managed-profile-proof-20260928-prepared/attempt-summary-1790633379644b62ea665a1b.json`.
+Focused helper and linked-task projection tests passed 18/18 (0 failures/skips;
+0.30s runner wall); TAP log `/tmp/orgward-tests-LvTULB/node-test.tap.log`.
+`git diff --check` passed. No provider or credential call was made for this UX
+slice. PR-06 remains first open; task checkboxes and release gates are unchanged.
+
 PR-06 fresh managed-profile provider attempt (2026-09-28): a disposable
 PostgreSQL/app fixture created a synthetic `process-review` plan, bound its
 human checkpoint to Bob and `task-process-learn` to the existing design-assistant

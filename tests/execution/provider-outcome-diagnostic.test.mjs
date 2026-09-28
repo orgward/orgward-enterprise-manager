@@ -33,6 +33,20 @@ test('DeepSeek outcome diagnostics project only allowlisted status and parser cl
   }
 });
 
+test('HTTP 401 copy directs admins to verify the saved credential without asserting its cause', () => {
+  const canary = 'private-response-body-canary';
+  assert.equal(deepSeekOutcomeDiagnosticCopy({ outcome: 'outcome_unknown', provider: 'deepseek', httpStatus: 401, body: canary }),
+    'Outcome unknown. DeepSeek returned HTTP 401. An administrator should check and verify the saved provider credential; this status alone does not identify the cause. An external request may have been received. Delivery is unverified. Reconcile with the provider before retrying.');
+  const nonUnknown = deepSeekOutcomeDiagnosticCopy({ provider: 'deepseek', httpStatus: 401, body: canary });
+  assert.equal(nonUnknown,
+    'DeepSeek returned HTTP 401. An administrator should check and verify the saved provider credential; this status alone does not identify the cause. Delivery remains unverified; this run cannot be retried.');
+  assert.equal(nonUnknown.includes(canary), false);
+  assert.equal(deepSeekOutcomeDiagnosticCopy({ outcome: 'outcome_unknown', provider: 'deepseek', httpStatus: 403 }),
+    'Outcome unknown. DeepSeek returned HTTP 403. An external request may have been received. Delivery is unverified. Reconcile with the provider before retrying.');
+  assert.equal(deepSeekOutcomeDiagnosticCopy({ provider: 'deepseek', httpStatus: 403 }),
+    'DeepSeek returned HTTP 403. Delivery remains unverified; this run cannot be retried.');
+});
+
 test('DeepSeek transport diagnostics expose only fixed safe copy, including unknown outcomes', () => {
   const canary = 'private-transport-message-canary';
   assert.deepEqual(deepSeekOutcomeDiagnostic({ provider: 'deepseek', transportFailureClass: 'dns_resolution_failed', message: canary }), {

@@ -366,3 +366,16 @@ test('restart-loaded linked result retains only safe persisted DeepSeek outcome 
   assert.equal(invalid.diagnostic, 'Outcome unknown. An external request may have been received. Delivery is unverified. Reconcile with the provider before retrying.');
   assert.equal(JSON.stringify(invalid).includes(canary), false);
 });
+
+test('restart-loaded linked task with HTTP 401 guides an admin without exposing provider response details', () => {
+  const canary = 'private-401-body-request-id-canary';
+  const restoredRun = JSON.parse(JSON.stringify(linkedRun({ status: 'FAILED', execution: {
+    providerDiagnostic: { outcome: 'outcome_unknown', provider: 'deepseek', httpStatus: 401,
+      body: canary, requestId: canary, message: canary },
+  } })));
+  const result = linkedProcessTaskResult(JSON.parse(JSON.stringify(runtime)), restoredRun);
+  assert.deepEqual(result.providerDiagnostic, { outcome: 'outcome_unknown', provider: 'deepseek', httpStatus: 401 });
+  assert.equal(result.diagnostic,
+    'Outcome unknown. DeepSeek returned HTTP 401. An administrator should check and verify the saved provider credential; this status alone does not identify the cause. An external request may have been received. Delivery is unverified. Reconcile with the provider before retrying.');
+  assert.equal(JSON.stringify(result).includes(canary), false);
+});
