@@ -65,6 +65,17 @@ occurred. Sanitized records:
 Cross-session spoken status remains unverified; PR-06 remains first open, with
 cursor and release gates unchanged.
 
+PR-06 updated saved-result keyboard proof attempt (2026-09-28): the one
+provider-free direct-CDP fixture attempt stopped before startup because shell
+redirection could not open `/tmp/orgward-pr06-keyboard-current-proof/run.log`;
+its parent directory did not exist. No page or keyboard interaction was
+observed, and no source, tests, provider, credentials or external effects were
+used. The existing keyboard-only human-checkpoint evidence predates the updated
+saved-result disclosure, so keyboard re-entry into that disclosure remains
+unverified. Sanitized record:
+`/tmp/orgward-pr06-keyboard-current-proof/attempt-summary.txt`. PR-06 remains
+first open; cursor and release gates are unchanged.
+
 PR-06 task profile empty-state copy (2026-09-28): saved task cards now distinguish
 an empty server execution-profile list, directing users to an OrgWard administrator,
 from existing profiles that cannot serve the task because model profiles require
