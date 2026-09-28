@@ -4650,3 +4650,19 @@ work here; do not create metadata-only completion loops.
   `/tmp/orgward-tests-NJQjQU/node-test.tap.log`. No provider credentials, live
   provider, browser or external effects were used. PR-06 remains active; cursor,
   task checkboxes and release gates are unchanged.
+
+  PR-06 single synthetic DeepSeek dispatch attempt (2026-09-28): a fresh
+  disposable PostgreSQL fixture created a synthetic `process-review` plan,
+  completed its human root and checkpoint, issued the linked `deepseek-flash`
+  task, and recorded independent approver approval before dispatch (256 output
+  token cap). Exactly one execute call was made for run
+  `execution-run-a9ac10d7-e014-4279-aa21-f682bc59dd6b`. OrgWard returned
+  `FAILED`; the provider attempt ledger contains one `outcome_unknown` attempt
+  and no generated proposal. Since provider handoff was ambiguous, it was not
+  retried; restart persistence was not asserted. The disposable app/database
+  were stopped and temporary data removed. The credential came from the
+  existing OpenClaw file through an anonymous pipe; its value was not placed in
+  argv, environment, logs or source, and was encrypted only in the disposable
+  database. No host permissions or provider settings changed. This is an
+  unsuccessful PR-06 proof; task checkboxes, cursor and release gates remain
+  unchanged.
