@@ -26,7 +26,7 @@ async function api(app, route, subject, { method = 'GET', body } = {}) {
   return { status: response.status, body: await response.json() };
 }
 
-async function setup(t, handler, { openAi = false, persistenceFaults = {} } = {}) {
+async function setup(t, handler, { openAi = false, deepSeek = false, persistenceFaults = {} } = {}) {
   const postgres = await startPostgres();
   let fixtureRequest;
   let fixtureRequestCount = 0;
@@ -51,7 +51,8 @@ async function setup(t, handler, { openAi = false, persistenceFaults = {} } = {}
       id: 'fixture-http-provider', kind: 'provider-http', version: '1.0.0', label: 'Fixture provider',
       providerEndpoint: `http://127.0.0.1:${fixture.address().port}/v1/execute`, timeoutMs: 5_000,
       credentialReference: 'secret-fixture', credentialVersion: 1,
-    }, ...(openAi ? [{ id: 'openai-current', kind: 'provider-openai', version: '1.0.0', label: 'Validated OpenAI', credentialReference: 'secret-openai', model: 'gpt-fixture', openAiEndpoint: `http://127.0.0.1:${fixture.address().port}/v1/responses` }] : [])];
+    }, ...(openAi ? [{ id: 'openai-current', kind: 'provider-openai', version: '1.0.0', label: 'Validated OpenAI', credentialReference: 'secret-openai', model: 'gpt-fixture', openAiEndpoint: `http://127.0.0.1:${fixture.address().port}/v1/responses` }] : []),
+    ...(deepSeek ? [{ id: 'deepseek-current', kind: 'provider-deepseek', version: '1.0.0', label: 'DeepSeek · deepseek-fixture', credentialReference: 'secret-fixture', model: 'deepseek-fixture', deepSeekEndpoint: `http://127.0.0.1:${fixture.address().port}/responses`, deepSeekMaxOutputTokens: 128 }] : [])];
   const apps = [];
   const newApp = async () => {
     const instance = createApp({ databaseUrl: postgres.databaseUrl, oidcAuthenticator: authenticator(), secretEncryptionKey, executionProfiles, persistenceFaults,
@@ -92,9 +93,9 @@ async function setup(t, handler, { openAi = false, persistenceFaults = {} } = {}
     getFixtureRequestCount: () => fixtureRequestCount, restart: newApp };
 }
 
-async function createApprovedRun(app, projectId, objective) {
+async function createApprovedRun(app, projectId, objective, profileId = 'fixture-http-provider') {
   const created = await api(app, '/api/execution/runs', 'worker', { method: 'POST', body: {
-    projectId, profileId: 'fixture-http-provider', title: 'Fixture call', objective,
+    projectId, profileId, title: 'Fixture call', objective,
   } });
   assert.equal(created.status, 201, JSON.stringify(created.body));
   assert.deepEqual(created.body.profile.credential, { reference: 'secret-fixture', version: 1 });
@@ -292,6 +293,8 @@ test('handoff wins the shared lease gate before revocation and restart never red
   releaseProvider();
   const outcome = await execution;
   assert.notEqual(outcome.body.status, 'SUCCEEDED');
+  assert.equal(outcome.body.status, 'INTERRUPTED');
+  assert.deepEqual(outcome.body.execution.providerDiagnostic, { outcome: 'outcome_unknown' });
   assert.equal(getFixtureRequestCount(), 1);
   const attempt = await app.persistence.query('select status from orgward.provider_dispatch_attempts where tenant_id=$1 and run_id=$2', ['tenant-a', run.id]);
   assert.equal(attempt.rows[0].status, 'outcome_unknown');
@@ -305,6 +308,7 @@ test('handoff wins the shared lease gate before revocation and restart never red
   const recovered = await api(restarted, `/api/execution/runs/${run.id}`, 'admin');
   assert.equal(recovered.status, 200);
   assert.notEqual(recovered.body.status, 'APPROVED');
+  assert.deepEqual(recovered.body.execution.providerDiagnostic, { outcome: 'outcome_unknown' });
   const retry = await api(restarted, `/api/execution/runs/${run.id}/execute`, 'admin', { method: 'POST', body: { version: recovered.body.version } });
   assert.notEqual(retry.status, 200);
   assert.equal(getFixtureRequestCount(), 1);
@@ -532,6 +536,8 @@ test('opt-in OpenAI profile binds each new approved run to the current validated
   assert.equal(created.status, 201, JSON.stringify(created.body));
   assert.deepEqual(created.body.profile.credential, { reference: 'secret-openai', version: 1 });
   assert.equal(created.body.profile.providerModel, 'gpt-fixture');
+  assert.equal(created.body.profile.providerMaxOutputTokens, undefined,
+    'the DeepSeek-specific cap does not alter the existing OpenAI profile contract');
   assert.equal(resolverCalls, 1);
 
   const runCountBeforeRace = await app.persistence.query(`select count(*)::int as count from orgward.aggregates
@@ -578,4 +584,185 @@ test('opt-in OpenAI profile binds each new approved run to the current validated
   assert.equal(providerCalls[0].credential, `Bearer ${keys[1]}`);
   assert.deepEqual(providerCalls[0].body, { model: 'gpt-fixture', input: 'Summarize the current model response\n\nRequirements:\n', store: false, max_output_tokens: 2_000, tools: [] });
   assert.equal(JSON.stringify(executed.body).includes(keys[1]), false);
+});
+
+test('DeepSeek uses its fixed Responses endpoint with a pinned generic credential and bounded output', async (t) => {
+  const providerCalls = [];
+  const fixtureResult = await setup(t, async ({ request, response, credential, body }) => {
+    providerCalls.push({ path: request.url, credential, body });
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'Bounded DeepSeek result' }] }] }));
+  }, { deepSeek: true });
+  const { app, projectId } = fixtureResult;
+  const created = await api(app, '/api/execution/runs', 'worker', { method: 'POST', body: {
+    projectId, profileId: 'deepseek-current', title: 'DeepSeek task', objective: 'Summarize the local test input',
+  } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.equal(created.body.profile.kind, 'provider-deepseek');
+  assert.deepEqual(created.body.profile.credential, { reference: 'secret-fixture', version: 1 });
+  assert.equal(created.body.profile.providerModel, 'deepseek-fixture');
+  assert.equal(created.body.profile.providerMaxOutputTokens, 128);
+
+  const approved = await api(app, `/api/execution/runs/${created.body.id}/approve`, 'admin', { method: 'POST', body: { version: created.body.version } });
+  assert.equal(approved.status, 200, JSON.stringify(approved.body));
+  const rotated = await api(app, '/api/v1/secrets/secret-fixture', 'admin', { method: 'PUT', body: {
+    schemaVersion: '1.0', commandId: 'deepseek-generic-secret-rotate', expectedVersion: 1,
+    payload: { value: 'fixture-deepseek-rotated-credential', reason: 'Rotate generic fixture credential', expiresAt: new Date(Date.now() + 60 * 60_000).toISOString() },
+  } });
+  assert.equal(rotated.status, 200, JSON.stringify(rotated.body));
+  const staleDispatch = await api(app, `/api/execution/runs/${created.body.id}/execute`, 'worker', { method: 'POST', body: { version: approved.body.version } });
+  assert.equal(staleDispatch.status, 409);
+  assert.match(staleDispatch.body.error, /credential binding changed after approval/i);
+  assert.equal(providerCalls.length, 0, 'a rotated generic credential never reaches the provider');
+
+  const next = await api(app, '/api/execution/runs', 'worker', { method: 'POST', body: {
+    projectId, profileId: 'deepseek-current', title: 'DeepSeek task v2', objective: 'Summarize the current local test input',
+  } });
+  assert.equal(next.status, 201, JSON.stringify(next.body));
+  assert.deepEqual(next.body.profile.credential, { reference: 'secret-fixture', version: 2 });
+  const nextApproved = await api(app, `/api/execution/runs/${next.body.id}/approve`, 'admin', { method: 'POST', body: { version: next.body.version } });
+  assert.equal(nextApproved.status, 200, JSON.stringify(nextApproved.body));
+  const executed = await api(app, `/api/execution/runs/${next.body.id}/execute`, 'worker', { method: 'POST', body: { version: nextApproved.body.version } });
+  assert.equal(executed.status, 200, JSON.stringify(executed.body));
+  assert.equal(executed.body.status, 'SUCCEEDED');
+  assert.equal(executed.body.execution.stdout, 'Bounded DeepSeek result');
+  assert.equal(providerCalls.length, 1);
+  assert.equal(providerCalls[0].path, '/responses');
+  assert.equal(providerCalls[0].credential, 'Bearer fixture-deepseek-rotated-credential');
+  assert.deepEqual(providerCalls[0].body, {
+    model: 'deepseek-fixture', input: 'Summarize the current local test input\n\nRequirements:\n',
+    store: false, max_output_tokens: 128, tools: [],
+  });
+  assert.equal(JSON.stringify(executed.body).includes('fixture-deepseek-rotated-credential'), false);
+});
+
+test('DeepSeek outcome-unknown HTTP responses persist only a safe status and never redispatch', async (t) => {
+  const bodyCanary = 'provider-private-body-canary-9071';
+  const headerCanary = 'provider-private-header-canary-9072';
+  const fixtureResult = await setup(t, async ({ response }) => {
+    response.writeHead(503, { 'content-type': 'text/plain', 'x-provider-private': headerCanary });
+    response.end(bodyCanary);
+  }, { deepSeek: true });
+  const { app, projectId, restart, getFixtureRequestCount } = fixtureResult;
+  const created = await api(app, '/api/execution/runs', 'worker', { method: 'POST', body: {
+    projectId, profileId: 'deepseek-current', title: 'DeepSeek uncertain response', objective: 'Read only the local fixture input',
+  } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const approved = await api(app, `/api/execution/runs/${created.body.id}/approve`, 'admin', {
+    method: 'POST', body: { version: created.body.version },
+  });
+  assert.equal(approved.status, 200, JSON.stringify(approved.body));
+  const failed = await api(app, `/api/execution/runs/${created.body.id}/execute`, 'worker', {
+    method: 'POST', body: { version: approved.body.version },
+  });
+  assert.equal(failed.status, 200, JSON.stringify(failed.body));
+  assert.equal(failed.body.status, 'FAILED');
+  assert.match(failed.body.execution.error, /may have received this request/i);
+  assert.deepEqual(failed.body.execution.providerDiagnostic, { outcome: 'outcome_unknown' });
+  const failureEvent = failed.body.events.findLast((event) => event.type === 'ExecutionFailed');
+  assert.deepEqual(failureEvent.data.providerDiagnostic, { provider: 'deepseek', httpStatus: 503 });
+  assert.equal(JSON.stringify(failed.body).includes(bodyCanary), false);
+  assert.equal(JSON.stringify(failed.body).includes(headerCanary), false);
+  assert.equal(JSON.stringify(failed.body).includes(fixtureResult.canary), false);
+  assert.equal(getFixtureRequestCount(), 1);
+  const attempt = await app.persistence.query(`select status from orgward.provider_dispatch_attempts
+    where tenant_id='tenant-a' and run_id=$1`, [created.body.id]);
+  assert.equal(attempt.rows[0].status, 'outcome_unknown');
+
+  await new Promise((resolve) => app.server.close(resolve));
+  await app.close();
+  fixtureResult.apps.splice(fixtureResult.apps.indexOf(app), 1);
+  const restarted = await restart();
+  const recovered = await api(restarted, `/api/execution/runs/${created.body.id}`, 'worker');
+  assert.equal(recovered.status, 200);
+  assert.deepEqual(recovered.body.execution.providerDiagnostic, { outcome: 'outcome_unknown' });
+  const retry = await api(restarted, `/api/execution/runs/${created.body.id}/execute`, 'worker', {
+    method: 'POST', body: { version: recovered.body.version },
+  });
+  assert.notEqual(retry.status, 200);
+  assert.equal(getFixtureRequestCount(), 1);
+});
+
+test('DeepSeek outcome-unknown transport failures expose only the durable marker and never redispatch', async (t) => {
+  const fixtureResult = await setup(t, async ({ response }) => { response.destroy(); }, { deepSeek: true });
+  const { app, projectId, restart, getFixtureRequestCount } = fixtureResult;
+  const created = await api(app, '/api/execution/runs', 'worker', { method: 'POST', body: {
+    projectId, profileId: 'deepseek-current', title: 'DeepSeek missing response status', objective: 'Read only the local fixture input',
+  } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const approved = await api(app, `/api/execution/runs/${created.body.id}/approve`, 'admin', {
+    method: 'POST', body: { version: created.body.version },
+  });
+  assert.equal(approved.status, 200, JSON.stringify(approved.body));
+  const failed = await api(app, `/api/execution/runs/${created.body.id}/execute`, 'worker', {
+    method: 'POST', body: { version: approved.body.version },
+  });
+  assert.equal(failed.status, 200, JSON.stringify(failed.body));
+  assert.equal(failed.body.status, 'FAILED');
+  assert.deepEqual(failed.body.execution.providerDiagnostic, { outcome: 'outcome_unknown' });
+  assert.equal(JSON.stringify(failed.body).includes(fixtureResult.canary), false);
+  assert.equal(getFixtureRequestCount(), 1);
+  const processSnapshot = await api(app,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(projectId)}`, 'worker');
+  assert.equal(processSnapshot.status, 200, JSON.stringify(processSnapshot.body));
+  assert.ok(processSnapshot.body.runs.every((candidate) => candidate.projectId === projectId));
+  assert.ok(processSnapshot.body.runs.some((candidate) => candidate.id === created.body.id
+    && candidate.execution.providerDiagnostic?.outcome === 'outcome_unknown'));
+
+  await new Promise((resolve) => app.server.close(resolve));
+  await app.close();
+  fixtureResult.apps.splice(fixtureResult.apps.indexOf(app), 1);
+  const restarted = await restart();
+  const recovered = await api(restarted, `/api/execution/runs/${created.body.id}`, 'worker');
+  assert.equal(recovered.status, 200);
+  assert.deepEqual(recovered.body.execution.providerDiagnostic, { outcome: 'outcome_unknown' });
+  const retry = await api(restarted, `/api/execution/runs/${created.body.id}/execute`, 'worker', {
+    method: 'POST', body: { version: recovered.body.version },
+  });
+  assert.notEqual(retry.status, 200);
+  assert.equal(getFixtureRequestCount(), 1);
+});
+
+test('DeepSeek 2xx parser failures persist only allowlisted diagnostics across restart', async (t) => {
+  const cases = [
+    { name: 'invalid JSON', parserFailureClass: 'invalid_json', body: '{bad-json' },
+    { name: 'oversize body', parserFailureClass: 'body_too_large', body: 'x'.repeat(33_000) },
+    { name: 'incomplete response', parserFailureClass: 'incomplete_response', body: JSON.stringify({ status: 'in_progress', output: [] }) },
+    { name: 'missing output text', parserFailureClass: 'missing_output_text', body: JSON.stringify({ status: 'completed', output: [] }) },
+  ];
+  for (const [index, scenario] of cases.entries()) {
+    const bodyCanary = `private-body-canary-${index}-8831`;
+    const headerCanary = `private-header-canary-${index}-8832`;
+    const fixtureResult = await setup(t, async ({ response }) => {
+      response.writeHead(200, { 'content-type': 'application/json', 'x-private-canary': headerCanary });
+      response.end(scenario.body.replace('{bad-json', `{\"canary\":\"${bodyCanary}`));
+    }, { deepSeek: true });
+    const { app, projectId, restart, getFixtureRequestCount } = fixtureResult;
+    const approved = await createApprovedRun(app, projectId, `parse failure ${index}`, 'deepseek-current');
+    const failed = await api(app, `/api/execution/runs/${approved.id}/execute`, 'worker', {
+      method: 'POST', body: { version: approved.version },
+    });
+    assert.equal(failed.status, 200, JSON.stringify(failed.body));
+    assert.equal(failed.body.status, 'FAILED');
+    const diagnostic = { provider: 'deepseek', httpStatus: 200, parserFailureClass: scenario.parserFailureClass };
+    assert.deepEqual(failed.body.execution.providerDiagnostic, { outcome: 'outcome_unknown' }, failed.body.execution.error);
+    const failureEvent = failed.body.events.findLast((event) => event.type === 'ExecutionFailed');
+    assert.deepEqual(failureEvent.data.providerDiagnostic, diagnostic);
+    assert.equal(JSON.stringify(failed.body).includes(bodyCanary), false);
+    assert.equal(JSON.stringify(failed.body).includes(headerCanary), false);
+    assert.equal(JSON.stringify(failed.body).includes(fixtureResult.canary), false);
+    assert.equal((await api(app, `/api/execution/runs/${approved.id}`, 'other')).status, 404);
+    await new Promise((resolve) => app.server.close(resolve));
+    await app.close();
+    fixtureResult.apps.splice(fixtureResult.apps.indexOf(app), 1);
+    const restarted = await restart();
+    const recovered = await api(restarted, `/api/execution/runs/${approved.id}`, 'worker');
+    assert.equal(recovered.status, 200);
+    assert.deepEqual(recovered.body.execution.providerDiagnostic, { outcome: 'outcome_unknown' });
+    const retry = await api(restarted, `/api/execution/runs/${approved.id}/execute`, 'worker', {
+      method: 'POST', body: { version: recovered.body.version },
+    });
+    assert.notEqual(retry.status, 200);
+    assert.equal(getFixtureRequestCount(), 1);
+  }
 });

@@ -50,36 +50,367 @@ record gaps or skipped checks explicitly. Advance the cursor and checkbox togeth
 only when the whole PR outcome passes its required behavior checks and review.
 Keep P/E release-gate status and evidence in their separate ledgers.
 
+PR-06 task profile empty-state copy (2026-09-28): saved task cards now distinguish
+an empty server execution-profile list, directing users to an OrgWard administrator,
+from existing profiles that cannot serve the task because model profiles require
+an input and information output. The latter copy also offers adding task inputs/
+outputs or selecting a non-model profile; it does not imply missing credentials.
+Served-client regression passed 1/1 (0.77s), TAP
+`/tmp/orgward-tests-JyuHu2/node-test.tap.log`. The single `npm run check` passed
+329/330 (329 passed, 0 failed, 1 optional PostgreSQL backup/restore skip because
+client tools are unavailable; 75.22s TAP), TAP
+`/tmp/orgward-tests-OHIst3/node-test.tap.log`. `node --check public/execution.js`
+and `git diff --check` passed. PR-06 remains first open; cursor and release gates
+unchanged.
+
+PR-06 task profile empty-state copy repair (2026-09-28): clarified that when
+configured profiles exist but none can run the task, the user can ask an OrgWard
+administrator to configure a non-model profile. Focused served-client test passed
+1/1 (0.67s), TAP `/tmp/orgward-tests-X3VUrO/node-test.tap.log`. The single check
+on the repaired source passed 329/330 (329 passed, 0 failed, one optional
+PostgreSQL backup/restore skip because client tools are unavailable; 76.69s TAP,
+77.87s total), TAP `/tmp/orgward-tests-9W6imt/node-test.tap.log`. `node --check
+public/execution.js` and `git diff --check` passed. PR-06, cursor, and release gates
+remain unchanged.
+
+PR-06 linked saved-result disclosure summary (2026-09-28): the collapsed task-row
+summary now shows the validated terminal status and bounded artifact count, using
+singular/plural wording and `100+` when capped; output previews and artifact links
+remain inside the disclosure. Focused helper and served-client tests passed 8/8
+(0.68s), TAP `/tmp/orgward-tests-xNYpCK/node-test.tap.log`; an initial focused
+attempt found two stale assertions, which were updated. The single frozen-source
+`npm run check` passed 330/331 (330 passed, 0 failed, 1 optional PostgreSQL
+backup/restore skip because client tools are unavailable; 75.40s TAP, 76.55s
+total), TAP `/tmp/orgward-tests-2pR9jN/node-test.tap.log`. `node --check` for the
+edited client/helper and `git diff --check` passed before and after. PR-06, cursor
+and release gates remain unchanged.
+
+PR-06 assignment disclosure summary (2026-09-28): the collapsed role-guidance
+disclosure now distinguishes a planned actor specified in the pinned blueprint
+from a currently enabled, eligible organizational target, without showing the
+target name in the summary. Expanded guidance and permission details remain
+unchanged. Focused assignment-helper and served-client tests passed 8/8 (0.69s),
+TAP `/tmp/orgward-tests-KTCDIR/node-test.tap.log`. The single frozen-tree
+`npm run check` passed 331/332 (331 passed, 0 failed, 1 optional PostgreSQL
+backup/restore skip because client tools are unavailable; 75.86s TAP, 76.98s
+total), TAP `/tmp/orgward-tests-BvUbfh/node-test.tap.log`. `node --check` for the
+edited client/helper and `git diff --check` passed before and after. PR-06, cursor
+and release gates remain unchanged.
+
+PR-06 pinned provider-input review (2026-09-28): the authorized model-task run
+view now exposes an expandable, text-only projection of the exact persisted source
+envelope and output target. It labels all task/source/target text as untrusted
+factual data and target-before as a proposed-update baseline, validates the full
+bounded shape and blueprint pin, and shows an explicit legacy/unavailable state
+without partial data. The existing fixture-backed PostgreSQL request journey
+asserts pre-dispatch snapshot data, cross-tenant run-read denial, exact snapshot
+and view persistence after restart. Focused helper, served-client and persistence
+tests passed 48/48 (66.58s), TAP `/tmp/orgward-tests-X41Y8e/node-test.tap.log`.
+The single frozen-tree `npm run check` passed 334/335 (334 passed, 0 failed,
+1 optional PostgreSQL backup/restore skip because client tools are unavailable;
+75.80s TAP, 76.98s total), TAP
+`/tmp/orgward-tests-ntZlZj/node-test.tap.log`. Syntax checks and `git diff --check`
+passed before and after. No live provider call or browser test. PR-06, cursor and
+release gates remain unchanged.
+
 The default `npm test` runner uses Node's process-isolated test-file workers with
-concurrency 2. Each PostgreSQL-backed test file lazily starts one temporary
-loopback cluster; integration tests in that file create uniquely named empty
-databases and close their pools at fixture teardown. The file's `after` hook stops
-its disposable server and removes its private temporary cluster root; no SQL
-`DROP DATABASE` cleanup is used. This bounds retained databases and WAL to one
-file while keeping databases isolated. The disposable test server uses `fsync=off`,
-`synchronous_commit=off`, `full_page_writes=off`, and bounded WAL to avoid
-checkpoint/disk quota stalls; production database settings are unchanged.
+concurrency 2. When selected tests need PostgreSQL, the runner creates one
+runner-owned disposable loopback cluster per invocation and passes its internally
+owned base URL to workers; caller-provided database URL variables are discarded.
+Each `startPostgres()` call creates a uniquely named empty database on that
+cluster, and fixture `close()` drops it after its pools close. Worker and runner
+teardown stop the cluster and clean up leftovers on completion or failure.
+Selections without PostgreSQL tests start no cluster. The disposable test server
+uses `fsync=off`, `synchronous_commit=off`, `full_page_writes=off`, and bounded WAL
+to avoid checkpoint/disk quota stalls; production database settings are unchanged.
+The earlier per-test-file cluster lifecycle described in dated receipts is
+historical and superseded by this runner-owned lifecycle.
 Transactions, isolation, application restarts and migration rollback are exercised,
 but test results do not prove PostgreSQL crash or power-loss durability.
 No persistent PostgreSQL daemon is left running. Focused test invocations that do
-not select PostgreSQL suites do not start it. Most recent implementation `npm run
-check`, after the PR-06 saved-design → human checkpoint → dependent agent result
-and restart increment, passed 223 of 224 tests with 0 failures and 1 optional
-PostgreSQL backup/restore skip because client tools were unavailable
-(`ORGWARD_PG_TOOLS_BIN` not set; 67.49s test runner, 70.02s wall). Focused
-PostgreSQL persistence passed 1/1 (10.35s); `git diff --check` and the focused test
-file syntax check passed. The full integration uses only the loopback OpenAI
-fixture; no live provider call was made. Rendered-browser verification was
-completed with the installed user-level `agent-browser` CLI against a seeded
-loopback fixture. The browser-authored revision 3 journey inserted and bound a
-required human checkpoint in the UI, completed both human checkpoints with
-evidence, independently approved and executed the dependent task once against the
-loopback provider, then restarted only the app and confirmed the result and
-evidence persisted. Post-restart API reads returned 200; no console or page errors
-were reported. No live provider call or screen-reader proof was performed. Logs:
-`/tmp/orgward-pr06-human-agent-restart-check-20260924.log`,
-`/tmp/orgward-tests-oaSTPM/node-test.tap.log`. The previous unverified-outcome
-disposition receipt and focused migration/client results remain below.
+not select PostgreSQL suites do not start it. The planned `npm run check`, after
+the event-driven dispatch-watchdog test wait, passed 246/247 tests with 246
+passed, 0 failed and 1 optional PostgreSQL backup/restore skip because client
+tools were unavailable (`ORGWARD_PG_TOOLS_BIN` not set; 67.09s TAP, 69.65s
+wall). The focused watchdog test passed 1/1 (6.44s case, 6.88s TAP, 6.96s
+wall); its full
+suite case duration fell from 6.50s to 5.63s. A redundant check was accidentally
+started during a log lookup; it also passed 246/247 (66.36s TAP) and left no
+PostgreSQL process running. `git diff --check` passed. The
+preceding focused failure-policy and served-client tests passed 2/2 (0.69s TAP),
+and the saved-process PostgreSQL conflict/recovery test passed 1/1 (10.66s TAP,
+10.73s wall). Only non-retryable state-conflict 409s refresh project, actor
+bindings, runtime and actions; validation codes `INVALID_HUMAN_TASK_OUTCOME` and
+`INVALID_HUMAN_TASK_ESCALATION` preserve the form and show the validation error.
+Retryable outcomes, including retryable 409s, retain the same pending command.
+Logs: `/tmp/orgward-dispatch-uncertainty-check-20260927.log`,
+`/tmp/orgward-tests-QkJO8h/node-test.tap.log`,
+`/tmp/orgward-tests-k7hOAs/node-test.tap.log` (redundant run),
+`/tmp/orgward-dispatch-uncertainty-focused-20260927.tap.log`,
+`/tmp/orgward-dispatch-uncertainty-focused-20260927.time.log`,
+`/tmp/orgward-pr06-human-conflict-repair-focused-20260927.log`, and the prior
+PostgreSQL receipt `/tmp/orgward-pr06-human-conflict-pg-20260927.log`. The sole
+skip was the optional backup/restore journey because client tools were unavailable.
+One user-authorized fresh DeepSeek dispatch occurred. The local execute API
+returned HTTP 200 while the run ended `FAILED` with its provider attempt marked
+`outcome_unknown`; upstream status and output were unavailable. No retry was
+made. PR-06 remains open with cursor/gates unchanged.
+PR-06 cross-session process freshness slice (2026-09-27): Execution now checks
+task-instance state every 15 seconds while visible and immediately on returning
+to the tab. It applies only current-project responses, defers replacing saved-plan
+cards while a card control is focused or has unsaved input, retries deferred data
+after focus leaves, and exposes refresh failures and updates through one polite
+status message. Focused state and served-client tests passed 3/3 (0.66s TAP),
+log `/tmp/orgward-tests-hQ51nj/node-test.tap.log`. The single frozen-tree
+`npm run check` passed 277/278 (277 passed, 0 failed, 1 optional PostgreSQL
+backup/restore skip because client tools are unavailable; 70.92s runner,
+70.85s TAP), log `/tmp/orgward-pr06-cross-session-freshness-check-20260927.log`,
+TAP `/tmp/orgward-tests-yURhrk/node-test.tap.log`. `git diff --check` passed
+before and after the check. No provider calls or credential access. PR-06 remains
+first open, cursor and release gates unchanged.
+PR-06 freshness review repair (2026-09-27): snapshot equality now takes
+precedence over focus/dirty-input checks, so unchanged polls do not defer, render,
+or alter the live status; only changed snapshots are deferred or applied. Added
+behavior coverage for unchanged+focused, changed+dirty and changed+clean cases.
+Focused tests passed 4/4 (0.73s), log `/tmp/orgward-tests-1ZHZkm/node-test.tap.log`.
+The single frozen-tree `npm run check` passed 278/279 (278 passed, 0 failed,
+1 optional PostgreSQL backup/restore skip because client tools are unavailable;
+70.58s runner, 70.50s TAP), log
+`/tmp/orgward-pr06-cross-session-review-repair-check-20260927.log`, TAP
+`/tmp/orgward-tests-w9xIBm/node-test.tap.log`. `git diff --check` passed before
+and after. PR-06 remains first open; cursor and release gates unchanged.
+An optional headed two-session render proof was not completed: the available
+reusable fixture uses provider-specific setup, while a stripped disposable
+fixture draft stopped during plan-revision setup on `INVALID_PROCESS_PLAN_ROLE`.
+It was torn down before any browser UI action; no provider or credential service
+was called. Cross-session behavior for this repair is covered by focused tests,
+not a new browser receipt.
+PR-06 freshness defer-message repair (2026-09-27): changed refresh snapshots now
+distinguish unsaved edits from focus-only protection. Dirty form values say to
+save or discard the edit; a focused but clean task/status target says to move
+focus outside the plan. Focused tests passed 6/6 (0.73s), log
+`/tmp/orgward-tests-wxBedN/node-test.tap.log`. The single frozen-tree
+`npm run check` passed 280/281 (280 passed, 0 failed, 1 optional PostgreSQL
+backup/restore skip because client tools are unavailable; 71.38s runner,
+71.50s TAP), log
+`/tmp/orgward-pr06-cross-session-defer-message-check-20260927.log`, TAP
+`/tmp/orgward-tests-ezNTej/node-test.tap.log`. `git diff --check` passed before
+and after. The optional headed proof was not run: the valid test pattern provides
+API-only bearer identities, while browser UI requires its separate normal OIDC
+login harness; the available browser harness includes provider/credential setup.
+No provider or credential call was made and no browser action was attempted.
+PR-06 remains first open; cursor and release gates unchanged.
+PR-06 provider-free cross-session browser proof (2026-09-27): a disposable
+loopback app/PostgreSQL fixture used the normal synthetic OIDC `/auth/login` flow
+in two headed agent-browser sessions, with no execution profiles configured.
+The fixture followed the persistence test's founder business answers, Bob editor
+membership, founder actor binding, `process-deliver` plan, and assigned
+`task-process-learn` human task. Bob's page showed ESCALATED; Alice submitted one
+owner `Resolve escalation` action with resume. Bob's first post-action DOM
+inspection showed the same task IN_PROGRESS. The inspection interval was not
+instrumented, so this is not a measured 15-second latency claim. AX snapshots and
+screenshots: `/tmp/orgward-pr06-cross-session-proof-20260927/`. Fixture reported
+zero provider calls and zero profiles. Both headed sessions and the disposable
+app, issuer, PostgreSQL cluster/data and harness were stopped/removed. Focus-only
+and dirty-form live browser deferral were not exercised in this proof; focused
+behavior tests cover those dispositions/messages. No source/tests or release
+gates changed; PR-06 remains open.
+PR-06 cross-session transition announcement slice (2026-09-27): successful
+poll application now announces task status transitions by matching project, plan,
+revision, instance and task identity. Titles come from the matching saved plan
+revision with a taskId fallback. First-seen and unchanged rows remain silent;
+multiple changes are summarized with at most three named transitions plus a
+remaining count. Existing focus/dirty deferrals, stale-response guards, and the
+plan subtree's non-live-region behavior remain intact. Focused refresh tests
+passed 9/9 (0.23s); log `/tmp/orgward-pr06-refresh-announcement-focused-20260927.log`,
+TAP `/tmp/orgward-tests-3wojob/node-test.tap.log`. The single frozen-tree
+`npm run check` passed 284/285 (284 passed, 0 failed, 1 optional PostgreSQL
+backup/restore skip because client tools are unavailable; 71.54s), log
+`/tmp/orgward-pr06-refresh-announcement-check-20260927.log`, TAP
+`/tmp/orgward-tests-No62ub/node-test.tap.log`. `git diff --check` passed.
+No provider calls or credential access. No Orca run was made for this slice;
+spoken transition behavior remains unverified. PR-06 remains first open; cursor
+and release gates unchanged.
+PR-06 cross-session refresh Orca follow-up (2026-09-27): a private
+D-Bus/Xvfb/PulseAudio smoke setup succeeded (`pactl info` confirmed the local
+null-sink server), and its short-lived processes were cleaned by the setup trap.
+The existing cross-session proof left screenshots/AX snapshots but no reusable
+live app, issuer, or browser fixture; the remaining OIDC browser harness contains
+provider-specific setup and was not used. No Alice/Bob refresh or Orca
+`SPEECH OUTPUT` check was performed, so changed-status speech is unverified.
+No provider/credential access, source edits, or tests. PR-06 remains first open;
+cursor and release gates unchanged.
+PR-06 refresh announcement component Orca check (2026-09-27): an initial
+component exercise used a populated template clone and is not treated as a valid
+speech result. A corrected final attempt attached the empty `#new-run-template`
+fragment, confirmed `document.getElementById('process-instance-refresh-status')`
+was empty and attached, then computed the transition through the real helper and
+set “Prepare deliverables changed from escalated to in progress.” on that same
+node. The DOM update was confirmed. Orca 50.2 emitted no task-specific
+`SPEECH OUTPUT` or corresponding status text-change event. The one status event
+in the trace was an unrelated JSON parse error from the unauthenticated static
+server's API request; page-load speech followed. Sanitized record:
+`/tmp/orgward-pr06-announcement-component-speech-evidence-20260927.txt`.
+Browser, Orca, Xvfb, PulseAudio, audio capture and static server were stopped;
+temporary profile and raw audio/logs removed. This is a component-only DOM
+update result, not proof of spoken cross-session behavior or accessibility
+qualification. No API fixture, provider, credential, source/test edits, or full
+check. PR-06 remains first open; cursor and gates unchanged.
+PR-06 authenticated two-session Orca attempt (2026-09-27): the one
+provider-free fixture launch stopped before PostgreSQL/app/issuer startup while
+loading the temporary script: Node ESM rejected the CommonJS `pg/lib/index.js`
+named import (`Named export 'Pool' not found`). Per the bounded stop condition,
+no correction/retry was made. No DB/app/browser/Orca processes or state changes,
+login, task transition, or speech evidence resulted. Temporary harness removed;
+no source/test/provider/credential changes. PR-06 remains first open; cursor and
+gates unchanged.
+Latest PR-06 rendered terminal-blocker recovery proof (2026-09-27): agent-browser 0.38.1 with Chromium `--no-sandbox` exercised a disposable loopback app/PostgreSQL fixture containing `task-process-learn` FAILED and unstarted `task-process-deliver` → `task-process-review` in the same instance. At 1280×900 and 390×844, the review task rendered BLOCKED and named the transitive failed prerequisite, explained starting a new instance from the first task, and stated that saved outcomes/evidence remain available. Neither blocked task row exposed an action; document horizontal overflow was 0px at both widths. Accessible snapshots named the review heading “Review and steer the enterprise — BLOCKED”; programmatic focus reached its `tabindex=-1` heading with the visible focus outline, and Tab then advanced to the next interactive form control. The recovery instruction is normal text in the same task reading order and is not a separate tab stop. No page/console errors. Rendered proof exposed that the recovery paragraph was hidden when assignment was unavailable; moved blocked-state guidance ahead of assignment status and added a focused served-client regression assertion. Focused tests passed 2/2 (0.69s); the one repaired-tree `npm run check` passed 247/248 (247 passed, 0 failed, 1 optional backup/restore skip; 68.79s runner / 68.71s TAP). `git diff --check` passed. Screenshots and sanitized snapshots/metrics: `/tmp/orgward-pr06-blocked-proof/desktop-1280x900.png`, `/tmp/orgward-pr06-blocked-proof/mobile-390x844.png`, and adjacent `*-snapshot.txt` / `*-metrics.json`; full check log `/tmp/orgward-pr06-blocked-check-20260927.log`, TAP `/tmp/orgward-tests-7CyJrX/node-test.tap.log`. Browser, app and PostgreSQL fixtures were closed and temporary database files removed. No provider or credential access. PR-06 remains first open; cursor and release gates unchanged.
+PR-06 rendered journey proof (2026-09-27): headed agent-browser exercised normal `/auth/login` → loopback test issuer → `/auth/callback` sign-in for synthetic Bob and Alice identities. Bob started/escalated the assigned checkpoint, Alice resumed it as project owner, Bob completed it with evidence and requested the dependent saved-plan task, and Alice independently approved/executed the configured local-command profile. The run rendered SUCCEEDED with one `task-result.txt` artifact and append-only request/approval/start/success activity. After app-only restart against the same disposable PostgreSQL DB, the persisted owner session, linked plan/instance, run result, artifact and event history rendered again. A fresh outsider login received HTTP 404 `PROJECT_NOT_FOUND` for the tenant-a project. Provider calls: 0; no source or tests changed. Desktop and narrow rendered screenshots and accessible snapshots are under `/tmp/orgward-pr06-current-rendered-proof/`; details and limits are in its `proof.txt`. At 390px the document reported 528px scroll width (138px horizontal overflow); actions used browser click/fill, not keyboard-only interaction; Orca speech and production IdP behavior were not tested. All browser sessions, app processes, disposable PostgreSQL and temporary fixture scripts/data were cleaned. The single full `npm run check` was interrupted after the persistence test process stopped producing output for over four minutes (worker idle in epoll; disposable PostgreSQL postmaster had exited, leaving an orphan background writer). Its partial TAP summary reports 230 passed, 35 failed, 2 cancelled and 1 optional backup/restore skip across 268 tests in 357.4s; first failures were in blueprint actor identity proposals, legacy import, and multiple persistence-backed cases, with broad subsequent persistence failures. No assertion detail was flushed before interruption, so no common source cause is established. No retry was made. `git diff --check` passed. Logs: `/tmp/orgward-pr06-current-rendered-proof/npm-check.log` and `/tmp/orgward-tests-vEkhR2/node-test.tap.log`. PR-06 remains first open; cursor and release gates unchanged.
+PR-06 repaired verification follow-up (2026-09-27): the prior first failing acceptance fixture was isolated to `tests/persistence.test.mjs` sending a caller-claimed `actor` to an authenticated architecture-accept action; the server’s verified-identity rejection remains intact and the shared test helper now relies on authenticated context. The narrow-screen activity history now wraps long event types and OIDC actor metadata; CSS/served-client regression assertions cover wrapping. An initial post-edit focused run failed with PostgreSQL SQLSTATE 53100 (disk quota exceeded). After confirming no active PostgreSQL process, removed only eight stale disposable test roots named in the repair log, leaving proof/TAP files untouched; `/tmp` free space rose from 684MB to 1.5GB. The combined focused command `npm test -- tests/persistence.test.mjs tests/execution/accessibility.test.mjs tests/execution/server.test.mjs` passed 47/47 in 61.65s. One final `npm run check` passed 265/266 (265 passed, 0 failed, 0 cancelled, 1 optional PostgreSQL backup/restore skip because client tools are unavailable; 73.74s TAP / 76.56s wall). `git diff --check` passed. Logs: `/tmp/orgward-pr06-repair-focused-final-20260927.log`, `/tmp/orgward-tests-QvAcfj/node-test.tap.log`, `/tmp/orgward-pr06-repair-check-final-20260927.log`, and `/tmp/orgward-pr06-repair-check-final-20260927.time.log`. The earlier interrupted check and quota-failed focused attempt are preserved as historical receipts. No fresh browser rerender was made after the CSS change; the earlier 390px measurement is pre-fix and CSS wrapping is verified through the served-client/focused tests. No provider calls or credentials. PR-06 remains first open; cursor and release gates unchanged.
+PR-06 post-fix activity wrapping render proof (2026-09-27): agent-browser loaded the actual `public/execution.css` in a temporary local fixture. At 390×844, document scrollWidth was 390px; long OIDC actor metadata wrapped to three lines and remained inside the event panel. At 1280×900, scrollWidth was 1280px and metadata remained visible on one line. Screenshots, accessible snapshot and metrics are under `/tmp/orgward-pr06-repair-render-proof/`. The temporary server, browser session and fixture source were cleaned. No app DB or provider was used; no tests were rerun. PR-06 remains open; cursor and gates unchanged.
+PR-06 mobile overflow follow-up (2026-09-28): inspected the current Execution source and the retained post-fix render proof. The documented 390px overflow is resolved: event rows wrap and long metadata uses `overflow-wrap:anywhere`; the retained render measured document width 390px at 390×844 and 1280px at 1280×900. Current served-client/accessibility assertions cover those wrapping rules. No code change was needed. Focused `npm test -- tests/execution/accessibility.test.mjs tests/execution/server.test.mjs` passed 3/3 (0.73s), TAP `/tmp/orgward-tests-UxrqLA/node-test.tap.log`. The single `npm run check` passed 309/310 (309 passed, 0 failed, 1 optional PostgreSQL backup/restore skip because client tools are unavailable; 78.63s), TAP `/tmp/orgward-tests-8pHdtu/node-test.tap.log`. `git diff --check` passed. The next customer UX evidence gap is actual spoken cross-session status announcements; prior Orca receipts are inconclusive, and no browser/Orca runtime reattempt was made per the current environment constraint. No provider/credential access or external effects. PR-06 remains first open; cursor and release gates unchanged.
+DeepSeek credential lookup follow-up (2026-09-27): one additional small provider test was requested, but the expected local credential source is absent. OpenClaw resolved to `/home/ubuntu/.openclaw/openclaw.json` and `agents/main/agent/openclaw-agent.sqlite`; neither file nor the state directory exists. The process environment has no `DEEPSEEK_API_KEY`, OrgWard DeepSeek profile, database URL, or secret-encryption key, and no `.env`/`*.env` files were found under `/home/ubuntu`, `/srv`, or `/etc`. No credential value was read or emitted and no provider request was sent. The earlier `outcome_unknown` run remains untouched; a protected file path or OrgWard secret reference is needed for another live proof.
+
+Latest PR-06 dependency recovery UX follow-up: downstream tasks now show
+`BLOCKED` with terminal prerequisite names/statuses, including blockers carried
+through unstarted tasks; another instance cannot unblock the selected one. The
+focused state/served-client suite passed 2/2. The persistence pause/dispatch race
+test now releases its worker after the per-run start marker and classifies a 409
+as dispatch-wins. Its focused PostgreSQL case passed 1/1 (9.48s case, 9.87s TAP).
+The final `npm run check` passed 247/248 (247 passed, 0 failed, 1 optional
+backup/restore skip; 61.87s TAP). `git diff --check` passed. Two superseded
+checks exposed and drove repair of the delayed worker release and fast-409
+classification; the final event-barrier check is the current receipt. No provider
+call or credential access occurred. Log: `/tmp/orgward-tests-qpkGOW/node-test.tap.log`.
+PR-06 remains first open; T-22 evidence and release gates remain pending.
+Previous DeepSeek diagnostics follow-up: the final `npm run check` passed 247/248 tests
+(247 passed, 0 failed, 1 optional PostgreSQL backup/restore skip; 64.23s TAP,
+64.33s wall). Focused diagnostic tests passed 20/20 and `git diff --check`
+passed. The loopback cases persisted only HTTP status and allowlisted parser
+classes, kept provider body/header/credential canaries out of run/event/UI
+output, and confirmed restart recovery and no redispatch. No live provider call
+occurred during this follow-up. Full-check log: `/tmp/orgward-tests-ipDutR/node-test.tap.log`.
+OpenClaw credential follow-up
+(2026-09-27; PR-06 remains open): its service configuration references
+`DEEPSEEK_API_KEY` from an owner-only `.env`. A preflight transfer accidentally
+emitted that value in a tool result before any OrgWard fixture, secret storage, or
+provider dispatch occurred. Treat the source key as compromised; it was not
+rotated, and the OpenClaw source file was not changed. At that point live proof
+was paused pending rotation or replacement; the earlier outcome-unknown run was
+not retried.
+An attempted bounded rendered check was stopped before app, PostgreSQL or browser
+fixtures started because no reusable browser harness was available. PR-06, the
+active cursor and release gates remain unchanged. The immediately preceding
+linked-run result summary check had failed on the RUNNING-before-cancel timing
+assertion; its exact failure is retained below. The preceding DeepSeek Responses
+endpoint correction `npm run check`
+passed 240
+of 241 tests with 240 passed, 0 failed and 1 optional PostgreSQL backup/restore
+skip because client tools were unavailable (`ORGWARD_PG_TOOLS_BIN` not set;
+66.31s TAP, 68.92s runner wall). Focused status-diagnostic, provider/restart and
+served-client coverage passed 14/14 (9.97s TAP). `git diff --check` passed. Logs:
+`/tmp/orgward-pr06-safe-provider-diagnostic-focused-rerun.log`,
+`/tmp/orgward-pr06-safe-provider-diagnostic-check.log`,
+`/tmp/orgward-pr06-safe-provider-diagnostic-check.time`, and
+`/tmp/orgward-tests-c2n4zo/node-test.tap.log`. An initial focused run exposed an
+overly specific served-source assertion; the predicate was corrected to match the
+actual integer/range validation and the entire focused set passed. No provider
+call was made. The sole full-check skip was the optional backup/restore journey
+because client tools were unavailable. The preceding DeepSeek profile increment
+`npm run check` passed 237
+of 238 tests with 237 passed, 0 failed and 1 optional PostgreSQL backup/restore
+skip because client tools were unavailable (`ORGWARD_PG_TOOLS_BIN` not set;
+69.77s TAP, 72.34s runner wall). Focused affected coverage passed 79/79 (75.43s
+wall), and the final proposal-identity follow-up passed 5/5 (0.23s wall).
+`git diff --check` passed. Logs: `/tmp/orgward-deepseek/focused-final2.log`,
+`/tmp/orgward-deepseek/focused-final2.time`,
+`/tmp/orgward-deepseek/proposals-review.log`,
+`/tmp/orgward-deepseek/proposals-review.time`,
+`/tmp/orgward-deepseek/npm-check.log`, `/tmp/orgward-deepseek/npm-check.time`, and
+`/tmp/orgward-tests-vsfAyw/node-test.tap.log`. The sole skip was the optional
+backup/restore journey because client tools were unavailable. One live DeepSeek
+request was attempted after those checks in a disposable, loopback-only OrgWard /
+PostgreSQL fixture. The run failed and its sole dispatch attempt ended
+`outcome_unknown`, so the provider may have received it; no retry was sent. The
+fixture database and app data were removed, and no successful live result or
+restart readback is claimed. Safe receipt:
+`/tmp/orgward-deepseek/live-proof-1790484208611.json`. DeepSeek behavior otherwise
+remains verified against loopback test fixtures. PR-06 remains first open and its
+cursor and release gates are unchanged.
+Earlier initial focused attempts and corrected test expectations are recorded in
+`/tmp/orgward-deepseek/focused.log` and
+`/tmp/orgward-deepseek/focused-repair-final.log`. The previous implementation
+`npm run check`, after the PR-06 linked-run cancellation consistency follow-up,
+passed
+233 of 234 tests with 233 passed, 0 failed and 1 optional PostgreSQL backup/restore
+skip because client tools were unavailable (`ORGWARD_PG_TOOLS_BIN` not set;
+68.25s TAP, 70.85s runner wall). Focused instance-controlled cancellation,
+requester-only withdrawal, served-client and migration-upgrade tests passed 7/7
+(4.30s wall); the PostgreSQL cancellation/restart integration passed 1/1
+(13.26s wall). `git diff --check` passed. Logs:
+`/tmp/orgward-instance-linked-cancel/focused-unit-final.log`,
+`/tmp/orgward-instance-linked-cancel/focused-persistence-repair.log`,
+`/tmp/orgward-instance-linked-cancel/npm-check.log`, and
+`/tmp/orgward-tests-oZJUa1/node-test.tap.log`. The optional recovery test was
+skipped because PostgreSQL client tools were unavailable (`ORGWARD_PG_TOOLS_BIN`
+not set). PR-06 remains first open and its cursor is unchanged. The preceding
+applied-proposal object deep-link increment passed 229 of 230 tests with 229
+passed, 0 failed and 1 optional PostgreSQL backup/restore skip because client tools
+were unavailable (`ORGWARD_PG_TOOLS_BIN` not set; 67.74s TAP, 70.01s runner wall).
+Focused proposal review and served-client tests passed 6/6
+(0.80s wall); the first attempt failed on a source assertion that did not match the
+array guard, then passed after the assertion was corrected. `git diff --check`
+passed. Logs: `/tmp/orgward-pr06-proposal-deep-link-focused.log`,
+`/tmp/orgward-pr06-proposal-deep-link-focused.time`,
+`/tmp/orgward-pr06-proposal-deep-link-focused-repair.log`,
+`/tmp/orgward-pr06-proposal-deep-link-focused-repair.time`,
+`/tmp/orgward-pr06-proposal-deep-link-check.log`,
+`/tmp/orgward-pr06-proposal-deep-link-check.time`, and
+`/tmp/orgward-tests-lAjRyh/node-test.tap.log`. Follow-up rendered-browser
+verification was attempted with agent-browser against a disposable loopback app,
+but Chrome failed before DevToolsActivePort with `No usable sandbox`, including
+when the documented `--args "--no-sandbox"` option was supplied. No rendered page
+or screenshot was produced; no app or provider state was changed, and temporary
+app data and browser sessions were cleaned up. The preceding narrow-viewport
+rendered checks at 390×844 and 1280×900 confirmed the source link/edit action row
+no longer overlaps the separately laid out process-instance selector. Keyboard
+Tab reached “Edit planned graph” with a visible 3px focus outline; the browser
+accessibility tree exposed distinct names for the button and combobox.
+Subsequent bounded rendered-browser journey (2026-09-26) used agent-browser
+0.38.1 with Chromium `--no-sandbox`, an isolated loopback app/PostgreSQL
+fixture, fake OIDC identities, and one loopback OpenAI Responses fixture call.
+The UI rendered saved revision 3, human checkpoint start/completion with
+evidence, dependent agent approval/result, cited proposal review/apply to
+blueprint v2, and the updated-design link selecting the changed object. After
+restarting the app against the retained disposable DB, Execution still showed
+the human evidence and terminal task states; reopening the run showed its
+successful result, citation, applied proposal and v2 provenance. Browser page
+errors and console checks returned no entries. Screenshots and exact limits are
+recorded in `/tmp/orgward-pr06-rendered/summary.log`; captures include
+`01-plan.png`, `02-human-started.png`, `03-checkpoint-agent-request.png`,
+`04-independent-approval.png`, `05-proposal-review.png`, `06-applied-design.png`,
+and `07-after-restart-result.png`. The harness restart handler printed a
+JavaScript const-reassignment error after its replacement app had started; that
+replacement served the post-restart browser view successfully. Cleanup stopped
+the app/provider/PostgreSQL fixture and closed both browser sessions. No source,
+tests, or persistent app data changed. This is fixture-only rendered evidence;
+no live provider, narrow-viewport, screen-reader or production-browser proof was
+performed. PR-06 and release-gate statuses and the active cursor remain
+unchanged.
+Orca follow-up (2026-09-26) used Orca 50.2 with Chromium 154 in a private
+D-Bus/Xvfb/PulseAudio session. Chromium needed `GTK_MODULES=gail:atk-bridge`,
+`ACCESSIBILITY_ENABLED=1`, `QT_ACCESSIBILITY=1`, and
+`--force-renderer-accessibility=complete` to register on AT-SPI. Orca announced
+the process-instance combobox name/value; an AT-SPI focus on “Edit planned graph”
+was spoken as “Edit planned graph, button.” Real X11 Tab events also moved DOM
+focus through the process controls. Speech Dispatcher output was captured through
+a PulseAudio null sink, and nonzero samples confirmed generated speech
+(the temporary audio recording was removed after validation; no human listening
+claim is made). Orca trace: `/tmp/orgward-orca-debug-restart.log`. Earlier viewport
+check logs: `/tmp/orgward-pr06-a11y-full-check.log` and
+`/tmp/orgward-tests-MhJyJW/node-test.tap.log`. The preceding saved-design → human
+checkpoint → dependent agent result/restart journey and loopback provider receipt
+remain below; no live provider call was made. PR-06 remains first open.
 The preceding full check after the PR-06 paused-run instruction amendment
 increment passed 222 tests, failed 0, and skipped 1 optional PostgreSQL
 backup/restore test because client tools were unavailable (`ORGWARD_PG_TOOLS_BIN`
@@ -1592,6 +1923,330 @@ repair check superseded it.
   resilience and operations qualification, while keeping authorization, tenant
   isolation, safe tool bounds and auditable state transitions in the path.
 
+  PR-06 customer-facing unknown provider outcome (bounded; 2026-09-28; PR-06
+  remains open): terminal run JSON now carries only
+  `providerDiagnostic: { outcome: 'outcome_unknown' }` when the durable dispatch
+  attempt ledger says `outcome_unknown`. The saved-plan linked task summary
+  renders “Outcome unknown.” and advises that delivery is unverified and to
+  reconcile with the provider before retrying. Task/run status stays FAILED;
+  ordinary local failures and HTTP/parser details do not set this marker. No
+  migration was needed. Loopback API coverage verified a dropped transport with
+  no HTTP status, API visibility after restart, canary exclusion and retry
+  refusal with exactly one dispatch; linked-summary/helper and served-client
+  regressions cover the customer copy and ordinary FAILED case. Focused tests
+  passed 21/21 (11.58s TAP), log
+  `/tmp/orgward-tests-LEwsYN/node-test.tap.log`. The one frozen-tree
+  `npm run check` passed 310/311 (310 passed, 0 failed, 1 optional backup/restore
+  skip; 74.97s TAP), log `/tmp/orgward-tests-GgjKG4/node-test.tap.log`.
+  `git diff --check` passed. No live provider call or external effect. PR-06,
+  active cursor and release gates remain open and unchanged.
+
+  PR-06 unknown-outcome visibility correction (2026-09-28): extended the
+  durable-ledger marker to `INTERRUPTED` terminal runs when and only when the
+  associated dispatch attempt is `outcome_unknown`. Linked saved-plan summaries
+  show the same safe copy for FAILED and INTERRUPTED; ordinary interruptions
+  and SUCCEEDED runs stay unmarked. The existing post-handoff revocation test now
+  asserts INTERRUPTED status, API marker, restart persistence, one fixture
+  request and retry denial. Helper coverage asserts interrupted marker/canary
+  handling and ordinary interruption omission. Focused tests passed 20/20
+  (11.68s TAP), log `/tmp/orgward-tests-xrnP5v/node-test.tap.log`. The single
+  repaired-tree `npm run check` passed 310/311 (310 passed, 0 failed, 1 optional
+  backup/restore skip; 77.19s TAP), log
+  `/tmp/orgward-tests-1iWkaz/node-test.tap.log`. `git diff --check` passed. No
+  live provider call or external effect; PR-06 cursor and release gates remain
+  open and unchanged.
+
+  PR-06 coherent cross-session linked-run freshness and uncertainty recovery
+  (bounded; 2026-09-28): authenticated process-instance refresh now returns its
+  project-authorized linked-run snapshot with task instances and plans. The UI
+  rejects responses after request/project/route changes, defers all snapshot
+  parts together while plan controls are dirty or focused, and retries on
+  focusout. Applied refreshes merge current-project runs and update run-list
+  status labels in place before rendering the saved-plan cards, preserving run
+  list focus. The `outcome_unknown` reconciliation warning is visible outside
+  collapsed result details. Blocked downstream tasks now ask for provider
+  reconciliation before any new-instance decision when an upstream linked run
+  has uncertain delivery; ordinary local failures retain the new-instance
+  recovery instruction. Focused tests passed 26/26 (11.54s TAP), log
+  `/tmp/orgward-tests-13DpBh/node-test.tap.log`. The single frozen-tree
+  `npm run check` passed 313/314 (313 passed, 0 failed, 1 optional backup/restore
+  skip; 74.87s TAP), log `/tmp/orgward-tests-GS5VJK/node-test.tap.log`.
+  `git diff --check` passed. No live provider/credential access or external
+  effects; PR-06 cursor and release gates remain open and unchanged.
+
+  PR-06 screen-reader announcement for uncertain provider outcome (bounded;
+  2026-09-28): the cross-session status announcer now compares previous and next
+  authorized run snapshots alongside task runtime snapshots. A linked run that
+  newly gains the durable `outcome_unknown` marker announces the task title and
+  safe reconciliation copy, including marker-only updates; simultaneous status
+  changes produce one announcement. Initial/first-seen snapshots and repeated
+  polls stay silent, ordinary failures retain generic status copy, and bounded
+  multi-task aggregation prioritizes unknown delivery without exposing request
+  IDs or raw provider data. The redundant blocked-task announcement is skipped
+  when the same refresh already announces a status/outcome transition. Focused
+  helper and served-client tests passed 20/20 (0.85s TAP), log
+  `/tmp/orgward-tests-j42j8m/node-test.tap.log`. The single frozen-tree
+  `npm run check` passed 317/318 (317 passed, 0 failed, 1 optional backup/restore
+  skip; 80.44s TAP), log `/tmp/orgward-tests-8Fs67E/node-test.tap.log`.
+  `git diff --check` passed. No browser/provider/credential retries or external
+  effects; PR-06 cursor and release gates remain open and unchanged.
+
+  PR-06 Execution small-text contrast increment (bounded; 2026-09-27; PR-06
+  remains open): added Execution-local `--exec-faint: #87948e` for boundary/muted,
+  run-list metadata, evidence labels and run-event metadata. Its WCAG contrast is
+  5.80:1 on `#11151b` and 5.38:1 on `#161d26`. A focused CSS-token regression
+  passed 2/2 tests (0.14s TAP); `git diff --check` passed. The one `npm run check`
+  passed 249/250 tests, 249 passed, 0 failed, 1 skipped (66.73s TAP; 69.24s
+  wall). Accent, status and focus color declarations remain separately asserted.
+  Logs: `/tmp/orgward-pr06-execution-contrast-focused-20260927.log`,
+  `/tmp/orgward-pr06-execution-contrast-check-20260927.log`,
+  `/tmp/orgward-pr06-execution-contrast-check-20260927.time`, and
+  `/tmp/orgward-tests-rdGmvd/node-test.tap.log`. No provider or external effects.
+  PR-06, active cursor and release gates remain open and unchanged.
+
+  PR-06 terminal process-instance cancellation increment (bounded; PR-06 remains
+  open): added migration 028 for the one-way PAUSED→CANCELLED transition. Only the
+  current human initiator or project owner with workspace-write access can cancel;
+  the transaction fences membership, control version, sorted runtime/run/attempt/
+  lease rows and rejects active work, live leases, or reserved/handed-off/unknown
+  provider requests. The append-only audit event records actor, time and reason.
+  Completed task outcomes/evidence remain intact, while later starts, resumes,
+  human writes, worker finalization and recovery are fenced. Execution shows the
+  cancel control only for eligible paused instances and explains the preserved
+  outcomes and terminal behavior. Focused cancellation/authz/replay/late-write/
+  restart, migration-upgrade and served-client tests passed 9/9 (15.87s wall); the
+  final UI-only served-client rerun passed 1/1 (0.59s). The single `npm run check`
+  passed 232/233 with 0 failures and 1 optional PostgreSQL backup/restore skip
+  because client tools were unavailable (`ORGWARD_PG_TOOLS_BIN` not set; 67.41s
+  TAP, 70.01s runner wall). An initial migration run exposed the v027 pause-reason
+  constraint name and an upgrade count still set to 27; both were corrected before
+  the passing run. Logs: `/tmp/orgward-process-instance-cancel-focused-reviewed-repair-20260926.log`,
+  `/tmp/orgward-process-instance-cancel-served-client-repair-20260926.log`,
+  `/tmp/orgward-process-instance-cancel-check-20260926.log`, and
+  `/tmp/orgward-tests-NuZHZF/node-test.tap.log`. `git diff --check` passed. No
+  browser or live provider calls were made; PR-06 remains open and the
+  cursor/gates are unchanged.
+
+  PR-06 DeepSeek Responses endpoint correction (bounded; PR-06 remains open):
+  changed the fixed production URL from the incorrect `/v1/responses` path to
+  `https://api.deepseek.com/responses`, which matches the provider's documented
+  `POST /responses` route and `https://api.deepseek.com` base URL. Validation now
+  requires the DeepSeek-specific `/responses` path while OpenAI retains its
+  independent `/v1/responses` path. Loopback tests assert the exact dispatched
+  path, and a profile test asserts the fixed production host/path plus rejection
+  of the former DeepSeek path. Focused tests passed 5/5 (15.25s TAP). The one
+  `npm run check` passed 240/241, 0 failures and 1 optional backup/restore skip
+  because client tools were unavailable (`ORGWARD_PG_TOOLS_BIN` unset; 65.88s
+  TAP, 68.23s runner wall). `git diff --check` passed. Logs:
+  `/tmp/orgward-pr06-deepseek-endpoint-focused.log`,
+  `/tmp/orgward-pr06-deepseek-endpoint-focused.time`,
+  `/tmp/orgward-pr06-deepseek-endpoint-check.log`,
+  `/tmp/orgward-pr06-deepseek-endpoint-check.time`, and
+  `/tmp/orgward-tests-EA6yTr/node-test.tap.log`. No live call was made; PR-06
+  remains open and cursor/gates are unchanged.
+
+  PR-06 linked-run result summary increment (bounded; PR-06 remains open): added
+  a collapsed “Saved result and evidence” disclosure to process-task rows when
+  their terminal linked run matches the runtime's project, run ID, process plan,
+  revision, instance, and task. It shows terminal status, a 280-character preview
+  only for successful saved output, capped artifact count, validated evidence-hash
+  prefix, and the existing safe DeepSeek diagnostic. Failed output and arbitrary
+  error text stay hidden; the full run detail link remains available. The pure
+  presenter rejects missing, malformed, nonterminal, cross-project, or mismatched
+  linkage. Focused helper, served-client, and PostgreSQL saved-process restart
+  coverage passed 6/6 (12.58s TAP); the restart scenario ran the presenter on the
+  restored task runtime and linked run. `git diff --check` passed. The one full
+  `npm run check` did not pass: 243/245 passed, 1 failed, 1 optional backup/restore
+  skip because PostgreSQL client tools were unavailable (62.39s TAP, 64.72s runner
+  wall). The failure was the existing worker cancellation timing assertion at
+  `tests/persistence.test.mjs:6673` (observed INTERRUPTED instead of RUNNING),
+  before the new restart-summary assertion. This failure was repaired in the
+  subsequent deterministic worker-barrier follow-up below.
+  Logs: `/tmp/orgward-pr06-linked-task-result-focused-repair.log`,
+  `/tmp/orgward-pr06-linked-task-result-focused-repair.time`,
+  `/tmp/orgward-pr06-linked-task-result-check.log`,
+  `/tmp/orgward-pr06-linked-task-result-check.time`, and
+  `/tmp/orgward-tests-589rSG/node-test.tap.log`. No provider call was made; PR-06
+  stays open and cursor/release gates remain unchanged.
+
+  PR-06 worker cancellation test barrier repair: replaced the timing-based 1.2s
+  worker sleep/poll with a marker/release barrier in the private per-run workspace.
+  The worker writes its start marker under `/workspace`; the test waits for it,
+  verifies RUNNING and cancellation denial, then writes the release marker in a
+  `finally` block and awaits completion before fixture cleanup. This follows the
+  existing adapter contract that binds the per-run host workspace at `/workspace`
+  and sets it as the worker directory. The previously failed saved-process test
+  passed 1/1 (10.95s TAP, 11.04s wall). The repaired-tree `npm run check` passed
+  244/245, 0 failures and 1 optional backup/restore skip because client tools were
+  unavailable (`ORGWARD_PG_TOOLS_BIN` unset; 67.24s TAP, 69.47s runner wall).
+  `git diff --check` passed. Logs: `/tmp/orgward-pr06-running-cancel-barrier-focused.log`,
+  `/tmp/orgward-pr06-running-cancel-barrier-focused.time`,
+  `/tmp/orgward-pr06-running-cancel-barrier-check.log`,
+  `/tmp/orgward-pr06-running-cancel-barrier-check.time`, and
+  `/tmp/orgward-tests-1B0pDq/node-test.tap.log`. No live provider call was made;
+  PR-06 and its cursor/gates remain open/unchanged.
+
+  PR-06 linked task artifact retrieval UX increment (bounded; PR-06 remains open):
+  process-task result disclosures now expose up to 10 authenticated artifact links
+  per task, using only bounded safe display names and hash prefixes from artifacts
+  with validated relative paths and SHA-256 hashes. Unsafe paths, labels and hashes
+  are omitted; links continue through the existing authorized run artifact route.
+  The PostgreSQL integration scenario writes one tiny local command-worker artifact,
+  then after app restart verifies the linked task summary, download bytes and hash,
+  foreign-tenant 404 and traversal 404. Focused presenter/served-client coverage
+  passed 6/6 (0.69s TAP); the restart/download scenario passed 1/1 (10.52s TAP).
+  The single `npm run check` passed 245/246 with 0 failures and 1 optional
+  PostgreSQL backup/restore skip because client tools were unavailable
+  (`ORGWARD_PG_TOOLS_BIN` unset; 67.77s TAP). `git diff --check` passed. Logs:
+  `/tmp/orgward-pr06-artifact-focused-20260927.log`,
+  `/tmp/orgward-pr06-artifact-restart-20260927.log`,
+  `/tmp/orgward-pr06-artifact-check-20260927.log`, and
+  `/tmp/orgward-tests-Xs84R5/node-test.tap.log`. No provider or OpenClaw credential
+  access occurred. PR-06 remains open; cursor and release gates are unchanged.
+
+  PR-06 linked task artifact disclosure rendered verification (bounded; 2026-09-27):
+  with a persisted synthetic OIDC browser session, the authenticated Execution
+  page rendered one collapsed “Saved result and evidence” disclosure and one safe
+  artifact link at both 390×844 and 1280×900. Space toggled it open and Tab focused
+  “Download rendered-proof.txt · 5d8a9c24189bc1bf2a…”. The local 37-byte download
+  matched fixture bytes and SHA-256
+  `5d8a9c24189bc1bf2a28818e116d52ca8b2a761959d32b515667bd50e986b34a`. Orca
+  50.2/AT-SPI recognized the disclosure toggle and link accessible names, observed
+  expanded state, and announced the download link. Console and page-error checks
+  at 1280×900 returned no entries. An initial API-token-only fixture had no
+  authenticated `/auth/session`, so the client correctly omitted task runtimes;
+  after seeding a temporary persisted browser session, the actual disclosure
+  rendered. This was fixture authentication, not a product defect. Evidence:
+  `/tmp/orgward-pr06-artifact-rendered-20260927.log`,
+  `/tmp/orgward-pr06-artifact-authenticated-390-open.png`,
+  `/tmp/orgward-pr06-artifact-authenticated-1280-open.png`,
+  `/tmp/orgward-pr06-artifact-orca-snapshot.txt`,
+  `/tmp/orgward-pr06-artifact-orca-debug.log`, and
+  `/tmp/orgward-pr06-artifact-authenticated-download.txt`. Disposable app,
+  PostgreSQL database/cluster, workspace, session and browser sessions were
+  removed. No product source/tests changed and no provider or external call was
+  made. PR-06, cursor and release gates remain open/unchanged.
+
+  PR-06 DeepSeek outcome-unknown diagnostic increment (bounded; PR-06 remains
+  open): on an existing pinned DeepSeek run, a received HTTP 4xx/5xx response may
+  persist only `{ provider: "deepseek", httpStatus }` in the failed run and its
+  failure event. The UI renders fixed copy stating delivery remains unverified
+  and the run cannot be retried. Response body, headers, request ID, phrase, URL
+  and raw error are excluded. Missing/non-HTTP status yields no diagnostic;
+  durable `outcome_unknown` and no-redispatch behavior are unchanged. Loopback
+  behavior tests cover a 503 with body/header/credential canaries, no-response
+  omission, restart persistence and retry denial; served-client and helper tests
+  cover safe presentation. Focused tests passed 14/14 (9.97s TAP). The one
+  `npm run check` passed 240/241, 0 failed, 1 optional backup/restore skip because
+  `ORGWARD_PG_TOOLS_BIN` was unset (66.31s TAP, 68.92s runner wall). `git diff
+  --check` passed. Logs: `/tmp/orgward-pr06-safe-provider-diagnostic-focused-rerun.log`,
+  `/tmp/orgward-pr06-safe-provider-diagnostic-check.log`,
+  `/tmp/orgward-pr06-safe-provider-diagnostic-check.time`, and
+  `/tmp/orgward-tests-c2n4zo/node-test.tap.log`. The first focused attempt failed
+  only because a served-source assertion expected a different equivalent range
+  predicate; after matching the actual helper predicate, all 14 focused tests
+  passed. No live provider call was made. PR-06 stays open; cursor and release
+  gates are unchanged.
+
+  PR-06 DeepSeek parser-diagnostic follow-up (bounded; PR-06 remains open):
+  outcome-unknown DeepSeek runs now retain a closed parser-failure class alongside
+  a validated upstream HTTP status, including when a 2xx response is malformed.
+  The saved diagnostic contains no response body, headers, request ID, provider
+  phrase, URL or arbitrary error. Execution renders fixed copy that can show both
+  `HTTP 200` and its parser category, while unknown categories and raw canaries
+  are omitted. Loopback coverage exercises invalid JSON, oversized body,
+  incomplete response, missing output text, HTTP 503 and a dropped connection;
+  tests also verify restart persistence, tenant isolation, no redispatch and
+  canary exclusion. The focused diagnostics suite passed 20/20. The final
+  `npm run check` passed 247/248 (247 passed, 0 failed, 1 optional PostgreSQL
+  backup/restore skip because client tools were unavailable; 64.23s TAP, 64.33s
+  wall). `git diff --check` passed. Full-check log:
+  `/tmp/orgward-tests-ipDutR/node-test.tap.log`. No provider call was made in
+  this increment; the earlier user-authorized outcome-unknown attempt was not
+  retried. PR-06 remains open; active cursor and release gates are unchanged.
+
+  PR-06 linked-run cancellation consistency follow-up (bounded; PR-06 remains
+  open): instance cancellation now transitions every linked undispatched
+  AWAITING_APPROVAL, APPROVED, or PAUSED run in the same transaction, after
+  validating its runtime link and safe attempts/leases. It appends a dedicated
+  instance-controller run event with the instance command causation, synchronizes
+  the runtime to CANCELLED while retaining existing outcome/evidence, and binds
+  the exact affected IDs into the control event and idempotent command result.
+  Migration 029 rejects closing while a linked run is still pending/approved/
+  paused/running and checks the exact event-bound run set; migration 030 extends
+  the runtime cancellation guard for this event while retaining the standalone
+  requester-only withdrawal rule. The existing PostgreSQL journey proves owner
+  cancellation of a different requester’s paused run, read access after restart,
+  exact replay IDs and the standalone owner-withdrawal denial; focused contract
+  coverage exercises AWAITING_APPROVAL, APPROVED and PAUSED cases. Focused tests
+  passed 8/8 (7 unit/server/upgrade, 4.30s wall; persistence/restart, 1/1,
+  13.26s wall). The single `npm run check` passed 233/234: 233 passed, 0 failed,
+  1 optional PostgreSQL backup/restore skip because client tools were unavailable
+  (`ORGWARD_PG_TOOLS_BIN` not set; 68.25s TAP, 70.85s runner wall). The first
+  focused attempts exposed and repaired an upgrade migration-count expectation,
+  an API denial-code expectation, and the existing runtime cancellation trigger’s
+  event-type allowlist. Logs: `/tmp/orgward-instance-linked-cancel/focused-unit-final.log`,
+  `/tmp/orgward-instance-linked-cancel/focused-persistence-repair.log`,
+  `/tmp/orgward-instance-linked-cancel/npm-check.log`, and
+  `/tmp/orgward-tests-oZJUa1/node-test.tap.log`. `git diff --check` passed. No
+  live provider calls or external effects were made; PR-06 remains open and its
+  cursor/gates are unchanged.
+
+  PR-06 historical-plan replan path increment (bounded; PR-06 remains open):
+  Execution retains old process plans and their runtime/history for inspection,
+  labels plans pinned to an earlier blueprint as historical, suppresses their edit
+  action and new-instance option, and links to planning the same process from the
+  current saved blueprint when that process still exists. Existing instances and
+  history remain inspectable; current-version plans retain their controls. The
+  new-work gate drives both the disabled selector option and agent start predicate.
+  Focused route and served-client tests passed 6/6 (0.72s wall). The repair's
+  single `npm run check` passed 230/231 with 0 failures and 1 optional PostgreSQL
+  backup/restore skip because PostgreSQL client tools were unavailable
+  (`ORGWARD_PG_TOOLS_BIN` not set; 65.93s TAP, 68.54s runner wall). Logs:
+  `/tmp/orgward-pr06-historical-plan-repair-focused.log`,
+  `/tmp/orgward-pr06-historical-plan-repair-focused.time`,
+  `/tmp/orgward-pr06-historical-plan-repair-check.log`,
+  `/tmp/orgward-pr06-historical-plan-repair-check.time`, and
+  `/tmp/orgward-tests-2nUBvy/node-test.tap.log`. `git diff --check` passed. No
+  browser, provider or external calls were made; PR-06 and release gates remain
+  open, and the active cursor is unchanged.
+
+  PR-06 post-save planning-graph focus increment (bounded; PR-06 remains open):
+  After a successful planning-graph save, Execution targets the saved plan from the
+  response event (or the current-process fallback on replay), then scrolls its
+  rendered card into view and moves keyboard focus to the accessible card. A
+  missing card is handled without interrupting the success flow, and the existing
+  “no work was dispatched” message remains. Focused navigation and served-client
+  tests passed 7/7 (0.82s wall). The single `npm run check` passed 231/232 with
+  0 failures and 1 optional PostgreSQL backup/restore skip because client tools
+  were unavailable (`ORGWARD_PG_TOOLS_BIN` not set; 67.59s TAP, 70.28s runner
+  wall). The first focused run failed on a test expectation for malformed preferred
+  target fallback and passed after correction. Logs:
+  `/tmp/orgward-pr06-post-save-focus-focused-repair.log`,
+  `/tmp/orgward-pr06-post-save-focus-focused-repair.time`,
+  `/tmp/orgward-pr06-post-save-focus-check.log`,
+  `/tmp/orgward-pr06-post-save-focus-check.time`, and
+  `/tmp/orgward-tests-25V86a/node-test.tap.log`. `git diff --check` passed. No
+  browser, provider or external calls were made; PR-06 and release gates remain
+  open, and the active cursor is unchanged.
+
+  PR-06 immutable graph-revision focus increment (bounded; PR-06 remains open):
+  After a successful edit, Execution uses the validated `ProcessTaskGraphRevised`
+  response event's plan ID and revision to scroll to and focus that exact rendered
+  plan card. Invalid or missing events and cards are handled without disrupting the
+  saved result. The truthful immutable-revision/no-dispatch notice is unchanged.
+  Focused route/target and served-client tests passed 8/8 (0.80s wall). The single
+  `npm run check` passed 232/233 with 0 failures and 1 optional PostgreSQL backup/
+  restore skip because client tools were unavailable (`ORGWARD_PG_TOOLS_BIN` not
+  set; 65.49s TAP, 68.27s runner wall). Logs:
+  `/tmp/orgward-pr06-revision-focus-focused.log`,
+  `/tmp/orgward-pr06-revision-focus-focused.time`,
+  `/tmp/orgward-pr06-revision-focus-check.log`,
+  `/tmp/orgward-pr06-revision-focus-check.time`, and
+  `/tmp/orgward-tests-eqD8Ey/node-test.tap.log`. `git diff --check` passed. No
+  browser, provider or external calls were made; PR-06 and release gates remain
+  open, and the active cursor is unchanged.
+
   Earlier P-07 planning-only graph increment (historical): a workspace writer
   can select a saved process and persist a proposed graph pinned to its blueprint
   version. Nodes are derived
@@ -2058,17 +2713,1749 @@ repair check superseded it.
   call or screen-reader proof was performed. PR-06 and release gates remain open;
   the active cursor remains PR-06.
 
+  PR-06 narrow-viewport process-controls UX increment (bounded; PR-06 remains
+  open): flex-wrapped the source/edit actions and moved the process-instance
+  selector into its own labeled block after rendered inspection found overlap at
+  390px. Fresh browser measurements at 390×844 and 1280×900 confirmed distinct,
+  non-overlapping bounds. Keyboard Tab reaches “Edit planned graph” with a visible
+  3px focus outline; the accessibility tree exposes distinct button and combobox
+  names. Focused served-client coverage passed 1/1 (0.64s); the single `npm run
+  check` passed 223/224 with 0 failures and one optional PostgreSQL backup/restore
+  skip (`ORGWARD_PG_TOOLS_BIN` unset; 64.72s TAP, 64.80s wall). `git diff --check`
+  passed. Browser captures: `/tmp/orgward-pr06-a11y-fixed-mobile.png` and
+  `/tmp/orgward-pr06-a11y-fixed-laptop.png`; logs:
+  `/tmp/orgward-pr06-a11y-full-check.log` and
+  `/tmp/orgward-tests-MhJyJW/node-test.tap.log`. A subsequent focused Orca 50.2 /
+  Chromium 154 check ran inside private Xvfb, D-Bus and PulseAudio: AT-SPI exposed
+  the process-instance control as “Process instance for Discover and qualify
+  demand” (combo box), and Orca spoke its label, value and popup state; keyboard
+  focus landed on “Edit planned graph” and Orca spoke its accessible name and
+  button role. Speech Dispatcher output was captured and nonzero audio samples
+  confirmed speech generation. Evidence: `/tmp/orgward-orca-debug.log` and
+  `/tmp/orgward-orca-debug-restart.log`; the focused one-test behavior check
+  recorded in `/tmp/orgward-pr06-a11y-focused.log` passed 1/1 (0.64s), and the
+  matching full `npm run check` passed 223/224 with one optional PostgreSQL
+  backup/restore skip as recorded above. The initial direct CLI launch failed
+  with `Cannot open display ":101"` because that display was not available to
+  the invocation; the later private-Xvfb run succeeded, so this was an
+  environment invocation issue, not an Orca or product failure. This is a focused
+  screen-reader control check, not full screen-reader qualification. No live
+  provider call was made. PR-06, release gates and cursor remain open/unchanged.
+
+  PR-06 process-instance control conflict recovery increment (bounded; PR-06
+  remains open): definitive non-retryable 4xx denials for pause, resume and
+  unverified closure now discard the failed idempotency command and reload the
+  current process-instance state, avoiding repeated submissions with stale
+  versions. Network errors, timeouts, rate limits and retryable responses retain
+  the command for safe replay. Focused behavior and served-client tests passed
+  2/2 (0.58s runner). The single `npm run check` passed 224/225, with 0 failures
+  and 1 optional PostgreSQL backup/restore skip because client tools were
+  unavailable (`ORGWARD_PG_TOOLS_BIN` not set; 60.37s TAP, 63.25s runner wall).
+  `git diff --check` passed. Logs: `/tmp/orgward-pr06-instance-control-check.log`,
+  `/tmp/orgward-pr06-instance-control-check.time`, and
+  `/tmp/orgward-tests-fkWenr/node-test.tap.log`. No live provider call was made.
+  PR-06 remains first open; release gates and cursor remain unchanged.
+
+  PR-06 human checkpoint event-history UX increment (bounded; PR-06 remains
+  open): the Execution task row now exposes an expandable timeline of persisted
+  start, escalation, owner-resolution and completion events with safe generic
+  actor labels, timestamps, result/disposition, reason and recorded evidence.
+  Presentation derives actor labels from the allowlisted event type and never
+  renders event IDs, raw actor identifiers or whole payloads. Focused history and
+  served-client tests passed 2/2 (0.69s); the persisted-process restart journey
+  passed 1/1 (9.67s), confirming all four transitions and details survive restart
+  without exposing the assigned principal. The single `npm run check` passed
+  225/226, with 0 failures and 1 optional PostgreSQL backup/restore skip because
+  client tools were unavailable (`ORGWARD_PG_TOOLS_BIN` not set; 64.20s TAP,
+  66.57s runner wall). `git diff --check` passed. Logs:
+  `/tmp/orgward-pr06-human-history-check.log`,
+  `/tmp/orgward-pr06-human-history-check.time`,
+  `/tmp/orgward-tests-WBX4Tp/node-test.tap.log`. No rendered-browser check or live
+  provider call was made. PR-06 remains first open; release gates and cursor remain
+  unchanged.
+
+  PR-06 instance-control history actor privacy UX increment (bounded; PR-06
+  remains open): the Execution history now labels pause/resume transitions as an
+  authorized controller, unverified abandonment as a project owner, and uses the
+  system label only when the event actor is exactly `system`. Event type, timestamp,
+  reason and the existing abandonment run/attempt/evidence/duplicate-work details
+  remain reviewable. Unknown and malformed events are omitted; raw actor identifiers
+  and arbitrary payload properties are not rendered. Focused presentation, existing
+  process-control behavior and served-client tests passed 4/4 (0.80s). The single
+  `npm run check` passed 226/227, with 0 failures and 1 optional PostgreSQL
+  backup/restore skip because client tools were unavailable (`ORGWARD_PG_TOOLS_BIN`
+  not set; 68.21s TAP, 70.91s runner wall). `git diff --check` passed. Logs:
+  `/tmp/orgward-pr06-instance-history-check.log`,
+  `/tmp/orgward-pr06-instance-history-check.time`, and
+  `/tmp/orgward-tests-LoJOVe/node-test.tap.log`. No live provider call was made;
+  rendered-browser verification remains unavailable as recorded above. PR-06
+  remains first open; release gates and cursor remain unchanged.
+
+  PR-06 history malformed-entry and size-bounds repair (bounded; PR-06 remains
+  open): both human-task and process-instance-control history presenters now skip
+  null, primitive, unknown, malformed-time and oversized-time entries. Each caps
+  history to the latest 100 events, reasons and evidence strings to 1,000
+  characters, and evidence/reference arrays to 20 entries (run/attempt references
+  to 160 characters). Event fields remain allowlisted; raw principals and arbitrary
+  payload properties stay hidden. The “project owner” abandonment label matches its
+  owner-only write path (`minimum: 'owner'`, workspace-write and human identity);
+  existing persistence coverage denies non-owners and permits the owner. Focused
+  history, control regression and served-client tests passed 6/6 (0.86s); the
+  PostgreSQL owner/denial journey passed 1/1 (9.90s). The single `npm run check`
+  passed 228/229, with 0 failures and 1 optional PostgreSQL backup/restore skip
+  because client tools were unavailable (`ORGWARD_PG_TOOLS_BIN` not set; 67.51s
+  TAP, 69.93s runner wall). `git diff --check` passed. Logs:
+  `/tmp/orgward-pr06-history-bounds-repair-check.log`,
+  `/tmp/orgward-pr06-history-bounds-repair-check.time`, and
+  `/tmp/orgward-tests-ciRaU6/node-test.tap.log`. No live provider call was made;
+  browser sandbox blocker, PR-06 status, release gates and cursor are unchanged.
+
+  PR-06 history allowlist inherited-key repair (bounded; PR-06 remains open):
+  both history presenters now require an own event-type key before projecting a
+  transition, preventing inherited names such as `toString`, `__proto__`,
+  `constructor` and `hasOwnProperty` from being accepted. Focused human-task and
+  process-instance history canaries passed 4/4 (0.46s wall). The single
+  `npm run check` passed 228/229, with 228 passed, 0 failed and 1 optional
+  PostgreSQL backup/restore skip because client tools were unavailable
+  (`ORGWARD_PG_TOOLS_BIN` not set; 67.41s TAP, 69.88s runner wall). `git diff
+  --check` passed. Logs: `/tmp/orgward-pr06-history-prototype-focused.log`,
+  `/tmp/orgward-pr06-history-prototype-focused.time`,
+  `/tmp/orgward-pr06-history-prototype-check.log`,
+  `/tmp/orgward-pr06-history-prototype-check.time`, and
+  `/tmp/orgward-tests-06POHf/node-test.tap.log`. No browser or provider calls were
+  made; PR-06 remains first open and the release gates and cursor are unchanged.
+
+  PR-06 checkpoint-dependent proposal apply journey closure (bounded; PR-06 remains
+  open): preserved the existing generic proposal-apply and stale-source checks, then
+  after that apply created one graph pinned to the new current blueprint, rebound
+  its human and agent actors for that version, completed a required human checkpoint,
+  and executed the dependent OpenAI proposal only against the test's loopback
+  provider fixture. An editor's apply was denied; the owner applied the dependent
+  run's exact saved proposal. Assertions cover its proposal hash, citation IDs and
+  hashes, provenance and target detail, the new `proposed-design` blueprint version,
+  unchanged pinned plan revisions and process runtimes, idempotent replay, and
+  applied provenance plus the immutable run result after app restart. Focused
+  persistence passed 1/1 (11.38s wall); an initial focused attempt failed only on
+  the old expectation that the first applied version remained latest after the new
+  apply, and the corrected restart assertions passed on rerun. The single
+  `npm run check` passed 228/229, with 228 passed, 0 failed and 1 optional
+  PostgreSQL backup/restore skip because client tools were unavailable
+  (`ORGWARD_PG_TOOLS_BIN` not set; 65.83s TAP, 68.25s runner wall). `git diff
+  --check` passed. Logs: `/tmp/orgward-pr06-dependent-proposal-journey-focused.log`,
+  `/tmp/orgward-pr06-dependent-proposal-journey-focused.time`,
+  `/tmp/orgward-pr06-dependent-proposal-journey-focused-repair.log`,
+  `/tmp/orgward-pr06-dependent-proposal-journey-focused-repair.time`,
+  `/tmp/orgward-pr06-dependent-proposal-journey-check.log`,
+  `/tmp/orgward-pr06-dependent-proposal-journey-check.time`, and
+  `/tmp/orgward-tests-IwqT6z/node-test.tap.log`. No live provider call was made;
+  PR-06 remains first open and release gates and cursor are unchanged.
+
+  PR-06 applied proposal object deep-link UX (bounded; PR-06 remains open):
+  applied review state now carries the object ID from the persisted apply event.
+  “Open updated design” opens the current map with that object selected when it is
+  present in the graph; missing or malformed object IDs fall back to the project
+  design route. Current/unapplied proposal links retain their existing behavior.
+  Focused proposal-review helper and served-client tests passed 6/6 (0.80s wall);
+  the initial attempt failed only because its source-match assertion omitted the
+  array guard, and the corrected run passed. The single `npm run check` passed
+  229/230, with 229 passed, 0 failed and 1 optional PostgreSQL backup/restore skip
+  because client tools were unavailable (`ORGWARD_PG_TOOLS_BIN` not set; 67.74s
+  TAP, 70.01s runner wall). `git diff --check` passed. Logs:
+  `/tmp/orgward-pr06-proposal-deep-link-focused.log`,
+  `/tmp/orgward-pr06-proposal-deep-link-focused.time`,
+  `/tmp/orgward-pr06-proposal-deep-link-focused-repair.log`,
+  `/tmp/orgward-pr06-proposal-deep-link-focused-repair.time`,
+  `/tmp/orgward-pr06-proposal-deep-link-check.log`,
+  `/tmp/orgward-pr06-proposal-deep-link-check.time`, and
+  `/tmp/orgward-tests-lAjRyh/node-test.tap.log`. No browser or provider calls were
+  made; PR-06 remains first open and release gates and cursor are unchanged.
+
+  PR-06 DeepSeek Responses provider profile (bounded; PR-06 remains open): added
+  an opt-in `provider-deepseek` profile at the fixed
+  `https://api.deepseek.com/responses` endpoint. It binds a tenant's active
+  generic versioned secret reference, pins the configured model and a validated
+  `max_output_tokens` cap (64–512, default 256) through create, independent
+  approval, pause/resume and dispatch. The saved-source proposal prompt remains
+  read-only with no tools; OpenAI candidate validation and its existing profile
+  contract remain unchanged. Additive migration 031 extends only the
+  outcome-unknown disposition to eligible DeepSeek model proposals. Loopback tests
+  cover credential-rotation denial before dispatch, bounded request body,
+  persisted outcome-unknown disposition, replay and restart. An initial focused
+  run had three test assertion/setup failures; after correcting the forged-provider
+  expectation, legacy response-envelope assertion and isolated preflight config,
+  the affected set passed 79/79 (75.43s wall); the final provider-identity follow-up
+  passed 5/5 (0.23s). The one `npm run check` passed 237/238: 237 passed, 0 failed,
+  and 1 optional PostgreSQL backup/restore skip because client tools were unavailable
+  (`ORGWARD_PG_TOOLS_BIN` not set; 69.77s TAP, 72.34s runner wall). `git diff
+  --check` passed. Logs: `/tmp/orgward-deepseek/focused.log`,
+  `/tmp/orgward-deepseek/focused-repair-final.log`,
+  `/tmp/orgward-deepseek/focused-final2.log`,
+  `/tmp/orgward-deepseek/focused-final2.time`,
+  `/tmp/orgward-deepseek/proposals-review.log`,
+  `/tmp/orgward-deepseek/npm-check.log`, `/tmp/orgward-deepseek/npm-check.time`,
+  and `/tmp/orgward-tests-vsfAyw/node-test.tap.log`. One live request used the
+  machine's OpenClaw-configured DeepSeek credential and `deepseek-flash` model with
+  a 128-token cap. Its single dispatch attempt ended `outcome_unknown` and the run
+  failed; provider receipt/completion is unverified, so no retry was made. The
+  credential was held only in memory and in the disposable encrypted fixture DB;
+  that DB and app data were removed. The sanitized receipt is
+  `/tmp/orgward-deepseek/live-proof-1790484208611.json`. No successful live model
+  result or restart readback is claimed. PR-06, release gates and the active cursor
+  remain unchanged.
+
+  PR-06 human-checkpoint conflict refresh and validation discrimination (bounded;
+  PR-06 remains open): non-retryable authoritative 409 conflicts from human
+  start/completion/escalation/resolution refresh the saved project, actor-binding
+  registry, task runtime and current actions without resubmitting. Validation
+  errors `INVALID_HUMAN_TASK_OUTCOME` and `INVALID_HUMAN_TASK_ESCALATION`, which
+  also use HTTP 409, preserve the user's form and show the validation message;
+  retryable outcomes including retryable 409s retain the same command. Focused
+  failure-policy and served-client tests passed 2/2 (0.83s TAP, 0.92s wall); the
+  saved-process PostgreSQL stale-owner conflict/recovery case passed 1/1 (10.66s
+  TAP, 10.73s wall). The repair `npm run check` passed 246/247: 246 passed, 0
+  failed, and 1 optional PostgreSQL backup/restore skip because client tools were
+  unavailable (`ORGWARD_PG_TOOLS_BIN` not set; 64.12s TAP, 66.67s wall).
+  `git diff --check` passed. Logs:
+  `/tmp/orgward-pr06-human-conflict-repair-focused-20260927.log`,
+  `/tmp/orgward-pr06-human-conflict-pg-20260927.log`,
+  `/tmp/orgward-pr06-human-conflict-repair-check-20260927.log`, and
+  `/tmp/orgward-tests-Pl3jTV/node-test.tap.log`. No provider/credential access or
+  external effects occurred; PR-06, cursor and gates remain open/unchanged.
+
+  PR-06 human-checkpoint keyboard focus recovery follow-up (bounded; 2026-09-27;
+  PR-06 remains open): human start, completion, escalation and resolution handlers
+  now remember the initiating control before disabling it and restore focus only
+  when the request leaves focus on BODY and that same control is still connected.
+  On validation and retryable errors, the form remains intact and focus returns to
+  its submit button; after a definitive conflict replaces the stale form, the
+  detached control is not refocused and the updated task status heading receives
+  keyboard focus with a visible focus outline. Focused failure-policy and served
+  client tests passed 2/2 (0.69s TAP); `git diff --check` passed. The one
+  `npm run check` passed 246/247, 246 passed, 0 failed, and 1 optional PostgreSQL
+  backup/restore skip because `ORGWARD_PG_TOOLS_BIN` was not set (71.00s TAP,
+  73.76s wall). Logs: `/tmp/orgward-pr06-conflict-focus-focused-final-20260927.log`,
+  `/tmp/orgward-pr06-conflict-focus-check-20260927.log`,
+  `/tmp/orgward-pr06-conflict-focus-check-20260927.time`, and
+  `/tmp/orgward-tests-Flvs0E/node-test.tap.log`.
+
+  Rendered 390×844 confirmation used two persisted synthetic OIDC sessions and
+  the disposable local PostgreSQL/app fixture. Session A submitted whitespace-only
+  resolution reason: the server returned `INVALID_HUMAN_TASK_ESCALATION`/409, the
+  typed value and form remained, the validation notice appeared, and keyboard
+  focus stayed on “Resolve escalation”; navigation count remained one. Session B
+  then resolved the task; A's one stale submission received
+  `PROCESS_TASK_STATE_CONFLICT`/409, refreshed to SUCCEEDED with the owner form
+  removed, and moved visible keyboard focus to the updated “Verify the saved
+  review result — SUCCEEDED” status heading. The observed POST sequence was exactly
+  those two 409s, with no automatic resubmit, navigation, or page errors. Screenshot:
+  `/tmp/orgward-pr06-conflict-focus-final-390x844.png`. Orca was not run because
+  this browser session has no `DISPLAY`; no screen-reader announcement is claimed.
+  The fixture used deterministic local state only; no provider, credential, or
+  external request occurred. PR-06, active cursor and release gates remain open
+  and unchanged.
+
+  PR-06 stale-checkpoint status focus Orca/AT-SPI confirmation (bounded;
+  2026-09-27): a provider-free disposable PostgreSQL/app fixture seeded one
+  escalated human checkpoint and two synthetic owner browser sessions. At
+  390×844, session B resolved it while session A retained the stale form; A's
+  one submitted stale action refreshed to SUCCEEDED, removed the owner form and
+  moved visible keyboard focus to “Verify the saved review result — SUCCEEDED.”
+  The AT-SPI accessibility tree exposed that focused heading; Orca emitted the
+  exact heading text and “heading 5” through its speech output. Browser snapshot
+  showed the current status and conflict notice. Evidence: screenshot
+  `/tmp/orgward-pr06-focus-orca-390x844.png` and focused AT-SPI/Orca trace excerpt
+  `/tmp/orgward-pr06-focus-orca-speech-evidence-20260927.txt`. Validation-input
+  focus/text was not repeated under Orca; the immediately preceding browser
+  receipt covers that behavior without a screen-reader claim. The run used a
+  private Xvfb/D-Bus display and PulseAudio null sink; generated audio capture,
+  sessions, Orca, browser, app, database and bridge were stopped/removed. The
+  audio recording was deleted after confirming nonzero captured samples; no human
+  listening claim is made. No providers, credentials, external network calls,
+  product source changes, tests or full checks were used. PR-06, active cursor
+  and release gates remain open and unchanged.
+
+  PR-06 watchdog test runtime follow-up (bounded; 2026-09-27; PR-06 remains open):
+  replaced the late-dispatch test's fixed 5.5s delay with a wait for the child
+  `close` event capped at 5s. The expected close retains the 550ms observation
+  gap; the deadline and existing closed-before-ack/live-lease assertions remain,
+  so a missing or late close still fails. The focused case passed 1/1 (6.44s case,
+  6.88s TAP, 6.96s wall); its full-suite duration fell from 6.50s to 5.63s
+  (866ms, 13.3%).
+  The planned `npm run check` passed 246/247 with 0 failures and one optional
+  PostgreSQL backup/restore skip (`ORGWARD_PG_TOOLS_BIN` unavailable; 67.09s TAP,
+  69.65s wall). `git diff --check` passed. A pre-change full-suite benchmark at
+  concurrency 3 took 74.00s versus the saved concurrency-2 run at 71.09s, so the
+  default remains 2. No product runtime, credential or provider behavior changed;
+  PR-06, active cursor and release gates remain open and unchanged.
+
+  PR-06 fresh DeepSeek proof attempt (user-authorized; 2026-09-27; PR-06 remains
+  open): with a fresh linked-task/command and run ID, the configured profile used
+  `deepseek-flash`, the fixed `/responses` endpoint and a 128-token cap. The
+  encrypted credential was independently approved before the one dispatch. The
+  local execute API returned HTTP 200, but the run finished FAILED and its single
+  provider attempt is `outcome_unknown`; no upstream status or response shape was
+  retained. The app restart readback preserved that failure; no parsed output or
+  result hash existed before or after restart. No retry was made. The disposable
+  app/database were removed and the credential was not emitted in logs or the
+  receipt. Sanitized receipt:
+  `/tmp/orgward-deepseek/live-proof-1790499388790-1790499382.json`. No successful
+  T-22 evidence is claimed; PR-06, cursor and release gates remain open.
+
+  PR-06 terminal dependency recovery UX increment (bounded; 2026-09-27; PR-06
+  remains open): dependent tasks now derive a visible BLOCKED state when a
+  prerequisite failed, was interrupted, or was cancelled in the selected process
+  instance. The UI names the terminal prerequisite and directs the user to start
+  a new instance from the first task, while preserving the existing instance's
+  saved outcomes and evidence. Blocker propagation follows unstarted intermediate
+  tasks, and outcomes from another instance do not unblock the selected one.
+  Focused process-task state and served-client tests passed 2/2; the chain test
+  covers A→B→C with failed A and no runtime for B. Review of the full check also
+  found a pause/dispatch race fixture that left its slow worker waiting for a
+  release marker when dispatch won. The test now observes the marker in the
+  per-run workspace and releases only after worker start; it treats only a saved
+  PAUSED response as pause-wins, while 409 waits for the dispatch marker. The
+  focused PostgreSQL persistence journey passed 1/1 (9.48s case, 9.87s TAP),
+  including the existing pause-before-authorization and dispatch-side race paths.
+  The final `npm run check` passed 247/248 (247 passed, 0 failed, 1 optional
+  PostgreSQL backup/restore skip because client tools were unavailable; 61.87s
+  TAP). An earlier full-check attempt exposed the unreleased worker and failed
+  after 123.8s; an intermediate run exposed a fast 409 classification issue.
+  Both attempts are superseded by the reviewed event-barrier repair and final
+  passing check. Logs: `/tmp/orgward-tests-JKNtd3/node-test.tap.log`,
+  `/tmp/orgward-tests-CtVZTZ/node-test.tap.log`, and
+  `/tmp/orgward-tests-qpkGOW/node-test.tap.log`. `git diff --check` passed. No
+  provider call or credential access occurred. PR-06, active cursor and release
+  gates remain open and unchanged.
+
+  PR-06 terminal dependency recovery Orca check (bounded; 2026-09-27): confirmed
+  Orca 50.2 / AT-SPI2 2.60.4 starts under `xvfb-run`, and the bundled Chrome
+  binary is available at `/home/ubuntu/.agent-browser/browsers/chrome-154.0.8037.57/chrome`.
+  The retained terminal-state evidence at `/tmp/orgward-pr06-blocked-proof/`
+  consists of PNG renders, metrics and headless agent-browser snapshots. The
+  snapshots expose the FAILED and BLOCKED status headings and the “Start a new
+  instance” option, but do not expose the recovery instruction; the disposable
+  seeded app/database session that produced the render is no longer running.
+  Therefore this pass did not claim a live DOM/AT-SPI or Orca announcement for
+  this state. Reproducing that evidence requires recreating and reseeding the
+  disposable app fixture in a headed Xvfb/AT-SPI session. No source changes,
+  tests, provider calls or credential access occurred; PR-06, active cursor and
+  release gates remain open and unchanged.
+
+  PR-06 terminal dependency recovery live Orca follow-up (bounded; 2026-09-27):
+  recreated the provider-free BLOCKED chain with a one-off `/tmp` harness using
+  `startTestPostgresCluster` and the existing app API patterns; the earlier
+  screenshot's live fixture was not retained. In headed Chromium 154 under
+  private Xvfb/D-Bus with Orca 50.2/AT-SPI2 2.60.4, the live accessibility tree
+  exposed the FAILED and BLOCKED headings and the full recovery paragraph.
+  Orca's initial whole-page speech event included the same recovery sentence;
+  this was not a separate focused-paragraph announcement. Sanitized excerpt:
+  `/tmp/orgward-pr06-orca-blocked-live-evidence-20260927.txt`. The ephemeral
+  PostgreSQL database, app, Chrome, Orca, Xvfb/D-Bus session and temporary
+  profiles/logs were stopped and removed. No source edits, tests, provider calls,
+  or credential access occurred; PR-06, cursor and release gates remain open.
+
+  PR-06 same-page blocked transition announcement follow-up (2026-09-27):
+  source review found `refresh()` reloads task instances and replaces the plan
+  subtree, while broad polite live regions could repeat the whole plan. Process
+  plans now opt out of broad live updates; a separate atomic polite status region
+  announces only a task's transition into BLOCKED, with failed prerequisite and
+  recovery instructions. A per-instance task-status map suppresses unchanged
+  refresh chatter; focus is not moved. Focused regression tests passed 2/2
+  (0.13s); `node --check public/execution.js` and `git diff --check` passed.
+  An initial `npm run check` passed 251/252 (251 passed, 0 failed, 1 optional
+  backup/restore skip; 68.78s TAP) but overlapped one final message-batching edit.
+  The frozen-tree `npm run check` passed 251/252 (251 passed, 0 failed, 1 optional
+  backup/restore skip; 64.80s TAP). Focused test log:
+  `/tmp/orgward-pr06-blocked-announcement-focused-20260927.log`; check log:
+  `/tmp/orgward-pr06-blocked-announcement-final-check-20260927.log`, TAP:
+  `/tmp/orgward-tests-8P5Kzp/node-test.tap.log`. No same-page Orca transition
+  harness was run; the live AT-SPI/Orca proof covers initial whole-page speech
+  only. No provider calls or credential access; PR-06 remains open.
+
+  PR-06 blocked announcement aggregation correction (2026-09-27): one failed
+  prerequisite could block many downstream tasks, so the earlier implementation
+  repeated the full recovery paragraph in a single live-region update. It now
+  emits one atomic summary per refresh with the newly blocked task count, up to
+  three unique prerequisite names/statuses (and a count of any remaining causes),
+  and one recovery instruction. Each task retains its full visible recovery
+  paragraph. Focused tests cover a single transition, multiple transitions with
+  deduplicated causes, repeated-refresh suppression, and live-region wiring; the
+  frozen-tree focused pass passed 3/3. The frozen-tree `npm run check` passed
+  252/253 (252 passed, 0 failed, 1 optional backup/restore skip; 65.00s TAP).
+  Focused log: `/tmp/orgward-pr06-blocked-announcement-aggregation-focused-20260927.log`;
+  check log: `/tmp/orgward-pr06-blocked-announcement-aggregation-check-20260927.log`,
+  TAP: `/tmp/orgward-tests-tzY9yS/node-test.tap.log`. The prior frozen-tree full
+  check above covers the earlier per-task speech content and is superseded for
+  this correction by this check. No live screen-reader harness or provider access.
+
+  PR-06 live same-page Orca transition follow-up (2026-09-27): dynamic speech
+  remains unverified. The disposable OIDC test app had no configured browser
+  login flow or identity provider; its bearer-token test authenticator did not
+  create an `ow_session`. The only way reached to show the signed-in controls
+  required manually seeding a session row/cookie, so that bypass was stopped
+  before any task UI action or transition-speech capture. No task was started or
+  failed. The disposable app/database/PostgreSQL, headed Chromium, Orca, Xvfb/D-Bus,
+  temporary session and harness files were stopped and removed. No source changes,
+  provider calls, or credential access occurred; PR-06 remains open.
+
+  PR-06 assigned checkpoint to saved local result UI/restart proof (2026-09-27):
+  with synthetic post-auth test sessions, the Execution UI completed the assigned
+  human checkpoint through worker escalation, owner `resume`, and human completion;
+  then the assigned downstream local-command task was requested from its named task
+  row, approved by the owner, and executed. Captured POST request/response matched
+  run `execution-run-2b46a3da-2b5e-4e6f-b72d-6bdec99767bc` to process task
+  `task-process-deliver`, plan `process-plan-a03f8c21-dd23-4ff2-a3ab-01739e51decd`
+  revision 2 and instance `4046f0ca-0695-4857-a2f8-b17c3759ca55`; after app-only
+  restart, UI/API readback retained the same linkage, runtime `SUCCEEDED`, checkpoint
+  history of start/escalation/resolution/completion, and `review.txt` artifact
+  (`Saved review result.`; GET 200). Focused tests passed 9/9: served Execution
+  controls, human history/result rendering (8 tests), and the linked durable task
+  persistence journey (1 PostgreSQL test; local provider fixture only). Evidence:
+  `/tmp/orgward-pr06-human-agent-ui-restart-proof.json`,
+  `/tmp/orgward-pr06-human-agent-ui-postrestart.txt`, and
+  `/tmp/orgward-pr06-ui-final-before-restart.txt`. No source edits, provider calls,
+  or live external effects. The UI used synthetic post-auth sessions; normal OIDC
+  browser login and same-page Orca speech remain unverified. PR-06 and release gates
+  remain open. The single frozen-source `npm run check` passed 252/253 tests
+  (252 passed, 0 failed, 1 optional backup/restore skip; 67.52s TAP); log:
+  `/tmp/orgward-pr06-human-agent-ui-check.log`, TAP:
+  `/tmp/orgward-tests-2iwMjr/node-test.tap.log`.
+
+  PR-06 blocked-transition announcement timing and human-task focus recovery
+  (2026-09-27): the polite one-summary BLOCKED announcement is deferred 500ms
+  after refresh and is canceled when superseded or when its project/plan/instance
+  context is no longer current. Focused tests cover aggregation/deduplication,
+  unchanged suppression, deferred scheduling and stale-context cancellation.
+  After successful human start, completion, escalation or resolution, Execution
+  restores focus to that task's status heading only if the initiating control was
+  removed and focus fell to BODY; it preserves any other valid focus. Focused tests
+  passed 9/9 across announcement scheduling, focus fallback/no-steal/missing-target,
+  and served Execution controls. Initial whole-page Orca speech evidence remains
+  the separate earlier result recorded above; same-page transition speech is still
+  unverified. The one bounded follow-up loaded the app with an already-authenticated
+  browser session, so no task action was taken and the run does not prove normal
+  OIDC login or dynamic speech. The narrow `SPEECH OUTPUT` capture was empty. Browser,
+  Orca, Xvfb, app fixture and disposable PostgreSQL were stopped and cleaned up;
+  no provider calls or source edits from the live attempt. `git diff --check` passed.
+  The frozen-tree `npm run check` passed 257/258 tests (257 passed, 0 failed,
+  1 optional backup/restore skip; 68.21s TAP); TAP:
+  `/tmp/orgward-tests-itOzLK/node-test.tap.log`. PR-06 and release gates remain
+  open.
+
+  PR-06 same-page blocked-transition UI integration proof (2026-09-27): a fresh
+  named browser session followed the disposable fixture's loopback test issuer
+  `/auth/login` → `/auth/callback` flow; no browser cookie was manually seeded and
+  this is not a production OIDC qualification. In Execution, starting and failing
+  the assigned human checkpoint changed three dependent tasks to BLOCKED on the
+  same page. After the delayed update, `#execution-announcement` contained one
+  concise summary and a MutationObserver captured exactly one live-region DOM
+  update. Selecting another instance and reselecting the same failed instance
+  refreshed the same page; the summary remained unchanged and no additional DOM
+  update occurred. After restarting the app against the same disposable database
+  and reloading Execution, all three BLOCKED headings and full recovery paragraphs
+  remained visible while the announcement region stayed empty on initial render.
+  No Orca speech is claimed. Focused regression tests passed 6/6 (announcement
+  helper, served-client wiring and Execution HTTP surface). The local fixture
+  reported `providerCalls: 0`; browser, app and PostgreSQL were stopped and the
+  disposable fixture cleaned up. PR-06 and release gates remain open.
+
+  PR-06 deterministic proposal structural evaluation (2026-09-27): generated
+  information-detail proposals now carry a versioned structural-only evaluation
+  bound to the run, pinned blueprint/source envelope/target, provider profile and
+  proposal core. Verification and the model apply boundary recompute the same
+  evaluator; changed evaluation/core bindings and unknown versions fail closed.
+  An unchanged trimmed target remains visible with a blocked reason and cannot be
+  applied; passing proposals remain review-only until the existing owner approval.
+  The existing PostgreSQL journey used its loopback provider fixture to persist an
+  unchanged-target proposal, confirmed owner apply returns 409 without changing
+  project or runtime state, restarted the app, then confirmed the evaluation
+  survives and remains denied without mutation. Focused runs passed: 35/35 across
+  proposal, review-state, served Execution/API surface and model tests; the existing
+  PostgreSQL journey 1/1; model suite after final binding assertions 21/21. The
+  single frozen-source `npm run check` passed 261/262 tests (261 passed, 0 failed,
+  1 optional PostgreSQL backup/restore skip because PostgreSQL client tools are
+  unavailable; 65.27s). TAP log:
+  `/tmp/orgward-tests-W3VZiZ/node-test.tap.log`. Focused TAP output was not saved to
+  separate log files. No external provider calls or credentials were used. PR-06,
+  active cursor and release gates remain open and unchanged.
+
+  PR-06 blocked proposal review UI proof (2026-09-27): headed agent-browser opened
+  `/execution.html` on a disposable file-backed `createApp` fixture with the
+  default local development identity and a seeded unchanged-target evaluation.
+  The synthetic task reference included the saved process ID/name. The page showed
+  “Deliver the core offering”, target, before/proposed detail, rationale, source
+  citation/hash and the exact blocked structural reason; the review-only message
+  was visible and the Apply action count was zero. Reload preserved the same
+  visible review and zero Apply actions. No browser cookie was seeded; this is not
+  an OIDC or production-auth claim. The profile endpoint was loopback-only and no
+  provider request was made. App/browser, fixture data and harness were cleaned up;
+  no product source/tests changed and no full check was rerun. Proof:
+  `/tmp/orgward-pr06-blocked-proposal-review-proof.json`; full-page screenshot:
+  `/tmp/orgward-pr06-blocked-proposal-review-full.png`. PR-06, cursor and gates
+  remain open and unchanged.
+
+  PR-06 same-page BLOCKED Orca speech follow-up (2026-09-27): a headed browser
+  completed the disposable loopback `/auth/login` → authorization → `/auth/callback`
+  flow without a manually seeded session cookie, then failed the assigned human
+  checkpoint in Execution. Three dependent tasks became BLOCKED and the summary
+  appeared in the accessibility tree as `role=status`, `live:polite`, `atomic:true`;
+  Orca logged the matching AT-SPI text insertion, but there was no matching
+  `SPEECH OUTPUT`. The scripted browser click left Orca's locus on the home link,
+  and the trace recorded a focus change ignored during say-all, so this capture is
+  inconclusive about real-user Orca speech and does not establish a product defect.
+  Sanitized evidence: `/tmp/orgward-pr06-orca-transition-evidence-20260927.txt`.
+  The local fixture reported `providerCalls: 0`; browser, Orca, app, disposable
+  PostgreSQL and temporary session/profile data were stopped and cleaned up. No
+  source or test changes and no full check; only `git diff --check` was run. PR-06,
+  active cursor and release gates remain open and unchanged.
+
+  PR-06 keyboard-only saved-process journey attempt (2026-09-27): headed agent-browser
+  used the loopback `/auth/login` → authorization → `/auth/callback` flow with local
+  synthetic Alice/Bob identities and a disposable PostgreSQL-backed fixture. Keyboard
+  Tab/Enter/Shift+Tab and keyboard typing started the assigned human checkpoint,
+  escalated it, and had the owner resolve/resume it; visible 3px focus outlines and
+  focus recovery to IN_PROGRESS/ESCALATED task headings are in the retained snapshots
+  and screenshots under `/tmp/orgward-pr06-keyboard-proof/`. A tab-order discovery
+  overshoot submitted a default local controlled-run request; it remained AWAITING
+  APPROVAL and was not approved or executed. After Alice’s resume, Bob’s refreshed
+  DOM still showed ESCALATED/history 2, while read-only GETs from both existing
+  sessions to `/api/execution/process-task-instances?projectId=project-bf47d0f2-0792-4e24-81b6-30fd0543ffcd`
+  agreed on the same instance/task at IN_PROGRESS, version 3, three events; actor
+  authority flags differed as expected. This records a UI/readback mismatch for root
+  review; no further mutation/reload was attempted. The remaining completion, local
+  execution, result/artifact and restart path is unverified. App/DB/browser sessions,
+  PostgreSQL data and temporary harness were cleaned; no provider or external calls,
+  source/test edits, tests or full check occurred. PR-06 and gates remain open.
+
+  PR-06 keyboard reload timing follow-up (2026-09-27): a fresh disposable fixture
+  copy used normal loopback OIDC login and only the built-in local executor; provider
+  code/profile/endpoint were removed. The single repeat attempt reached the saved-plan
+  page, but native Tab traversal wrapped to “Create planning graph” instead of the
+  human-task action, and Enter added an extra planned graph in the disposable DB. No
+  checkpoint transition, owner resolution, read-after-reload comparison, approval or
+  execution occurred, so the prior DOM/API mismatch remains unresolved. The temporary
+  app, PostgreSQL cluster/data, browser and launcher were cleaned. Evidence:
+  `/tmp/orgward-pr06-keyboard-proof/repeat-attempt-20260927/`. No source/test edits,
+  provider calls, tests or full check. PR-06 and release gates remain open.
+
+  PR-06 Execution keyboard entry and saved-task ordering (2026-09-27): Execution
+  now starts with a keyboard-visible “Skip to Execution content” link targeting a
+  labelled, `tabindex=-1` main region with visible focus styling. Existing saved
+  process task cards now precede the graph-creation form in the new-run template;
+  graph creation and standalone run forms remain available. Served HTML/CSS regression
+  coverage verifies the skip target and source order. Focused command `npm test --
+  tests/execution/server.test.mjs tests/execution/accessibility.test.mjs` passed 3/3
+  (0.69s); log `/tmp/orgward-pr06-keyboard-ux-focused-20260927.log`. The single
+  frozen-tree `npm run check` passed 265/266 (265 pass, 0 fail, 1 optional backup/
+  restore skip because PostgreSQL client tools are unavailable; TAP 72.12s, wall
+  74.67s); logs `/tmp/orgward-pr06-keyboard-ux-check-20260927.log` and
+  `/tmp/orgward-tests-3vl5TB/node-test.tap.log`. `git diff --check` passed. The
+  earlier native-keyboard journey remains incomplete; no browser retry, provider call,
+  or external request was made for this slice. PR-06, active cursor and release gates
+  remain open and unchanged.
+
+  PR-06 keyboard skip-link and human checkpoint proof (2026-09-27): in one fresh
+  headed local fixture, browser login completed the normal `/auth/login` → loopback
+  test issuer → `/auth/callback` flow with a synthetic assigned-human identity. First
+  Tab focused “Skip to Execution content” with a visible 3px outline; Enter focused
+  labelled `#execution-main`. Native Tab then reached saved task controls before
+  “Create planning graph”; Enter started the eligible checkpoint, keyboard typing
+  entered evidence, and Enter completed it. Focus moved to matching IN_PROGRESS and
+  SUCCEEDED status headings with visible 3px outlines. A settled read-only GET verified
+  the same task `SUCCEEDED` (version 2), evidence present, and HumanTaskStarted plus
+  HumanTaskCompleted events. Sanitized AX snapshots, focus trace and screenshots:
+  `/tmp/orgward-pr06-keyboard-skip-proof-20260927/`. The disposable fixture configured
+  only the built-in local executor and had no provider profile/code/credential or
+  provider request; no executor was run. Agent request/approval/result/artifact and
+  restart flow plus Orca speech remain unverified. Fixture/app/PostgreSQL/browser and
+  temp data were cleaned. No product source/test edits or test/full-check reruns were made for this proof.
+  PR-06 keyboard approval/execution focus handoff and persisted run proof (2026-09-27):
+  keyboard Approve now hands focus to Execute only after a successful APPROVED refresh,
+  without activating it; keyboard Execute focuses the terminal SUCCEEDED/FAILED run
+  status after successful refresh. Trusted keyboard activation, current focus, detached
+  initiator, target availability and no focus movement during the request are required;
+  failures, pointer activation and nonterminal responses do not hand focus away. The
+  terminal status has a visible 3px focus outline. Focused helper/served-client/accessibility
+  tests passed 10/10 (0.75s), log `/tmp/orgward-tests-7pc9us/node-test.tap.log`.
+
+  The first full check after source changes had 271 pass, 1 failure, 1 optional skip
+  (76.99s): `tests/persistence.test.mjs:6850` did not observe the slow local command
+  worker start marker within 10 seconds. Test diagnostics were updated to use the same
+  workspace-marker watcher used by the earlier race cases and to report execution HTTP
+  status, final run status/events and safe error detail after releasing the barrier. The
+  affected persistence case passed alone (1/1, 12.20s;
+  `/tmp/orgward-tests-h7Tqkx/node-test.tap.log`). The final `npm run check` passed
+  272/273 with 1 optional PostgreSQL backup/restore skip (client tools unavailable),
+  0 failures, 66.36s; logs `/tmp/orgward-pr06-run-focus-final-check-20260927.log` and
+  `/tmp/orgward-tests-qrqEU2/node-test.tap.log`. `git diff --check` passed.
+
+  One fresh local keyboard journey used normal loopback OIDC for separate Bob requester
+  and Alice approver sessions, starting from a saved plan whose human checkpoint was
+  already SUCCEEDED. Bob keyboard-requested the task; Alice keyboard-approved it. Focus
+  moved to Execute without running it; Enter then ran only the built-in deterministic
+  `scaffold-node-service` executor, producing SUCCEEDED, six artifacts and the
+  Request/Approve/Start/Success event history. Execution moved focus to the terminal
+  status with a visible outline. App-only restart on the same PostgreSQL fixture was
+  followed by keyboard Ctrl+R; the completed page AX tree showed SUCCEEDED and artifact
+  links. Post-restart read-only API verified the same run/task/plan-instance link,
+  succeeded human and agent history, all six artifact hashes, and a Dockerfile artifact
+  GET 200 with matching recorded/header SHA-256. On an extra keyboard navigation after
+  reload, focus was on “Open linked plan instance” and Enter returned to the plan; no
+  further UI action was attempted. Thus post-restart persistence and initial reloaded
+  run display were observed, but clean keyboard re-entry from the reloaded plan is not
+  claimed. Evidence: `/tmp/orgward-pr06-agent-keyboard-proof-final-20260927/`. Fixture,
+  app, PostgreSQL data/processes and browser sessions were cleaned; providerCalls=0,
+  no provider profile/credential/network or external effect. Provider-backed model work
+  and Orca transition speech remain open. PR-06, cursor and release gates remain open
+  and unchanged.
+
+  PR-06 selected-run keyboard re-entry increment (2026-09-27): Execution now records
+  the selected run as a validated `?project=…&run=…` route and reload restores only
+  an accessible run matching that ID. The existing plan-row “Open linked run” action
+  explicitly returns to the run detail and, for keyboard activation, hands focus to
+  its status target only after the successful load; it does not approve or execute.
+  Route, focus-guard and served-client tests passed 17/17 (0.81s), log
+  `/tmp/orgward-tests-gjI7We/node-test.tap.log`. The single `npm run check` passed
+  274/275 with 1 optional PostgreSQL backup/restore skip (client tools unavailable),
+  0 failures, 72.49s TAP / 75.03s total; logs
+  `/tmp/orgward-pr06-run-reentry-full-check-20260927.log` and
+  `/tmp/orgward-tests-MMWKuQ/node-test.tap.log`. A fresh local fixture reached a
+  persisted SUCCEEDED run using the built-in executor, but headed agent-browser Chrome
+  exited before UI launch with “No usable sandbox.” Per the one-attempt limit, browser
+  re-entry and app-restart readback were not verified; no screenshot or UI interaction
+  occurred. The exact disposable app/issuer/PostgreSQL/profile and browser session were
+  cleaned; no fixture processes remain and providerCalls=0. Prior persisted-result and
+  artifact readback receipts remain valid, while keyboard re-entry after reload and
+  provider-backed model/Orca speech evidence remain open. `git diff --check` passed.
+  PR-06, active cursor and release gates remain open and unchanged.
+
+  PR-06 selected-run browser follow-up (2026-09-27): a fresh headed browser launch
+  with the documented Chromium `--no-sandbox` option completed normal synthetic
+  loopback OIDC login. A saved SUCCEEDED local-executor run rendered from a URL
+  containing its exact project and run IDs. After app-only restart against the same
+  disposable PostgreSQL database, the fixture chose a new ephemeral loopback port;
+  opening the same selected-run URL there restored the exact SUCCEEDED run with six
+  artifact links and the existing normal login session. Native Ctrl+R then restored
+  that same run again. Native Tab/Enter opened the linked plan; Tab/Shift+Tab reached
+  its explicit “Open linked run” button, and Enter re-entered the exact run URL with
+  focus on the SUCCEEDED status (solid visible outline). Read-only state remained
+  SUCCEEDED with only the original request, approval, start and success event types;
+  no approval or execution action was triggered by re-entry. Provider calls: 0.
+  Screenshots, AX snapshots, URL/focus records and sanitized proof:
+  `/tmp/orgward-pr06-run-reentry-proof-20260927/`. The prior no-sandbox launch failure
+  remains as historical receipt; this separate bounded launch succeeded. Fixture,
+  issuer, app, browser session and PostgreSQL data were cleaned, with no related
+  process remaining. No source/tests/full check changed for this proof. `git diff
+  --check` passed. PR-06, active cursor and release gates remain open and unchanged.
+
+  PR-06 approval handoff Orca follow-up (2026-09-27): the first disposable
+  fixture launch stopped before browser startup because its temporary setup code
+  expected a nested human-task start response; `server.mjs` returns
+  `planInstanceId` and `status` at the top level. After correcting only that
+  fixture assumption, a second fresh local run completed synthetic loopback OIDC
+  login and loaded one AWAITING_APPROVAL run backed by the built-in deterministic
+  `scaffold-node-service` executor. Native Tab reached “Approve execution” and
+  native Enter approved it. The refreshed run was APPROVED; keyboard focus moved
+  to “Execute approved profile” with a solid visible outline, and Orca logged
+  `SPEECH OUTPUT: 'Execute approved profile'`. After a later Enter the browser
+  unexpectedly returned to the workspace home page, so no further UI action was
+  taken. Read-only run GET returned HTTP 200, status APPROVED, version 1, only
+  `ExecutionRequested` and `ExecutionApproved`, and no execution/artifacts; the
+  run did not start. Execute activation, terminal status focus and terminal Orca
+  speech therefore remain unverified. Sanitized evidence:
+  `/tmp/orgward-pr06-orca-approval-evidence-20260927/sanitized-result.txt`.
+  App/fixture, browser, Orca, private Xvfb/D-Bus/PulseAudio and PostgreSQL were
+  stopped; the final process scan found no task-owned processes. Provider calls:
+  0. No product source/tests or full check changed for this attempt;
+  `git diff --check` passed. PR-06, cursor and release gates remain open.
+
+  PR-06 guarded Orca terminal-status follow-up (2026-09-27): a fresh synthetic
+  loopback OIDC/local-executor fixture repeated approval. Orca spoke
+  “Execute approved profile” after focus moved there with a visible outline. The
+  required immediate pre-Enter guard returned false for exact Execute-button
+  focus. A read-only probe found BODY focused on the selected-run URL
+  (`http://127.0.0.1:38779/execution.html?project=project-7308ee4a-eb1b-4a71-9323-f12566948fd6&run=execution-run-bf4ba608-32bb-446b-870c-75c636d49ca5`), with status
+  APPROVED. Per stop condition no Enter was sent. Read-only API confirmed only
+  `ExecutionRequested` and `ExecutionApproved`, no execution; terminal focus,
+  speech and artifact hashes remain unverified. This does not establish a
+  product defect. Sanitized trace: `/tmp/orgward-pr06-orca-terminal-evidence-20260927/sanitized-result.txt`.
+  Fixture/app, browser, Orca, Xvfb/D-Bus/audio and PostgreSQL were cleaned; final
+  process scan was clear. Provider calls: 0; no product source/tests/full check
+  changed. `git diff --check` passed. PR-06, cursor and gates remain open.
+
+  PR-06 final guarded Orca follow-up (2026-09-27): a single CDP-backed page
+  sequence observed exact BUTTON focus on “Execute approved profile” immediately
+  before sending one Enter keydown/keyup. The captured trace records that keydown
+  with Execute active, but no click event followed. The selected run URL remained
+  loaded and focus stayed on Execute. Read-only API returned APPROVED, version 1,
+  only `ExecutionRequested` and `ExecutionApproved`, and no execution/artifacts.
+  The captured Orca trace had an AT-SPI text insertion for Execute but no matching
+  SPEECH OUTPUT line. Enter activation and terminal status speech remain
+  inconclusive; no product defect is established. Sanitized evidence:
+  `/tmp/orgward-pr06-orca-guarded-evidence-20260927/sanitized-result.txt`.
+  All fixture/browser/Orca/Xvfb/audio/PostgreSQL processes were cleaned; provider
+  calls: 0. No source/tests/full check changed. `git diff --check` passed; PR-06,
+  cursor and gates remain open.
+
+  PR-06 native X11 Orca terminal-result proof (2026-09-27): with capture already
+  running, normal synthetic loopback OIDC loaded a disposable saved-plan run.
+  Native Tab and Return approved it. Before execution, the focused X11 input
+  window was Chromium and `document.activeElement` exactly matched the Execute
+  button; one native X11 Return then produced its activation click. The run stayed
+  on its selected URL, finished SUCCEEDED, and moved DOM focus to the matching
+  status target with a solid outline. Orca’s trace recorded focus on SUCCEEDED and
+  `SPEECH OUTPUT: 'SUCCEEDED.'`; this attempt did not record speech for the Execute
+  label (that phrase was spoken in the earlier approval-follow-up receipt above).
+  Read-only API returned HTTP 200, SUCCEEDED, version 3, exactly one each of
+  ExecutionRequested/Approved/Started/Succeeded and six artifacts with content
+  hashes. Full URL, key-target trace and artifact hashes:
+  `/tmp/orgward-pr06-orca-x11-evidence-20260927/sanitized-result.txt`. Fixture,
+  browser, Orca, Xvfb/D-Bus/audio and PostgreSQL were cleaned; final process scan
+  was clear. Provider calls: 0; no source/tests/full check changed.
+  `git diff --check` passed. PR-06, cursor and gates remain open.
+
+  PR-06 unknown-attempt reference UX increment (2026-09-27): the recorded pause
+  boundary now displays the full local `attemptId` only when its provider status
+  is `outcome_unknown`. The text identifies it as an OrgWard-local attempt
+  reference, explicitly says it is not a provider request ID and proves neither
+  receipt nor completion, and shows `unavailable` for a malformed local ID. No
+  status, output, endpoint, retry or control transition changed. The focused
+  saved-process PostgreSQL restart journey and served-client test passed 2/2
+  (12.04s total; PostgreSQL case 11.17s), confirming the reference survives
+  restart while the provider attempt remains unknown and linked run remains
+  interrupted. The frozen-tree `npm run check` passed 286/287 (286 passed, 0
+  failed, 1 optional PostgreSQL backup/restore skip because client tools are
+  unavailable; 71.63s TAP, 74.04s total). `git diff --check` passed before and
+  after the check. Logs: `/tmp/orgward-pr06-attempt-reference-check.log`,
+  `/tmp/orgward-pr06-attempt-reference-check.time.log`, and
+  `/tmp/orgward-tests-vjfJsE/node-test.tap.log`. No provider calls or credential
+  access. PR-06 remains first open; cursor and release gates remain unchanged.
+
+  PR-06 provider and sandbox availability check (2026-09-27): the user authorized
+  a test with the exposed key. The relevant DeepSeek/OpenClaw environment variables
+  are unset, the previously identified OpenClaw config and agent database paths
+  are absent, and the running loopback gateway reports unhealthy status; its
+  redacted model status lists only an OpenAI route, with no DeepSeek route. No
+  secret values or transcripts were read, no provider call was sent, and the prior
+  `outcome_unknown` attempt was not retried. A sandbox-preserving Chromium launch
+  is also unavailable: Ubuntu AppArmor blocks unprivileged user namespaces and no
+  Chrome sandbox helper is installed. No `--no-sandbox` workaround or host-policy
+  change was made. The real-provider result and dynamic cross-session Orca proof
+  remain open; PR-06, the active cursor and release gates are unchanged.
+
+  PR-06 resource and freshness recheck (2026-09-28): the OpenClaw system service
+  runs as its dedicated `openclaw` account, but its process environment exposes no
+  provider/API-key variable names, its standard config and `.env` paths are absent,
+  and no credential files are mounted for the service. No credential value was
+  read, no provider request was sent, and the earlier `outcome_unknown` attempt was
+  not retried. Orca and AT-SPI are installed, but no browser executable or
+  browser automation runtime is available; the existing Chromium launch remains
+  blocked by the host sandbox policy. No browser was launched and no sandbox or
+  host policy was changed. Review of the historical cross-session stale-render
+  report confirmed current behavior intentionally defers a changed snapshot while
+  focus remains in the plan and applies it on focusout; the focused state/served-
+  client tests and prior provider-free two-session proof cover this path. No source
+  or test files changed and no tests were run. The real-provider result and dynamic
+  cross-session Orca proof remain open; PR-06, cursor and release gates are
+  unchanged.
+
+  PR-06 provider/keyboard runtime recheck (2026-09-28): the active
+  `openclaw.service` runs as its dedicated `openclaw` account, but its runtime
+  environment has no provider-key variable names, and it has no environment-file
+  or systemd credential-file directive. The service account's standard
+  `/home/openclaw/.openclaw/openclaw.json`, agent SQLite and `.env` paths are
+  absent. DeepSeek/OpenClaw key variables and OrgWard database/secret-vault
+  variables are unset. No credential value was read or printed and no live
+  request was made; the previous `outcome_unknown` attempt was not retried. The
+  local `agent-browser` 0.38.1 runtime and Chrome for Testing 154.0.8037.57 are
+  installed, as are Orca and Xvfb, but this Chrome runtime has no `chrome-sandbox`
+  helper. AppArmor restricts unprivileged user namespaces
+  (`/proc/sys/kernel/apparmor_restrict_unprivileged_userns` is `1`), and the
+  sandbox-preserving `unshare --user --map-root-user true` probe failed with
+  `Operation not permitted`. No browser was launched, no user profile or session
+  was touched, and no host policy or sandbox setting was changed. The native
+  keyboard/Orca customer journey remains unverified. No source/test changes or
+  tests/full check were made. PR-06 remains first open; cursor and release gates
+  remain unchanged.
+
+  PR-06 selected-run cross-session freshness increment (2026-09-28): an open
+  selected Execution run now performs authenticated GET refreshes on the existing
+  15-second cadence and when the page becomes visible. Request generation and exact
+  current run/project route identity reject late or misrouted responses; older and
+  divergent same-version snapshots are ignored. Identical snapshots do not rerender
+  or announce. Updates defer while run controls are focused or dirty, with distinct
+  messages in the persistent polite status region, then apply on focusout. Applied
+  snapshots announce status transitions only, keep the main content out of a live
+  region, and update the selected run-list status in place to preserve keyboard
+  focus. Focused helper and served-client tests passed 5/5 (0.71s); the single final
+  frozen-tree `npm run check` passed 309/310 (309 passed, 0 failed, 1 optional
+  PostgreSQL backup/restore skip because client tools are unavailable; 76.09s TAP,
+  79.91s total). `git diff --check` passed. Logs:
+  `/tmp/orgward-pr06-selected-run-refresh-focused-final.log`,
+  `/tmp/orgward-pr06-selected-run-refresh-check.time.log`; TAP
+  `/tmp/orgward-tests-tj8ob9/node-test.tap.log`. No browser or provider was used.
+  PR-06 remains first open; task checkboxes, cursor and release gates remain
+  unchanged.
+
+  PR-06 task-assignment transparency increment (2026-09-28): saved-plan task cards
+  now expose the exact pinned blueprint version's role scope, responsibility,
+  instructions, proposed tools and escalation rules, clearly labeled as proposed
+  guidance rather than enabled authority or tools. The card separately shows the
+  planned human/agent assignee, and shows an organizational responsibility target
+  only for a current version-matched enabled eligible identity binding of the
+  matching target type; stale, proposed, unavailable or unresolved bindings say
+  `Unresolved`. Human and agent execution permission boundaries are stated
+  separately. Missing role statements are shown as `Not specified`. Focused helper
+  and served-client tests passed 6/6 (0.66s). `git diff --check` passed before and
+  after the single frozen-tree `npm run check`, which passed 322/323 (322 passed,
+  0 failed, 1 optional PostgreSQL backup/restore skip because client tools are
+  unavailable; 76.51s TAP, 77.7s total). Logs:
+  `/tmp/orgward-tests-xpEk5F/node-test.tap.log`,
+  `/tmp/orgward-tests-Mqhu1y/node-test.tap.log`. No provider, browser or external
+  effect was used. PR-06 remains first open; task checkboxes, cursor and release
+  gates remain unchanged.
+
+  Role-reference follow-on (2026-09-28): verified that a planned task with a
+  `role-reference` and no selected actor still presents role guidance from the
+  exact pinned blueprint while the planned assignee and organizational target
+  remain unresolved. Added an enabled-target canary assertion to ensure an
+  unrelated binding cannot disclose its target. The focused assignment helper
+  tests passed 6/6 (0.25s). The frozen-tree `npm run check` passed 323/324 (323
+  passed, 0 failed, 1 optional PostgreSQL backup/restore skip because client tools
+  are unavailable; 76.80s TAP). `git diff --check` passed before and after the
+  check. Logs: `/tmp/orgward-tests-5hNAdS/node-test.tap.log`,
+  `/tmp/orgward-tests-HXEvoF/node-test.tap.log`. PR-06 cursor, task checkboxes and
+  release gates remain unchanged.
+
+  PR-06 immutable model task-guidance increment (2026-09-28): model-backed
+  process-task requests now capture proposed role instructions and scope from the
+  exact blueprint version and graph revision already locked for the saved task
+  request. The snapshot is validated against the task assignment and linked
+  actor-role, stored with the existing run work item and checked by digest against
+  the immutable run reference whenever the provider prompt is built. Existing
+  historical plan instances remain pinned to their saved blueprint; no migration
+  was needed. The prompt labels guidance as user-authored and subordinate to
+  server-approved scope, tools, approvals and platform rules, while task and
+  source text remain separately labeled untrusted factual data. Proposed tool and
+  escalation statements are not sent as enabled permissions; Responses requests
+  retain `tools: []` and bounded citation validation. Tests cover forged/mismatched
+  references, stale blueprint and graph revisions, digest tampering, role edits
+  after request with saved-work-item reload, source injection separation, and the
+  PostgreSQL process-task request read after application restart. Focused proposal
+  tests passed 9/9 (0.21s); the linked PostgreSQL request/recovery journey passed
+  1/1 (16.16s). An initial focused persistence pass exposed a legacy pinned role
+  without `proposedInstructions`; the snapshot now preserves that absent value as
+  an empty string and the rerun passed. The single frozen-tree `npm run check`
+  passed 325/326 (325 passed, 0 failed, 1 optional PostgreSQL backup/restore skip
+  because client tools are unavailable; 78.21s TAP, 79.32s total). `git diff
+  --check` passed before and after. Logs: `/tmp/orgward-tests-XUjXOA/node-test.tap.log`,
+  `/tmp/orgward-tests-UtIAIJ/node-test.tap.log`,
+  `/tmp/orgward-tests-jbUPoq/node-test.tap.log`. No provider credentials or live
+  requests were used; PR-06 cursor, checkboxes and release gates remain unchanged.
+
+  Legacy approval compatibility follow-on (2026-09-28): persisted model-backed
+  runs without a guidance snapshot now reconstruct the exact pre-increment prompt
+  from their saved proposal context and approved task instructions, with no read
+  of mutable blueprint role text and no newly injected guidance. Prompt building
+  requires the saved run approval; paused legacy amendments retain the same
+  pre-guidance prompt contract. A no-transport unit regression mutates current
+  role text after serializing an approved legacy run and confirms unchanged prompt
+  wording and work item. Focused proposal tests passed 10/10 (0.23s); the linked
+  PostgreSQL request/recovery journey passed 1/1 (14.48s). The repaired frozen-tree
+  `npm run check` passed 326/327 (326 passed, 0 failed, 1 optional PostgreSQL
+  backup/restore skip because client tools are unavailable; 77.64s TAP, 78.73s
+  total). `git diff --check` passed before and after. Logs:
+  `/tmp/orgward-tests-AAa6lG/node-test.tap.log`,
+  `/tmp/orgward-tests-iQSi8O/node-test.tap.log`,
+  `/tmp/orgward-tests-OcCTK1/node-test.tap.log`. No provider requests or credentials
+  were used; PR-06 cursor, checkboxes and release gates remain unchanged.
+
+  PR-06 run-specific guidance review increment (2026-09-28): confirmed the
+  authorized run view exposes `workItem.taskGuidance` but the approval/result
+  screen omitted it. The screen now renders only the immutable request snapshot,
+  labels it as user-authored proposed guidance subordinate to approved scope,
+  approvals, tools and platform rules, and shows its pinned role/actor/blueprint/
+  graph references. Existing runs without a snapshot receive separate legacy
+  prompt provenance copy; mismatched snapshots are shown unavailable. No current
+  editable blueprint role text is consulted. Focused review-helper and served
+  client tests passed 4/4 (0.64s); the single frozen-tree `npm run check` passed
+  329/330 (329 passed, 0 failed, 1 optional PostgreSQL backup/restore skip because
+  client tools are unavailable; 76.94s TAP, 78.15s total). `git diff --check`
+  passed before and after. Logs: `/tmp/orgward-tests-kfUWdz/node-test.tap.log`,
+  `/tmp/orgward-tests-jMZMZ6/node-test.tap.log`. One earlier helper/served-client
+  run failed due to an unescaped test regex and passed after correction.
+
+  Provider smoke status (updated 2026-09-28): one fresh synthetic OpenClaw CLI
+  call through the service-managed DeepSeek credential route succeeded with
+  `deepseek-flash` in 7.989s (one dispatch); the credential value was not printed.
+  This confirms OpenClaw provider access only. The managed credential is not
+  available as an OrgWard tenant-scoped SecretStore binding, so the linked
+  process-task app flow was not attempted. No product source changed, and the
+  historical `outcome_unknown` run was untouched. PR-06 cursor, checkboxes and
+  release gates remain unchanged.
+
+  PR-06 human checkpoint evidence notes (2026-09-28): completion, escalation and
+  owner-resolution forms now accept up to 20 trimmed evidence notes, one per line,
+  matching the existing runtime/API bounds of 1,000 characters per note. Invalid
+  counts or oversized notes are rejected inline; successful completion and owner
+  success still require evidence. Saved command payloads keep the evidence array
+  intact. Follow-up uncertainty handling (2026-09-28): all fields and the submit
+  button lock before the first request; a polite in-form status announces saving.
+  An uncertain result keeps the exact command ID/payload and displayed values frozen
+  behind a “Retry saved …” action. A definitive conflict clears the command and
+  unlocks fields for reconciliation; after success, controls stay locked until the
+  enclosing refresh replaces the form. Focused retry/helper/served-client tests
+  passed 3/3 (0.44s), TAP
+  `/tmp/orgward-tests-but8tQ/node-test.tap.log`. Tests cover complete, escalate and
+  resolve control flow, same-command payload replay, edits blocked during send,
+  post-save lock and definitive-conflict unlock. The first full check after this
+  repair failed 343/345 because a served-client assertion expected three direct
+  helper call sites instead of the two calls used by completion and the shared
+  escalation/resolution path; the assertion was corrected. Its log is
+  `/tmp/orgward-pr06-human-evidence-retry-check.log`, TAP
+  `/tmp/orgward-tests-A64yls/node-test.tap.log`. The final frozen-tree check passed
+  344/345 (344 passed, 0 failed, 1 optional PostgreSQL backup/restore skip because
+  client tools are unavailable; 77.57s TAP, 80.19s total), TAP
+  `/tmp/orgward-tests-kvb6CN/node-test.tap.log`; output
+  `/tmp/orgward-pr06-human-evidence-retry-final-check.log`. Syntax checks and
+  `git diff --check` passed. No provider call, browser launch or external effect.
+  PR-06, cursor, task checkboxes and release gates remain unchanged.
+
+  The earlier focused helper and served-client tests passed 3/3 (0.33s), TAP
+  `/tmp/orgward-tests-NlkD3T/node-test.tap.log`. The existing PostgreSQL human/agent
+  journey passed 1/1 (14.52s), including authorization denial, idempotency conflict,
+  distinct-task isolation and restart recovery; it verifies multiple notes on
+  escalation, owner resolution, completion and restored audit events. Log
+  `/tmp/orgward-pr06-human-evidence-persistence.log`, TAP
+  `/tmp/orgward-tests-fdM4fD/node-test.tap.log`.
+
+  PR-06 process-instance control retry/freshness (2026-09-28): pause, resume,
+  cancel and ABANDONED_UNVERIFIED forms now freeze submitted details while sending
+  and retain the same command ID and payload for uncertain retries. A remounted
+  form restores the saved values and retry/settled status; only the retry button
+  is enabled while uncertain. Success and definitive conflicts keep stale controls
+  locked until an authoritative instance refresh replaces them; failed refreshes
+  preserve the lock and accurate status. Cross-session applied snapshots clear
+  settled commands before render; deferred snapshots retain them, and unchanged
+  snapshots rerender only when clearing a stale settled lock. The abandonment
+  evidence and duplicate-cost/work acknowledgement remain required. Final focused
+  control/helper and served-client tests passed 11/11 (0.69s), log
+  `/tmp/orgward-pr06-instance-control-focused.log`. One earlier focused attempt
+  caught an outdated served-client regex after the refresh branch changed; the
+  assertion was corrected and the final focused run passed. The final frozen-tree
+  `npm run check` passed 353/354
+  (353 passed, 0 failed, 1 optional PostgreSQL backup/restore test skipped because
+  PostgreSQL client tools are unavailable; 78.70s total, 77.52s TAP). Output:
+  `/tmp/orgward-pr06-instance-control-final-check.log`; TAP:
+  `/tmp/orgward-tests-bf46lL/node-test.tap.log`. No provider/browser/external
+  action. PR-06, cursor, task checkboxes and release gates remain unchanged.
+
+PR-06 paused linked-run amendment retry (2026-09-28): paused instruction edits
+now freeze objective, normalized requirements, reason, project ID, version and
+command ID before send. Fields lock while sending and after uncertain, saved or
+conflict results; only the exact saved command can retry. A fresh run read clears
+settled state before rerender, failed reads preserve the lock and truthful status,
+and selected-run refreshes reconcile settled state only when applied. Remounted
+forms restore the submitted values. The existing API authorization, idempotency,
+pause and fresh-approval rules remain in force. Focused helper/served-client tests
+passed 6/6 (0.71s), log
+`/tmp/orgward-pr06-linked-run-amendment-ui.log`. The affected durable PostgreSQL
+request journey passed 1/1 (15.66s), log
+`/tmp/orgward-pr06-linked-run-amendment-persistence.log`; this includes requester
+authority and same-command/conflicting-payload idempotency assertions. An earlier
+combined focused run failed 48/50 on a version-conflict disposition edge and a
+status-text assertion; both were corrected before the passing runs. No provider,
+browser or external actions. The single frozen-source `npm run check` passed
+358/359 (358 passed, 0 failed, 1 optional PostgreSQL backup/restore journey
+skipped because PostgreSQL client tools are unavailable; 76.66s TAP, 77.82s
+reported runner duration), log `/tmp/orgward-pr06-linked-run-amendment-check.log`,
+TAP `/tmp/orgward-tests-cckVud/node-test.tap.log`. `git diff --check` passed
+after the receipt update. PR-06, cursor, task checkboxes and release gates remain
+unchanged.
+
+PR-06 linked saved-result failure guidance (2026-09-28): linked failed and
+interrupted runs now persist only a fixed allowlisted category derived from
+profile kind, known failure codes or known interruption reasons. The saved-task
+disclosure maps recognized categories to bounded next-step guidance and uses
+generic copy for old or unknown categories; raw messages, output and unknown
+codes are not used for this guidance. Existing provider outcome-unknown
+diagnostics retain precedence. Focused helper/service/served-client tests passed
+21/21 (1.26s), log
+`/tmp/orgward-pr06-linked-failure-guidance-focused-final.log`. The durable saved
+process-task PostgreSQL journey passed 1/1 (15.11s), including failed-command
+category persistence and provider recovery classification, log
+`/tmp/orgward-pr06-linked-failure-guidance-persistence.log`. The single
+frozen-source `npm run check` passed 361/362 (361 passed, 0 failed, 1 optional
+PostgreSQL backup/restore journey skipped because PostgreSQL client tools are
+unavailable; 77.87s TAP, 79.01s reported runner duration), log
+`/tmp/orgward-pr06-linked-failure-guidance-check.log`, TAP
+`/tmp/orgward-tests-er9oCE/node-test.tap.log`. Syntax and `git diff --check`
+passed. No provider, browser or external actions. PR-06, cursor, task checkboxes
+and release gates remain unchanged.
+
+PR-06 saved-plan proposal application status (2026-09-28): the linked task-row
+proposal preview now reports an applied version only when the current project
+snapshot and append-only `BlueprintProposalApplied` event match the run ID and
+exact generated-proposal hash and carry a positive integer version. Otherwise it
+remains review-only or says application status is unavailable. The applied copy
+states that this created a proposed design version and did not execute work.
+Focused helper and served-client tests passed 12/12 (0.72s), log
+`/tmp/orgward-pr06-proposal-application-row-focused.log`. The saved-process
+PostgreSQL restart journey passed 1/1 (15.52s), including applied and unapplied
+task-row projection after restart, log
+`/tmp/orgward-pr06-proposal-application-row-persistence.log`. The single
+frozen-source `npm run check` passed 362/363 (362 passed, 0 failed, 1 optional
+PostgreSQL backup/restore journey skipped because PostgreSQL client tools are
+unavailable; 77.22s TAP, 78.36s reported runner duration), log
+`/tmp/orgward-pr06-proposal-application-row-check.log`, TAP
+`/tmp/orgward-tests-ATcCmL/node-test.tap.log`. Syntax and `git diff --check`
+passed. No provider, browser or external actions. PR-06, cursor, task checkboxes
+and release gates remain unchanged.
+
+PR-06 cross-session proposal-status freshness (2026-09-28): the 15-second
+process refresh now fetches the authorized selected-project snapshot alongside
+runtime plans, task instances and runs. Matching project ID/version changes
+trigger task-card refresh even when runtime state is unchanged; focus/dirty edits
+retain the existing deferral, and request, route and project guards reject stale
+responses. If project state is unavailable, process activity can still refresh
+and an accessible retry warning remains visible. Focused refresh, announcement
+and served-client tests passed 21/21 (0.86s), log
+`/tmp/orgward-pr06-process-project-refresh-focused.log`. The final frozen-tree
+`npm run check` passed 363/364 (363 passed, 0 failed, 1 optional PostgreSQL
+backup/restore journey skipped because PostgreSQL client tools are unavailable;
+78.31s TAP, 79.56s runner), log
+`/tmp/orgward-pr06-process-project-refresh-final-check.log`, TAP
+`/tmp/orgward-tests-l0aWwH/node-test.tap.log`. Syntax and `git diff --check`
+passed. No provider, browser or external actions. PR-06, cursor, task checkboxes
+and release gates remain unchanged.
+
+PR-06 saved task applied-proposal design link (2026-09-28): expanded linked task
+results now offer a direct design link only when the current project event matches
+the exact run and proposal hash. The event object must also match the generated
+proposal target and exist in the current graph before the link selects it; absent,
+mismatched or superseded objects open the current design and are labeled as such.
+Focused result, route, and served-client tests passed 19/19 (0.91s), log
+`/tmp/orgward-pr06-applied-proposal-design-link-focused.log`. The final frozen-tree
+`npm run check` passed 364/365 (364 passed, 0 failed, 1 optional PostgreSQL
+backup/restore journey skipped because client tools were unavailable; 78.56s TAP,
+79.70s runner), log
+`/tmp/orgward-pr06-applied-proposal-design-link-check.log`, TAP
+`/tmp/orgward-tests-SI134x/node-test.tap.log`. Syntax and `git diff --check`
+passed. No provider, browser or external actions. PR-06, cursor, task checkboxes
+and release gates remain unchanged.
+
+PR-06 saved-result unknown-category fallback (2026-09-28): failed/interrupted
+result guidance now recognizes only own keys from its fixed category allowlist.
+Prototype property names in legacy or malformed persisted categories fall back to
+the bounded generic guidance instead of producing inherited values. Focused
+presenter and served-client tests passed 13/13 (0.79s), log
+`/tmp/orgward-pr06-result-guidance-own-key-focused.log`. The final frozen-tree
+`npm run check` passed 364/365 (364 passed, 0 failed, 1 optional PostgreSQL
+backup/restore journey skipped because client tools were unavailable; 76.55s TAP,
+77.75s runner), log
+`/tmp/orgward-pr06-result-guidance-own-key-check.log`, TAP
+`/tmp/orgward-tests-mSX5BL/node-test.tap.log`. Syntax and `git diff --check`
+passed. No provider, browser or external actions. PR-06, cursor, task checkboxes
+and release gates remain unchanged.
+
+PR-06 saved-result disclosure refresh continuity (2026-09-28): expanded task
+result disclosures now remain open across process-plan rerenders, keyed by exact
+project and run so state cannot transfer to another project. Focused helper and
+served-client tests passed 3/3 (0.67s), log
+`/tmp/orgward-pr06-result-disclosure-persistence-focused.log`; the first focused
+attempt caught a stale served-client assertion for the updated details markup,
+which was corrected before the passing rerun. The final frozen-tree `npm run check`
+passed 366/367 (366 passed, 0 failed, 1 optional PostgreSQL backup/restore journey
+skipped because client tools were unavailable; 77.24s TAP, 78.50s runner), log
+`/tmp/orgward-pr06-result-disclosure-persistence-check.log`, TAP
+`/tmp/orgward-tests-e2gus2/node-test.tap.log`. Syntax and `git diff --check`
+passed. No provider, browser or external actions. PR-06, cursor, task checkboxes
+and release gates remain unchanged.
+
+PR-06 linked-run lifecycle labels (2026-09-28): saved task rows now label linked
+runs according to their lifecycle, distinguishing approval requests awaiting
+approval from approved, paused, running, and terminal runs; malformed or unknown
+statuses receive a bounded unavailable label. Focused helper and served-client
+tests passed 3/3 (0.80s), log
+`/tmp/orgward-pr06-linked-run-lifecycle-label-focused.log`. The frozen-tree
+`npm run check` passed 368/369 (368 passed, 0 failed, 1 optional PostgreSQL
+backup/restore journey skipped because `ORGWARD_PG_TOOLS_BIN` client tools were
+unavailable; 76.35s TAP, 77.52s runner), log
+`/tmp/orgward-pr06-linked-run-lifecycle-label-check.log`, TAP
+`/tmp/orgward-tests-DimA9f/node-test.tap.log`. `node --check` and `git diff --check`
+passed. The documented agent-browser attempt failed before opening a page because
+Chrome reported `No usable sandbox`; no sandbox bypass or host-policy change was
+used. Orca reported that no X11 display was available, so rendered, narrow-layout,
+keyboard, and speech evidence remains unavailable; runtime details are in
+`/tmp/orgward-pr06-agent-browser-runtime.log`. No provider or external effects.
+PR-06 remains active; cursor, task checkboxes and release gates are unchanged.
+
+PR-06 owner reassignment for escalated human checkpoints (2026-09-28): owners
+with current workspace-write can explicitly reassign an ESCALATED checkpoint to
+another active same-tenant human project owner/editor with workspace-write. The
+original assigned principal and pinned actor/role/plan snapshot stay immutable;
+effective principal and membership/authz generations are stored separately. A
+version-fenced command validates the process control, snapshot, target identity
+and membership under transaction locks, then appends the resolution event, audit
+and idempotency result atomically. Completion, runtime visibility and success
+provenance use the effective assignee; the owner UI limits candidates to eligible
+members and keeps target principal details out of runtime history. The database
+constraint accepts only the all-null legacy tuple or all three non-null positive
+human override fields; its transition trigger requires the new target to differ
+from the current effective assignee, allowing return to the original assigned
+human after an intervening reassignment. PostgreSQL coverage checks every partial
+tuple, valid legacy/complete tuples, direct trigger denial, version/reader/
+revoked/outsider/same-principal/nonhuman/nonowner denials, exact replay and
+changed-payload conflict, Carol→Bob reassignment, resume by a reassigned human
+without an enabled pinned actor binding, completion, and restart generation
+behavior after later revocation/regrant. A tenant-B identity target is denied
+with `PROCESS_TASK_REASSIGNEE_UNAVAILABLE`; the direct DB snapshot confirms
+status, version, effective assignment and event history are unchanged. Override
+resume locks and validates the saved effective assignee's active human identity,
+workspace-write role, active editor/owner membership, and exact persisted
+generations; original assignment resume still validates its pinned binding.
+Focused persistence and upgrade coverage passed 49/49 (67.34s TAP);
+`git diff --check` passed. The final frozen-tree `npm run check` passed 369/370
+(369 passed, 0 failed, 1 optional PostgreSQL backup/restore journey skipped
+because PostgreSQL client tools were unavailable; 77.24s TAP, 79.90s runner).
+Logs: `/tmp/orgward-pr06-cross-tenant-reassignment-focused.log`,
+`/tmp/orgward-pr06-cross-tenant-reassignment-final-check.log`,
+`/tmp/orgward-pr06-cross-tenant-reassignment-final-check.time.log`, and TAP
+`/tmp/orgward-tests-2utCJZ/node-test.tap.log`. Earlier full attempts found and
+repaired the migration count and effective-assignment assertion fixtures; the
+final run has no failures. No provider, browser, external, or live business
+effects were used. PR-06 remains active; cursor, task checkboxes and release
+gates are unchanged.
+
+PR-06 generic provider credential setup guidance (2026-09-28): the served tenant
+admin now explains that generic encrypted references can back the operator-
+configured DeepSeek model profile or supported fixed-version providers. It tells
+admins to have the installation operator configure DeepSeek with the same
+reference and selected model, and states that the generic form does not validate
+credential or model access. It also makes the server encryption-key requirement
+explicit while keeping credential values password-only and absent from served
+content. No credential, provider profile, API, or secret behavior changed.
+Focused `tests/secrets.test.mjs` passed 5/5 (5.02s TAP); the served-admin
+regression checks the setup copy, key/access limits, and absence of secret
+canaries. `git diff --check` passed. The final frozen-tree `npm run check` passed
+369/370 (369 passed, 0 failed, 1 skipped: optional PostgreSQL backup/restore
+journey because PostgreSQL client tools were unavailable; 78.51s TAP, 82.45s
+runner). Logs: `/tmp/orgward-pr06-generic-provider-credential-focused.log`,
+`/tmp/orgward-pr06-generic-provider-credential-focused.time.log`,
+`/tmp/orgward-pr06-generic-provider-credential-final-check.log`,
+`/tmp/orgward-pr06-generic-provider-credential-final-check.time.log`, and TAP
+`/tmp/orgward-tests-x7pF8l/node-test.tap.log`. No provider or external effects
+were used. PR-06 remains active; cursor, task checkboxes and release gates are
+unchanged.
+
+PR-06 linked task approval receipt recovery (2026-09-28): the profile and local
+repository fields now lock while an approval request is in flight and remain
+locked with the submitted selections after a transport-uncertain result. If the
+API saved a run but the process-instance refresh fails or returns an incomplete
+snapshot, the exact command ID/payload stays persisted and the task remains
+locked for replay. Recovery clears only when an authorized run and process-task
+snapshot match tenant, project, plan revision, task, instance and run ID; initial
+refresh also scans accepted receipts for the active tenant/principal so reloads
+can reconcile without requiring a new click. Recovery lookup is scoped by tenant
+and principal. Focused helper and served-client tests passed 6/6 (0.74s TAP,
+0.82s runner); the first focused attempt exposed an overbroad source assertion,
+which was narrowed to the accepted-response path before the passing run.
+`git diff --check` passed. Final frozen-tree `npm run check` passed 372/373
+(372 passed, 0 failed, 1 optional PostgreSQL backup/restore journey skipped
+because PostgreSQL client tools were unavailable; 79.68s TAP, 82.32s runner).
+Logs: `/tmp/orgward-pr06-process-task-request-recovery-focused-final.log`,
+`/tmp/orgward-pr06-process-task-request-recovery-focused-final.time.log`,
+`/tmp/orgward-pr06-process-task-request-recovery-final-check.log`,
+`/tmp/orgward-pr06-process-task-request-recovery-final-check.time.log`, and TAP
+`/tmp/orgward-tests-mhIFR9/node-test.tap.log`. No provider, browser, credential or
+external effects. PR-06 remains active; cursor, task checkboxes and release gates
+remain unchanged.
+
+PR-06 uncertain new-instance approval recovery follow-up (2026-09-28): when a
+request submitted for a new instance has an uncertain transport result, a later
+concrete-instance task view now recovers the exact tenant/principal/project/plan/
+revision/task-scoped original command and payload. The form labels this as the
+original new-instance intent and states that it is not tied to the displayed
+instance; retry cannot create an instance-specific replacement command. Helper
+and served-client tests passed 7/7 (0.70s TAP). Existing PostgreSQL persistence
+coverage confirms same-command API replay returns the original run and generated
+instance. `git diff --check` passed. Final frozen-tree `npm run check` passed
+373/374 (373 passed, 0 failed, 1 optional PostgreSQL backup/restore journey
+skipped because PostgreSQL client tools were unavailable; 79.02s TAP, 81.58s
+runner). Logs: `/tmp/orgward-pr06-uncertain-new-instance-focused-final.log`,
+`/tmp/orgward-pr06-uncertain-new-instance-final-check.log`,
+`/tmp/orgward-pr06-uncertain-new-instance-final-check.time.log`, and TAP
+`/tmp/orgward-tests-Gd5JKz/node-test.tap.log`. No provider, browser, credential or
+external effects. PR-06 remains active; cursor, task checkboxes and release gates
+remain unchanged.
+
+PR-06 durable human-task start recovery (2026-09-28): assigned human starts now
+persist the exact command and task payload under tenant, principal, project, plan
+revision, task and requested-instance scope. In-flight controls disable; uncertain
+and accepted-but-unreconciled starts remain available only as exact-command
+recovery. A new-instance intent is clearly identified inside its task row and is
+never attributed to whichever instance is currently selected. Accepted starts
+clear only after an authorized runtime snapshot confirms the exact project, plan,
+revision, instance and task is IN_PROGRESS for the current assigned principal.
+Focused helper and served-client tests passed 4/4 (0.75s); the first focused
+attempt caught one stale served-client copy assertion, corrected before the
+passing run. Existing PostgreSQL journey assertions cover same-command replay
+returning the original generated instance and wrong-assignee denial. `git diff --check`
+passed. Final frozen-tree `npm run check` passed 376/377 (376 passed,
+0 failed, 1 optional PostgreSQL backup/restore test skipped because PostgreSQL
+client tools are unavailable; 78.83s TAP, 81.39s runner). Logs:
+`/tmp/orgward-pr06-human-task-start-recovery-focused-final.log`,
+`/tmp/orgward-pr06-human-task-start-recovery-check.log`,
+`/tmp/orgward-pr06-human-task-start-recovery-check.time.log`, and TAP
+`/tmp/orgward-tests-nle558/node-test.tap.log`. No provider, credential, browser or
+external effects. PR-06 remains active; cursor, task checkboxes and release gates
+remain unchanged.
+
+PR-06 effective human-assignee visibility (2026-09-28): task rows now show the
+effective assignment separately from the immutable planned blueprint actor. The
+current assigned human sees “You”; an active project owner with current
+workspace-write and owner membership sees the server-derived effective assignee
+display name; other project readers and the former assignee receive only a
+neutral “Assigned member” label. Override copy explains that the pinned plan is
+unchanged while the effective assignment determines who may act. No principal
+identifier is returned for this presentation. The existing durable PostgreSQL
+reassignment journey now asserts owner, current assignee, reader and former
+assignee visibility alongside their existing authority checks. Focused helper
+and served-client tests passed 3/3 (0.77s); the first helper attempt caught a
+test fixture that modeled an unauthorized client-side name instead of the
+server-redacted response and was corrected. The PostgreSQL reassignment journey
+passed 1/1 (16.79s). `git diff --check` passed. The final frozen-tree `npm run
+check` passed 378/379 (378 passed, 0 failed, 1 optional PostgreSQL backup/restore
+test skipped because PostgreSQL client tools were unavailable; 79.98s TAP,
+82.65s runner). Logs: `/tmp/orgward-pr06-effective-assignee-check.log`,
+`/tmp/orgward-pr06-effective-assignee-check.time.log`, and TAP
+`/tmp/orgward-tests-cq4xxc/node-test.tap.log`; focused TAP logs:
+`/tmp/orgward-tests-VAOwiM/node-test.tap.log` and
+`/tmp/orgward-tests-gYnpu2/node-test.tap.log`. No provider, credential, browser
+or external effects. PR-06 remains active; cursor, task checkboxes and release
+gates are unchanged.
+
+PR-06 pinned human-task input review (2026-09-28): human task cards now provide
+an expandable preview of their referenced information inputs. Each input resolves
+by exact object ID, label and type against the blueprint ID/version pinned to the
+saved plan; newer blueprint edits are not substituted. Missing pins, malformed,
+duplicate or mismatched references and oversized text fail closed with one
+unavailable message instead of a partial or current-design preview. Agent and
+unassigned task cards do not show this human-only review. Expanded state survives
+process-card rerenders and is scoped by project, plan revision and task. Focused
+helper and served-client tests passed 5/5 (0.83s); the first served assertion
+expected a differently named version field and was corrected. The saved-process
+PostgreSQL restart journey passed 1/1 (16.56s), confirming the exact pinned input
+remains reviewable after restart and design version advancement. `git diff
+--check` passed. The single frozen-tree `npm run check` passed 382/383 (382
+passed, 0 failed, 1 optional PostgreSQL backup/restore test skipped because
+PostgreSQL client tools were unavailable; 81.31s TAP, 84.00s runner). Logs:
+`/tmp/orgward-pr06-human-input-review-check.log`,
+`/tmp/orgward-pr06-human-input-review-check.time.log`, and TAP
+`/tmp/orgward-tests-rfsp0V/node-test.tap.log`; focused TAP logs:
+`/tmp/orgward-tests-7l0Dzr/node-test.tap.log` and
+`/tmp/orgward-tests-pPiXii/node-test.tap.log`. No provider, credential, browser
+or external effects. PR-06 remains active; cursor, task checkboxes and release
+gates are unchanged.
+
+PR-06 task-row rendered proof attempt (2026-09-28): the disposable PostgreSQL
+and local app fixture successfully created a pinned human task plan, started its
+assigned task as Bob, and created separate authenticated synthetic sessions for
+the owner, assignee and reader. `agent-browser open` then failed before loading
+the page: Chromium exited with `No usable sandbox` under the host AppArmor
+user-namespace policy. The CLI suggested `--no-sandbox`; it was not used. The
+browser session was closed and the script stopped the app and dropped the
+disposable database. No page rendered, so there are no screenshots, viewport
+overflow measurements, accessibility-tree or keyboard results; Orca speech was
+also unavailable to assess. The failure log is
+`/tmp/orgward-pr06-effective-assignee-human-input-proof-run.log`; fixture
+identifiers are in `/tmp/orgward-pr06-effective-assignee-human-input-proof/fixture.json`.
+No source repair, tests or full check were run because the rendered proof did
+not expose a product defect. PR-06 remains active; cursor, task checkboxes and
+release gates are unchanged.
+
+PR-06 owner-authored human output increment (2026-09-28): a current human
+workspace owner can explicitly enter content for one `information` output
+declared by the exact saved plan revision, after the exact assigned human
+checkpoint has succeeded and its completion event passes the existing audit
+verification. The owner command checks project and blueprint versions, pinned
+before value, runtime, task, and output refs in one transaction; it creates one
+proposed blueprint version and durable idempotency result, and links the project
+event and output provenance to the completion event ID/hash. Evidence stays
+contextual and is never copied or treated as validation. A stale pin/version,
+nonowner, incomplete checkpoint, duplicate write, or changed before value fails
+closed; task/runtime history is unchanged. The expanded saved task row renders
+an accessible explicit-entry form and derives applied state from the persisted
+event and blueprint after reload. The uncertain-submit retry freezes its command
+ID, expected project version and payload together. Focused helper and
+served-client tests passed 4/4 (0.74s); the focused PostgreSQL
+owner/output/replay/restart journey passed 1/1 (2.58s). `git diff --check`
+passed. The final frozen-tree `npm run check` passed 386/387 (386 passed, 0
+failed, 1 optional PostgreSQL backup/restore test skipped because PostgreSQL
+client tools are unavailable; 78.53s TAP, 82.15s runner). Logs:
+`/tmp/orgward-pr06-human-output-focused-ui.log`,
+`/tmp/orgward-pr06-human-output-focused-persistence.log`,
+`/tmp/orgward-pr06-human-output-final-check.log`,
+`/tmp/orgward-pr06-human-output-final-check.time.log`, and TAP
+`/tmp/orgward-tests-4zeqDF/node-test.tap.log`. No provider, credential, browser,
+or external effects. PR-06 remains active; cursor, task checkboxes and release
+gates are unchanged.
+
+PR-06 human output current-design navigation (2026-09-28): an applied owner-entered
+output now links from its saved task result to the declared information object only
+when the exact persisted `HumanTaskOutputApplied` event matches the saved project,
+plan revision, instance, task and output, and that object exists in the current graph.
+If the object is absent, the link opens the current design without selecting an
+unverified object. The row keeps the applied blueprint version, current detail,
+plan/revision/task/instance and event reference visible, and states that navigation
+opens current design rather than a historical snapshot. Focused presenter and
+served-client tests passed 4/4 (0.72s; two earlier focused assertion attempts
+caught route-fixture expectations and were corrected before the passing run), log
+`/tmp/orgward-pr06-human-output-link-focused.log`. `git diff --check` passed. The
+single frozen-source `npm run check` passed 386/387 (386 passed, 0 failed, 1
+optional PostgreSQL backup/restore test skipped because PostgreSQL client tools
+were unavailable; 78.77s TAP, 82s runner), log
+`/tmp/orgward-pr06-human-output-link-check.log`, TAP
+`/tmp/orgward-tests-zv3uQd/node-test.tap.log`. No provider, credential, browser or
+external effects. PR-06 remains active; cursor, task checkboxes and release gates
+are unchanged.
+
+PR-06 human-output applied-state provenance verification follow-up (2026-09-28):
+restored owner-output status now resolves the actual persisted project `eventId`,
+checks the referenced successful HumanTaskCompleted/HumanTaskEscalationResolved
+event against the exact runtime task/plan/revision/instance, and requires the
+referenced immutable applied blueprint to contain the declared information output.
+That output's provenance must match project, plan/revision, instance, task, output,
+completion event ID/hash and applied content hash in the apply event; malformed or
+mismatched snapshots remain unavailable instead of appearing applied. PostgreSQL
+restart coverage now runs the saved task presenter over the reloaded project, plan,
+task and runtime. Focused helper/served-client tests passed 4/4 (0.78s), log
+`/tmp/orgward-pr06-human-output-integrity-focused.log`; the persisted owner-output
+apply/replay/restart journey passed 1/1 (2.68s), log
+`/tmp/orgward-pr06-human-output-integrity-persistence.log`. Two initial restart-test
+attempts caught that project events use `eventId` rather than `id`, then that runtime
+projection intentionally omits event contentHash; the final check uses the persisted
+event ID and exact successful runtime refs while matching source hashes between
+apply event and output provenance. `git diff --check` passed. The frozen-source
+`npm run check` passed 386/387 (386 passed, 0 failed, 1 optional PostgreSQL
+backup/restore journey skipped because PostgreSQL client tools were unavailable;
+79.25s TAP, 83s runner), log
+`/tmp/orgward-pr06-human-output-integrity-check.log`, TAP
+`/tmp/orgward-tests-3oZEmI/node-test.tap.log`. No provider, credentials, browser or
+external effects. PR-06 remains active; cursor, task checkboxes and release gates
+are unchanged.
+
+PR-06 failed-dependency fresh-instance selection (2026-09-28): dependent human
+and agent task rows blocked by a terminal failed/interrupted/cancelled task now
+provide an explicit “Choose a new process instance” action when the plan and its
+blueprint pin are current. Unknown provider delivery remains reconcile-only, and
+historical/stale plans do not show the action. Choosing it changes only the
+selected plan-instance UI state and route; it does not start work or mutate the
+old instance. Existing instance options, results and evidence remain available,
+and focus returns to the process-instance selector after rerender. Focused recovery
+helper and served-client tests passed 5/5 (0.69s), log
+`/tmp/orgward-pr06-failed-dependency-new-instance-focused.log`; an earlier served
+assertion attempt failed on an overly specific focus-selector regex, corrected
+before the passing run. `git diff --check` passed. The single frozen-source
+`npm run check` passed 388/389 (388 passed, 0 failed, 1 optional PostgreSQL
+backup/restore test skipped because PostgreSQL client tools were unavailable;
+81.03s TAP, 83s runner), log
+`/tmp/orgward-pr06-failed-dependency-new-instance-check.log`, TAP
+`/tmp/orgward-tests-S8cxA8/node-test.tap.log`. No provider, credential, browser or
+external effects. PR-06 remains active; cursor, task checkboxes and release gates
+are unchanged.
+
 ## Governed software delivery
 
 - [ ] PR-07 — Intent-to-plan engineering workflow (T-25–T-28). Connect approved
   enterprise intent to context/impact, traced requirements, architecture alternatives
   and recovery design, then compile accepted work into the shared durable engine.
 
+  PR-07 saved-design source binding increment (2026-09-27): the customer form selects
+  a saved blueprint object and describes a change. The server resolves the exact
+  current project/blueprint/object versions, stores a canonical source snapshot and
+  hashes, and records the source in Context and Impact; remaining synthesized
+  coverage is labeled synthetic. Stale, corrupt or unavailable pins block further
+  actions before mutation. Project-bound case creation requires a source reference;
+  the no-project synthetic case path remains available. Focused source-pin,
+  workspace/UI and affected PostgreSQL/OIDC scope checks passed 11/11, and
+  `git diff --check` passed. A headed loopback browser proof selected a saved design,
+  created a case through the S9 human checkpoint, and reviewed Context/Impact;
+  screenshot and sanitized note are `/tmp/orgward-pr07-source-case-full.png` and
+  `/tmp/orgward-pr07-saved-design-browser-proof-20260927.txt`. No live provider or
+  external effect was used. The earlier `npm run check` was interrupted (exit 130)
+  after old PostgreSQL fixtures using projectId-only creation failed and one case
+  stalled; affected fixtures now use valid saved-source selections. The full check
+  was not rerun, so this is not a full-suite pass. PR-06, active cursor, release
+  gates and PR-07 status remain open and unchanged.
+
+  PR-07 versioned requirement review increment (2026-09-27): source-bound cases
+  now stop at G4 with an editable draft. Each requirement has a stable ID, intent
+  and pinned-source links, actor, precondition, observable result, owner, priority,
+  acceptance criteria, verification method and independent verification. Edits are
+  idempotent and draft-revision guarded; invalid or stale edits cannot change the
+  frozen baseline. Only the case owner can accept a validated revision, producing
+  a hashed baseline tied to intent/source hashes and advancing G4. Architecture
+  and planning verify and consume the accepted rows. Focused OIDC/PostgreSQL/SDLC
+  coverage passed 44/44 with no skips (10.29s wall); `git diff --check` passed.
+  A headed local browser path edited revision 2, accepted G4, passed G5 and reached
+  S6; it used a synthetic local identity, not production OIDC. Evidence:
+  `/tmp/orgward-pr07-requirements-browser-proof-20260927.txt` and the adjacent
+  draft, accepted and architecture screenshots. No provider calls or external
+  effects. The earlier whole-suite attempt remains interrupted; no full check was
+  rerun. PR-07, cursor and release gates remain open and unchanged.
+
+  PR-07 T-27 architecture review increment (2026-09-27): source-bound cases now
+  pause at G5 with two stable-ID architecture alternatives, explicit interfaces,
+  data ownership, dependencies, ordered migrations/health checks and recovery
+  guidance. The case owner can revision-edit and accept the selected validated
+  draft; its canonical hash binds the frozen architecture to the accepted G4
+  content hash/version, pinned source hash and intent hash. G6 planning verifies
+  that accepted binding and carries its exact architecture hash. Cross-system
+  database writes, authorization bypasses and incompatible first-step schema
+  replacement produce repairable findings and cannot be accepted. API tests
+  cover denial, edit/replay, stale revision, acceptance persistence and tampered
+  baseline blocking. Served-client assertions cover the S5 alternatives and
+  owner-acceptance UI. `node --test tests/sdlc/server.test.mjs
+  tests/sdlc/workspace.test.mjs` passed 19/19, 0 skipped (1.62s); log and timing:
+  `/tmp/orgward-pr07-t27-focused.tap.log` and
+  `/tmp/orgward-pr07-t27-focused.time.log`. `git diff --check` passed. The
+  changed PostgreSQL journey helper now accepts G5 explicitly but was not run in
+  this focused file-backed set; no `npm run check`, browser proof, provider call
+  or external effect was performed. PR-07, active cursor and release gates remain
+  open and unchanged.
+
+  T-27 fitness-rule repair (2026-09-27): selected-option validation now also
+  blocks unqualified direct database-write phrasing. Destructive schema removal
+  or replacement must follow an earlier migration step whose action/health check
+  establishes expansion, shadowing, compatibility, coexistence, parity or
+  reconciliation; later compatibility language cannot mask a destructive first
+  step. Regression cases cover both phrasings and the seeded safe migration still
+  passes. The same focused command passed 19/19 with no skips (1.69s); logs:
+  `/tmp/orgward-pr07-t27-repair-focused.tap.log` and
+  `/tmp/orgward-pr07-t27-repair-focused.time.log`. No full check or other suite
+  was run; PR-07, cursor and gates remain open.
+
+  T-27 PostgreSQL accepted-architecture restart regression (2026-09-27): the
+  compare-and-swap persistence journey now asserts that G5's canonical draft hash
+  remains bound to the accepted G4 content hash/version, pinned source hash and
+  intent hash after app-only restart. It also verifies every persisted G6 plan
+  work item retains that exact architecture hash. The named PostgreSQL case passed
+  1/1 (2.71s; `/tmp/orgward-pr07-t27-hash-persistence.log`, timing
+  `/tmp/orgward-pr07-t27-hash-persistence.time.log`). One `npm run check` passed
+  274/275 (274 passed, 0 failed/cancelled, 1 optional backup/restore skip because
+  PostgreSQL client tools are unavailable; 72.32s TAP / 74.89s wall); logs:
+  `/tmp/orgward-pr07-t27-hash-fullcheck.log`, timing
+  `/tmp/orgward-pr07-t27-hash-fullcheck.time.log`, TAP
+  `/tmp/orgward-tests-nccOiK/node-test.tap.log`. `git diff --check` passed.
+  No provider calls or external effects. PR-06 remains the active cursor; PR-07
+  and all release gates remain open and unchanged.
+
+  T-27 rendered PostgreSQL review and restart proof (2026-09-27): one headed
+  agent-browser journey used a synthetic loopback OIDC issuer and normal login /
+  callback, with no seeded session cookie. From a saved-source case, the UI
+  reached S4 and accepted G4, rendered both G5 alternatives, saved the owner's
+  rationale edit, accepted G5, and generated the G6 plan. Read-only API evidence
+  confirmed the G5 architecture hash bound to the exact G4, pinned-source and
+  intent hashes; all eight G6 work items carried that architecture hash. After
+  stopping/restarting only the app against the same disposable PostgreSQL DB, the
+  authenticated UI restored the accepted architecture and plan; API hashes and
+  item count matched. Screenshots, AX snapshots and sanitized values:
+  `/tmp/orgward-pr07-t27-render-proof/` (`proof.txt`). Provider calls: 0. Browser,
+  app and DB processes were stopped and temporary fixture scripts/data removed.
+  No source/tests changed and no tests/full check ran. This is local synthetic
+  OIDC evidence only, not production IdP/provider evidence. PR-06 remains the
+  active cursor; PR-07 and release gates remain open and unchanged.
+
+  T-28 inert software-delivery compilation slice (2026-09-27): an authenticated
+  project owner can compile the accepted G6 work graph into deterministic,
+  reviewable `software_delivery` DRAFT tasks in the shared PostgreSQL execution
+  store. Each immutable row binds the G6 hash and compiler version to the G5/G4
+  accepted baseline hashes/versions, intent, exact saved project/blueprint/object
+  identity and source hash. Compilation locks the project and case aggregates,
+  verifies their expected versions/state hash and rechecks G4/G5/G6/source integrity
+  before insertion. The unique generation key safely replays identical drafts;
+  corrupt stored bytes, changed G6 and stale source fail closed. Draft tasks retain
+  stable G6 work IDs, mapped dependencies, requirement/decision/context refs, and
+  no assignments, runtime rows, approvals or execution runs are created. The
+  Delivery tab exposes an explicit owner action and labels the result inert; it
+  never auto-runs. Migration `032-software-delivery-plans.sql` adds the typed
+  sidecar without changing the source project or PR-06 `processPlans`.
+
+  Focused command selecting the T-28 PostgreSQL compile/restart journey, saved-
+  source stale behavior, served SDLC surface and migration upgrade case passed
+  3/3, 0 skipped (3.31s); TAP `/tmp/orgward-tests-ZPVsK2/node-test.tap.log`.
+  Browser review found and fixed two rendered issues: source-bound cases were
+  incorrectly read-only when their project-list summary omitted full blueprint
+  detail, and long engine IDs overlapped in the task list. Focused SDLC tests
+  passed 20/20 after the source-detail repair; the task-label regression passed
+  1/1. The latest `npm run check` passed 275/276 (275 passed, 0 failed/cancelled,
+  1 optional PostgreSQL backup/restore skip because client tools are unavailable;
+  69.47s runner). Log `/tmp/orgward-pr07-t28-task-label-check.log`, TAP
+  `/tmp/orgward-tests-B3AsE2/node-test.tap.log`. An earlier check before the
+  stale-source message compatibility repair had one wording assertion failure;
+  its log remains `/tmp/orgward-pr07-t28-check.log`.
+
+  Rendered proof used an isolated loopback app/PostgreSQL fixture and synthetic
+  OIDC through normal login/callback. The owner compiled the accepted G6 graph
+  from the Delivery UI into a DRAFT containing eight readable WORK-1…WORK-8
+  items, source hashes and an inert notice. Project version remained 5. At
+  390×844 there was no page-level horizontal overflow or task-label overlap.
+  Screenshots and sanitized details: `/tmp/orgward-pr07-t28-browser-proof-20260927/`
+  (`proof.txt`, `desktop-draft.png`, `mobile-draft.png`). No approval was clicked;
+  no execution/runtime rows, provider calls or external effects were created.
+  `git diff --check` passed after the receipt update. PR-06 remains the active
+  cursor; PR-07 and release gates remain open.
+
+  T-28 compiler identity collision repair (2026-09-27): compiler v2 now derives
+  generation, plan and task IDs from the project/G6 identity plus the case and
+  pinned source hash, blueprint version, and source object identity. The
+  existing tenant-wide `plan_id` uniqueness remains unchanged and was exercised
+  by compiling two cases with identical G6 and source hashes; their IDs no
+  longer collide. Same-case compilation remains deterministic and replays the
+  stored draft. Verification selects the plan's compiler version and preserves
+  v1 canonical reconstruction, so a persisted v1 row remains valid and readable
+  after restart. Pure identity tests passed 2/2 (0.23s); the focused PostgreSQL
+  compile/restart journey passed 1/1 (3.02s test, 3.54s wall). The frozen-tree
+  `npm run check` passed 286/287 (286 passed, 0 failed/cancelled, 1 optional
+  PostgreSQL backup/restore skip because client tools are unavailable; 72.82s
+  TAP, 75.50s total). Logs: `/tmp/orgward-pr07-t28-identity-pure.log`,
+  `/tmp/orgward-pr07-t28-identity-pg.log`, `/tmp/orgward-pr07-t28-identity-pg.time.log`,
+  `/tmp/orgward-pr07-t28-identity-full-check.log`, and
+  `/tmp/orgward-pr07-t28-identity-full-check.time.log`; TAP:
+  `/tmp/orgward-tests-J8JD56/node-test.tap.log`. `git diff --check` passed.
+  No provider calls or external effects. PR-06 remains the active cursor; PR-07
+  and release gates remain open and unchanged.
+
+  T-28 owner assignment-review increment (2026-09-27): owners can save a
+  separately persisted, append-only assignment snapshot for every compiled v2
+  DRAFT task using a current enabled human/agent actor-role binding. The API
+  checks owner/project authority, case/project optimistic versions, current
+  source and G4/G5/G6/draft hashes, exact task coverage, binding authority and
+  binding generations. Identical idempotent replay returns the saved snapshot;
+  changed replay input, stale revision, missing/duplicate/unknown task, stale
+  binding, editor denial and cross-tenant access are rejected without adding a
+  review row. Revision 2 preserves revision 1 and survives restart. The Delivery
+  UI distinguishes proposal from owner review, shows assignment names and task
+  order/dependencies, pre-fills current assignments for revision, and states
+  every snapshot is not executable; there is no promotion, approval, runtime or
+  dispatch path in this increment. Focused PostgreSQL/restart plus served-client
+  tests passed 2/2 (4.41s wall); `git diff --check` passed. The first frozen check
+  failed only on a stale served-client regex, which was repaired before the final
+  check. Final frozen-tree `npm run check` passed 286/287 (286 passed, 0 failed,
+  1 optional database recovery test skipped because PostgreSQL client tools are
+  unavailable; 71.51s TAP, 74.18s total). Logs:
+  `/tmp/orgward-pr07-assignment-review-check.log`,
+  `/tmp/orgward-pr07-assignment-review-check.time.log`,
+  `/tmp/orgward-pr07-assignment-review-final-check.log`, and
+  `/tmp/orgward-pr07-assignment-review-final-check.time.log`; TAP:
+  `/tmp/orgward-tests-kswU5L/node-test.tap.log`. No provider calls or external
+  effects. PR-06 remains the active cursor; PR-07 and release gates remain open
+  and unchanged.
+
+
+  T-28 runtime promotion follow-on (2026-09-27): promotion was not implemented. The existing process-task model proposal context requires exact blueprint input object IDs and an editable blueprint output target, while the software-delivery draft and owner-review schema provide G4 requirement/context references and actor assignments but no safe software-output contract. A human-only immutable runtime adapter was not completed in that attempt. Model-agent execution and result/patch handling require a separate PR-08 SCM/sandbox task context and output proposal. PR-06 remains the active cursor; PR-07 and release gates remain open and unchanged.
+
+  T-28 human-only runtime adapter increment (2026-09-27): implemented a separate
+  immutable PostgreSQL runtime-plan snapshot and idempotency receipts bound to
+  the compiled case/project/source/blueprint/G4/G5/G6/draft and exact owner-review
+  revision/hash. Owner promotion revalidates current source, authority, DAG and
+  uniquely current explicit human principal/membership bindings; explicit start
+  separately creates only human PLANNED checkpoint rows. Snapshot-backed plans
+  resolve through authenticated runtime list/deep-link and lifecycle paths,
+  including start, complete, escalate, owner resolve, pause, resume and cancel.
+  Reads and task lifecycle fail closed on source/review mismatch, assignment
+  revocation or missing snapshot task rows. Agent-assigned drafts remain
+  unpromotable with `SOFTWARE_AGENT_RUNTIME_UNSUPPORTED`; there is no model run,
+  approval, patch or dispatch path in this increment. Focused PostgreSQL restart,
+  denial, replay, corruption, dependency and human lifecycle coverage passed
+  2/2 selected persistence cases (6.23s), and served navigation/API/UI/upgrade
+  coverage passed 28/28 (4.03s). `git diff --check` passed. The first frozen
+  `npm run check` found one stale owner-principal privacy assertion; exact
+  principal visibility is now owner-only, with editor visibility still denied,
+  and the affected tests passed. The repair check passed 287/288 (287 passed,
+  0 failed, 1 optional skip; 72.20s TAP); TAP log:
+  `/tmp/orgward-tests-IFK6oO/node-test.tap.log`. No provider calls or external
+  effects. PR-06 remains the active cursor; PR-07 and release gates remain open
+  and unchanged.
+
+  T-28 instance-start replay/audit repair (2026-09-27): the served SDLC client
+  now persists one pending instance-start idempotency key per tenant/session
+  and project/case/plan/revision intent, retains it when the response is
+  ambiguous, blocks duplicate in-flight submission, and clears it after a
+  confirmed receipt so a later explicit start can use a fresh key. The
+  PostgreSQL start transaction now locks and revalidates the current case
+  project/tenant/accountable owner, records one `SoftwareDeliveryInstanceStarted`
+  audit/outbox event with the idempotency receipt in the same transaction, and
+  invokes `afterCommit` once for a new commit only. Replay creates no new event;
+  the initial process control history remains empty. Focused served-client/API
+  tests passed 15/15; the focused PostgreSQL CAS/restart journey passed 1/1.
+  The single `npm run check` passed 289/290 (289 passed, 0 failed, 1 optional
+  skip; 73.24s TAP; 76s total). Logs:
+  `/tmp/orgward-t28-start-repair-check.log`,
+  `/tmp/orgward-t28-start-repair-check.time.log`, and TAP
+  `/tmp/orgward-tests-DFEcBU/node-test.tap.log`. No provider calls or external
+  effects. PR-06 remains the active cursor; PR-07 and release gates remain open
+  and unchanged.
+
+  T-28 stale-owner replay/lock-order follow-on (2026-09-27): instance start
+  locks project then case, matching promotion's order to avoid start/promotion
+  deadlocks, and validates the current case binding/owner before looking up a
+  replay receipt. The PostgreSQL test changes the accountable owner after a
+  successful start, retries that same idempotency key as the former owner, and
+  verifies denial without another receipt, audit event, control/task row, or
+  after-commit call; it then restores the fixture state. Focused PostgreSQL and
+  client helper tests passed 2/2. The final single `npm run check` passed
+  289/290 (289 passed, 0 failed, 1 optional skip; 73.51s TAP; 76s total). Logs:
+  `/tmp/orgward-t28-start-replay-order-final-check.log`,
+  `/tmp/orgward-t28-start-replay-order-final-check.time.log`, and TAP
+  `/tmp/orgward-tests-cIYnWB/node-test.tap.log`. No provider calls or external
+  effects. PR-06 remains the active cursor; PR-07 and release gates remain open
+  and unchanged.
+
+  T-28 rendered owner-to-human-checkpoint journey remains unverified (2026-09-27):
+  `agent-browser open about:blank` failed before opening a page because Chromium
+  reported `No usable sandbox` under the host's AppArmor user-namespace policy.
+  No `--no-sandbox` flag or host-policy change was used; the disposable app/DB
+  fixture was not started. The earlier browser proof covers the inert compiled
+  draft only, not assignment review, promotion, instance start, or human outcome.
+  Captured startup error: `/tmp/orgward-pr07-agent-browser-start.log`. PR-06 stays
+  the active cursor; PR-07 and release gates remain open.
+
+  T-28 human checkpoint saved-result readback regression (2026-09-28): the
+  PostgreSQL persistence journey now asserts after app restart that the completed
+  human task retains outcome `succeeded` and exact evidence. Its single matching
+  `HumanTaskCompleted` event is checked for the same result/evidence plus exact
+  project-plan revision, instance, and task identity; persisted rows are likewise
+  checked for exact linkage and saved outcome. A second completed task verifies
+  task-specific evidence does not bleed across checkpoints. Served-client
+  coverage asserts the existing Execution UI binds its displayed result/evidence
+  from that saved runtime outcome. Focused persistence test passed 1/1 and
+  served-client/history tests passed 3/3. The single frozen-tree `npm run check`
+  passed 289/290 (289 passed, 0 failed, 1 optional skip; 72.15s test run, 74.52s
+  total). Logs: `/tmp/orgward-pr07-checkpoint-result-readback-pg-focused.log`,
+  `/tmp/orgward-pr07-checkpoint-result-readback-client-focused.log`,
+  `/tmp/orgward-pr07-checkpoint-result-readback-check.log`,
+  `/tmp/orgward-pr07-checkpoint-result-readback-check.time.log`; TAP
+  `/tmp/orgward-tests-UY6YjK/node-test.tap.log`. No browser or provider was used.
+  Rendered end-to-end journey remains unverified; PR-06 remains the active cursor,
+  and PR-07/release gates remain open and unchanged.
+
 - [ ] PR-08 — SCM, agent changes and immutable assurance (T-29–T-32; E-06, E-09).
   Let a user onboard a repository, request a bounded agent change, review its diff,
   and inspect reproducible build/test results. Keep credentials scoped and publish
   the required security checks, SBOM, provenance, signatures and immutable candidate
   evidence as part of that path.
+
+  Bounded local-only implementation receipt (2026-09-28): added server-configured,
+  exact tenant/project repository bindings; bounded immutable file/mode snapshots
+  with content hashes; source mutation/stale digest and unsafe entry rejection;
+  descriptor-rooted no-follow private per-run materialization; path-level add,
+  modify, delete and executable-mode candidate diffs; and a review-only Execution
+  UI candidate backed by persisted run data. Verification command/config identity,
+  exact candidate tree digest, status/exit and hash-checked output are persisted;
+  pinned source and candidate bytes are served only from the captured, hash-checked
+  run data. Client retries retain only the request identity and snapshot binding in
+  namespaced browser storage, never a host path or secret. Tests cover synthetic
+  local repositories, denied arbitrary/cross-project/stale bindings, unsafe paths,
+  hard links and limits, restart recovery, candidate changes, verification and
+  served UI; no external repository, provider, browser, push or write-back was used.
+  Focused local snapshot/intent/served-client tests passed 6/6 and the PostgreSQL
+  durability journey passed 1/1. The single frozen-tree `npm run check` passed
+  294/295 (294 passed, 0 failed, 1 optional skip; 71.55s test run, 74.10s total).
+  Logs: `/tmp/orgward-pr08-local-repository-client-focused.log`,
+  `/tmp/orgward-pr08-local-repository-pg-focused.log`,
+  `/tmp/orgward-pr08-local-repository-check.log`,
+  `/tmp/orgward-pr08-local-repository-check.time.log`; TAP
+  `/tmp/orgward-tests-E2JVUZ/node-test.tap.log`. This is one local candidate
+  execution/review slice, not full PR-08: remote repository onboarding, reproducible
+  builds, security checks, SBOM, provenance, signatures and broader qualification
+  remain open. PR-06 remains the active cursor; task checkboxes and release gates
+  remain open and unchanged.
+
+  Inline review follow-on (2026-09-28): the Execution candidate view now offers a
+  bounded line-level preview for changed text files. It loads pinned and candidate
+  bytes only through the authenticated hash-checked endpoints, caps each response
+  at 128 KiB and the LCS comparison at 40,000 cells/250 lines per side, validates
+  the saved SHA-256 values, and uses fatal UTF-8 decoding. Diff lines are rendered
+  as text nodes. Binary, invalid UTF-8, hash mismatch, oversized and complex files
+  show a fallback to the existing download links; mode-only changes remain
+  metadata-only. Focused diff and served-client tests passed 4/4. Syntax checks and
+  `git diff --check` passed before the full check. The single frozen-tree
+  `npm run check` passed 297/298 (297 passed, 0 failed, 1 optional skip; 73.87s
+  test run, 76.45s total). Logs: `/tmp/orgward-pr08-inline-diff-focused.log`,
+  `/tmp/orgward-pr08-inline-diff-focused.time.log`,
+  `/tmp/orgward-pr08-inline-diff-check.log`,
+  `/tmp/orgward-pr08-inline-diff-check.time.log`; TAP
+  `/tmp/orgward-tests-SVlTCQ/node-test.tap.log`. No browser or provider tooling was
+  used. This remains a review-only UI increment; no write-back or push behavior was
+  added, and PR-06 cursor, task checkboxes and release gates remain unchanged.
+
+  PostgreSQL test harness follow-on (2026-09-28): `npm test` now starts one
+  disposable PostgreSQL cluster per invocation when the selected files require it,
+  passes only its internally created loopback base URL to test workers, and tears
+  the cluster down after success, failure or handled termination signals. Each
+  `startPostgres()` call still creates a unique database; closing a scenario pool
+  drops that database, with worker teardown cleaning any remaining fixture DBs.
+  Selected non-PostgreSQL tests do not start a cluster, and runner setup discards
+  caller-provided test database URL variables. Focused environment/cleanup tests
+  passed 4/4 (also with an invalid PostgreSQL binary path and hostile database URL);
+  shared-cluster isolation and drop-on-close passed 1/1. The single final frozen-tree
+  `npm run check` passed 302/303 (302 passed, 0 failed, 1 optional skip; 73.69s
+  test run, 76.25s total). Compared with the prior full check at 76.45s total and
+  73.87s test time, this run was 0.20s faster overall and 0.18s faster in tests;
+  it adds five tests, so this is effectively unchanged wall time rather than a
+  measured speedup. Logs: `/tmp/orgward-postgres-runner-unit-focused.log`,
+  `/tmp/orgward-postgres-runner-isolation-focused.log`,
+  `/tmp/orgward-postgres-runner-check.log`,
+  `/tmp/orgward-postgres-runner-check.time.log`; TAP
+  `/tmp/orgward-tests-Ra8jXe/node-test.tap.log`. No cursor, task checkbox or release
+  gate was changed.
+
+  Git source hardening follow-on (2026-09-28): Git reads now disable lazy fetch and
+  all transport protocols; partial/promisor config, alternates, HTTP alternates,
+  and linked worktree metadata are rejected. Configured bare sources require a
+  canonical no-symlink path whose ancestors are service/root-owned and not
+  group/other-writable (a sticky `/tmp` parent is allowed); refs, object stores,
+  and relevant metadata are checked for regular nonlinked files/directories,
+  single-link files, safe ownership/modes and bounded entry counts. Git errors no
+  longer surface repository stderr. A local promisor fixture confirmed the missing
+  blob remains absent; tests also cover alternates, symlink refs, writable metadata,
+  and a hard-linked object. Git snapshot and served-client tests passed 3/3; the
+  PostgreSQL persistence journey passed 1/1. One exploratory persistence attempt
+  observed a transient finalization-version conflict in its existing provider
+  proposal journey; the worker state was RUNNING at the expected version after
+  provider completion on the successful diagnostic rerun, and the final
+  uninstrumented focused run passed without weakening assertions or changing
+  execution behavior. Test-only teardown now closes idle connections on both app
+  and provider fixture servers so failures cannot hang while awaiting server close.
+  The single completed frozen-tree `npm run check` passed 304/305 (304 passed,
+  0 failed, 1 optional skip; 69.12s test run, 71.72s total). An earlier full-check
+  attempt was interrupted while diagnosing the same teardown stall and is not
+  counted. Logs: `/tmp/orgward-pr08-git-focused.log`,
+  `/tmp/orgward-pr08-git-persistence-focused.log`,
+  `/tmp/orgward-pr08-git-check.time.log`; TAP
+  `/tmp/orgward-tests-tAjVCo/node-test.tap.log`. No remote fetch, provider call,
+  push or write-back was used; PR-06 cursor, task checkboxes and release gates
+  remain unchanged.
+
+  Dispatch-recovery race follow-on (2026-09-28): fixed a startup race where the
+  periodic recovery worker could interrupt a RUNNING run before dispatch
+  authorization created its worker lease. The active execution now marks its
+  pre-authorization phase, and PostgreSQL recovery honors the callback's explicit
+  skip result; after dispatch authorization, expired-lease recovery remains
+  enabled. The persistence regression holds the authorization gate across the
+  1-second recovery interval, asserts the run stays RUNNING without an interruption
+  event, then confirms the existing PAUSED outcome. Focused persistence coverage
+  passed 1/1 in 14.59s. The preceding frozen full check exposed this race and failed
+  at 304/306 (304 passed, 1 failed, 1 optional skip; 66.88s test time, 70.61s
+  total); its failure was the expected PAUSED response receiving a 409 after
+  recovery had changed the run version. The repaired frozen-tree `npm run check`
+  passed 305/306 (305 passed, 0 failed, 1 optional skip; 74.38s test time, 76.82s
+  total). `git diff --check` passed. Logs: `/tmp/orgward-dispatch-recovery-focused.log`,
+  `/tmp/orgward-dispatch-recovery-check.time.log`; TAP
+  `/tmp/orgward-tests-Aw8aoC/node-test.tap.log`. No cursor, task checkbox or release
+  gate changed.
 
 - [ ] PR-09 — Authorized environments, release and rollback (T-33–T-35; E-10).
   Let a user review an exact candidate, approve a protected environment action,
@@ -2157,3 +4544,27 @@ repair check superseded it.
 Review code after implementation for correctness, persistence, concurrency,
 authority, isolation, failure handling and usability. Record concrete remaining
 work here; do not create metadata-only completion loops.
+
+  PR-06 saved-plan model proposal preview (2026-09-28): linked successful model
+  task rows now project a bounded review-only summary from the persisted
+  `execution.generatedProposal`. The presenter validates successful run identity,
+  exact process-task/pinned blueprint reference, proposal status and hash format,
+  evaluation schema, target equality with the run's saved `proposalContext`, and
+  source/citation equality with its saved source envelope. It bounds text, checks,
+  sources and provenance before serializing the envelope, and rejects duplicate
+  citations. Missing or malformed model proposals show “Structured proposal
+  unavailable” and suppress raw provider JSON; ordinary non-model output keeps its
+  prior preview. The collapsed text-only disclosure shows proposed detail,
+  rationale, cited source names/types and structural evaluation; it has no apply
+  controls and states application is a separate versioned owner action. Focused
+  presenter/served-client tests passed 9/9 (0.74s TAP); the fixture-provider
+  PostgreSQL linked-run restart journey passed 1/1 (15.23s TAP), including restored
+  task-row projection. Frozen-tree `npm run check` passed 335/336 with 0 failures
+  and 1 optional PostgreSQL backup/restore skip because PostgreSQL client tools
+  were unavailable (`ORGWARD_PG_TOOLS_BIN` unset; 76.12s TAP, 79.87s runner wall).
+  `git diff --check` passed. Logs: `/tmp/orgward-pr06-linked-proposal-preview-focused.log`,
+  `/tmp/orgward-pr06-linked-proposal-preview-restart.log`,
+  `/tmp/orgward-pr06-linked-proposal-preview-check.log`, and
+  `/tmp/orgward-tests-NJQjQU/node-test.tap.log`. No provider credentials, live
+  provider, browser or external effects were used. PR-06 remains active; cursor,
+  task checkboxes and release gates are unchanged.

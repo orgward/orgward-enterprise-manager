@@ -1,17 +1,53 @@
 import { getOrCreatePlanRevisionCommand, getOrCreateProcessPlanCommand, processPlanCommandKey, processPlanFailureDisposition } from './process-plan-command.mjs';
 import { deriveProcessTaskState } from './process-task-state.mjs';
+import { processTaskStatusAnnouncement, scheduleProcessTaskAnnouncement, summarizeBlockedTaskTransitions } from './process-task-announcement.mjs';
+import { humanTaskHistoryEntries } from './human-task-history.mjs';
+import { humanTaskEffectiveAssigneePresentation } from './human-task-effective-assignee.mjs';
+import { humanTaskInputDisclosureKey, humanTaskInputDisclosureOpen, processTaskHumanInputReview,
+  rememberHumanTaskInputDisclosure } from './human-task-input-review.mjs';
+import { humanTaskOutputApplicationState, humanTaskOutputCommand } from './human-task-output-application.mjs';
+import { parseHumanTaskEvidence } from './human-task-evidence.mjs';
+import { submitHumanTaskCommand } from './human-task-command-ui.mjs';
+import { humanTaskActionFailureDisposition } from './human-task-action-failure.mjs';
+import { processInstanceControlHistoryEntries } from './process-instance-history.mjs';
+import { applySettledProcessInstanceCommands, clearSettledProcessInstanceCommands, processInstanceCommandKey, refreshAfterProcessInstanceControl, restoreProcessInstanceControlPresentation, submitProcessInstanceControl } from './process-instance-control.mjs';
+import { clearSettledLinkedRunAmendment, refreshLinkedRunAmendment, restoreLinkedRunAmendment, submitLinkedRunAmendment } from './linked-run-amendment.mjs';
+import { restoreHumanTaskStatusFocus } from './human-task-status-focus.mjs';
+import { isRunActionKeyboardActivation, restoreRunTransitionFocus } from './run-transition-focus.mjs';
+import { deepSeekOutcomeDiagnosticCopy } from './provider-outcome-diagnostic.mjs';
+import { isCurrentProcessInstanceRefresh, processInstanceRefreshDisposition, processInstanceRefreshMessage, processInstanceStatusAnnouncement } from './process-instance-refresh.mjs';
+import { isCurrentSelectedRunRefresh, selectedRunRefreshDisposition, selectedRunRefreshMessage, selectedRunStatusAnnouncement } from './selected-run-refresh.mjs';
+import { linkedProcessTaskResult } from './linked-process-task-result.mjs';
+import { linkedRunActivityLabel } from './linked-run-activity.mjs';
+import { captureExpandedSavedTaskResultKeys, restoreSavedTaskResultOpen, savedTaskResultDisclosureKey } from './saved-task-result-disclosure.mjs';
+import { blockedProcessTaskRecoveryCopy, processTaskRecoveryAction, selectFreshProcessTaskInstance } from './process-task-recovery.mjs';
+import { processTaskAssignmentTransparency } from './process-task-assignment.mjs';
+import { processTaskGuidanceReview } from './process-task-guidance-review.mjs';
+import { processTaskSourceReview } from './process-task-source-review.mjs';
 import { deriveBlueprintProposalReviewState, proposalApplyFailureDisposition, proposalDesignLink } from './proposal-review-state.mjs';
-import { encodeExecutionRoute, encodeStudioRoute, executionProcessTarget, executionProjectContext } from './shared-interactions.mjs';
-import { linkedPlanInstanceRouteTarget, linkedProcessPlanTarget, selectLinkedProcessPlanInstance, sourceProcessDesignLink } from './process-plan-navigation.mjs';
+import { acceptProcessTaskRequest, clearPendingProcessTaskRequest, findPendingProcessTaskRequest,
+  processTaskRequestPresentation, processTaskRequestReconciled, processTaskRequestStorageKey,
+  readPendingProcessTaskRequest, reconciledSavedProcessTaskRequests, savePendingProcessTaskRequest } from './process-task-request.mjs';
+import { acceptHumanTaskStart, clearHumanTaskStart, humanTaskStartCommandKey, humanTaskStartPresentation,
+  humanTaskStartReconciled, humanTaskStartStorageKey, readHumanTaskStart, restoreHumanTaskStarts,
+  saveHumanTaskStart } from './human-task-start-recovery.mjs';
+import { boundedLineDiff, readBoundedUtf8Response } from './repository-text-diff.mjs';
+import { encodeExecutionRoute, encodeStudioRoute, executionProcessTarget, executionProjectContext, executionRunRouteTarget } from './shared-interactions.mjs';
+import { currentProcessPlanFocusTarget, linkedPlanInstanceRouteTarget, linkedProcessPlanTarget, processPlanFreshness, processPlanRevisionFocusTarget, selectLinkedProcessPlanInstance, sourceProcessDesignLink } from './process-plan-navigation.mjs';
 
 const state = {
-  meta: null, projects: [], runs: [], taskInstances: [], run: null, runProject: null, proposalMembershipAccess: null, authenticated: false, currentPrincipal: null, planningProject: null, projectContextId: null,
+  meta: null, projects: [], runs: [], taskInstances: [], runtimePlans: [], localRepositories: [], run: null, runProject: null, proposalMembershipAccess: null, authenticated: false, currentPrincipal: null, planningProject: null, projectContextId: null,
   actorBindingRows: [], actorBindingProjectId: null, actorBindingReadAvailable: false,
   selectedPlanInstances: new Map(),
+  processTaskStatuses: new Map(),
 };
 state.pendingProcessPlans = new Map();
 state.pendingTaskRuns = new Map();
+state.submittingTaskRequests = new Set();
 state.pendingHumanTaskCommands = new Map();
+state.pendingHumanTaskOutputApplications = new Map();
+state.submittingHumanTaskStarts = new Set();
+state.expandedHumanTaskInputs = new Set();
 state.pendingRunCancellations = new Map();
 state.pendingRunPauses = new Map();
 state.pendingRunAmendments = new Map();
@@ -20,6 +56,253 @@ state.pendingProposalApplies = new Map();
 const main = document.querySelector('#execution-main');
 const list = document.querySelector('#run-list');
 const toast = document.querySelector('#execution-toast');
+const executionAnnouncement = document.querySelector('#execution-announcement');
+let processRefreshRequestId = 0;
+let deferredProcessInstances = null;
+let selectedRunRefreshRequestId = 0;
+let deferredSelectedRun = null;
+let selectedRunWaitMessage = '';
+
+function processPlansFor(project = state.planningProject) {
+  const base = project?.processPlans ?? [];
+  const runtime = state.runtimePlans.filter((plan) => plan.source?.projectId === project?.id);
+  const revisions = new Set(base.map((plan) => `${plan.id}\n${plan.revision ?? 1}`));
+  return [...base, ...runtime.filter((plan) => !revisions.has(`${plan.id}\n${plan.revision ?? 1}`))];
+}
+
+function setProcessRefreshStatus(message) {
+  const processRefreshStatus = document.querySelector('#process-instance-refresh-status');
+  if (processRefreshStatus && processRefreshStatus.textContent !== message) processRefreshStatus.textContent = message;
+}
+
+function noteProjectRefreshUnavailable() {
+  const warning = 'Project design update status could not be refreshed; process activity can still refresh. Will retry automatically.';
+  const current = document.querySelector('#process-instance-refresh-status')?.textContent ?? '';
+  if (!current.includes(warning)) setProcessRefreshStatus(current ? `${current} ${warning}` : warning);
+}
+
+function reconcileAcceptedProcessTaskRequests(runs, instances, projectId) {
+  let reconciled = false;
+  for (const [key, pending] of state.pendingTaskRuns) {
+    if (pending?.status !== 'accepted' || pending.acceptedProcessTaskRef?.projectId !== projectId
+      || pending.acceptedProcessTaskRef?.tenantId !== state.planningProject?.tenantId
+      || pending.acceptedProcessTaskRef?.principal !== state.currentPrincipal
+      || !processTaskRequestReconciled(pending, { runs, instances })) continue;
+    const ref = pending.acceptedProcessTaskRef;
+    state.selectedPlanInstances.set(`${ref.processPlanId}\n${ref.revision}`, ref.planInstanceId);
+    state.pendingTaskRuns.delete(key);
+    clearPendingProcessTaskRequest(processTaskIntentStorage(), key);
+    reconciled = true;
+  }
+  for (const { key, pending } of reconciledSavedProcessTaskRequests(processTaskIntentStorage(), {
+    tenantId: state.planningProject?.tenantId, principal: state.currentPrincipal, projectId, runs, instances,
+  })) {
+    const ref = pending.acceptedProcessTaskRef;
+    state.selectedPlanInstances.set(`${ref.processPlanId}\n${ref.revision}`, ref.planInstanceId);
+    state.pendingTaskRuns.delete(key);
+    clearPendingProcessTaskRequest(processTaskIntentStorage(), key);
+    reconciled = true;
+  }
+  return reconciled;
+}
+
+function syncHumanTaskStarts(project, plan) {
+  const scope = { tenantId: project.tenantId, principal: state.currentPrincipal, projectId: project.id,
+    planId: plan.id, revision: plan.revision };
+  const restored = restoreHumanTaskStarts(processTaskIntentStorage(), scope);
+  for (const { commandKey, pending } of restored) {
+    if (!state.pendingHumanTaskCommands.has(commandKey)) state.pendingHumanTaskCommands.set(commandKey, pending);
+  }
+  const candidates = new Map(restored
+    .map((entry) => [entry.commandKey, entry.pending]));
+  for (const [commandKey, pending] of state.pendingHumanTaskCommands) {
+    if (commandKey.startsWith(`start\n${plan.id}\n${plan.revision}\n`)
+      && pending?.tenantId === project.tenantId && pending.principal === state.currentPrincipal
+      && pending.payload?.projectId === project.id) candidates.set(commandKey, pending);
+  }
+  for (const [commandKey, pending] of candidates) {
+    if (!humanTaskStartReconciled(pending, { tenantId: project.tenantId, principal: state.currentPrincipal,
+      projectId: project.id, instances: state.taskInstances })) continue;
+    state.pendingHumanTaskCommands.delete(commandKey);
+    clearHumanTaskStart(processTaskIntentStorage(), humanTaskStartStorageKey({ tenantId: pending.tenantId,
+      principal: pending.principal, projectId: pending.payload.projectId, planId: pending.payload.planId,
+      revision: pending.payload.revision, planInstanceId: pending.payload.planInstanceId ?? null,
+      taskId: pending.payload.taskId }));
+  }
+  return [...candidates.entries()].filter(([commandKey, pending]) => state.pendingHumanTaskCommands.has(commandKey)
+    && pending?.tenantId === project.tenantId && pending.principal === state.currentPrincipal
+    && pending.payload?.projectId === project.id && pending.payload?.planId === plan.id
+    && pending.payload?.revision === plan.revision).map(([commandKey, pending]) => ({ commandKey, pending }));
+}
+
+function setTaskRequestControls({ requestButton, profileSelect, repositorySelect, status, pending, submitting = false,
+  recoveringNewInstance = false }) {
+  const presentation = processTaskRequestPresentation(pending, { submitting, recoveringNewInstance });
+  if (profileSelect) profileSelect.disabled = presentation.locked;
+  if (repositorySelect) repositorySelect.disabled = presentation.locked;
+  requestButton.disabled = presentation.buttonDisabled;
+  requestButton.textContent = presentation.buttonLabel;
+  if (status) status.textContent = presentation.status;
+}
+
+function applyCrossSessionProcessInstances(instances, projectId, runtimePlans = state.runtimePlans, projectRuns = [],
+  projectSnapshot = state.planningProject, expectedRouteKey = null, projectRefreshUnavailable = false) {
+  const plans = document.querySelector('#process-plans');
+  const route = new URL(window.location.href);
+  const routeProjectId = route.searchParams.get('project') || null;
+  if (state.planningProject?.id !== projectId || (routeProjectId && routeProjectId !== projectId)
+    || projectSnapshot?.id !== projectId
+    || (expectedRouteKey && `${window.location.pathname}${window.location.search}` !== expectedRouteKey) || !plans) return false;
+  const disposition = processInstanceRefreshDisposition({ currentInstances: state.taskInstances,
+    nextInstances: instances,
+    currentRuns: state.runs.filter((run) => run.projectId === projectId), nextRuns: projectRuns,
+    currentProject: state.planningProject, nextProject: projectSnapshot,
+    container: plans, documentRef: document });
+  if (disposition === 'unchanged') {
+    const requestsReconciled = reconcileAcceptedProcessTaskRequests(projectRuns, instances, projectId);
+    const instanceCommandsReconciled = applySettledProcessInstanceCommands({ disposition, pendingCommands: state.pendingInstanceCommands,
+      render: () => renderProcessPlans(plans, processPlansFor(), state.planningProject) });
+    if (requestsReconciled && !instanceCommandsReconciled) renderProcessPlans(plans, processPlansFor(), state.planningProject);
+    return false;
+  }
+  if (disposition === 'defer-dirty' || disposition === 'defer-focus') {
+    applySettledProcessInstanceCommands({ disposition, pendingCommands: state.pendingInstanceCommands });
+    deferredProcessInstances = { instances, projectId, runtimePlans, projectRuns, projectSnapshot,
+      projectRefreshUnavailable, routeKey: expectedRouteKey };
+    setProcessRefreshStatus(processInstanceRefreshMessage(disposition));
+    return false;
+  }
+  applySettledProcessInstanceCommands({ disposition, pendingCommands: state.pendingInstanceCommands });
+  state.runtimePlans = runtimePlans;
+  const currentProjectRuns = state.runs.filter((run) => run.projectId === projectId);
+  const announcement = processInstanceStatusAnnouncement(state.taskInstances, instances, processPlansFor(projectSnapshot),
+    currentProjectRuns, projectRuns);
+  state.planningProject = projectSnapshot;
+  state.taskInstances = instances;
+  state.runs = [...state.runs.filter((run) => run.projectId !== projectId), ...projectRuns];
+  reconcileAcceptedProcessTaskRequests(projectRuns, instances, projectId);
+  for (const run of projectRuns) {
+    const runLink = [...list.querySelectorAll('[data-run-link-id]')].find((entry) => entry.dataset.runLinkId === run.id);
+    const status = runLink?.querySelector('.run-link-status');
+    if (status) status.textContent = run.status.replaceAll('_', ' ');
+  }
+  deferredProcessInstances = null;
+  renderProcessPlans(plans, processPlansFor(), state.planningProject, { skipBlockedAnnouncement: Boolean(announcement) });
+  setProcessRefreshStatus(announcement);
+  return true;
+}
+
+async function refreshProcessInstancesFromOtherSessions() {
+  if (document.hidden || !state.authenticated || !state.planningProject?.id) return;
+  const projectId = state.planningProject.id;
+  const requestId = ++processRefreshRequestId;
+  const routeKey = `${window.location.pathname}${window.location.search}`;
+  try {
+    const [processRead, projectRead] = await Promise.allSettled([
+      api(`/api/execution/process-task-instances?projectId=${encodeURIComponent(projectId)}`),
+      api(`/api/v1/projects/${encodeURIComponent(projectId)}`),
+    ]);
+    if (processRead.status === 'rejected') throw processRead.reason;
+    const result = processRead.value;
+    const projectSnapshot = projectRead.status === 'fulfilled' && projectRead.value?.data?.id === projectId
+      ? projectRead.value.data : state.planningProject;
+    const projectRefreshUnavailable = projectRead.status !== 'fulfilled' || projectRead.value?.data?.id !== projectId;
+    if (!isCurrentProcessInstanceRefresh({ requestId, currentRequestId: processRefreshRequestId,
+      projectId, currentProjectId: state.planningProject?.id, snapshotProjectId: projectSnapshot?.id, routeKey,
+      currentRouteKey: `${window.location.pathname}${window.location.search}` })) return;
+    applyCrossSessionProcessInstances(result.instances, projectId, result.plans ?? [], result.runs ?? [],
+      projectSnapshot, routeKey, projectRefreshUnavailable);
+    if (projectRefreshUnavailable) noteProjectRefreshUnavailable();
+  } catch (error) {
+    if (!isCurrentProcessInstanceRefresh({ requestId, currentRequestId: processRefreshRequestId,
+      projectId, currentProjectId: state.planningProject?.id, routeKey,
+      currentRouteKey: `${window.location.pathname}${window.location.search}` })) return;
+    setProcessRefreshStatus(`Could not refresh saved process activity. ${error.message} Will retry automatically.`);
+  }
+}
+
+function applySelectedRunSnapshot(nextRun, runId) {
+  const route = new URL(window.location.href);
+  if (state.run?.id !== runId || route.searchParams.get('run') !== runId
+    || (route.searchParams.get('project') || null) !== (state.run.projectId || null)) return false;
+  const disposition = selectedRunRefreshDisposition({ currentRun: state.run, nextRun, container: main, documentRef: document });
+  if (disposition === 'stale') return false;
+  if (disposition === 'unchanged') {
+    if (clearSettledLinkedRunAmendment(state.pendingRunAmendments, runId)) {
+      renderRun();
+      return true;
+    }
+    return false;
+  }
+  if (disposition === 'defer-dirty' || disposition === 'defer-focus') {
+    deferredSelectedRun = { runId, nextRun };
+    selectedRunWaitMessage = selectedRunRefreshMessage(disposition);
+    if (executionAnnouncement.textContent !== selectedRunWaitMessage) executionAnnouncement.textContent = selectedRunWaitMessage;
+    return false;
+  }
+  clearSettledLinkedRunAmendment(state.pendingRunAmendments, runId);
+  const announcement = selectedRunStatusAnnouncement(state.run, nextRun);
+  state.run = nextRun;
+  state.runs = state.runs.map((run) => run.id === runId ? { ...run, status: nextRun.status, version: nextRun.version } : run);
+  deferredSelectedRun = null;
+  renderRun();
+  const selectedRunLink = [...list.querySelectorAll('[data-run-link-id]')].find((entry) => entry.dataset.runLinkId === runId);
+  const selectedRunStatus = selectedRunLink?.querySelector('.run-link-status');
+  if (selectedRunStatus) selectedRunStatus.textContent = nextRun.status.replaceAll('_', ' ');
+  if (announcement) executionAnnouncement.textContent = announcement;
+  else if (selectedRunWaitMessage && executionAnnouncement.textContent === selectedRunWaitMessage) executionAnnouncement.textContent = '';
+  selectedRunWaitMessage = '';
+  return true;
+}
+
+async function refreshSelectedRunFromOtherSessions() {
+  if (document.hidden || !state.authenticated || !state.run?.id) return;
+  const runId = state.run.id;
+  const currentRoute = new URL(window.location.href);
+  if (currentRoute.searchParams.get('run') !== runId
+    || (currentRoute.searchParams.get('project') || null) !== (state.run.projectId || null)) return;
+  const requestId = ++selectedRunRefreshRequestId;
+  try {
+    const nextRun = await api(`/api/execution/runs/${encodeURIComponent(runId)}`);
+    const route = new URL(window.location.href);
+    if (!isCurrentSelectedRunRefresh({ requestId, currentRequestId: selectedRunRefreshRequestId,
+      runId, currentRunId: state.run?.id, routeRunId: route.searchParams.get('run'),
+      projectId: state.run?.projectId ?? null, currentProjectId: state.run?.projectId ?? null,
+      routeProjectId: route.searchParams.get('project') || null })) return;
+    applySelectedRunSnapshot(nextRun, runId);
+  } catch {
+    // A transient read failure is retried on the next poll or visibility return.
+  }
+}
+
+function retryDeferredSelectedRun() {
+  if (!deferredSelectedRun) return;
+  const { runId, nextRun } = deferredSelectedRun;
+  applySelectedRunSnapshot(nextRun, runId);
+}
+
+function retryDeferredProcessInstances() {
+  if (!deferredProcessInstances) return;
+  const { instances, projectId, runtimePlans, projectRuns, projectSnapshot, routeKey, projectRefreshUnavailable } = deferredProcessInstances;
+  const applied = applyCrossSessionProcessInstances(instances, projectId, runtimePlans, projectRuns,
+    projectSnapshot, routeKey, projectRefreshUnavailable);
+  if (applied && projectRefreshUnavailable) noteProjectRefreshUnavailable();
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    void refreshProcessInstancesFromOtherSessions();
+    void refreshSelectedRunFromOtherSessions();
+  }
+});
+document.addEventListener('focusout', (event) => {
+  if (event.target?.closest?.('#process-plans')) setTimeout(retryDeferredProcessInstances, 0);
+  if (event.target?.closest?.('#execution-main')) setTimeout(retryDeferredSelectedRun, 0);
+});
+setInterval(() => {
+  void refreshProcessInstancesFromOtherSessions();
+  void refreshSelectedRunFromOtherSessions();
+}, 15000);
 
 function syncEnterpriseDesignNavigation(projectId = state.projectContextId) {
   const link = document.querySelector('#enterprise-design-nav');
@@ -28,6 +311,12 @@ function syncEnterpriseDesignNavigation(projectId = state.projectContextId) {
 
 function syncExecutionRoute(projectId = state.projectContextId, target = null) {
   history.replaceState(null, '', encodeExecutionRoute(projectId, target));
+}
+
+function syncExecutionRunRoute(run) {
+  if (!run?.id) return;
+  state.projectContextId = run.projectId ?? state.projectContextId;
+  history.replaceState(null, '', encodeExecutionRoute(state.projectContextId, null, run.id));
 }
 
 function el(tag, options = {}, children = []) {
@@ -58,30 +347,50 @@ function notify(message) {
   notify.timer = setTimeout(() => { toast.hidden = true; }, 4000);
 }
 
+function processTaskIntentStorage() {
+  try { return window.localStorage; } catch { return null; }
+}
+
 async function refresh() {
+  processRefreshRequestId += 1;
   state.runs = (await api('/api/execution/runs')).runs;
+  let processInstancesRefreshed = false;
   if (state.authenticated && state.planningProject?.id) {
     try {
-      state.taskInstances = (await api(`/api/execution/process-task-instances?projectId=${encodeURIComponent(state.planningProject.id)}`)).instances;
-    } catch { state.taskInstances = []; }
+      const runtime = await api(`/api/execution/process-task-instances?projectId=${encodeURIComponent(state.planningProject.id)}`);
+      state.taskInstances = runtime.instances;
+      state.runtimePlans = runtime.plans ?? [];
+      deferredProcessInstances = null;
+      setProcessRefreshStatus('');
+      clearSettledProcessInstanceCommands(state.pendingInstanceCommands);
+      reconcileAcceptedProcessTaskRequests(state.runs, state.taskInstances, state.planningProject.id);
+      processInstancesRefreshed = true;
+    } catch {
+      setProcessRefreshStatus('Could not refresh process instances. Existing controls remain locked until the current state is available.');
+    }
   }
   renderList();
   const plans = document.querySelector('#process-plans');
-  if (plans && state.planningProject) renderProcessPlans(plans, state.planningProject.processPlans ?? [], state.planningProject);
+  if (processInstancesRefreshed && plans && state.planningProject) renderProcessPlans(plans, processPlansFor(), state.planningProject);
+  return processInstancesRefreshed;
 }
 
 function renderList() {
   list.replaceChildren();
   if (!state.runs.length) return list.append(el('p', { className: 'muted', text: 'No execution runs yet.' }));
   for (const run of state.runs) {
-    const button = el('button', { className: `run-link${state.run?.id === run.id ? ' active' : ''}`, attrs: { type: 'button' } }, [
-      el('strong', { text: run.title }), el('span', { text: run.status.replaceAll('_', ' ') }), el('small', { text: run.profile.label }),
+    const button = el('button', { className: `run-link${state.run?.id === run.id ? ' active' : ''}`, attrs: { type: 'button', 'data-run-link-id': run.id } }, [
+      el('strong', { text: run.title }), el('span', { className: 'run-link-status', text: run.status.replaceAll('_', ' ') }), el('small', { text: run.profile.label }),
     ]);
     button.addEventListener('click', () => load(run.id)); list.append(button);
   }
 }
 
 function showNew({ planTarget = null, preferredProcessId = null, preserveProcessRoute = false } = {}) {
+  selectedRunRefreshRequestId += 1;
+  deferredSelectedRun = null;
+  if (selectedRunWaitMessage && executionAnnouncement.textContent === selectedRunWaitMessage) executionAnnouncement.textContent = '';
+  selectedRunWaitMessage = '';
   state.run = null; main.replaceChildren(document.querySelector('#new-run-template').content.cloneNode(true)); renderList();
   const select = document.querySelector('#profile');
   const projectSelect = document.querySelector('#project');
@@ -146,14 +455,21 @@ async function loadPlanningProject(projectId, preferredProcessId = null, planTar
         state.actorBindingReadAvailable = true;
       } catch { /* Registry identity details remain unavailable to readers; project plans still render. */ }
       try {
-        state.taskInstances = (await api(`/api/execution/process-task-instances?projectId=${encodeURIComponent(projectId)}`)).instances;
-      } catch { state.taskInstances = []; }
+        const runtime = await api(`/api/execution/process-task-instances?projectId=${encodeURIComponent(projectId)}`);
+        state.taskInstances = runtime.instances;
+        state.runtimePlans = runtime.plans ?? [];
+      } catch { state.taskInstances = []; state.runtimePlans = []; }
+      try {
+        const repositories = await api(`/api/execution/local-repositories?projectId=${encodeURIComponent(projectId)}`);
+        if (document.querySelector('#plan-project')?.value !== projectId) return;
+        state.localRepositories = repositories.repositories ?? [];
+      } catch { state.localRepositories = []; }
     } else {
-      state.taskInstances = [];
+      state.taskInstances = []; state.runtimePlans = []; state.localRepositories = [];
     }
     let restoredPlanTarget = planTarget;
     if (restoredPlanTarget) {
-      const planExists = (project.processPlans ?? []).some((plan) => plan.id === restoredPlanTarget.processPlanId
+      const planExists = processPlansFor(project).some((plan) => plan.id === restoredPlanTarget.processPlanId
         && plan.revision === restoredPlanTarget.revision);
       const instanceExists = state.taskInstances.some((runtime) => runtime.projectId === projectId
         && runtime.processPlanId === restoredPlanTarget.processPlanId && runtime.revision === restoredPlanTarget.revision
@@ -167,12 +483,63 @@ async function loadPlanningProject(projectId, preferredProcessId = null, planTar
         notify('The linked plan revision or instance is no longer available.');
       }
     }
-    renderProcessPlans(plansPanel, project.processPlans ?? [], project);
+    renderProcessPlans(plansPanel, processPlansFor(project), project);
     updatePlanButtonLabel();
     if (restoredPlanTarget && !focusLinkedPlanInstance(restoredPlanTarget)) {
       notify('The linked plan revision or instance is no longer available.');
     }
   } catch (error) { notify(error.message); }
+}
+
+function humanTaskStatusTarget({ processPlanId, revision, planInstanceId, taskId }) {
+  const card = [...document.querySelectorAll('.process-plan')].find((candidate) =>
+    candidate.dataset.processPlanId === processPlanId
+      && Number(candidate.dataset.planRevision) === revision);
+  const instanceSelect = card?.querySelector('select[aria-label^="Process instance for"]');
+  if (!instanceSelect || instanceSelect.value !== planInstanceId) return null;
+  const status = [...card.querySelectorAll('[data-human-task-status-focus-target]')]
+    .find((candidate) => candidate.dataset.humanTaskStatusFocusTarget === taskId);
+  return status ?? null;
+}
+
+function focusHumanTaskStatus({ processPlanId, revision, planInstanceId, taskId }) {
+  const status = humanTaskStatusTarget({ processPlanId, revision, planInstanceId, taskId });
+  if (!status) return false;
+  status.scrollIntoView?.({ block: 'nearest' });
+  status.focus({ preventScroll: true });
+  return document.activeElement === status;
+}
+
+function restoreHumanTaskStatusFocusAfterAction({ button, plan, task, planInstanceId }) {
+  return restoreHumanTaskStatusFocus({
+    initiatingControl: button,
+    documentRef: document,
+    findTarget: () => humanTaskStatusTarget({
+      processPlanId: plan.id, revision: plan.revision, planInstanceId, taskId: task.id,
+    }),
+  });
+}
+
+async function reconcileHumanTaskConflict(project, plan, task, selectedInstance) {
+  await loadPlanningProject(project.id, plan.source?.processId ?? null);
+  if (state.planningProject?.id !== project.id || state.actorBindingProjectId !== project.id) return false;
+  const existingRuntime = state.taskInstances.filter((runtime) => runtime.projectId === project.id
+    && runtime.processPlanId === plan.id && runtime.revision === plan.revision && runtime.taskId === task.id)
+    .sort((left, right) => (Date.parse(right.updatedAt) || 0) - (Date.parse(left.updatedAt) || 0))[0];
+  const instanceKey = `${plan.id}\n${plan.revision}`;
+  let planInstanceId = selectedInstance;
+  if (selectedInstance === 'new' && existingRuntime?.planInstanceId) {
+    planInstanceId = existingRuntime.planInstanceId;
+    state.selectedPlanInstances.set(instanceKey, planInstanceId);
+    const plans = document.querySelector('#process-plans');
+    if (plans) {
+      renderProcessPlans(plans, processPlansFor(), state.planningProject);
+      updatePlanButtonLabel();
+    }
+  }
+  return focusHumanTaskStatus({
+    processPlanId: plan.id, revision: plan.revision, planInstanceId, taskId: task.id,
+  });
 }
 
 function focusLinkedPlanInstance(target) {
@@ -186,8 +553,19 @@ function focusLinkedPlanInstance(target) {
   return document.activeElement === instanceSelect;
 }
 
+function focusProcessPlanCard(target) {
+  if (!target) return false;
+  const card = [...document.querySelectorAll('.process-plan')].find((candidate) =>
+    candidate.dataset.processPlanId === target.processPlanId
+      && Number(candidate.dataset.planRevision) === target.revision);
+  if (!card || !card.hasAttribute('tabindex')) return false;
+  card.scrollIntoView?.({ block: 'nearest' });
+  card.focus({ preventScroll: true });
+  return document.activeElement === card;
+}
+
 function openLinkedProcessPlan(run) {
-  const target = selectLinkedProcessPlanInstance(run, state.projects, state.selectedPlanInstances);
+  const target = selectLinkedProcessPlanInstance(run, state.projects, state.selectedPlanInstances, state.runtimePlans);
   if (!target) return;
   state.projectContextId = target.projectId;
   syncEnterpriseDesignNavigation(target.projectId);
@@ -223,7 +601,8 @@ async function createProcessPlan(event) {
     });
     state.pendingProcessPlans.delete(key);
     state.planningProject = result.data;
-    renderProcessPlans(document.querySelector('#process-plans'), result.data.processPlans ?? [], result.data);
+    renderProcessPlans(document.querySelector('#process-plans'), processPlansFor(result.data), result.data);
+    focusProcessPlanCard(currentProcessPlanFocusTarget(result.data, processId, result.event?.data?.planId));
     updatePlanButtonLabel();
     notify('Planning graph saved. No execution run was created and no work was dispatched.');
   } catch (error) {
@@ -253,9 +632,13 @@ function updatePlanButtonLabel() {
     ? 'Retry graph save' : 'Create planning graph';
 }
 
-function renderProcessPlans(container, plans, project, { allowNewInstances = true, showHistory = true } = {}) {
+function renderProcessPlans(container, plans, project, { allowNewInstances = true, showHistory = true, skipBlockedAnnouncement = false } = {}) {
+  const expandedSavedTaskResults = captureExpandedSavedTaskResultKeys(
+    container.querySelectorAll('details[data-saved-task-result-key]'));
   container.replaceChildren();
   if (!plans.length) return container.append(el('p', { className: 'muted', text: 'No planning graphs saved for this project.' }));
+  const blockedAnnouncements = [];
+  const blockedAnnouncementContexts = new Map();
   const revisions = new Map();
   for (const plan of plans) {
     const values = revisions.get(plan.id) ?? [];
@@ -264,8 +647,10 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
   for (const entries of revisions.values()) {
     entries.sort((left, right) => (left.revision ?? 1) - (right.revision ?? 1));
     const plan = entries.at(-1);
+    const pendingHumanTaskStarts = syncHumanTaskStarts(project, plan);
     const card = el('section', { className: 'run-section process-plan', attrs: {
       'aria-label': `Planned graph for ${plan.source.processName}`,
+      tabindex: '-1',
       'data-process-plan-id': plan.id,
       'data-plan-revision': plan.revision ?? 1,
     } }, [
@@ -275,7 +660,15 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
     const planControls = el('div', { className: 'process-plan-controls' });
     const sourceLink = sourceProcessDesignLink(plan, project);
     if (sourceLink) planControls.append(el('a', { className: 'button', text: sourceLink.label, attrs: { href: sourceLink.href } }));
-    if (allowNewInstances) {
+    const freshness = processPlanFreshness(plan, project);
+    const softwareDeliveryPlan = plan.kind === 'software_delivery_runtime_plan';
+    const canStartNewInstances = !softwareDeliveryPlan && allowNewInstances && !freshness.historical;
+    if (softwareDeliveryPlan) card.append(el('p', { className: 'muted', text: 'Owner-promoted human checkpoint snapshot · each task remains a separately assigned human action. Agent execution requires a separate software output contract.' }));
+    if (freshness.historical) {
+      card.append(el('p', { className: 'muted historical-process-plan', text: `Historical plan · pinned to blueprint v${plan.source.blueprintVersion}; the current saved design is v${project.latestBlueprint.version}. This plan cannot start new work.` }));
+      if (freshness.link) planControls.append(el('a', { className: 'button', text: freshness.link.label, attrs: { href: freshness.link.href } }));
+    }
+    if (canStartNewInstances) {
       const editButton = el('button', { className: 'button', text: 'Edit planned graph', attrs: { type: 'button' } });
       editButton.addEventListener('click', () => openPlanEditor(card, plan, project));
       planControls.append(editButton);
@@ -313,7 +706,7 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
       state.selectedPlanInstances.set(instanceKey, latestInstance);
     }
     const instanceSelect = el('select', { attrs: { 'aria-label': `Process instance for ${plan.source.processName}` } });
-    instanceSelect.append(el('option', { text: allowNewInstances ? 'Start a new instance' : 'Earlier revision · existing instances only', attrs: { value: 'new', ...(selectedInstance === 'new' ? { selected: 'selected' } : {}), ...(!allowNewInstances ? { disabled: 'disabled' } : {}) } }));
+    instanceSelect.append(el('option', { text: canStartNewInstances ? 'Start a new instance' : 'Earlier revision · existing instances only', attrs: { value: 'new', ...(selectedInstance === 'new' ? { selected: 'selected' } : {}), ...(!canStartNewInstances ? { disabled: 'disabled' } : {}) } }));
     for (const [instanceId, runtimes] of instances) {
       const finished = runtimes.filter((runtime) => ['SUCCEEDED', 'FAILED', 'INTERRUPTED', 'CANCELLED'].includes(runtime.status)).length;
       instanceSelect.append(el('option', {
@@ -337,30 +730,51 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
       const controlSummary = el('p', { className: 'muted', text: `Instance control: ${instanceControl.status.replaceAll('_', ' ')}${instanceControl.pauseReason ? ` · ${instanceControl.pauseReason}` : ''}` });
       card.append(controlSummary);
       if (instanceControl.pauseBoundary?.tasks?.length) {
-        const boundary = instanceControl.pauseBoundary.tasks.map((task) =>
-          `${task.taskId}${task.runId ? ` · run ${task.runId.slice(-8)} · instruction revision ${task.instructionRevision}` : ` · ${task.status}`}${task.attemptStatus ? ` · provider ${task.attemptStatus}` : ''}`,
-        ).join('; ');
+        const boundary = instanceControl.pauseBoundary.tasks.map((task) => {
+          const attemptReference = task.attemptStatus === 'outcome_unknown'
+            ? ` · OrgWard-local attempt reference ${typeof task.attemptId === 'string' && /^[a-f0-9-]{36}$/i.test(task.attemptId) ? task.attemptId : 'unavailable'} (not a provider request ID; proves neither receipt nor completion)`
+            : '';
+          return `${task.taskId}${task.runId ? ` · run ${task.runId.slice(-8)} · instruction revision ${task.instructionRevision}` : ` · ${task.status}`}${task.attemptStatus ? ` · provider ${task.attemptStatus}` : ''}${attemptReference}`;
+        }).join('; ');
         card.append(el('p', { className: 'muted', text: `Recorded pause boundary: ${boundary}` }));
       }
       if (instanceControl.events?.length) {
-        const history = el('details', { className: 'process-instance-history' }, [el('summary', { text: 'Instance control history' })]);
-        history.append(el('ul', {}, instanceControl.events.map((event) => el('li', {
-          text: `${event.type} · ${event.actor} · ${new Date(event.at).toLocaleString()}${event.data?.reason ? ` · ${event.data.reason}` : ''}${event.type === 'ProcessTaskInstanceAbandonedUnverified' ? ` · Runs: ${(event.data?.runIds ?? []).join(', ') || 'none'} · Attempts: ${(event.data?.attemptIds ?? []).join(', ') || 'none'} · Evidence: ${(event.data?.evidence ?? []).join(' | ') || 'none'} · Duplicate cost/work acknowledged: ${event.data?.acknowledgeDuplicateCostWork === true ? 'yes' : 'no'}` : ''}`,
-        }))));
-        card.append(history);
+        const controlHistory = processInstanceControlHistoryEntries(instanceControl.events);
+        if (controlHistory.length) {
+          const history = el('details', { className: 'process-instance-history' }, [el('summary', { text: 'Instance control history' })]);
+          history.append(el('ul', {}, controlHistory.map((event) => {
+            const item = el('li');
+            item.append(el('strong', { text: `${event.type} · ${event.actor}` }));
+            item.append(el('p', { className: 'muted' }, el('time', {
+              text: new Date(event.at).toLocaleString(), attrs: { datetime: event.at },
+            })));
+            if (event.reason) item.append(el('p', { text: `Reason: ${event.reason}` }));
+            if (event.type === 'ProcessTaskInstanceAbandonedUnverified') {
+              item.append(el('p', { text: `Runs: ${event.runIds.join(', ') || 'none'}` }));
+              item.append(el('p', { text: `Attempts: ${event.attemptIds.join(', ') || 'none'}` }));
+              item.append(el('p', { text: `Duplicate cost/work acknowledged: ${event.acknowledgeDuplicateCostWork ? 'yes' : 'no'}` }));
+              if (event.evidence.length) item.append(el('ul', {}, event.evidence.map((note) => el('li', { text: note }))));
+            }
+            return item;
+          })));
+          card.append(history);
+        }
       }
       if (instanceControl.status === 'PAUSE_REQUESTED') {
         card.append(el('p', { className: 'muted', text: 'Pause is pending while in-flight tasks settle. Provider requests already handed off are not canceled; unknown outcomes remain unresolved.' }));
         if (!canControlInstance) card.append(el('p', { className: 'muted', text: 'Only the instance initiator or a current project owner can control this process.' }));
         if (instanceControl.canAbandonUnverified === true) card.append(renderAbandonUnverifiedForm({ project, instanceId: selectedInstance, control: instanceControl }));
         else if (instanceControl.pauseBoundary?.tasks?.some((task) => task.attemptStatus === 'outcome_unknown')) {
-          card.append(el('p', { className: 'muted', text: 'This unknown provider result cannot be cleared through this control. Terminal abandonment is limited to read-only OpenAI model proposals; other provider or effect-capable work requires reconciliation before any new work.' }));
+          card.append(el('p', { className: 'muted', text: 'This unknown provider result cannot be cleared through this control. Terminal abandonment is limited to read-only OpenAI or DeepSeek model proposals; other provider or effect-capable work requires reconciliation before any new work.' }));
         }
       } else if (instanceControl.status === 'PAUSED') {
         card.append(el('p', { className: 'muted', text: 'This instance is paused at its recorded boundary. Resuming rechecks dependencies and authority; paused agent requests need fresh independent approval.' }));
         if (canControlInstance) card.append(renderInstanceControlForm({ project, instanceId: selectedInstance, control: instanceControl, action: 'resume' }));
         else card.append(el('p', { className: 'muted', text: 'Only the instance initiator or a current project owner can control this process.' }));
+        if (instanceControl.canCancel === true) card.append(renderInstanceControlForm({ project, instanceId: selectedInstance, control: instanceControl, action: 'cancel' }));
         if (instanceControl.canAbandonUnverified === true) card.append(renderAbandonUnverifiedForm({ project, instanceId: selectedInstance, control: instanceControl }));
+      } else if (instanceControl.status === 'CANCELLED') {
+        card.append(el('p', { className: 'muted', text: 'This process instance is cancelled. Completed task outcomes and evidence remain available; no further work can start or resume.' }));
       } else if (instanceControl.status === 'ABANDONED_UNVERIFIED') {
         card.append(el('p', { className: 'muted', text: 'This instance is closed as ABANDONED_UNVERIFIED. The old model output is unverified; the provider call may have completed and may have incurred cost. This instance cannot resume. Retrying requires a distinct new process instance and fresh independent approval.' }));
       } else if (instanceControl.status === 'ACTIVE' && canControlInstance) {
@@ -380,51 +794,215 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
       const outputs = task.outputs.map((item) => item.label).join(', ') || 'None specified';
       const roleText = taskAssigneePresentation(task, plan, project);
       const selectedRuntimes = selectedInstance === 'new' ? [] : instances.get(selectedInstance) ?? [];
-      const runtimeState = deriveProcessTaskState(task, selectedRuntimes, selectedInstance === 'new' ? null : selectedInstance);
+      const runtimeState = deriveProcessTaskState(task, selectedRuntimes, selectedInstance === 'new' ? null : selectedInstance, plan.tasks);
       const runtime = runtimeState.runtime;
+      const uncertainBlockedDependency = runtimeState.blockedDependencies.some(({ taskId }) => {
+        const dependencyRuntime = selectedRuntimes.find((candidate) => candidate.taskId === taskId);
+        const dependencyRun = dependencyRuntime?.executionRunId
+          ? state.runs.find((candidate) => candidate.id === dependencyRuntime.executionRunId) : null;
+        return dependencyRun?.execution?.providerDiagnostic?.outcome === 'outcome_unknown';
+      });
+      const blockedDependencyText = runtimeState.blockedDependencies.length
+        ? blockedProcessTaskRecoveryCopy({
+          blockedTitles: runtimeState.blockedDependencies.map(({ taskId, status }) =>
+            `${tasks.get(taskId)?.title ?? taskId} (${status.replaceAll('_', ' ').toLowerCase()})`),
+          uncertainDelivery: uncertainBlockedDependency,
+        }) : null;
+      if (selectedInstance !== 'new') {
+        const statusKey = `${project.id}\n${plan.id}\n${plan.revision}\n${selectedInstance}\n${task.id}`;
+        const previousStatus = state.processTaskStatuses.get(statusKey);
+        if (processTaskStatusAnnouncement(previousStatus, runtimeState.status)) {
+          if (!uncertainBlockedDependency) {
+            blockedAnnouncements.push(runtimeState.blockedDependencies.map(({ taskId, status }) => ({
+              taskId,
+              title: tasks.get(taskId)?.title,
+              status,
+            })));
+            blockedAnnouncementContexts.set(statusKey, { planId: plan.id, revision: plan.revision, instanceId: selectedInstance });
+          }
+        }
+        state.processTaskStatuses.set(statusKey, runtimeState.status);
+      }
       const instancePaused = instanceControl?.status === 'PAUSED';
       const instanceFenced = instanceControl && instanceControl.status !== 'ACTIVE';
       const instanceAbandoned = instanceControl?.status === 'ABANDONED_UNVERIFIED';
+      const instanceCancelled = instanceControl?.status === 'CANCELLED';
+      const instanceTerminal = instanceAbandoned || instanceCancelled;
       const linkedRun = runtime?.executionRunId ? state.runs.find((candidate) => candidate.id === runtime.executionRunId) ?? null : null;
       const dependenciesSucceeded = runtimeState.dependenciesSucceeded;
       const item = el('li');
-      item.append(el('strong', { text: `${task.title} — ${runtimeState.status}` }));
+      item.append(el('h5', {
+        className: 'process-task-status',
+        text: `${task.title} — ${runtimeState.status}`,
+        attrs: { tabindex: '-1', 'data-human-task-status-focus-target': task.id },
+      }));
       item.append(
         el('p', { text: task.detail }),
         el('p', { text: `Depends on: ${dependencies.join(', ') || 'No upstream process dependency'}` }),
         el('p', { text: `Inputs: ${inputs}` }), el('p', { text: `Outputs: ${outputs}` }),
         el('p', { text: `Role reference: ${roleText}` }),
       );
+      item.append(renderTaskAssignmentTransparency(task, plan, project));
+      const selectedStartKey = humanTaskStartCommandKey({ planId: plan.id, revision: plan.revision,
+        planInstanceId: selectedInstance, taskId: task.id });
+      const detachedTaskStarts = pendingHumanTaskStarts.filter((entry) => entry.pending.payload.taskId === task.id
+        && entry.commandKey !== selectedStartKey);
+      for (const entry of detachedTaskStarts) {
+        const presentation = humanTaskStartPresentation(entry.pending, {
+          submitting: state.submittingHumanTaskStarts.has(entry.commandKey),
+          displayedInstanceId: selectedInstance === 'new' ? null : selectedInstance,
+        });
+        const button = el('button', { className: 'button', text: presentation.buttonLabel,
+          attrs: { type: 'button', disabled: presentation.buttonDisabled } });
+        const status = el('p', { className: 'muted human-task-command-status', attrs: {
+          role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true',
+        }, text: presentation.status });
+        button.addEventListener('click', () => { void startHumanTask({ project, plan, task,
+          selectedInstance: entry.pending.payload.planInstanceId ?? 'new', button, status, requestKey: entry.commandKey }); });
+        item.append(el('div', { className: 'human-task-start-recovery' }, [
+          el('p', { className: 'muted', text: entry.pending.payload.planInstanceId === undefined
+            ? 'Recover the saved new-instance start for this task. It is not linked to the process instance selected above; retry retrieves the original server-created instance if the command was already accepted.'
+            : `Recover the saved start for process instance ${entry.pending.accepted?.planInstanceId ?? entry.pending.payload.planInstanceId}. It is not linked to the process instance selected above.` }),
+          button, status,
+        ]));
+      }
       const pinnedBlueprint = project.blueprintVersions?.find((entry) => entry.id === plan.source.blueprintId
         && entry.version === plan.source.blueprintVersion);
       const taskActor = Object.values(pinnedBlueprint?.areas ?? {}).flatMap((area) => area.items ?? [])
         .find((candidate) => candidate.id === task.assignee?.actorId);
       const isHumanTask = taskActor?.type === 'actor-human';
+      const humanInputReview = isHumanTask ? processTaskHumanInputReview({ task, plan, project }) : null;
+      if (humanInputReview?.kind === 'unavailable') {
+        item.append(el('p', { className: 'muted human-task-input-review-unavailable', text: humanInputReview.label }));
+      } else if (humanInputReview?.kind === 'inputs' && humanInputReview.entries.length === 0) {
+        item.append(el('p', { className: 'muted human-task-input-review-empty', text: 'No saved information inputs are referenced by this human task.' }));
+      } else if (humanInputReview?.kind === 'inputs') {
+        const inputDisclosureKey = humanTaskInputDisclosureKey({ projectId: project.id, planId: plan.id,
+          revision: plan.revision, taskId: task.id });
+        const disclosure = el('details', { className: 'human-task-input-review', attrs: {
+          ...(inputDisclosureKey ? { 'data-human-task-input-key': inputDisclosureKey } : {}),
+          ...(humanTaskInputDisclosureOpen(inputDisclosureKey, state.expandedHumanTaskInputs) ? { open: 'open' } : {}),
+        } }, [
+          el('summary', { text: `Review pinned task inputs (${humanInputReview.entries.length})` }),
+          el('p', { className: 'muted', text: `Input details come from blueprint v${humanInputReview.blueprintVersion} pinned to this saved process.` }),
+          el('ul', {}, humanInputReview.entries.map((entry) => el('li', {}, [
+            el('strong', { text: `${entry.name} (${entry.type})` }),
+            el('p', { text: entry.detail }),
+          ]))),
+        ]);
+        disclosure.addEventListener('toggle', () => rememberHumanTaskInputDisclosure(
+          inputDisclosureKey, disclosure.open, state.expandedHumanTaskInputs));
+        item.append(disclosure);
+      }
+      const effectiveAssignee = isHumanTask ? humanTaskEffectiveAssigneePresentation(runtime) : null;
+      if (effectiveAssignee) {
+        item.append(el('div', { className: 'human-task-effective-assignee' }, [
+          el('p', { text: effectiveAssignee.label }),
+          el('p', { className: 'muted', text: effectiveAssignee.detail }),
+        ]));
+      }
       if (instanceAbandoned) {
         item.append(el('p', { className: 'muted', text: 'This old model result is unverified and cannot advance work. Start a distinct process instance and obtain fresh independent approval before retrying.' }));
       } else if (linkedRun) {
+        const resultSummary = linkedProcessTaskResult(runtime, linkedRun, project);
+        if (resultSummary) {
+          if (resultSummary.providerDiagnostic?.outcome === 'outcome_unknown') {
+            item.append(el('p', { className: 'provider-outcome-diagnostic', text: resultSummary.diagnostic }));
+          }
+          const disclosureKey = savedTaskResultDisclosureKey(project.id, linkedRun.id);
+          const disclosure = el('details', { className: 'linked-process-task-result', attrs: {
+            'data-saved-task-result-key': disclosureKey,
+            ...(restoreSavedTaskResultOpen(disclosureKey, expandedSavedTaskResults) ? { open: 'open' } : {}),
+          } }, [
+            el('summary', { text: resultSummary.summaryLabel }),
+            el('p', { text: `Terminal status: ${resultSummary.statusLabel}` }),
+          ]);
+          if (resultSummary.proposalPreview?.kind === 'proposal') {
+            const preview = resultSummary.proposalPreview;
+            disclosure.append(
+              el('p', { className: 'muted', text: preview.label }),
+              el('p', { text: `Target: ${preview.target}` }),
+              el('p', { text: `Proposed detail: ${preview.proposedDetail}` }),
+              el('p', { text: `Rationale: ${preview.rationale}` }),
+              el('p', { text: `Structural checks only: ${preview.evaluation}` }),
+              el('ul', { attrs: { 'aria-label': 'Cited saved task inputs' } }, preview.citations.map((citation) => el('li', {
+                text: `${citation.name} (${citation.type})`,
+              }))),
+            );
+            if (preview.designLink) disclosure.append(el('a', {
+              className: 'button', text: preview.designLink.label, attrs: { href: preview.designLink.href },
+            }));
+          } else if (resultSummary.proposalPreview?.kind === 'unavailable') {
+            disclosure.append(el('p', { className: 'muted', text: resultSummary.proposalPreview.label }));
+          } else if (resultSummary.outputPreview) {
+            disclosure.append(el('p', { text: `Saved output preview: ${resultSummary.outputPreview}` }));
+          } else if (resultSummary.status === 'SUCCEEDED') {
+            disclosure.append(el('p', { className: 'muted', text: 'The run completed without saved text output.' }));
+          }
+          disclosure.append(el('p', { text: `Artifacts: ${resultSummary.artifactsCapped ? '100+' : resultSummary.artifactCount}` }));
+          if (resultSummary.artifacts.length) {
+            const artifactList = el('ul', { className: 'linked-task-artifacts', attrs: { 'aria-label': 'Saved task artifacts' } });
+            for (const artifact of resultSummary.artifacts) {
+              artifactList.append(el('li', {}, el('a', {
+                text: `Download ${artifact.displayName} · ${artifact.hashPrefix}…`,
+                attrs: { href: `/api/execution/runs/${encodeURIComponent(linkedRun.id)}/artifact?path=${encodeURIComponent(artifact.relativePath)}` },
+              })));
+            }
+            disclosure.append(artifactList);
+          }
+          if (resultSummary.artifactLinksCapped) {
+            disclosure.append(el('p', { className: 'muted', text: 'This task-row summary shows up to 10 safe artifact links. Open the linked run to review the full artifact list.' }));
+          }
+          if (resultSummary.evidenceHash) disclosure.append(el('p', { text: `Evidence hash: ${resultSummary.evidenceHash}…` }));
+          if (resultSummary.diagnostic && resultSummary.providerDiagnostic?.outcome !== 'outcome_unknown') {
+            disclosure.append(el('p', { className: 'muted provider-outcome-diagnostic', text: resultSummary.diagnostic }));
+          }
+          if (resultSummary.failureGuidance && !resultSummary.diagnostic
+            && resultSummary.providerDiagnostic?.outcome !== 'outcome_unknown') {
+            disclosure.append(el('p', { className: 'linked-task-failure-guidance', text: resultSummary.failureGuidance.nextStep }));
+          }
+          item.append(disclosure);
+        }
         const openRun = el('button', { className: 'button', text: `Open linked run ${linkedRun.id.slice(-8)}`, attrs: { type: 'button' } });
-        openRun.addEventListener('click', () => { void load(linkedRun.id); });
-        item.append(el('p', { text: `Approval request ${linkedRun.id} · ${linkedRun.status.replaceAll('_', ' ')}` }), openRun);
+        openRun.addEventListener('click', (event) => { void load(linkedRun.id, { initiatingControl: openRun, event }); });
+        item.append(el('p', { text: linkedRunActivityLabel(linkedRun) }), openRun);
       } else if (isHumanTask) {
         if (runtime?.outcome?.result) {
           item.append(el('p', { text: `Human checkpoint result: ${runtime.outcome.result}. Evidence: ${runtime.evidence.join(' · ') || 'none recorded'}` }));
         }
-        const latestEscalation = [...(runtime?.events ?? [])].reverse().find((event) =>
-          event.type === 'HumanTaskEscalated' || event.type === 'HumanTaskEscalationResolved');
-        if (latestEscalation) {
-          const escalationEvidence = latestEscalation.data?.evidence?.join(' · ') || 'None recorded';
-          item.append(el('p', { className: 'muted', text: `${latestEscalation.type === 'HumanTaskEscalated' ? 'Escalation' : `Owner ${latestEscalation.data?.disposition ?? 'resolution'}`} · ${latestEscalation.data?.reason ?? 'No reason recorded'} · Evidence: ${escalationEvidence}` }));
+        const humanHistory = humanTaskHistoryEntries(runtime?.events);
+        if (humanHistory.length) {
+          const history = el('details', { className: 'human-task-history' }, [
+            el('summary', { text: `Human task history (${humanHistory.length})` }),
+          ]);
+          history.append(el('ol', {}, humanHistory.map((entry) => {
+            const event = el('li');
+            const result = entry.result ? ` · ${entry.result.replaceAll('_', ' ')}` : '';
+            event.append(el('strong', { text: `${entry.label}${result} · ${entry.actor}` }));
+            event.append(el('p', { className: 'muted' }, el('time', {
+              text: new Date(entry.at).toLocaleString(), attrs: { datetime: entry.at },
+            })));
+            if (entry.reason) event.append(el('p', { text: `Reason: ${entry.reason}` }));
+            if (entry.evidence.length) event.append(el('ul', {}, entry.evidence.map((note) => el('li', { text: note }))));
+            return event;
+          })));
+          item.append(history);
         }
-        if (instanceAbandoned) {
+        if (runtime?.status === 'SUCCEEDED') {
+          for (const output of task.outputs.filter((entry) => entry.type === 'information')) {
+            const outputControl = renderHumanTaskOutputApplication({ project, plan, task, runtime, output });
+            if (outputControl) item.append(outputControl);
+          }
+        }
+        if (instanceTerminal) {
           item.append(el('p', { className: 'muted', text: 'This process instance is terminal; no human task can start or resolve in it.' }));
         } else if (runtime?.status === 'ESCALATED') {
           if (instanceControl?.status === 'PAUSED') {
             item.append(el('p', { className: 'muted', text: 'This process instance is paused. Resume it before a project owner resolves the escalated checkpoint.' }));
           } else if (runtime.canResolveEscalation) {
             item.append(
-              el('p', { className: 'muted', text: 'Project owner resolution is required before this human task can continue. Resume rechecks the original assigned human and pinned enabled binding.' }),
-              renderHumanTaskEscalationResolution({ project, plan, task, selectedInstance }),
+              el('p', { className: 'muted', text: 'Project owner resolution is required before this human task can continue. Resume rechecks the current assignee; reassignment keeps this immutable task plan and instance.' }),
+      renderHumanTaskEscalationResolution({ project, plan, task, selectedInstance, runtime }),
             );
           } else {
             item.append(el('p', { className: 'muted', text: 'Escalated and awaiting a project owner with workspace write access. The assigned human cannot complete it until an owner resolves it.' }));
@@ -444,34 +1022,54 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
           item.append(el('p', { className: 'muted', text: 'This human checkpoint is complete for this process instance. A retry requires a new process instance.' }));
         } else if (selectedInstance === 'new' && task.dependencies.length > 0) {
           item.append(el('p', { className: 'muted', text: 'A dependent human task must join an existing process instance after every dependency succeeds.' }));
-        } else if (selectedInstance === 'new' && (!allowNewInstances || entries.at(-1)?.revision !== plan.revision
+        } else if (selectedInstance === 'new' && (!canStartNewInstances || entries.at(-1)?.revision !== plan.revision
           || project.latestBlueprint?.version !== plan.source.blueprintVersion)) {
           item.append(el('p', { className: 'muted', text: 'A new human task instance requires the latest saved graph revision and current blueprint.' }));
+        } else if (runtimeState.blockedDependencies.length) {
+          item.append(el('p', { className: 'muted', text: blockedDependencyText }));
         } else if (!dependenciesSucceeded) {
           item.append(el('p', { className: 'muted', text: 'Dependencies must succeed in this instance before the assigned human can start this task.' }));
         } else if (!state.authenticated) {
           item.append(el('p', { className: 'muted', text: 'Sign in as the enabled assigned human with workspace write access to start this checkpoint.' }));
         } else if (runtime && !runtime.assignedToCurrentPrincipal) {
-          item.append(el('p', { className: 'muted', text: 'This task runtime is pinned to its assigned human and cannot be started by another identity.' }));
+          item.append(el('p', { className: 'muted', text: 'Only the current assigned human can start this task.' }));
         } else {
-          const startButton = el('button', { className: 'button primary', text: 'Start assigned human task', attrs: { type: 'button' } });
-          startButton.addEventListener('click', () => { void startHumanTask({ project, plan, task, selectedInstance, button: startButton }); });
+          const commandKey = humanTaskStartCommandKey({ planId: plan.id, revision: plan.revision,
+            planInstanceId: selectedInstance, taskId: task.id });
+          const pendingStart = state.pendingHumanTaskCommands.get(commandKey) ?? null;
+          const presentation = humanTaskStartPresentation(pendingStart, {
+            submitting: state.submittingHumanTaskStarts.has(commandKey),
+            displayedInstanceId: selectedInstance === 'new' ? null : selectedInstance,
+          });
+          const startButton = el('button', { className: 'button primary', text: presentation.buttonLabel,
+            attrs: { type: 'button', disabled: presentation.buttonDisabled } });
+          const startStatus = el('p', { className: 'muted human-task-command-status', attrs: {
+            role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true',
+          }, text: presentation.status });
+          startButton.addEventListener('click', () => { void startHumanTask({ project, plan, task, selectedInstance,
+            button: startButton, status: startStatus, requestKey: commandKey }); });
           item.append(
-            el('p', { className: 'muted', text: 'Only the enabled human bound to this blueprint actor can start and complete the task. Starting records work in progress; it grants no agent or platform authority.' }),
-            startButton,
+            el('p', { className: 'muted', text: runtime?.effectiveAssignmentOverridden
+              ? 'The current owner-reassigned human may start and complete this task. Starting records work in progress; it grants no agent or platform authority.'
+              : 'Only the enabled human bound to this blueprint actor can start and complete the task. Starting records work in progress; it grants no agent or platform authority.' }),
+            startButton, startStatus,
           );
         }
+      } else if (instanceCancelled) {
+        item.append(el('p', { className: 'muted', text: 'This process instance is cancelled. No further task work can start.' }));
       } else {
         const assignment = currentTaskAssignment(task, plan, project, selectedInstance !== 'new');
         const hasProposalInputs = task.inputs?.length > 0 && task.outputs?.some((output) => output.type === 'information');
-        const profileOptions = (state.meta?.profiles ?? []).filter((profile) => profile.kind !== 'provider-openai' || hasProposalInputs);
-        const canStartNew = allowNewInstances && selectedInstance === 'new' && task.dependencies.length === 0
+        const profileOptions = (state.meta?.profiles ?? []).filter((profile) => !['provider-openai', 'provider-deepseek'].includes(profile.kind) || hasProposalInputs);
+        const canStartNew = canStartNewInstances && selectedInstance === 'new' && task.dependencies.length === 0
           && entries.at(-1)?.revision === plan.revision
           && project.latestBlueprint?.version === plan.source.blueprintVersion;
         const eligibleInInstance = selectedInstance !== 'new' && dependenciesSucceeded;
         const canRequest = state.authenticated && !instanceFenced && assignment.available && profileOptions.length > 0
           && (canStartNew || eligibleInInstance);
-        if (!assignment.available) {
+        if (selectedInstance !== 'new' && blockedDependencyText) {
+          item.append(el('p', { className: 'muted', text: blockedDependencyText }));
+        } else if (!assignment.available) {
           item.append(el('p', { className: 'muted', text: assignment.reason }));
         } else if (!state.authenticated) {
           item.append(el('p', { className: 'muted', text: 'Sign in with workspace write access to request approval for an assigned task.' }));
@@ -482,33 +1080,104 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
         } else if (selectedInstance !== 'new' && !dependenciesSucceeded) {
           item.append(el('p', { className: 'muted', text: 'Dependencies must succeed in this instance before this task can start.' }));
         }
-        if (!profileOptions.length) {
-          item.append(el('p', { className: 'muted', text: 'No local configured execution profile is available for a task-linked approval request.' }));
+        if (!state.meta?.profiles?.length) {
+          item.append(el('p', { className: 'muted', text: 'No execution profile is configured. Ask an OrgWard administrator to configure one before requesting approval.' }));
+        } else if (!profileOptions.length) {
+          item.append(el('p', { className: 'muted', text: 'No configured execution profile supports this task. Model profiles need at least one input and one information output; add those to the task or ask an OrgWard administrator to configure a non-model profile.' }));
         } else if (canRequest) {
+          const requestLookup = {
+            tenantId: project.tenantId, principal: state.currentPrincipal, projectId: project.id, planId: plan.id,
+            revision: plan.revision, planInstanceId: selectedInstance, taskId: task.id,
+          };
+          const directRequestKey = processTaskRequestStorageKey(requestLookup);
+          const pendingRequestEntry = findPendingProcessTaskRequest(processTaskIntentStorage(), {
+            ...requestLookup, key: directRequestKey,
+          });
+          const requestKey = pendingRequestEntry?.key ?? directRequestKey;
+          const pendingRequest = state.pendingTaskRuns.get(requestKey) ?? pendingRequestEntry?.pending ?? null;
+          if (pendingRequest) state.pendingTaskRuns.set(requestKey, pendingRequest);
+          const isSubmittingTaskRequest = state.submittingTaskRequests.has(requestKey);
+          const recoveringNewInstance = selectedInstance !== 'new' && pendingRequest?.status !== 'accepted'
+            && pendingRequest?.payload?.planInstanceId === undefined;
+          const requestPresentation = processTaskRequestPresentation(pendingRequest, {
+            submitting: isSubmittingTaskRequest, recoveringNewInstance,
+          });
           const profileSelect = el('select', { attrs: { 'aria-label': `Configured execution profile for ${task.title}` } });
           for (const profile of profileOptions) profileSelect.append(el('option', {
             text: `${profile.label} · ${profile.kind}`,
             attrs: { value: profile.id },
           }));
+          const savedProfileId = pendingRequest?.payload?.profileId;
+          if (requestPresentation.locked && savedProfileId) {
+            if (!profileOptions.some((profile) => profile.id === savedProfileId)) profileSelect.append(el('option', {
+              text: `${savedProfileId} · saved selection unavailable`, attrs: { value: savedProfileId, disabled: true },
+            }));
+            profileSelect.value = savedProfileId;
+          }
+          profileSelect.disabled = requestPresentation.locked;
           const requestButton = el('button', {
             className: 'button primary',
-            text: state.pendingTaskRuns.has(`${plan.id}\n${plan.revision}\n${task.id}`) ? 'Retry same approval request' : 'Create approval request',
-            attrs: { type: 'button' },
+            text: requestPresentation.buttonLabel,
+            attrs: { type: 'button', disabled: requestPresentation.buttonDisabled },
           });
-          requestButton.addEventListener('click', () => {
-            void requestTaskApproval({ project, plan, task, selectedInstance, profileId: profileSelect.value, requestButton });
-          });
+          const repositorySelect = el('select', { attrs: { 'aria-label': `Local repository for ${task.title}` } });
+          repositorySelect.append(el('option', { text: 'No local repository', attrs: { value: '' } }));
+          repositorySelect.disabled = requestPresentation.locked;
+          for (const repository of state.localRepositories) repositorySelect.append(el('option', {
+            text: `${repository.label}${repository.kind === 'git' ? ` · ${repository.refLabel} @ ${repository.commitOid.slice(0, 12)}` : ''} · ${repository.fileCount} files · ${repository.treeDigest.slice(0, 12)}`,
+            attrs: { value: repository.selectionId ?? repository.id },
+          }));
+          const savedRepository = pendingRequest?.payload?.repositoryId
+            ? state.localRepositories.find((repository) => repository.id === pendingRequest.payload.repositoryId
+              && repository.treeDigest === pendingRequest.payload.snapshotDigest
+              && (repository.kind !== 'git' || (repository.refId === pendingRequest.payload.repositoryRefId
+                && repository.commitOid === pendingRequest.payload.repositoryCommitOid))) : null;
+          if (requestPresentation.locked && pendingRequest?.payload?.repositoryId) {
+            if (savedRepository) repositorySelect.value = savedRepository.selectionId ?? savedRepository.id;
+            else repositorySelect.append(el('option', {
+              text: `Saved repository snapshot ${pendingRequest.payload.repositoryId} · unavailable or changed`,
+              attrs: { value: '__saved_repository_unavailable__', disabled: true, selected: true },
+            }));
+          }
           const profileDisclosure = el('p', { className: 'muted' });
           const updateProfileDisclosure = () => {
-            profileDisclosure.textContent = profileSelect.selectedOptions[0]?.textContent.includes('provider-openai')
-              ? 'After independent approval, this OpenAI profile receives the saved task instructions, its pinned input record content and source notes, and the selected output context. It does not receive unrelated project records or credential material. The result is a review-only cited proposal.'
+            const selectedProfile = (state.meta?.profiles ?? []).find((profile) => profile.id === profileSelect.value);
+            profileDisclosure.textContent = ['provider-openai', 'provider-deepseek'].includes(selectedProfile?.kind)
+              ? `After independent approval, this ${selectedProfile.kind === 'provider-deepseek' ? 'DeepSeek' : 'OpenAI'} profile receives the saved task instructions, its pinned input record content and source notes, and the selected output context. It does not receive unrelated project records or credential material. The result is a review-only cited proposal.`
               : 'This records the assigned agent reference; the configured local profile runs under the OrgWard worker after separate approval, not as the bound workload identity.';
           };
           profileSelect.addEventListener('change', updateProfileDisclosure);
           updateProfileDisclosure();
+          const requestStatus = el('p', { className: 'muted', attrs: { role: 'status', 'aria-live': 'polite' }, text: requestPresentation.status });
+          requestButton.addEventListener('click', () => {
+            void requestTaskApproval({ project, plan, task, selectedInstance, profileId: profileSelect.value,
+              repositorySelectionId: repositorySelect.value, requestButton, profileSelect, repositorySelect, requestStatus, requestKey });
+          });
           item.append(
-            profileDisclosure, el('label', { text: 'Configured execution profile' }, profileSelect), requestButton,
+            profileDisclosure, el('label', { text: 'Configured execution profile' }, profileSelect),
+            ...(state.localRepositories.length || pendingRequest?.payload?.repositoryId
+              ? [el('label', { text: 'Server-configured local repository' }, repositorySelect)] : []),
+            requestButton, requestStatus,
           );
+        }
+      }
+      if (selectedInstance !== 'new') {
+        const recoveryAction = processTaskRecoveryAction({ blockedDependencies: runtimeState.blockedDependencies,
+          uncertainDelivery: uncertainBlockedDependency,
+          canStartNewInstance: canStartNewInstances && entries.at(-1)?.revision === plan.revision
+            && project.latestBlueprint?.version === plan.source.blueprintVersion });
+        if (recoveryAction?.kind === 'select-new-instance') {
+          const chooseInstance = el('button', { className: 'button', text: recoveryAction.label, attrs: { type: 'button' } });
+          chooseInstance.addEventListener('click', () => {
+            if (!selectFreshProcessTaskInstance(state.selectedPlanInstances, instanceKey, recoveryAction)) return;
+            syncExecutionRoute(project.id, null);
+            renderProcessPlans(container, plans, project);
+            const planCard = [...container.querySelectorAll('.process-plan')].find((candidate) =>
+              candidate.dataset.processPlanId === plan.id && Number(candidate.dataset.planRevision) === Number(plan.revision));
+            planCard?.querySelector('select[aria-label^="Process instance for"]')?.focus();
+            notify('A new process instance is selected. Start with the first task; prior outcomes and evidence remain available in their original instance.');
+          });
+          item.append(chooseInstance);
         }
       }
       list.append(item);
@@ -548,42 +1217,71 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
       }
     }
   }
+  const blockedAnnouncement = summarizeBlockedTaskTransitions(blockedAnnouncements);
+  if (blockedAnnouncement && executionAnnouncement && !skipBlockedAnnouncement) {
+    const contexts = [...blockedAnnouncementContexts.values()];
+    scheduleProcessTaskAnnouncement(executionAnnouncement, blockedAnnouncement, {
+      isCurrent: () => state.planningProject?.id === project.id && contexts.every(({ planId, revision, instanceId }) => {
+        const card = [...container.querySelectorAll('.process-plan')].find((candidate) =>
+          candidate.dataset.processPlanId === planId && Number(candidate.dataset.planRevision) === Number(revision));
+        return card?.querySelector('select[aria-label^="Process instance for"]')?.value === instanceId;
+      }),
+    });
+  }
+}
+
+async function submitInstanceControl({ project, instanceId, control, action, form, button, status, payload, endpoint, successMessage }) {
+  const key = processInstanceCommandKey(action, instanceId, control.version);
+  const disposition = await submitProcessInstanceControl({ action, key, pendingCommands: state.pendingInstanceCommands,
+    payload, form, button, status,
+    send: (pending) => api(endpoint, { method: 'POST', body: JSON.stringify({ schemaVersion: '1.0',
+      commandId: pending.commandId, payload: pending.payload }) }),
+  });
+  if (disposition.kind === 'busy') return;
+  if (disposition.kind === 'saved') {
+    notify(successMessage(disposition.result));
+    await refreshAfterProcessInstanceControl({ kind: 'saved', refresh, status, pending: state.pendingInstanceCommands.get(key) });
+  } else if (disposition.kind === 'reconcile') {
+    notify(disposition.error.message);
+    await refreshAfterProcessInstanceControl({ kind: 'reconcile', refresh, status, pending: state.pendingInstanceCommands.get(key) });
+  } else {
+    status.textContent += ` ${disposition.error.message}`;
+    notify(disposition.error.message);
+  }
 }
 
 function renderInstanceControlForm({ project, instanceId, control, action }) {
   const form = el('form', { className: 'execution-form process-instance-control', attrs: {
-    'aria-label': action === 'pause' ? 'Pause process instance' : 'Resume process instance',
+    'aria-label': action === 'pause' ? 'Pause process instance' : action === 'cancel' ? 'Cancel process instance' : 'Resume process instance',
   } });
   let reason = null;
-  if (action === 'pause') {
-    reason = el('textarea', { attrs: { name: 'reason', required: 'required', maxlength: '500', rows: '2', 'aria-label': 'Reason for pausing process instance' } });
-    form.append(el('p', { className: 'muted', text: 'Pause blocks new starts and approvals. Already dispatched work remains in flight until its outcome is known.' }),
+  if (action === 'pause' || action === 'cancel') {
+    reason = el('textarea', { attrs: { name: 'reason', required: 'required', maxlength: action === 'pause' ? '500' : '1000', rows: '2',
+      'aria-label': action === 'pause' ? 'Reason for pausing process instance' : 'Reason for cancelling process instance' } });
+    form.append(el('p', { className: 'muted', text: action === 'pause'
+      ? 'Pause blocks new starts and approvals. Already dispatched work remains in flight until its outcome is known.'
+      : 'Cancellation is terminal. Completed outcomes and evidence remain; unresolved work must be reconciled before this action is available.' }),
       el('label', { text: 'Reason (required)' }, reason));
   }
   const button = el('button', { className: action === 'resume' ? 'button primary' : 'button',
-    text: action === 'pause' ? 'Pause process instance' : 'Resume process instance', attrs: { type: 'submit' } });
-  form.append(button);
+    text: action === 'pause' ? 'Pause process instance' : action === 'cancel' ? 'Cancel process instance' : 'Resume process instance', attrs: { type: 'submit' } });
+  const status = el('p', { className: 'muted', attrs: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' } });
+  form.append(button, status);
+  const key = processInstanceCommandKey(action, instanceId, control.version);
+  restoreProcessInstanceControlPresentation({ action, pending: state.pendingInstanceCommands.get(key), form, button, status });
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     const reasonText = reason?.value.trim() ?? '';
-    const key = `${instanceId}:${action}:${control.version}:${reasonText}`;
-    let pending = state.pendingInstanceCommands.get(key);
-    if (!pending) {
-      pending = { commandId: `process-instance-${action}:${crypto.randomUUID()}` };
-      state.pendingInstanceCommands.set(key, pending);
-    }
-    button.disabled = true;
-    void api(`/api/execution/process-task-instances/${action}`, {
-      method: 'POST', body: JSON.stringify({ schemaVersion: '1.0', commandId: pending.commandId,
-        payload: { projectId: project.id, planInstanceId: instanceId, version: control.version,
-          ...(action === 'pause' ? { reason: reasonText } : {}) } }),
-    }).then(async (result) => {
-      state.pendingInstanceCommands.delete(key);
-      notify(action === 'pause'
+    if ((action === 'pause' || action === 'cancel') && !reasonText) return;
+    void submitInstanceControl({ project, instanceId, control, action, form, button, status,
+      endpoint: `/api/execution/process-task-instances/${action}`,
+      payload: { projectId: project.id, planInstanceId: instanceId, version: control.version,
+        ...(action === 'pause' || action === 'cancel' ? { reason: reasonText } : {}) },
+      successMessage: (result) => action === 'pause'
         ? result.status === 'PAUSED' ? 'Process instance paused.' : 'Pause requested; waiting for in-flight work to settle.'
-        : 'Process instance resumed. Paused agent requests require fresh independent approval.');
-      await refresh();
-    }).catch((error) => notify(error.message)).finally(() => { button.disabled = false; });
+        : action === 'cancel' ? 'Process instance cancelled. Completed outcomes and evidence remain; no further work can start or resume.'
+          : 'Process instance resumed. Paused agent requests require fresh independent approval.',
+    });
   });
   return form;
 }
@@ -598,35 +1296,28 @@ function renderAbandonUnverifiedForm({ project, instanceId, control }) {
     'aria-label': 'Evidence checked before closing' } });
   const acknowledgement = el('input', { attrs: { type: 'checkbox', required: 'required', name: 'acknowledgeDuplicateCostWork' } });
   const button = el('button', { className: 'button', text: 'Close as unverified', attrs: { type: 'submit' } });
+  const status = el('p', { className: 'muted', attrs: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' } });
   form.append(
     el('p', { className: 'muted', text: 'The old model output is unverified. The provider call may have completed and may have incurred cost. This terminal action preserves the unknown attempt and will not resume this instance.' }),
     el('p', { className: 'muted', text: 'Retry only by starting a distinct new process instance and obtaining fresh independent approval. The new call could duplicate cost or work.' }),
     el('label', { text: 'Reason (required)' }, reason),
     el('label', { text: 'Evidence reviewed (one note per line, required)' }, evidence),
     el('label', { text: 'I acknowledge retry may duplicate cost or work', attrs: { className: 'checkbox-label' } }, acknowledgement),
-    button,
+    button, status,
   );
+  const key = processInstanceCommandKey('abandon-unverified', instanceId, control.version);
+  restoreProcessInstanceControlPresentation({ action: 'abandon-unverified', pending: state.pendingInstanceCommands.get(key), form, button, status });
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     const reasonText = reason.value.trim();
     const evidenceEntries = evidence.value.split('\n').map((entry) => entry.trim()).filter(Boolean);
     if (!reasonText || evidenceEntries.length < 1 || evidenceEntries.length > 20 || !acknowledgement.checked) return;
-    const key = `${instanceId}:abandon-unverified:${control.version}:${reasonText}:${evidenceEntries.join('\n')}`;
-    let pending = state.pendingInstanceCommands.get(key);
-    if (!pending) {
-      pending = { commandId: `process-instance-abandon-unverified:${crypto.randomUUID()}` };
-      state.pendingInstanceCommands.set(key, pending);
-    }
-    button.disabled = true;
-    void api('/api/execution/process-task-instances/abandon-unverified', {
-      method: 'POST', body: JSON.stringify({ schemaVersion: '1.0', commandId: pending.commandId,
-        payload: { projectId: project.id, planInstanceId: instanceId, version: control.version,
-          reason: reasonText, evidence: evidenceEntries, acknowledgeDuplicateCostWork: true } }),
-    }).then(async () => {
-      state.pendingInstanceCommands.delete(key);
-      notify('Instance closed as ABANDONED_UNVERIFIED. The old output is not verified; use a distinct instance and fresh approval to retry.');
-      await refresh();
-    }).catch((error) => notify(error.message)).finally(() => { button.disabled = false; });
+    void submitInstanceControl({ project, instanceId, control, action: 'abandon-unverified', form, button, status,
+      endpoint: '/api/execution/process-task-instances/abandon-unverified',
+      payload: { projectId: project.id, planInstanceId: instanceId, version: control.version,
+        reason: reasonText, evidence: evidenceEntries, acknowledgeDuplicateCostWork: true },
+      successMessage: () => 'Instance closed as ABANDONED_UNVERIFIED. The old output is not verified; use a distinct instance and fresh approval to retry.',
+    });
   });
   return form;
 }
@@ -638,62 +1329,221 @@ function renderHumanTaskCompletion({ project, plan, task, selectedInstance }) {
     el('option', { text: 'Succeeded', attrs: { value: 'succeeded' } }),
     el('option', { text: 'Failed', attrs: { value: 'failed' } }),
   ]);
-  const evidence = el('textarea', { attrs: { name: 'evidence', maxlength: '1000', rows: '3', 'aria-label': `Evidence for ${task.title}` } });
-  const evidenceLabel = el('label', { text: 'Evidence note (required)' }, evidence);
+  const evidence = el('textarea', { attrs: { name: 'evidence', maxlength: '20099', rows: '4', 'aria-label': `Evidence notes for ${task.title}` } });
+  const evidenceLabel = el('label', { text: 'Evidence notes, one per line (required)' }, evidence);
   const updateEvidenceRequirement = () => {
     const required = result.value === 'succeeded';
     evidence.required = required;
-    evidenceLabel.firstChild.textContent = required ? 'Evidence note (required)' : 'Evidence note (optional)';
+    evidence.setCustomValidity('');
+    evidenceLabel.firstChild.textContent = required ? 'Evidence notes, one per line (required)' : 'Evidence notes, one per line (optional)';
   };
   updateEvidenceRequirement();
+  evidence.addEventListener('input', () => evidence.setCustomValidity(''));
   result.addEventListener('change', updateEvidenceRequirement);
   const submit = el('button', { className: 'button primary', text: 'Complete human task', attrs: { type: 'submit' } });
-  form.append(el('label', { text: 'Outcome' }, result), evidenceLabel, submit);
+  const status = el('p', { className: 'muted human-task-command-status', attrs: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' } });
+  form.append(el('label', { text: 'Outcome' }, result), evidenceLabel, status, submit);
   form.addEventListener('submit', (event) => {
     event.preventDefault();
-    void completeHumanTask({ project, plan, task, selectedInstance, result: result.value, evidence: evidence.value, button: submit });
+    const evidenceEntries = parseHumanTaskEvidence(evidence.value);
+    if (!evidenceEntries || (result.value === 'succeeded' && evidenceEntries.length === 0)) {
+      evidence.setCustomValidity('Enter up to 20 evidence notes, one per line, with no note longer than 1000 characters. A succeeded task needs at least one note.');
+      evidence.reportValidity();
+      return;
+    }
+    evidence.setCustomValidity('');
+    void completeHumanTask({ project, plan, task, selectedInstance, result: result.value, evidence: evidenceEntries, form, status, button: submit });
   });
   return form;
+}
+
+function humanTaskOutputApplicationKey({ project, plan, task, runtime, output }) {
+  return [project.id, plan.id, plan.revision, runtime.planInstanceId, task.id, output.objectId].join('\n');
+}
+
+function renderHumanTaskOutputApplication({ project, plan, task, runtime, output }) {
+  const disposition = humanTaskOutputApplicationState({ project, plan, task, runtime, output });
+  if (disposition.kind === 'unavailable' || disposition.kind === 'not-succeeded') return null;
+  if (disposition.kind === 'applied') {
+    const superseded = disposition.currentBlueprintVersion > disposition.appliedBlueprintVersion;
+    const designLink = proposalDesignLink(project, { status: 'applied',
+      blueprintVersion: disposition.appliedBlueprintVersion, objectId: disposition.outputObjectId });
+    return el('section', { className: 'human-task-output-applied', attrs: { 'aria-label': `Saved output ${output.label}` } }, [
+      el('p', { text: `${output.label}: owner-authored content applied in proposed blueprint v${disposition.appliedBlueprintVersion}${superseded ? `; current design is v${disposition.currentBlueprintVersion}` : ''}.` }),
+      el('p', { text: `Current saved design detail: ${disposition.currentDetail}` }),
+      el('p', { className: 'muted', text: `Saved output reference: plan ${disposition.planId} revision ${disposition.revision}, task ${disposition.taskId}, instance ${disposition.planInstanceId}, event ${disposition.eventId}. The link opens the current design; it does not open a historical snapshot.` }),
+      ...(designLink ? [el('a', { className: 'button', text: designLink.label, attrs: { href: designLink.href } })] : []),
+    ]);
+  }
+  if (disposition.kind === 'stale') {
+    return el('p', { className: 'muted human-task-output-stale', text: `${output.label} remains pinned to blueprint v${plan.source.blueprintVersion}, while the current design has advanced. A project owner must review and reconcile this task output against the current design.` });
+  }
+  if (disposition.kind === 'owner-review') {
+    return el('p', { className: 'muted human-task-output-owner-review', text: `${output.label} is ready for explicit owner review. Only a current project owner can enter and apply proposed design content.` });
+  }
+  const key = humanTaskOutputApplicationKey({ project, plan, task, runtime, output });
+  const pending = state.pendingHumanTaskOutputApplications.get(key) ?? null;
+  const form = el('form', { className: 'execution-form human-task-output-application', attrs: {
+    'aria-label': `Apply owner-entered content for ${output.label}`,
+  } });
+  form.append(el('p', { className: 'muted', text: `Owner-entered proposed design content for ${output.label}, pinned to blueprint v${disposition.blueprintVersion}.` }));
+  form.append(el('p', { className: 'muted', text: 'Human evidence notes remain contextual provenance. They will not be copied into this output or treated as validation.' }));
+  form.append(el('p', { text: `Pinned value before this owner update: ${disposition.before || 'No detail saved.'}` }));
+  const detail = el('textarea', { attrs: { name: 'detail', required: 'required', maxlength: '700', rows: '4',
+    'aria-label': `Owner-entered detail for ${output.label}`, ...(pending ? { disabled: 'disabled' } : {}) } });
+  detail.value = pending?.payload?.detail ?? '';
+  const submit = el('button', { className: 'button primary', text: pending ? 'Retry saved output update' : 'Apply owner-entered output',
+    attrs: { type: 'submit', ...(pending?.submitting ? { disabled: 'disabled' } : {}) } });
+  const status = el('p', { className: 'muted human-task-output-status', attrs: {
+    role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true',
+  }, text: pending ? pending.status : '' });
+  form.append(el('label', { text: 'Proposed output detail (required)' }, detail), status, submit);
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (!detail.value.trim() || detail.value.length > 700) {
+      detail.setCustomValidity('Enter owner-authored output detail of 1–700 characters.');
+      detail.reportValidity();
+      return;
+    }
+    detail.setCustomValidity('');
+    void applyHumanTaskOutputApplication({ project, plan, task, runtime, output, disposition, key, form, detail, submit, status });
+  });
+  return form;
+}
+
+async function applyHumanTaskOutputApplication({ project, plan, task, runtime, output, disposition, key, form, detail, submit, status }) {
+  let pending = state.pendingHumanTaskOutputApplications.get(key);
+  if (pending?.submitting) return;
+  pending = humanTaskOutputCommand(pending, { commandId: `human-task-output:${crypto.randomUUID()}`,
+    expectedVersion: project.version,
+    payload: { planId: plan.id, revision: plan.revision, planInstanceId: runtime.planInstanceId,
+        taskId: task.id, outputObjectId: output.objectId, blueprintId: plan.source.blueprintId,
+        blueprintVersion: plan.source.blueprintVersion, before: disposition.before, detail: detail.value.trim() } });
+  if (!pending) return;
+  if (!state.pendingHumanTaskOutputApplications.has(key)) {
+    state.pendingHumanTaskOutputApplications.set(key, pending);
+  }
+  pending.submitting = true;
+  pending.status = 'Saving the owner-entered output against the pinned human checkpoint…';
+  for (const field of form.querySelectorAll('textarea, select, input')) field.disabled = true;
+  submit.disabled = true;
+  status.textContent = pending.status;
+  try {
+    const result = await api(`/api/v1/projects/${encodeURIComponent(project.id)}/human-task-outputs/apply`, {
+      method: 'POST', body: JSON.stringify({ schemaVersion: '1.0', commandId: pending.commandId,
+        expectedVersion: pending.expectedVersion, payload: pending.payload }),
+    });
+    state.pendingHumanTaskOutputApplications.delete(key);
+    const stillSelected = state.planningProject?.id === project.id;
+    if (stillSelected) state.planningProject = result.data;
+    state.projects = state.projects.map((candidate) => candidate.id === result.data.id ? result.data : candidate);
+    await refresh().catch(() => false);
+    const plans = document.querySelector('#process-plans');
+    if (stillSelected && plans && state.planningProject?.id === project.id) renderProcessPlans(plans, processPlansFor(), result.data);
+    notify('Owner-entered content was saved as a new proposed blueprint version. The human checkpoint history remains unchanged.');
+  } catch (error) {
+    pending.submitting = false;
+    if (error.status && error.status < 500) {
+      state.pendingHumanTaskOutputApplications.delete(key);
+      try {
+        const current = await api(`/api/v1/projects/${encodeURIComponent(project.id)}`);
+        const stillSelected = state.planningProject?.id === project.id;
+        if (stillSelected) state.planningProject = current.data;
+        state.projects = state.projects.map((candidate) => candidate.id === project.id ? current.data : candidate);
+        await refresh();
+        const plans = document.querySelector('#process-plans');
+        if (stillSelected && plans && state.planningProject?.id === project.id) renderProcessPlans(plans, processPlansFor(), current.data);
+      } catch {
+        status.textContent = 'The command was rejected because its pinned state changed, but the current design could not be refreshed. Reload the project before entering new content.';
+      }
+      notify(error.message);
+      return;
+    }
+    pending.status = 'The save result is uncertain. The submitted detail is frozen; retry sends the same command and payload.';
+    detail.disabled = true;
+    submit.disabled = false;
+    submit.textContent = 'Retry saved output update';
+    status.textContent = pending.status;
+    notify(pending.status);
+  }
 }
 
 function renderHumanTaskEscalation({ project, plan, task, selectedInstance }) {
   const form = el('form', { className: 'execution-form human-task-escalation', attrs: { 'aria-label': `Escalate assigned human task ${task.title}` } });
   form.append(el('p', { className: 'muted', text: 'Escalation pauses this task until a project owner reviews and resolves it.' }));
   const reason = el('textarea', { attrs: { name: 'reason', required: 'required', maxlength: '1000', rows: '2', 'aria-label': `Escalation reason for ${task.title}` } });
-  const evidence = el('textarea', { attrs: { name: 'evidence', maxlength: '1000', rows: '2', 'aria-label': `Escalation evidence for ${task.title}` } });
+  const evidence = el('textarea', { attrs: { name: 'evidence', maxlength: '20099', rows: '4', 'aria-label': `Escalation evidence notes for ${task.title}` } });
+  evidence.addEventListener('input', () => evidence.setCustomValidity(''));
   const submit = el('button', { className: 'button', text: 'Escalate to project owner', attrs: { type: 'submit' } });
-  form.append(el('label', { text: 'Reason (required)' }, reason), el('label', { text: 'Evidence (optional)' }, evidence), submit);
+  const status = el('p', { className: 'muted human-task-command-status', attrs: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' } });
+  form.append(el('label', { text: 'Reason (required)' }, reason), el('label', { text: 'Evidence notes, one per line (optional)' }, evidence), status, submit);
   form.addEventListener('submit', (event) => {
     event.preventDefault();
-    void escalateHumanTask({ project, plan, task, selectedInstance, reason: reason.value, evidence: evidence.value, button: submit });
+    const evidenceEntries = parseHumanTaskEvidence(evidence.value);
+    if (!evidenceEntries) {
+      evidence.setCustomValidity('Enter up to 20 evidence notes, one per line, with no note longer than 1000 characters.');
+      evidence.reportValidity();
+      return;
+    }
+    evidence.setCustomValidity('');
+    void escalateHumanTask({ project, plan, task, selectedInstance, reason: reason.value, evidence: evidenceEntries, form, status, button: submit });
   });
   return form;
 }
 
-function renderHumanTaskEscalationResolution({ project, plan, task, selectedInstance }) {
+function renderHumanTaskEscalationResolution({ project, plan, task, selectedInstance, runtime }) {
   const form = el('form', { className: 'execution-form human-task-escalation-resolution', attrs: { 'aria-label': `Resolve escalated human task ${task.title}` } });
+  const reassignmentCandidates = Array.isArray(runtime.humanReassignmentCandidates) ? runtime.humanReassignmentCandidates : [];
   const disposition = el('select', { attrs: { name: 'disposition', required: 'required', 'aria-label': `Owner resolution for ${task.title}` } }, [
     el('option', { text: 'Resume assigned human task', attrs: { value: 'resume' } }),
+    el('option', { text: reassignmentCandidates.length
+      ? 'Reassign to an eligible project human' : 'Reassignment unavailable · no eligible human members',
+    attrs: { value: 'reassign', ...(reassignmentCandidates.length ? {} : { disabled: 'disabled' }) } }),
     el('option', { text: 'Mark succeeded', attrs: { value: 'succeeded' } }),
     el('option', { text: 'Mark failed', attrs: { value: 'failed' } }),
   ]);
+  const targetPrincipal = el('select', { attrs: { name: 'targetPrincipal', 'aria-label': `New human assignee for ${task.title}`, disabled: 'disabled' } }, [
+    el('option', { text: 'Choose an active human project member', attrs: { value: '' } }),
+    ...reassignmentCandidates.map((candidate) => el('option', {
+      text: `${candidate.displayName} (${candidate.principal.slice(-8)})`, attrs: { value: candidate.principal },
+    })),
+  ]);
+  const targetLabel = el('label', { text: 'New assignee (owner override; the saved plan remains unchanged)', attrs: { hidden: 'hidden' } }, targetPrincipal);
   const reason = el('textarea', { attrs: { name: 'reason', required: 'required', maxlength: '1000', rows: '2', 'aria-label': `Owner resolution reason for ${task.title}` } });
-  const evidence = el('textarea', { attrs: { name: 'evidence', maxlength: '1000', rows: '2', 'aria-label': `Owner verification evidence for ${task.title}` } });
-  const syncEvidenceRequirement = () => { evidence.required = disposition.value === 'succeeded'; };
-  disposition.addEventListener('change', syncEvidenceRequirement);
-  syncEvidenceRequirement();
+  const evidence = el('textarea', { attrs: { name: 'evidence', maxlength: '20099', rows: '4', 'aria-label': `Owner verification evidence notes for ${task.title}` } });
+  evidence.addEventListener('input', () => evidence.setCustomValidity(''));
+  const syncResolutionFields = () => {
+    const reassigning = disposition.value === 'reassign';
+    evidence.required = ['succeeded', 'reassign'].includes(disposition.value);
+    targetLabel.hidden = !reassigning;
+    targetPrincipal.disabled = !reassigning;
+    targetPrincipal.required = reassigning;
+  };
+  disposition.addEventListener('change', syncResolutionFields);
+  syncResolutionFields();
   const submit = el('button', { className: 'button primary', text: 'Resolve escalation', attrs: { type: 'submit' } });
+  const status = el('p', { className: 'muted human-task-command-status', attrs: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' } });
   form.append(
-    el('p', { className: 'muted', text: 'Only a project owner with workspace write access can resolve this escalation. Marking succeeded requires verification or work evidence.' }),
+    el('p', { className: 'muted', text: 'Only a project owner with workspace write access can resolve this escalation. Reassignment is an explicit owner override to another active human project member with workspace write access; it keeps the pinned plan unchanged. Reassignment and marking succeeded require evidence.' }),
     el('label', { text: 'Resolution' }, disposition),
+    targetLabel,
     el('label', { text: 'Owner reason (required)' }, reason),
-    el('label', { text: 'Verification or work evidence' }, evidence), submit,
+    el('label', { text: 'Verification or work evidence notes, one per line' }, evidence), status, submit,
   );
   form.addEventListener('submit', (event) => {
     event.preventDefault();
+    const evidenceEntries = parseHumanTaskEvidence(evidence.value);
+    if (!evidenceEntries || (['succeeded', 'reassign'].includes(disposition.value) && evidenceEntries.length === 0)) {
+      evidence.setCustomValidity('Enter up to 20 verification, work, or reassignment evidence notes, one per line, with no note longer than 1000 characters. A succeeded or reassigned resolution needs at least one note.');
+      evidence.reportValidity();
+      return;
+    }
+    evidence.setCustomValidity('');
     void resolveHumanTaskEscalation({
       project, plan, task, selectedInstance, disposition: disposition.value,
-      reason: reason.value, evidence: evidence.value, button: submit,
+      targetPrincipal: disposition.value === 'reassign' ? targetPrincipal.value : null,
+      expectedVersion: disposition.value === 'reassign' ? runtime.version : null,
+      reason: reason.value, evidence: evidenceEntries, form, status, button: submit,
     });
   });
   return form;
@@ -703,106 +1553,191 @@ function humanTaskCommandKey(action, plan, task, instanceId) {
   return `${action}\n${plan.id}\n${plan.revision}\n${instanceId}\n${task.id}`;
 }
 
-async function startHumanTask({ project, plan, task, selectedInstance, button }) {
-  const key = humanTaskCommandKey('start', plan, task, selectedInstance);
+async function startHumanTask({ project, plan, task, selectedInstance, button, status, requestKey }) {
+  const key = requestKey ?? humanTaskStartCommandKey({ planId: plan.id, revision: plan.revision,
+    planInstanceId: selectedInstance, taskId: task.id });
+  if (state.submittingHumanTaskStarts.has(key)) return;
+  const planInstanceSelectionKey = `${plan.id}\n${plan.revision}`;
+  const selectionAtStart = state.selectedPlanInstances.get(planInstanceSelectionKey) ?? selectedInstance;
+  const requestTenantId = project.tenantId;
+  const requestPrincipal = state.currentPrincipal;
+  const storageKeyFor = (pending) => humanTaskStartStorageKey({ tenantId: requestTenantId,
+    principal: requestPrincipal, projectId: project.id, planId: plan.id, revision: plan.revision,
+    planInstanceId: pending?.payload?.planInstanceId ?? null, taskId: task.id });
+  const priorFocus = document.activeElement;
+  let pending = state.pendingHumanTaskCommands.get(key) ?? readHumanTaskStart(processTaskIntentStorage(), storageKeyFor({
+    payload: { planInstanceId: selectedInstance === 'new' ? undefined : selectedInstance },
+  }));
+  if (pending && (pending.tenantId !== requestTenantId || pending.principal !== requestPrincipal)) {
+    notify('This saved start belongs to a different signed-in identity. Reload the project before retrying it.');
+    return;
+  }
+  if (pending && (pending.payload?.projectId !== project.id || pending.payload?.planId !== plan.id
+    || pending.payload?.revision !== plan.revision || pending.payload?.taskId !== task.id
+    || pending.payload?.planInstanceId !== (selectedInstance === 'new' ? undefined : selectedInstance))) {
+    notify('The saved start does not match this task selection. Reload the authorized task state before retrying it.');
+    return;
+  }
+  if (!pending) {
+    pending = { commandId: `human-task-start:${crypto.randomUUID()}`, status: 'pending',
+      tenantId: requestTenantId, principal: requestPrincipal, payload: {
+        projectId: project.id, planId: plan.id, revision: plan.revision, taskId: task.id,
+        ...(selectedInstance !== 'new' ? { planInstanceId: selectedInstance } : {}),
+      } };
+  }
+  state.pendingHumanTaskCommands.set(key, pending);
+  saveHumanTaskStart(processTaskIntentStorage(), storageKeyFor(pending), pending);
+  state.submittingHumanTaskStarts.add(key);
+  const showStatus = (submitting = false) => {
+    const presentation = humanTaskStartPresentation(state.pendingHumanTaskCommands.get(key) ?? pending, {
+      submitting, displayedInstanceId: selectedInstance === 'new' ? null : selectedInstance,
+    });
+    button.disabled = presentation.buttonDisabled;
+    button.textContent = presentation.buttonLabel;
+    if (status) status.textContent = presentation.status;
+  };
   button.disabled = true;
+  showStatus(true);
   try {
-    let pending = state.pendingHumanTaskCommands.get(key);
-    if (!pending) {
-      pending = {
-        commandId: `human-task-start:${crypto.randomUUID()}`,
-        payload: {
-          projectId: project.id, planId: plan.id, revision: plan.revision, taskId: task.id,
-          ...(selectedInstance !== 'new' ? { planInstanceId: selectedInstance } : {}),
-        },
-      };
-      state.pendingHumanTaskCommands.set(key, pending);
-    }
+    if (state.currentPrincipal !== requestPrincipal) throw Object.assign(new Error('The signed-in identity changed before the task start was sent. Its exact saved command remains available to its original assignee.'), { status: 403 });
     const runtime = await api('/api/execution/process-task-instances/start', {
       method: 'POST', body: JSON.stringify({ schemaVersion: '1.0', commandId: pending.commandId, payload: pending.payload }),
     });
-    state.pendingHumanTaskCommands.delete(key);
-    state.selectedPlanInstances.set(`${plan.id}\n${plan.revision}`, runtime.planInstanceId);
-    syncExecutionRoute(project.id, {
-      projectId: project.id, processPlanId: plan.id, revision: plan.revision,
-      planInstanceId: runtime.planInstanceId,
-    });
-    await refresh();
-    notify('Human task started. Its assigned identity, start time and task history were saved.');
+    pending = acceptHumanTaskStart(pending, runtime);
+    if (!pending) throw Object.assign(new Error('The saved start response did not match its task, assignee or instance intent. The exact command remains saved for recovery.'), { retryable: true });
+    state.pendingHumanTaskCommands.set(key, pending);
+    saveHumanTaskStart(processTaskIntentStorage(), storageKeyFor(pending), pending);
+    const stillSelected = state.planningProject?.id === project.id && state.currentPrincipal === requestPrincipal
+      && document.querySelector('#plan-project')?.value === project.id
+      && (state.selectedPlanInstances.get(planInstanceSelectionKey) ?? selectionAtStart) === selectionAtStart;
+    if (stillSelected) {
+      state.selectedPlanInstances.set(planInstanceSelectionKey, runtime.planInstanceId);
+      syncExecutionRoute(project.id, {
+        projectId: project.id, processPlanId: plan.id, revision: plan.revision,
+        planInstanceId: runtime.planInstanceId,
+      });
+    }
+    const refreshed = stillSelected ? await refresh() : false;
+    if (refreshed && !state.pendingHumanTaskCommands.has(key)) {
+      restoreHumanTaskStatusFocusAfterAction({ button, plan, task, planInstanceId: runtime.planInstanceId });
+      notify('Human task started. Its assigned identity, start time and task history were confirmed in the current snapshot.');
+    } else {
+      showStatus();
+      notify('The start was accepted, but the current task snapshot has not confirmed it. The exact command remains saved; retry it to reconcile.');
+    }
   } catch (error) {
-    if (!error.retryable) state.pendingHumanTaskCommands.delete(key);
-    notify(error.retryable ? 'The start result is uncertain. Retry this same task command.' : error.message);
-  } finally { button.disabled = false; }
+    const disposition = humanTaskActionFailureDisposition(error);
+    if (state.pendingHumanTaskCommands.get(key)?.status === 'accepted') {
+      notify('The start was accepted, but refresh did not confirm its current task state. Its exact command remains saved; retry it to reconcile.');
+    } else if (disposition === 'reconcile') {
+      const refreshed = state.planningProject?.id === project.id
+        ? await reconcileHumanTaskConflict(project, plan, task, selectedInstance) : false;
+      const reconciled = refreshed && !state.pendingHumanTaskCommands.has(key);
+      if (reconciled) notify('The human checkpoint changed before this action was saved. Current history and available actions were refreshed.');
+      else notify('The start could not be reconciled. Its exact command remains saved; review the current task state before trying again.');
+    } else {
+      notify(disposition === 'retry' ? 'The start result is uncertain. The exact command remains saved; retry it to recover the same task start.' : error.message);
+    }
+  } finally {
+    state.submittingHumanTaskStarts.delete(key);
+    if (button.isConnected) showStatus();
+    if (document.activeElement === document.body && priorFocus?.isConnected) priorFocus.focus({ preventScroll: true });
+  }
 }
 
-async function completeHumanTask({ project, plan, task, selectedInstance, result, evidence, button }) {
+async function completeHumanTask({ project, plan, task, selectedInstance, result, evidence, form, status, button }) {
   const key = humanTaskCommandKey('complete', plan, task, selectedInstance);
-  button.disabled = true;
+  const priorFocus = document.activeElement;
+  let saved = false;
   try {
-    let pending = state.pendingHumanTaskCommands.get(key);
-    if (!pending) {
-      pending = {
-        commandId: `human-task-complete:${crypto.randomUUID()}`,
-        payload: {
-          projectId: project.id, planId: plan.id, revision: plan.revision,
-          planInstanceId: selectedInstance, taskId: task.id, result,
-          evidence: evidence.trim() ? [evidence.trim()] : [],
-        },
-      };
-      state.pendingHumanTaskCommands.set(key, pending);
-    }
-    await api('/api/execution/process-task-instances/complete', {
-      method: 'POST', body: JSON.stringify({ schemaVersion: '1.0', commandId: pending.commandId, payload: pending.payload }),
+    const submission = await submitHumanTaskCommand({
+      action: 'complete', key, pendingCommands: state.pendingHumanTaskCommands,
+      payload: { projectId: project.id, planId: plan.id, revision: plan.revision,
+        planInstanceId: selectedInstance, taskId: task.id, result, evidence },
+      form, button, status,
+      send: (pending) => api('/api/execution/process-task-instances/complete', {
+        method: 'POST', body: JSON.stringify({ schemaVersion: '1.0', commandId: pending.commandId, payload: pending.payload }),
+      }),
     });
-    state.pendingHumanTaskCommands.delete(key);
-    await refresh();
-    notify('Human task outcome and evidence were saved to its process runtime.');
+    if (submission.kind === 'saved') {
+      saved = true;
+      await refresh();
+      restoreHumanTaskStatusFocusAfterAction({ button, plan, task, planInstanceId: selectedInstance });
+      notify('Human task outcome and evidence were saved to its process runtime.');
+    } else if (submission.kind === 'reconcile') {
+      const refreshed = await reconcileHumanTaskConflict(project, plan, task, selectedInstance);
+      notify(refreshed
+        ? 'The human checkpoint changed before this action was saved. Current history and available actions were refreshed.'
+        : 'The human checkpoint changed before this action was saved. Reload the project to review its current history and actions.');
+    } else if (submission.kind === 'retry') {
+      notify('The completion result is uncertain. Form values are locked; use Retry saved completion to resend the same command.');
+    } else if (submission.kind !== 'busy') {
+      notify(submission.error?.message ?? 'The human task could not be completed.');
+    }
   } catch (error) {
-    if (!error.retryable) state.pendingHumanTaskCommands.delete(key);
-    notify(error.retryable ? 'The completion result is uncertain. Retry this same task command.' : error.message);
-  } finally { button.disabled = false; }
+    notify(error.message);
+  } finally {
+    if (!saved) button.disabled = false;
+    if (document.activeElement === document.body && priorFocus?.isConnected) priorFocus.focus({ preventScroll: true });
+  }
 }
 
-async function submitHumanTaskAction({ action, project, plan, task, selectedInstance, details, button, success }) {
+async function submitHumanTaskAction({ action, project, plan, task, selectedInstance, details, form, status, button, success }) {
   const key = humanTaskCommandKey(action, plan, task, selectedInstance);
-  button.disabled = true;
+  const priorFocus = document.activeElement;
+  let saved = false;
   try {
-    let pending = state.pendingHumanTaskCommands.get(key);
-    if (!pending) {
-      pending = {
-        commandId: `human-task-${action}:${crypto.randomUUID()}`,
-        payload: {
-          projectId: project.id, planId: plan.id, revision: plan.revision,
-          planInstanceId: selectedInstance, taskId: task.id, ...details,
-        },
-      };
-      state.pendingHumanTaskCommands.set(key, pending);
-    }
-    await api(`/api/execution/process-task-instances/${action}`, {
-      method: 'POST', body: JSON.stringify({ schemaVersion: '1.0', commandId: pending.commandId, payload: pending.payload }),
+    const submission = await submitHumanTaskCommand({
+      action, key, pendingCommands: state.pendingHumanTaskCommands,
+      payload: { projectId: project.id, planId: plan.id, revision: plan.revision,
+        planInstanceId: selectedInstance, taskId: task.id, ...details },
+      form, button, status,
+      send: (pending) => api(`/api/execution/process-task-instances/${action}`, {
+        method: 'POST', body: JSON.stringify({ schemaVersion: '1.0', commandId: pending.commandId, payload: pending.payload }),
+      }),
     });
-    state.pendingHumanTaskCommands.delete(key);
-    await refresh();
-    notify(success);
+    if (submission.kind === 'saved') {
+      saved = true;
+      await refresh();
+      restoreHumanTaskStatusFocusAfterAction({ button, plan, task, planInstanceId: selectedInstance });
+      notify(success);
+    } else if (submission.kind === 'reconcile') {
+      const refreshed = await reconcileHumanTaskConflict(project, plan, task, selectedInstance);
+      notify(refreshed
+        ? 'The human checkpoint changed before this action was saved. Current history and available actions were refreshed.'
+        : 'The human checkpoint changed before this action was saved. Reload the project to review its current history and actions.');
+    } else if (submission.kind === 'retry') {
+      const label = action === 'escalate' ? 'escalation' : 'resolution';
+      notify(`The ${label} result is uncertain. Form values are locked; use Retry saved ${label} to resend the same command.`);
+    } else if (submission.kind !== 'busy') {
+      notify(submission.error?.message ?? 'The human task action could not be saved.');
+    }
   } catch (error) {
-    if (!error.retryable) state.pendingHumanTaskCommands.delete(key);
-    notify(error.retryable ? `The ${action} result is uncertain. Retry this same task command.` : error.message);
-  } finally { button.disabled = false; }
+    notify(error.message);
+  } finally {
+    if (!saved) button.disabled = false;
+    if (document.activeElement === document.body && priorFocus?.isConnected) priorFocus.focus({ preventScroll: true });
+  }
 }
 
-function escalateHumanTask({ project, plan, task, selectedInstance, reason, evidence, button }) {
+function escalateHumanTask({ project, plan, task, selectedInstance, reason, evidence, form, status, button }) {
   return submitHumanTaskAction({
     action: 'escalate', project, plan, task, selectedInstance, button,
-    details: { reason: reason.trim(), evidence: evidence.trim() ? [evidence.trim()] : [] },
+    form, status,
+    details: { reason: reason.trim(), evidence },
     success: 'Human task escalated to its project owner; the task is paused pending resolution.',
   });
 }
 
-function resolveHumanTaskEscalation({ project, plan, task, selectedInstance, disposition, reason, evidence, button }) {
+function resolveHumanTaskEscalation({ project, plan, task, selectedInstance, disposition, targetPrincipal, expectedVersion, reason, evidence, form, status, button }) {
   return submitHumanTaskAction({
     action: 'resolve', project, plan, task, selectedInstance, button,
-    details: { disposition, reason: reason.trim(), evidence: evidence.trim() ? [evidence.trim()] : [] },
-    success: `Project owner saved the ${disposition} resolution for the human task.`,
+    form, status,
+    details: { disposition, reason: reason.trim(), evidence,
+      ...(targetPrincipal ? { targetPrincipal, expectedVersion } : {}) },
+    success: disposition === 'reassign'
+      ? 'Project owner reassigned the checkpoint to the selected active human; the saved plan remains unchanged.'
+      : `Project owner saved the ${disposition} resolution for the human task.`,
   });
 }
 
@@ -823,10 +1758,33 @@ function taskAssigneePresentation(task, plan, project) {
   }
   const row = state.actorBindingRows.find((candidate) => candidate.blueprintVersion === plan.source.blueprintVersion
     && candidate.actorId === task.assignee.actorId && candidate.roleId === task.assignee.roleId);
-  if (row?.status === 'enabled' && row.eligibilityStatus?.length === 1 && row.eligibilityStatus[0] === 'eligible' && row.targetName) {
+  if (row?.status === 'enabled' && row.targetType === 'workload'
+    && row.eligibilityStatus?.length === 1 && row.eligibilityStatus[0] === 'eligible' && row.targetName) {
     return `${actorLabel} · enabled organizational assignee: ${row.targetName}`;
   }
   return `${actorLabel} · enabled binding is stale or unavailable; target unresolved`;
+}
+
+function renderTaskAssignmentTransparency(task, plan, project) {
+  const view = processTaskAssignmentTransparency({ task, plan, project,
+    bindings: state.actorBindingRows, bindingProjectId: state.actorBindingProjectId,
+    bindingReadAvailable: state.actorBindingReadAvailable });
+  const field = (label, values) => el('p', { className: 'task-assignment-transparency-field' }, [
+    el('strong', { text: `${label}: ` }), document.createTextNode(values.join(' · ')),
+  ]);
+  return el('details', { className: 'task-assignment-transparency' }, [
+    el('summary', { text: view.disclosureSummary }),
+    el('p', { className: 'muted', text: view.guidanceLabel }),
+    field('Blueprint role', [view.roleName]),
+    field('Responsibility', view.responsibility),
+    field('Proposed scope and authority', view.scopeAndAuthority),
+    field('Proposed instructions', view.instructions),
+    field('Proposed tools (not enabled)', view.tools),
+    field('Proposed escalation rules', view.escalationRules),
+    field('Planned assignee', [view.assignee]),
+    field('Enabled organizational responsibility target', [view.organizationalTarget]),
+    field('Actual execution permission', [view.permissionBoundary]),
+  ]);
 }
 
 function currentTaskAssignment(task, plan, project, pinnedInstance = false) {
@@ -861,44 +1819,77 @@ function currentTaskAssignment(task, plan, project, pinnedInstance = false) {
   return { available: true, binding };
 }
 
-async function requestTaskApproval({ project, plan, task, selectedInstance, profileId, requestButton }) {
-  const key = `${plan.id}\n${plan.revision}\n${task.id}`;
-  requestButton.disabled = true;
+async function requestTaskApproval({ project, plan, task, selectedInstance, profileId, repositorySelectionId,
+  requestButton, profileSelect, repositorySelect, requestStatus, requestKey }) {
+  const key = requestKey ?? processTaskRequestStorageKey({ tenantId: project.tenantId, principal: state.currentPrincipal,
+    projectId: project.id, planId: plan.id, revision: plan.revision, planInstanceId: selectedInstance, taskId: task.id });
+  let pending = state.pendingTaskRuns.get(key) ?? readPendingProcessTaskRequest(processTaskIntentStorage(), key);
+  if (pending) {
+    pending = { ...pending, tenantId: project.tenantId, principal: state.currentPrincipal };
+    state.pendingTaskRuns.set(key, pending);
+    savePendingProcessTaskRequest(processTaskIntentStorage(), key, pending);
+  }
+  const recoveringNewInstance = selectedInstance !== 'new' && pending?.status !== 'accepted'
+    && pending?.payload?.planInstanceId === undefined;
+  state.submittingTaskRequests.add(key);
+  setTaskRequestControls({ requestButton, profileSelect, repositorySelect, status: requestStatus, pending,
+    submitting: true, recoveringNewInstance });
   try {
-    let pending = state.pendingTaskRuns.get(key);
     if (!pending) {
       const payload = {
         projectId: project.id, planId: plan.id, revision: plan.revision,
         taskId: task.id, profileId,
         ...(selectedInstance !== 'new' ? { planInstanceId: selectedInstance } : {}),
       };
-      pending = { commandId: `process-task-request:${crypto.randomUUID()}`, payload };
+      if (repositorySelectionId) {
+        const repository = state.localRepositories.find((entry) => (entry.selectionId ?? entry.id) === repositorySelectionId);
+        if (!repository) throw new Error('Reload the project to select a current local repository snapshot.');
+        payload.repositoryId = repository.id;
+        if (repository.kind === 'git') {
+          payload.repositoryRefId = repository.refId;
+          payload.repositoryCommitOid = repository.commitOid;
+        }
+        payload.snapshotDigest = repository.treeDigest;
+      }
+      pending = { commandId: `process-task-request:${crypto.randomUUID()}`, payload,
+        tenantId: project.tenantId, principal: state.currentPrincipal };
       state.pendingTaskRuns.set(key, pending);
+      savePendingProcessTaskRequest(processTaskIntentStorage(), key, pending);
     }
     const run = await api('/api/execution/process-task-runs', {
       method: 'POST',
       body: JSON.stringify({ schemaVersion: '1.0', commandId: pending.commandId, payload: pending.payload }),
     });
-    state.pendingTaskRuns.delete(key);
-    state.selectedPlanInstances.set(`${plan.id}\n${plan.revision}`, run.processTaskRef.planInstanceId);
-    syncExecutionRoute(project.id, {
-      projectId: project.id, processPlanId: plan.id, revision: plan.revision,
-      planInstanceId: run.processTaskRef.planInstanceId,
-    });
+    const accepted = acceptProcessTaskRequest(pending, run);
+    if (!accepted) throw Object.assign(new Error('The saved approval response did not match this task request. Its exact command remains available for reconciliation.'), { retryable: true });
+    pending = accepted;
+    state.pendingTaskRuns.set(key, pending);
+    savePendingProcessTaskRequest(processTaskIntentStorage(), key, pending);
     state.run = run;
-    await refresh();
+    syncExecutionRunRoute(run);
+    const refreshed = await refresh();
     renderRun();
     renderList();
-    notify('Approval request created for the assigned task. No work was dispatched; the selected profile will run through the OrgWard worker, not as the bound workload.');
+    if (refreshed && !state.pendingTaskRuns.has(key)) notify(run.meta?.replayed
+      ? 'Recovered the existing approval request and confirmed its saved process task. No work was dispatched; independent approval is still required.'
+      : 'Approval request created and linked to the saved process task. No work was dispatched; independent approval is still required.');
+    else notify('The approval request was saved, but its process task is not yet confirmed. The original request stays locked; retry it to reconcile the saved receipt.');
   } catch (error) {
-    if (error.retryable && state.pendingTaskRuns.has(key)) {
-      requestButton.textContent = 'Retry same approval request';
-      notify('The request result is uncertain. Retry the same approval command to recover its saved run.');
+    const currentPending = state.pendingTaskRuns.get(key) ?? pending;
+    if (currentPending?.status === 'accepted') {
+      notify('The approval request was saved, but its process task is not yet confirmed. The original request stays locked; retry it to reconcile the saved receipt.');
+    } else if (error.retryable && currentPending) {
+      notify('The request result is uncertain. The profile and repository stay locked; retry the same approval command to recover its saved run.');
     } else {
       state.pendingTaskRuns.delete(key);
+      clearPendingProcessTaskRequest(processTaskIntentStorage(), key);
       notify(error.message);
     }
-  } finally { requestButton.disabled = false; }
+  } finally {
+    state.submittingTaskRequests.delete(key);
+    setTaskRequestControls({ requestButton, profileSelect, repositorySelect, status: requestStatus,
+      pending: state.pendingTaskRuns.get(key) ?? null, recoveringNewInstance });
+  }
 }
 
 function openPlanEditor(container, plan, project) {
@@ -1077,7 +2068,8 @@ async function submitPlanRevision(event, plan, project) {
     });
     state.pendingProcessPlans.delete(key);
     state.planningProject = result.data;
-    renderProcessPlans(document.querySelector('#process-plans'), result.data.processPlans ?? [], result.data);
+    renderProcessPlans(document.querySelector('#process-plans'), processPlansFor(result.data), result.data);
+    focusProcessPlanCard(processPlanRevisionFocusTarget(result.event));
     notify('Immutable graph revision saved. Tasks remain planned; no work was dispatched.');
   } catch (error) {
     const disposition = processPlanFailureDisposition(error);
@@ -1104,11 +2096,22 @@ async function createRun(event) {
     if (state.authenticated) delete values.requestedBy;
     values.requirements = values.requirements.split('\n').map((entry) => entry.trim()).filter(Boolean);
     state.run = await api('/api/execution/runs', { method: 'POST', body: JSON.stringify(values) });
+    syncExecutionRunRoute(state.run);
     await refresh(); renderRun(); notify('Execution request created. Independent approval is required.');
   } catch (error) { notify(error.message); button.disabled = false; }
 }
 
-async function load(id) {
+async function load(id, { initiatingControl = null, event = null } = {}) {
+  selectedRunRefreshRequestId += 1;
+  deferredSelectedRun = null;
+  if (selectedRunWaitMessage && executionAnnouncement.textContent === selectedRunWaitMessage) executionAnnouncement.textContent = '';
+  selectedRunWaitMessage = '';
+  const keyboardInvoked = isRunActionKeyboardActivation(event, initiatingControl, document);
+  let focusMoved = false;
+  const observeFocusMove = (focusEvent) => {
+    if (focusEvent.target !== document.body && focusEvent.target !== initiatingControl) focusMoved = true;
+  };
+  if (keyboardInvoked) document.addEventListener('focusin', observeFocusMove);
   try {
     state.run = await api(`/api/execution/runs/${id}`);
     if (state.authenticated && state.run.processTaskRef && state.run.projectId) {
@@ -1117,9 +2120,21 @@ async function load(id) {
       } catch { state.taskInstances = []; }
     }
     await loadProposalApplication(state.run);
+    syncExecutionRunRoute(state.run);
     renderRun(); renderList();
+    if (keyboardInvoked) restoreRunTransitionFocus({
+      initiatingControl,
+      documentRef: document,
+      action: 'open-run',
+      runStatus: state.run.status,
+      keyboardInvoked,
+      focusMoved,
+      transitionSucceeded: true,
+      findTarget: () => document.querySelector('[data-run-status-focus-target]'),
+    });
   }
   catch (error) { notify(error.message); }
+  finally { if (keyboardInvoked) document.removeEventListener('focusin', observeFocusMove); }
 }
 
 async function loadProposalApplication(run, project = null) {
@@ -1151,13 +2166,34 @@ async function loadProposalApplication(run, project = null) {
   });
 }
 
-async function command(action, body) {
-  const button = document.querySelector(`[data-action="${action}"]`); if (button) button.disabled = true;
+async function command(action, body, event = null) {
+  const button = document.querySelector(`[data-action="${action}"]`);
+  const keyboardInvoked = isRunActionKeyboardActivation(event, button, document);
+  let focusMoved = false;
+  const observeFocusMove = (focusEvent) => {
+    if (focusEvent.target !== document.body && focusEvent.target !== button) focusMoved = true;
+  };
+  if (keyboardInvoked) document.addEventListener('focusin', observeFocusMove);
+  if (button) button.disabled = true;
   try {
     state.run = await api(`/api/execution/runs/${state.run.id}/${action}`, { method: 'POST', body: JSON.stringify({ version: state.run.version, ...body }) });
     await loadProposalApplication(state.run);
-    await refresh(); renderRun(); notify(action === 'execute' ? 'Execution finished and evidence was saved.' : 'Independent approval recorded.');
+    await refresh(); renderRun();
+    if (keyboardInvoked) restoreRunTransitionFocus({
+      initiatingControl: button,
+      documentRef: document,
+      action,
+      runStatus: state.run.status,
+      keyboardInvoked,
+      focusMoved,
+      transitionSucceeded: true,
+      findTarget: () => action === 'approve'
+        ? document.querySelector('[data-action="execute"]')
+        : document.querySelector('[data-run-status-focus-target]'),
+    });
+    notify(action === 'execute' ? 'Execution finished and evidence was saved.' : 'Independent approval recorded.');
   } catch (error) { notify(error.message); if (button) button.disabled = false; }
+  finally { if (keyboardInvoked) document.removeEventListener('focusin', observeFocusMove); }
 }
 
 async function withdrawLinkedRun() {
@@ -1231,31 +2267,48 @@ async function changeLinkedRunPause(action, reason = null) {
 async function amendLinkedRun(form) {
   const run = state.run;
   if (!run?.processTaskRef || run.status !== 'PAUSED' || !state.currentPrincipal || run.requestedBy !== state.currentPrincipal) return;
-  const values = Object.fromEntries(new FormData(form));
   const key = run.id;
-  let pending = state.pendingRunAmendments.get(key);
-  if (!pending) {
-    pending = { commandId: crypto.randomUUID(), version: run.version, projectId: run.projectId };
-    state.pendingRunAmendments.set(key, pending);
-  }
+  const existing = state.pendingRunAmendments.get(key);
+  const values = existing ? null : Object.fromEntries(new FormData(form));
+  const payload = existing?.payload ?? {
+    objective: values.objective,
+    requirements: values.requirements.split('\n').map((entry) => entry.trim()).filter(Boolean),
+    reason: values.reason,
+  };
   const button = form.querySelector('[type="submit"]');
-  if (button) button.disabled = true;
-  try {
-    const updated = await api(`/api/execution/runs/${run.id}/amend`, {
-      method: 'POST',
-      body: JSON.stringify({ ...pending, objective: values.objective,
-        requirements: values.requirements.split('\n').map((entry) => entry.trim()).filter(Boolean), reason: values.reason }),
-    });
-    state.pendingRunAmendments.delete(key);
-    state.run = updated;
-    await refresh(); renderRun();
-    notify(updated.meta?.replayed ? 'The saved instruction amendment was restored.'
-      : 'Instructions saved as a new revision. Resume will require fresh independent approval.');
-  } catch (error) {
-    if (error.status && error.status < 500) state.pendingRunAmendments.delete(key);
-    notify(error.message);
-    if (button) button.disabled = false;
+  const status = form.querySelector('[role="status"]');
+  const submission = await submitLinkedRunAmendment({ key, pendingCommands: state.pendingRunAmendments,
+    projectId: run.projectId, version: run.version, payload,
+    form, button, status,
+    send: (pending) => api(`/api/execution/runs/${run.id}/amend`, {
+      method: 'POST', body: JSON.stringify({ commandId: pending.commandId, version: pending.version,
+        projectId: pending.projectId, ...pending.payload }),
+    }),
+  });
+  if (submission.kind === 'busy') return;
+  if (submission.kind === 'retry') {
+    notify('The amendment result is uncertain. Retry the same saved instruction revision.');
+    return;
   }
+  if (submission.kind === 'discard') {
+    notify(submission.error.message);
+    return;
+  }
+  const disposition = await refreshLinkedRunAmendment({ key, pendingCommands: state.pendingRunAmendments,
+    status, refresh: () => api(`/api/execution/runs/${encodeURIComponent(run.id)}`) });
+  if (disposition.kind === 'refresh-failed') {
+    notify(submission.kind === 'reconcile' ? 'The amendment was rejected, but current run state could not be refreshed.'
+      : 'The amendment was saved, but current run state could not be refreshed.');
+    return;
+  }
+  const currentRoute = new URL(window.location.href);
+  if (state.run?.id !== run.id || currentRoute.searchParams.get('run') !== run.id) return;
+  state.run = disposition.run;
+  await loadProposalApplication(state.run);
+  renderRun();
+  if (submission.kind === 'reconcile') notify(submission.error.message);
+  else notify(disposition.run.meta?.replayed ? 'The saved instruction amendment was restored.'
+    : 'Instructions saved as a new revision. Resume will require fresh independent approval.');
 }
 
 function section(title, children) { return el('section', { className: 'run-section' }, [el('h3', { text: title }), ...(Array.isArray(children) ? children : [children])]); }
@@ -1337,6 +2390,18 @@ function renderGeneratedProposal(proposal, application) {
     el('p', { text: `Rationale: ${proposal.rationale}` }),
     el('p', { className: 'muted', text: `Pinned blueprint v${proposal.blueprintVersion} · ${proposal.provider.provider} / ${proposal.provider.model} · proposal hash ${proposal.proposalHash}` }),
   ];
+  const evaluation = proposal.evaluation;
+  content.push(el('h4', { text: 'Structural checks only' }));
+  content.push(el('p', { className: 'muted', text: 'These checks verify proposal structure and pinned references. They do not assess factual accuracy, source grounding, or provider quality.' }));
+  if (evaluation?.evaluatorVersion === 1 && evaluation?.rubricVersion === 1
+    && evaluation?.meaning === 'structural-checks-only' && Array.isArray(evaluation.checks)) {
+    content.push(el('p', { text: `Evaluation: ${evaluation.status === 'passed' ? 'passed' : 'blocked'} · evaluator v${evaluation.evaluatorVersion} · rubric v${evaluation.rubricVersion}` }));
+    content.push(el('ul', { className: 'proposal-structural-checks' }, evaluation.checks.map((check) => el('li', {
+      text: `${check.status === 'passed' ? 'Passed' : 'Blocked'}: ${check.message}`,
+    }))));
+  } else {
+    content.push(el('p', { className: 'muted', text: 'No supported structural evaluation is available. This proposal remains review-only.' }));
+  }
   content.push(el('h4', { text: 'Cited saved task inputs' }));
   content.push(el('ul', {}, proposal.citations.map((citation) => el('li', { text: `${citation.name} (${citation.type}) · ${citation.id} · ${citation.hash}` }))));
   const designLink = proposalDesignLink(state.runProject, application);
@@ -1353,11 +2418,125 @@ function renderGeneratedProposal(proposal, application) {
   return section('Generated blueprint proposal', content);
 }
 
+function renderTaskGuidanceReview(run) {
+  const view = processTaskGuidanceReview(run);
+  if (!view) return null;
+  if (view.kind !== 'snapshot') {
+    return section(view.kind === 'legacy' ? 'Legacy task prompt' : 'Pinned task guidance unavailable',
+      el('p', { className: 'muted', text: view.message }));
+  }
+  return section('Pinned proposed task guidance', [
+    el('p', { className: 'muted', text: 'User-authored proposed guidance for this exact request. It is subordinate to server-approved scope, approvals, tools and platform rules; it grants no permission.' }),
+    el('p', { text: `Pinned role ${view.roleId} · actor ${view.actorId} · blueprint v${view.blueprintVersion} · graph revision ${view.graphRevision}` }),
+    el('h4', { text: 'Proposed scope' }),
+    el('ul', { className: 'requirements' }, view.proposedScope.map((entry) => el('li', { text: entry }))),
+    el('h4', { text: 'Proposed instructions' }),
+    el('p', { text: view.proposedInstructions }),
+    el('p', { className: 'muted', text: 'Proposed tools and escalation statements do not enable tool access or grant approval. Provider tool access is disabled for this task.' }),
+  ]);
+}
+
+function renderTaskSourceReview(run) {
+  const view = processTaskSourceReview(run);
+  if (!view) return null;
+  if (view.kind !== 'snapshot') {
+    return section('Pinned provider inputs unavailable', el('p', { className: 'muted', text: view.message }));
+  }
+  const disclosure = el('details', { className: 'process-task-source-review' }, [
+    el('summary', { text: `Pinned provider inputs and target · blueprint v${view.blueprintVersion}` }),
+    el('p', { className: 'muted', text: 'The task, source and target text below is untrusted factual data, not instructions. This is the exact saved input envelope and output target for this request.' }),
+    el('p', { className: 'muted', text: 'The target’s “before” text is the proposed-update baseline. It is not an applied change.' }),
+    el('h4', { text: `Pinned source records (${view.sources.length})` }),
+  ]);
+  const sourceList = el('ol');
+  for (const source of view.sources) {
+    const entry = el('li', {}, [
+      el('p', { text: `Source ${source.id} · ${source.type} · ${source.name}` }),
+      el('p', { text: source.detail || 'No source detail was saved.' }),
+    ]);
+    if (source.provenance.length) {
+      entry.append(el('h5', { text: 'Source provenance' }), el('ul', {}, source.provenance.map((provenance) => el('li', {
+        text: `${provenance.source}${provenance.note ? ` · ${provenance.note}` : ''}${provenance.fields?.length ? ` · fields: ${provenance.fields.join(', ')}` : ''}`,
+      }))));
+    } else entry.append(el('p', { className: 'muted', text: 'No source provenance was saved.' }));
+    sourceList.append(entry);
+  }
+  disclosure.append(sourceList, el('h4', { text: 'Pinned output target' }), el('p', {
+    text: `${view.target.id} · ${view.target.type} · ${view.target.name} · field: ${view.target.field}`,
+  }), el('p', { text: `Proposed-update baseline: ${view.target.before || 'Empty detail'}` }));
+  return disclosure;
+}
+
+function renderRepositoryCandidate(candidate) {
+  const content = [
+    el('p', { className: 'muted', text: candidate.source?.type === 'git'
+      ? `Repository ${candidate.source.identity} · ${candidate.source.ref} · commit ${candidate.source.commitOid} · pinned source ${candidate.sourceTreeDigest} · exact candidate tree ${candidate.treeDigest}`
+      : `Repository ${candidate.repositoryId} · pinned source ${candidate.sourceTreeDigest} · exact candidate tree ${candidate.treeDigest}` }),
+    el('p', { className: 'muted', text: 'Review-only candidate. OrgWard has not written changes back to the configured repository or pushed them.' }),
+  ];
+  if (candidate.changes?.length) {
+    const list = el('ul', { className: 'repository-candidate-diff', attrs: { 'aria-label': 'Candidate path changes' } });
+    for (const change of candidate.changes) {
+      const detail = `${change.change.replaceAll('_', ' ')} · ${change.path}`
+        + (change.beforeMode || change.afterMode ? ` · mode ${change.beforeMode ?? '—'} → ${change.afterMode ?? '—'}` : '')
+        + (change.beforeHash || change.afterHash ? ` · hash ${change.beforeHash?.slice(0, 12) ?? '—'} → ${change.afterHash?.slice(0, 12) ?? '—'}` : '');
+      const item = el('li', {}, el('span', { text: detail }));
+      if (change.change !== 'mode_changed' && (change.beforeHash || change.afterHash)) {
+        const previewButton = el('button', { className: 'button', text: 'Preview text diff', attrs: { type: 'button' } });
+        const preview = el('div', { className: 'repository-text-diff-preview', attrs: { 'aria-live': 'polite' } });
+        previewButton.addEventListener('click', async () => {
+          previewButton.disabled = true;
+          preview.replaceChildren(el('p', { className: 'muted', text: 'Loading bounded text preview…' }));
+          try {
+            const base = `/api/execution/runs/${encodeURIComponent(candidate.runId)}`;
+            const [beforeText, afterText] = await Promise.all([
+              change.beforeHash
+                ? fetch(`${base}/repository-source?path=${encodeURIComponent(change.path)}`).then((response) => readBoundedUtf8Response(response, change.beforeHash))
+                : Promise.resolve(''),
+              change.afterHash
+                ? fetch(`${base}/artifact?path=${encodeURIComponent(change.path)}`).then((response) => readBoundedUtf8Response(response, change.afterHash))
+                : Promise.resolve(''),
+            ]);
+            const lines = boundedLineDiff(beforeText, afterText);
+            const diff = el('pre', { className: 'repository-text-diff' });
+            for (const line of lines) diff.append(el('span', { className: `repository-diff-${line.type}`, text: line.text }), document.createTextNode('\n'));
+            preview.replaceChildren(diff);
+          } catch (error) {
+            preview.replaceChildren(el('p', { className: 'muted', text: `${error.message} Use the file download links for review.` }));
+          } finally {
+            previewButton.disabled = false;
+          }
+        });
+        item.append(previewButton, preview);
+      }
+      if (change.beforeHash) item.append(el('a', { text: 'Download pinned source file', attrs: {
+        href: `/api/execution/runs/${encodeURIComponent(candidate.runId)}/repository-source?path=${encodeURIComponent(change.path)}`,
+      } }));
+      if (change.afterHash && change.change !== 'mode_changed') item.append(el('a', { text: 'Download captured candidate file', attrs: {
+        href: `/api/execution/runs/${encodeURIComponent(candidate.runId)}/artifact?path=${encodeURIComponent(change.path)}`,
+      } }));
+      list.append(item);
+    }
+    content.push(list);
+  } else content.push(el('p', { className: 'muted', text: 'The candidate contains no file changes.' }));
+  if (candidate.verification) {
+    const verification = candidate.verification;
+    content.push(el('p', { text: `Verification ${verification.id} v${verification.version} · ${verification.status} · exit ${verification.exitCode} · tree ${verification.treeDigest} · command ${verification.commandHash} · output ${verification.outputHash}` }));
+    if (verification.stdout) content.push(el('pre', { className: 'execution-output', text: verification.stdout }));
+    if (verification.stderr) content.push(el('pre', { className: 'execution-output execution-error', text: verification.stderr }));
+  }
+  return section('Local repository candidate · review only', content);
+}
+
 function renderRun() {
   const run = state.run; main.replaceChildren();
   const effectiveInstructions = run.interventionRevisions?.at(-1) ?? run.workItem;
   const panel = el('section', { className: 'execution-panel' }, [
-    el('div', { className: 'run-heading' }, [el('div', {}, [el('span', { className: 'eyebrow', text: `${run.profile.kind} · run revision ${run.version}` }), el('h2', { text: run.title })]), el('span', { className: `run-status status-${run.status}`, text: run.status.replaceAll('_', ' ') })]),
+    el('div', { className: 'run-heading' }, [el('div', {}, [el('span', { className: 'eyebrow', text: `${run.profile.kind} · run revision ${run.version}` }), el('h2', { text: run.title })]), el('span', {
+      className: `run-status status-${run.status}`,
+      text: run.status.replaceAll('_', ' '),
+      attrs: { tabindex: '-1', 'data-run-status-focus-target': run.id },
+    })]),
     el('p', { className: 'objective', text: effectiveInstructions.objective }),
   ]);
   if (run.processTaskRef) {
@@ -1368,17 +2547,22 @@ function renderRun() {
       el('p', { text: `Blueprint assignment reference ${ref.actorId} → role ${ref.roleId}. The durable task runtime supplies progress; the saved plan graph remains immutable.` }),
       el('p', { className: 'muted', text: 'This run uses its selected configured profile through the OrgWard worker after independent approval; it does not execute as or impersonate the bound workload identity.' }),
     ];
-    if (linkedProcessPlanTarget(run, state.projects)) {
+    if (linkedProcessPlanTarget(run, state.projects, state.runtimePlans)) {
       const openPlan = el('button', { className: 'button', text: 'Open linked plan instance', attrs: { type: 'button', 'data-action': 'open-linked-plan' } });
       openPlan.addEventListener('click', () => openLinkedProcessPlan(run));
       processTaskDetails.push(openPlan);
     }
     panel.append(section('Saved process task', processTaskDetails));
   }
+  const taskGuidance = renderTaskGuidanceReview(run);
+  if (taskGuidance) panel.append(taskGuidance);
+  const taskSource = renderTaskSourceReview(run);
+  if (taskSource) panel.append(taskSource);
   panel.append(section('Approval boundary', approvalControls(run)));
   panel.append(section('Requirements', effectiveInstructions.requirements.length ? el('ul', { className: 'requirements' }, effectiveInstructions.requirements.map((entry) => el('li', { text: entry }))) : el('p', { className: 'muted', text: 'No acceptance requirements supplied.' })));
   if (run.execution) panel.append(section('Execution evidence', executionEvidence(run.execution, run.id)));
   if (run.execution?.generatedProposal) panel.append(renderGeneratedProposal(run.execution.generatedProposal, run.proposalApplication));
+  if (run.execution?.repositoryCandidate) panel.append(renderRepositoryCandidate({ ...run.execution.repositoryCandidate, runId: run.id }));
   panel.append(section('Append-only activity', el('div', { className: 'run-events' }, run.events.slice().reverse().map((entry) => {
     const details = [el('b', { text: entry.type }), el('span', { text: `${new Date(entry.at).toLocaleString()} · ${entry.actor}` })];
     if (entry.type === 'ExecutionInstructionsAmended') {
@@ -1434,10 +2618,10 @@ function approvalControls(run) {
   if (run.status === 'AWAITING_APPROVAL') {
     const wrap = el('div', { className: 'approval-box' }, [el('p', { text: `Requested by ${run.requestedBy}. A different identity with execution-approver authority must approve the immutable request. The requester can pause it before dispatch.` })]);
     const button = el('button', { className: 'button primary', text: 'Approve execution', attrs: { type: 'button', 'data-action': 'approve' } });
-    if (state.authenticated) button.addEventListener('click', () => command('approve', {}));
+    if (state.authenticated) button.addEventListener('click', (event) => command('approve', {}, event));
     else {
       const input = el('input', { attrs: { value: 'studio-governor', 'aria-label': 'Approver identity', maxlength: '120' } });
-      button.addEventListener('click', () => command('approve', { principal: input.value, roles: ['execution-approver'] }));
+      button.addEventListener('click', (event) => command('approve', { principal: input.value, roles: ['execution-approver'] }, event));
       wrap.append(el('div', { className: 'inline-action' }, [input, button]));
       return wrap;
     }
@@ -1448,7 +2632,7 @@ function approvalControls(run) {
   }
   if (run.status === 'APPROVED') {
     const button = el('button', { className: 'button primary', text: 'Execute approved profile', attrs: { type: 'button', 'data-action': 'execute' } });
-    button.addEventListener('click', () => command('execute', state.authenticated ? {} : { principal: 'local-execution-worker' }));
+    button.addEventListener('click', (event) => command('execute', state.authenticated ? {} : { principal: 'local-execution-worker' }, event));
     return [el('p', { text: `Approved by ${run.approval.principal}. The profile executable and arguments are server-controlled. Pausing now clears this approval; resume requires a new independent approval.` }), button,
       ...(canWithdraw ? [pauseButton('Pause and require new approval')] : []),
       ...(canWithdraw ? [withdrawalButton()] : [])];
@@ -1456,12 +2640,16 @@ function approvalControls(run) {
   if (run.processTaskRef && run.status === 'PAUSED') {
     const revision = run.interventionRevisions?.at(-1) ?? run.workItem;
     const canOwnerRecover = run.requestedBy !== state.currentPrincipal && canRecoverLinkedRun(run);
+    const pendingAmendment = state.pendingRunAmendments.get(run.id);
     const amendForm = el('form', { className: 'execution-form' }, [
-      el('label', {}, ['Amended objective', el('textarea', { attrs: { name: 'objective', required: true, maxlength: '4000', rows: '4' }, text: revision.objective })]),
-      el('label', {}, ['Requirements, one per line', el('textarea', { attrs: { name: 'requirements', maxlength: '26000', rows: '4' }, text: revision.requirements.join('\n') })]),
-      el('label', {}, ['Reason for change', el('textarea', { attrs: { name: 'reason', required: true, maxlength: '1000', rows: '2' } })]),
+      el('label', {}, ['Amended objective', el('textarea', { attrs: { name: 'objective', required: true, maxlength: '4000', rows: '4' }, text: pendingAmendment?.payload.objective ?? revision.objective })]),
+      el('label', {}, ['Requirements, one per line', el('textarea', { attrs: { name: 'requirements', maxlength: '26000', rows: '4' }, text: pendingAmendment?.payload.requirements.join('\n') ?? revision.requirements.join('\n') })]),
+      el('label', {}, ['Reason for change', el('textarea', { attrs: { name: 'reason', required: true, maxlength: '1000', rows: '2' }, text: pendingAmendment?.payload.reason ?? '' })]),
       el('button', { className: 'button', text: 'Save new instruction revision', attrs: { type: 'submit' } }),
+      el('p', { className: 'muted', attrs: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' } }),
     ]);
+    restoreLinkedRunAmendment({ pending: pendingAmendment, form: amendForm,
+      button: amendForm.querySelector('[type="submit"]'), status: amendForm.querySelector('[role="status"]') });
     amendForm.addEventListener('submit', (event) => { event.preventDefault(); void amendLinkedRun(amendForm); });
     return el('div', {}, [
       el('p', { text: 'This linked request is paused before dispatch. You can add a reasoned instruction revision; the saved plan remains unchanged. Resume rechecks the task assignment, dependencies, profile and credential generation. Any instruction revision requires fresh independent approval.' }),
@@ -1477,18 +2665,23 @@ function approvalControls(run) {
     ]);
   }
   if (run.processTaskRef && run.status === 'CANCELLED') {
-    return el('p', { text: 'The requester withdrew this linked task before work started. A retry requires a new plan instance.' });
+    const cancelledByInstance = run.events?.some((entry) => entry.type === 'ExecutionCancelledByProcessInstanceController');
+    return el('p', { text: cancelledByInstance
+      ? 'The parent process instance was cancelled before this task started. Its run history remains available; starting again requires a new plan instance.'
+      : 'The requester withdrew this linked task before work started. A retry requires a new plan instance.' });
   }
   return el('p', { text: run.approval ? `Approved by ${run.approval.principal} at ${new Date(run.approval.approvedAt).toLocaleString()}.` : 'No approval recorded.' });
 }
 
 function executionEvidence(execution, runId) {
+  const providerDiagnostic = deepSeekOutcomeDiagnosticCopy(execution.providerDiagnostic);
   const wrap = el('div', { className: 'evidence-grid' }, [
     el('div', {}, [el('b', { text: 'Result' }), el('span', { text: execution.status ?? 'FAILED' })]),
     el('div', {}, [el('b', { text: 'Exit code' }), el('span', { text: String(execution.exitCode ?? 'n/a') })]),
     el('div', {}, [el('b', { text: 'Artifacts' }), el('span', { text: String(execution.changedArtifacts?.length ?? 0) })]),
     el('div', {}, [el('b', { text: 'Evidence hash' }), el('span', { text: execution.evidenceHash?.slice(0, 18) ?? 'n/a' })]),
   ]);
+  if (providerDiagnostic) wrap.append(el('p', { className: 'muted provider-outcome-diagnostic', text: providerDiagnostic }));
   if (execution.changedArtifacts?.length) {
     const list = el('ul', { className: 'artifact-list' });
     for (const entry of execution.changedArtifacts) {
@@ -1519,10 +2712,14 @@ try {
   state.projectContextId = planTarget?.projectId ?? processTarget?.projectId ?? projectContext.projectId;
   syncEnterpriseDesignNavigation();
   await refresh();
+  const routeRun = executionRunRouteTarget(window.location.href, state.runs);
   if (routePlan.requested && !planTarget) notify('The linked plan revision or instance is no longer available.');
   if (routeProcess.requested && !processTarget) notify('The selected saved process is no longer available. Choose a current process to continue.');
+  if (routeRun.requested && !routeRun.target) notify('The selected run is no longer available in this workspace.');
   if (planTarget) showNew({ planTarget });
   else if (processTarget) showNew({ preferredProcessId: processTarget.processId, preserveProcessRoute: true });
+  else if (routeRun.target) await load(routeRun.target.runId);
+  else if (routeRun.requested) showNew();
   else if (projectContext.projectId) showNew();
   else if (state.runs.length) await load(state.runs[0].id);
   else showNew();

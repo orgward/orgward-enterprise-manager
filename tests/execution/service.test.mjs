@@ -9,7 +9,45 @@ import { fileURLToPath } from 'node:url';
 import { digest } from '../../src/sdlc/contracts.mjs';
 import { CommandExecutionAdapter } from '../../src/sdlc/execution-adapter.mjs';
 import { approveExecutionRun, createExecutionRun } from '../../src/execution/contracts.mjs';
+import { linkedRunOutcomeCategory } from '../../src/execution/linked-run-outcome-category.mjs';
 import { ExecutionService } from '../../src/execution/service.mjs';
+
+test('linked terminal failure guidance persists only stable allowlisted categories', () => {
+  const linkedCommand = { processTaskRef: { taskId: 'task-one' }, profile: { kind: 'command' } };
+  const linkedProvider = { processTaskRef: { taskId: 'task-one' }, profile: { kind: 'provider-openai' } };
+  assert.equal(linkedRunOutcomeCategory(linkedCommand, { status: 'FAILED', errorCode: 'COMMAND_EXIT_NONZERO' }), 'command_failed');
+  assert.equal(linkedRunOutcomeCategory({ ...linkedCommand, execution: { repositoryCandidate: { verification: { status: 'FAILED' } } } },
+    { status: 'FAILED', errorCode: 'COMMAND_EXIT_NONZERO' }), 'verification_failed');
+  assert.equal(linkedRunOutcomeCategory(linkedCommand, { status: 'FAILED', errorCode: 'LOCAL_REPOSITORY_VERIFICATION_STALE' }), 'verification_failed');
+  assert.equal(linkedRunOutcomeCategory(linkedProvider, { status: 'FAILED', errorCode: 'PROVIDER_REQUEST_FAILED' }), 'provider_failed');
+  assert.equal(linkedRunOutcomeCategory(linkedProvider, { status: 'FAILED', errorCode: 'PROVIDER_OUTCOME_UNKNOWN' }), 'outcome_unverified');
+  assert.equal(linkedRunOutcomeCategory(linkedProvider, { status: 'INTERRUPTED', reason: 'control_plane_restarted' }), 'outcome_unverified');
+  assert.equal(linkedRunOutcomeCategory(linkedCommand, { status: 'INTERRUPTED', reason: 'control_plane_restarted' }), 'worker_recovery');
+  assert.equal(linkedRunOutcomeCategory(linkedCommand, { status: 'INTERRUPTED', reason: 'authorization_revoked' }), 'authorization_changed');
+  assert.equal(linkedRunOutcomeCategory(linkedCommand, { status: 'INTERRUPTED', reason: 'credential_generation_changed' }), 'credential_changed');
+  assert.equal(linkedRunOutcomeCategory(linkedCommand, { status: 'INTERRUPTED', reason: 'execution_approval_stale' }), 'approval_stale');
+  assert.equal(linkedRunOutcomeCategory(linkedCommand, { status: 'INTERRUPTED', reason: 'worker_lease_unavailable' }), 'outcome_unverified');
+  assert.equal(linkedRunOutcomeCategory(linkedCommand, { status: 'INTERRUPTED', reason: 'future_unknown_reason_secret' }), null);
+  assert.equal(linkedRunOutcomeCategory({ profile: { kind: 'command' } }, { status: 'FAILED', errorCode: 'SECRET_CODE' }), null);
+  assert.equal(linkedRunOutcomeCategory(linkedCommand, { status: 'SUCCEEDED', errorCode: 'SECRET_CODE' }), null);
+});
+
+test('DeepSeek profiles pin the fixed production endpoint and enforce the small output-token cap', () => {
+  const profile = { id: 'deepseek-profile', label: 'DeepSeek · deepseek-chat', kind: 'provider-deepseek',
+    version: '1.0.0', credentialReference: 'secret-deepseek', model: 'deepseek-chat' };
+  const service = new ExecutionService({ runDirectory: '/tmp/orgward-deepseek-profile-default', profiles: [profile] });
+  assert.equal(service.profiles.get(profile.id).providerEndpoint, 'https://api.deepseek.com/responses');
+  assert.equal(service.profiles.get(profile.id).maxOutputTokens, 256);
+  assert.throws(() => new ExecutionService({ runDirectory: '/tmp/orgward-deepseek-profile-invalid-host', profiles: [
+    { ...profile, deepSeekEndpoint: 'https://untrusted.example/responses' },
+  ] }), /must use api\.deepseek\.com/);
+  assert.throws(() => new ExecutionService({ runDirectory: '/tmp/orgward-deepseek-profile-invalid-path', profiles: [
+    { ...profile, deepSeekEndpoint: 'https://api.deepseek.com/v1/responses' },
+  ] }), /must use api\.deepseek\.com/);
+  assert.throws(() => new ExecutionService({ runDirectory: '/tmp/orgward-deepseek-profile-invalid-cap', profiles: [
+    { ...profile, deepSeekMaxOutputTokens: 513 },
+  ] }), /cap DeepSeek output between 64 and 512/);
+});
 
 test('controlled execution requires independent approval, creates a real system, and persists evidence', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'orgward-execution-'));

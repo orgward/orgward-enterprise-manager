@@ -1,5 +1,5 @@
 const PROJECT_ID = /^project-[0-9a-f-]{36}$/;
-const PROCESS_PLAN_ID = /^process-plan-[0-9a-f-]{36}$/i;
+const PROCESS_PLAN_ID = /^(?:process-plan-[0-9a-f-]{36}|software-delivery-[a-f0-9]{32})$/i;
 const PLAN_INSTANCE_ID = /^[0-9a-f-]{36}$/i;
 const SAFE_ID = /^[a-z0-9][a-z0-9_-]{0,119}$/i;
 const VIEWS = new Set(['blueprint', 'map', 'coverage']);
@@ -33,7 +33,7 @@ export function encodeStudioRoute({ projectId = null, view = 'blueprint', select
   return query ? `/?${query}` : '/';
 }
 
-export function encodeExecutionRoute(projectId = null, planTarget = null) {
+export function encodeExecutionRoute(projectId = null, planTarget = null, runId = null) {
   const studioRoute = encodeStudioRoute({ projectId });
   const url = new URL(studioRoute, 'http://orgward.local');
   if (PROJECT_ID.test(projectId ?? '') && planTarget?.projectId === projectId
@@ -48,7 +48,22 @@ export function encodeExecutionRoute(projectId = null, planTarget = null) {
     url.searchParams.set('revision', String(planTarget.revision));
     url.searchParams.set('instance', planTarget.planInstanceId);
   }
+  if (!planTarget && SAFE_ID.test(runId ?? '')) url.searchParams.set('run', runId);
   return `/execution.html${url.search}`;
+}
+
+export function executionRunRouteTarget(value, runs = []) {
+  const url = new URL(value, 'http://orgward.local');
+  const requested = url.searchParams.has('run');
+  if (!requested) return { requested: false, target: null };
+  const runId = url.searchParams.get('run');
+  const run = SAFE_ID.test(runId ?? '') && Array.isArray(runs)
+    ? runs.find((candidate) => candidate.id === runId)
+    : null;
+  return {
+    requested: true,
+    target: run ? { runId: run.id, projectId: run.projectId ?? null } : null,
+  };
 }
 
 export function executionProjectContext(value, projects = []) {

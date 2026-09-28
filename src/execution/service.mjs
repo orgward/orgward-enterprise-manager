@@ -5,8 +5,12 @@ import http from 'node:http';
 import https from 'node:https';
 import { digest } from '../sdlc/contracts.mjs';
 import { CommandExecutionAdapter } from '../sdlc/execution-adapter.mjs';
+import { captureLocalRepositorySnapshot, localRepositoryDiff, materializeLocalRepositorySnapshot } from './local-repository-snapshot.mjs';
+import { captureGitRepositorySnapshot } from './git-repository-snapshot.mjs';
 import { readWorkspaceArtifact } from './artifact-file.mjs';
-import { buildBlueprintProposalPrompt, createGeneratedBlueprintProposal, createProcessTaskProposalContext } from './proposals.mjs';
+import { linkedRunOutcomeCategory } from './linked-run-outcome-category.mjs';
+import { buildProcessTaskProposalPromptForRun, createGeneratedBlueprintProposal, createProcessTaskGuidanceSnapshot,
+  createProcessTaskProposalContext } from './proposals.mjs';
 import {
   approveExecutionRun,
   createExecutionRun,
@@ -18,6 +22,10 @@ import { ExecutionRunStore } from './store.mjs';
 
 const WORKER_LEASE_MS = 5_000;
 const PROVIDER_WORKER_LEASE_MS = 30_000;
+const isModelProvider = (profile) => Boolean(profile?.dynamicOpenAi || profile?.dynamicDeepSeek);
+const resolveModelCredentialBinding = (secretStore, profile, options) => profile.dynamicOpenAi
+  ? secretStore.resolveOpenAiBinding({ ...options, reference: profile.credentialReference, model: profile.model })
+  : secretStore.resolveGenericCredentialBinding({ ...options, reference: profile.credentialReference });
 const WORKER_HEARTBEAT_MS = 1_000;
 const PROVIDER_LEASE_RENEWAL_MS = 15_000;
 const DISPATCH_ACK_WATCHDOG_MS = WORKER_LEASE_MS - WORKER_HEARTBEAT_MS;
@@ -37,21 +45,52 @@ function providerTransport(endpoint, { headers, body, signal, parseResponse }) {
   const client = target.protocol === 'https:' ? https : http;
   const request = client.request(target, { method: 'POST', headers, agent: false });
   let sent = false;
+  let diagnostic = null;
   const result = new Promise((resolve, reject) => {
     request.once('response', async (response) => {
       try {
-        if (response.statusCode < 200 || response.statusCode >= 300) throw new Error('provider rejected request');
+        const upstreamHttpStatus = Number.isInteger(response.statusCode) && response.statusCode >= 100 && response.statusCode <= 599
+          ? response.statusCode : null;
+        diagnostic = upstreamHttpStatus === null ? null : { httpStatus: upstreamHttpStatus };
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          const error = new Error('provider rejected request');
+          if (upstreamHttpStatus) error.upstreamHttpStatus = upstreamHttpStatus;
+          throw error;
+        }
         const chunks = []; let size = 0;
         for await (const chunk of response) {
           size += chunk.length;
-          if (size > 32_768) { response.destroy(); throw new Error('provider response too large'); }
+          if (size > 32_768) {
+            response.destroy();
+            throw Object.assign(new Error('provider response too large'), { parserFailureClass: 'body_too_large' });
+          }
           chunks.push(chunk);
         }
-        const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-        const output = parseResponse(parsed);
-        if (typeof output !== 'string' || !output.trim() || Buffer.byteLength(output) > 8_000) throw new Error('invalid provider result');
+        let parsed;
+        try { parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+        catch { throw Object.assign(new Error('invalid provider JSON'), { parserFailureClass: 'invalid_json' }); }
+        let output;
+        try { output = parseResponse(parsed); }
+        catch (error) {
+          if (error?.parserFailureClass) throw error;
+          throw Object.assign(new Error('invalid provider response shape'), { parserFailureClass: 'incomplete_response' });
+        }
+        if (typeof output !== 'string' || !output.trim()) {
+          throw Object.assign(new Error('missing provider output text'), { parserFailureClass: 'missing_output_text' });
+        }
+        if (Buffer.byteLength(output) > 8_000) {
+          throw Object.assign(new Error('provider result too large'), { parserFailureClass: 'output_too_large' });
+        }
         resolve(output);
-      } catch (error) { reject(error); }
+      } catch (error) {
+        if (Number.isInteger(response.statusCode) && response.statusCode >= 100 && response.statusCode <= 599) {
+          error.upstreamHttpStatus = response.statusCode;
+          const parserFailureClass = ['invalid_json', 'body_too_large', 'incomplete_response', 'missing_output_text', 'output_too_large'].includes(error?.parserFailureClass)
+            ? error.parserFailureClass : null;
+          diagnostic = { httpStatus: response.statusCode, ...(parserFailureClass ? { parserFailureClass } : {}) };
+        }
+        reject(error);
+      }
     });
     request.once('error', reject);
   });
@@ -66,6 +105,7 @@ function providerTransport(endpoint, { headers, body, signal, parseResponse }) {
       request.end(body);
     },
     result,
+    diagnostic: () => diagnostic,
     abort: () => request.destroy(new Error('provider request aborted')),
   };
 }
@@ -92,19 +132,30 @@ function validateProfile(profile) {
   if (!/^[a-z0-9][a-z0-9_-]{1,79}$/i.test(profile.id ?? '')) throw new Error('Execution profile id is invalid.');
   const provider = profile.kind === 'provider-http';
   const openAiProvider = profile.kind === 'provider-openai';
-  if (!provider && !openAiProvider && (!path.isAbsolute(profile.executable ?? '') || !path.isAbsolute(profile.workspaceRoot ?? ''))) throw new Error(`Execution profile ${profile.id} must use an absolute executable and workspace root.`);
+  const deepSeekProvider = profile.kind === 'provider-deepseek';
+  const modelProvider = openAiProvider || deepSeekProvider;
+  const deepSeekMaxOutputTokens = profile.deepSeekMaxOutputTokens ?? 256;
+  if (deepSeekProvider && (!Number.isSafeInteger(deepSeekMaxOutputTokens) || deepSeekMaxOutputTokens < 64 || deepSeekMaxOutputTokens > 512)) {
+    throw new Error(`Execution profile ${profile.id} must cap DeepSeek output between 64 and 512 tokens.`);
+  }
+  if (!provider && !modelProvider && (!path.isAbsolute(profile.executable ?? '') || !path.isAbsolute(profile.workspaceRoot ?? ''))) throw new Error(`Execution profile ${profile.id} must use an absolute executable and workspace root.`);
   let providerEndpoint = null;
-  if (provider || openAiProvider) {
-    if (openAiProvider) {
+  if (provider || modelProvider) {
+    if (modelProvider) {
       if (profile.executable != null || (profile.args?.length ?? 0) || profile.workspaceRoot != null
         || Object.keys(profile.environment ?? {}).length || !/^secret-[a-z0-9][a-z0-9._-]{0,79}$/.test(profile.credentialReference ?? '')
-        || !/^[A-Za-z0-9._:-]{1,100}$/.test(profile.model ?? '')) throw new Error(`Execution profile ${profile.id} has invalid OpenAI profile configuration.`);
+        || !/^[A-Za-z0-9._:-]{1,100}$/.test(profile.model ?? '')) throw new Error(`Execution profile ${profile.id} has invalid model provider configuration.`);
       let endpoint;
-      try { endpoint = new URL(profile.openAiEndpoint ?? 'https://api.openai.com/v1/responses'); } catch { throw new Error(`Execution profile ${profile.id} has invalid OpenAI endpoint configuration.`); }
+      const defaultEndpoint = openAiProvider ? 'https://api.openai.com/v1/responses' : 'https://api.deepseek.com/responses';
+      const configuredEndpoint = openAiProvider ? profile.openAiEndpoint : profile.deepSeekEndpoint;
+      try { endpoint = new URL(configuredEndpoint ?? defaultEndpoint); } catch { throw new Error(`Execution profile ${profile.id} has invalid model provider endpoint configuration.`); }
       const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(endpoint.hostname);
+      const expectedPath = openAiProvider ? '/v1/responses' : '/responses';
       if ((endpoint.protocol !== 'https:' && !(endpoint.protocol === 'http:' && loopback)) || endpoint.username || endpoint.password
-        || endpoint.search || endpoint.hash || endpoint.pathname !== '/v1/responses'
-        || (!loopback && endpoint.hostname !== 'api.openai.com')) throw new Error(`Execution profile ${profile.id} must use api.openai.com (loopback is test-only).`);
+        || endpoint.search || endpoint.hash || endpoint.pathname !== expectedPath
+        || (!loopback && endpoint.hostname !== (openAiProvider ? 'api.openai.com' : 'api.deepseek.com'))) {
+        throw new Error(`Execution profile ${profile.id} must use ${openAiProvider ? 'api.openai.com' : 'api.deepseek.com'} (loopback is test-only).`);
+      }
       providerEndpoint = endpoint.href;
     } else {
     if (profile.executable != null || (profile.args?.length ?? 0) || profile.workspaceRoot != null
@@ -122,7 +173,7 @@ function validateProfile(profile) {
     if (!profile.credentialReference) throw new Error(`Execution profile ${profile.id} requires a provider credential binding.`);
     }
   }
-  if (!openAiProvider && (((profile.credentialReference == null) !== (profile.credentialVersion == null))
+  if (!modelProvider && (((profile.credentialReference == null) !== (profile.credentialVersion == null))
     || (profile.credentialReference != null && (!/^secret-[a-z0-9][a-z0-9._-]{0,79}$/.test(profile.credentialReference) || !Number.isSafeInteger(profile.credentialVersion) || profile.credentialVersion < 1)))) {
     throw new Error(`Execution profile ${profile.id} has an invalid approved credential binding.`);
   }
@@ -130,13 +181,15 @@ function validateProfile(profile) {
     id: profile.id, label: String(profile.label ?? profile.id), description: String(profile.description ?? ''),
     kind: String(profile.kind ?? 'command'), version: String(profile.version ?? '1.0.0'), executable: profile.executable,
     args: [...(profile.args ?? [])], workspaceRoot: profile.workspaceRoot ? path.resolve(profile.workspaceRoot) : null,
-    timeoutMs: profile.timeoutMs ?? (provider || openAiProvider ? 20_000 : 120_000),
+    timeoutMs: profile.timeoutMs ?? (provider || modelProvider ? 20_000 : 120_000),
     environment: { ...(profile.environment ?? {}) },
     credentialReference: profile.credentialReference ?? null,
     credentialVersion: profile.credentialVersion ?? null,
     providerEndpoint,
     dynamicOpenAi: openAiProvider,
-    model: openAiProvider ? profile.model : null,
+    dynamicDeepSeek: deepSeekProvider,
+    model: modelProvider ? profile.model : null,
+    maxOutputTokens: deepSeekProvider ? deepSeekMaxOutputTokens : (openAiProvider ? 2_000 : null),
     sandbox: {
       executable: profile.sandbox?.executable ?? '/usr/bin/bwrap',
       readOnlyFiles: [...(profile.sandbox?.readOnlyFiles ?? [])],
@@ -154,10 +207,36 @@ function redact(value) {
 }
 
 export class ExecutionService {
-  constructor({ runDirectory, store = null, profiles = [], secretStore = null, commandAdapterFactory = (options) => new CommandExecutionAdapter(options) }) {
+  constructor({ runDirectory, store = null, profiles = [], secretStore = null, localRepositories = [], commandAdapterFactory = (options) => new CommandExecutionAdapter(options) }) {
     this.store = store ?? new ExecutionRunStore(runDirectory);
     this.secretStore = secretStore;
     this.commandAdapterFactory = commandAdapterFactory;
+    this.localRepositories = new Map();
+    for (const repository of localRepositories) {
+      const isGit = repository.kind === 'git';
+      if (!/^[a-z0-9][a-z0-9_-]{1,79}$/i.test(repository.id ?? '')
+        || !/^[a-z0-9][a-z0-9_-]{1,79}$/i.test(repository.tenantId ?? '')
+        || !/^project-[0-9a-f-]{36}$/i.test(repository.projectId ?? '')
+        || (isGit
+          ? (!/^[a-z0-9][a-z0-9._-]{0,119}$/i.test(repository.identity ?? '')
+            || typeof repository.gitDirectory !== 'string' || !path.isAbsolute(repository.gitDirectory)
+            || !Array.isArray(repository.allowedRefs) || !repository.allowedRefs.length || repository.allowedRefs.length > 8
+            || repository.allowedRefs.some((entry) => !/^[a-z0-9][a-z0-9_-]{0,79}$/i.test(entry.id ?? '')
+              || typeof entry.ref !== 'string' || !entry.ref.startsWith('refs/heads/')
+              || (entry.label !== undefined && (typeof entry.label !== 'string' || entry.label.length > 120))))
+          : (typeof repository.directory !== 'string' || !path.isAbsolute(repository.directory)))
+        || !repository.verification || !/^[a-z0-9][a-z0-9_-]{1,79}$/i.test(repository.verification.id ?? '')
+        || !path.isAbsolute(repository.verification.executable ?? '')
+        || !Array.isArray(repository.verification.args) || repository.verification.args.some((arg) => typeof arg !== 'string')) {
+        throw new Error('A configured local repository or verification command has invalid server-side configuration.');
+      }
+      const key = `${repository.tenantId}\n${repository.projectId}\n${repository.id}`;
+      if (this.localRepositories.has(key)) throw new Error('Configured local repository IDs must be unique within a project.');
+      if (isGit && new Set(repository.allowedRefs.map((entry) => entry.id)).size !== repository.allowedRefs.length) {
+        throw new Error('Configured Git repository ref IDs must be unique.');
+      }
+      this.localRepositories.set(key, structuredClone(repository));
+    }
     if (this.secretStore) this.secretStore.onCredentialInvalidated = (change) => this.cancelCredentialReference(change);
     this.profiles = new Map(profiles.map((profile) => { const valid = validateProfile(profile); return [valid.id, valid]; }));
     this.active = new Map();
@@ -168,8 +247,14 @@ export class ExecutionService {
     if (!recoverRunning) return;
     const recover = async (run) => {
       if (run.status !== 'RUNNING') return false;
+      // A RUNNING aggregate can briefly precede its worker lease while this
+      // process is still authorizing dispatch. Keep startup owned by this
+      // process; after authorization, normal lease-expiry recovery applies.
+      if (this.active.get(run.id)?.dispatchAuthorizationPending) return false;
       const persistedVersion = run.version;
       run.status = 'INTERRUPTED'; run.version += 1;
+      const category = linkedRunOutcomeCategory(run, { status: 'INTERRUPTED', reason: 'control_plane_restarted' });
+      if (category) run.linkedOutcomeCategory = category;
       executionEvent(run, 'ExecutionInterrupted', 'execution-recovery', { reason: 'Control plane restarted while the run was active.' });
       if (!this.store.recoverRunning) await this.store.save(run, { expectedVersion: persistedVersion });
       return true;
@@ -301,6 +386,29 @@ export class ExecutionService {
     const run = await this.store.get(id, tenantId);
     return readAndDeliver(run);
   }
+  async readRepositorySource(id, tenantId, principal, relativePath, { authzGeneration = null, onArtifact = null } = {}) {
+    if (!/^execution-run-[0-9a-f-]{36}$/.test(id ?? '') || typeof relativePath !== 'string'
+      || relativePath.length > 500 || relativePath.includes('\\') || relativePath.includes('\0')
+      || relativePath.split('/').some((segment) => !segment || segment === '.' || segment === '..')) return null;
+    const readAndDeliver = async (run) => {
+      if (!run || run.tenantId !== tenantId || !run.processTaskRef?.repository
+        || run.repositorySnapshot?.treeDigest !== run.processTaskRef.repository.treeDigest) return null;
+      const record = run.repositorySnapshot.files.find((entry) => entry.path === relativePath);
+      if (!record || !/^[a-f0-9]{64}$/.test(record.contentHash ?? '')) return null;
+      const contents = Buffer.from(record.contentBase64, 'base64');
+      if (contents.length !== record.size || createHash('sha256').update(contents).digest('hex') !== record.contentHash) return null;
+      const artifact = { contents, fileName: path.posix.basename(relativePath), contentHash: record.contentHash };
+      await onArtifact?.(artifact);
+      return artifact;
+    };
+    if (principal) {
+      if (typeof this.store.withPrincipalAuthority !== 'function') throw principalScopeUnavailable();
+      return this.store.withPrincipalAuthority({ id, tenantId, principal,
+        anyPrincipalRoleGroups: [['workspace-read', 'workspace-write', 'tenant-admin']], authzGeneration,
+        operation: readAndDeliver });
+    }
+    return readAndDeliver(await this.store.get(id, tenantId));
+  }
   async create(input) {
     if (input && (Object.hasOwn(input, 'processTaskRef') || Object.hasOwn(input, 'proposalContext'))) {
       throw Object.assign(new Error('Only a saved process-task request may establish immutable task linkage.'), {
@@ -319,6 +427,17 @@ export class ExecutionService {
       if (!this.secretStore || !input.tenantId) throw Object.assign(new Error('OpenAI profile requires the server-side credential broker.'), { statusCode: 503, code: 'BROKER_AUTHORITY_REQUIRED' });
       const binding = await this.secretStore.resolveOpenAiBinding({ tenantId: input.tenantId, reference: profile.credentialReference, model: profile.model });
       profile = { ...profile, credentialVersion: binding.version };
+    } else if (profile?.dynamicDeepSeek) {
+      if (input.scopePrincipal) {
+        if (typeof this.store.authorizeProjectForPrincipal !== 'function') throw principalScopeUnavailable();
+        await this.store.authorizeProjectForPrincipal({
+          tenantId: input.tenantId, projectId: input.projectId,
+          principal: input.scopePrincipal, authzGeneration: input.authzGeneration,
+        });
+      }
+      if (!this.secretStore || !input.tenantId) throw Object.assign(new Error('DeepSeek profile requires the server-side credential broker.'), { statusCode: 503, code: 'BROKER_AUTHORITY_REQUIRED' });
+      const binding = await resolveModelCredentialBinding(this.secretStore, profile, { tenantId: input.tenantId });
+      profile = { ...profile, credentialVersion: binding.version };
     }
     const run = createExecutionRun({ ...input, profile });
     await this.#saveRun(run, {
@@ -336,19 +455,58 @@ export class ExecutionService {
     }
     let profile = this.profiles.get(input.profileId);
     if (!profile) throw Object.assign(new Error('Choose an available configured execution profile.'), { statusCode: 400, code: 'EXECUTION_PROFILE_NOT_FOUND' });
-    if (profile.dynamicOpenAi && (!this.secretStore || !input.tenantId)) {
-      throw Object.assign(new Error('OpenAI profiles require the server-side credential broker.'), {
+    if (isModelProvider(profile) && (!this.secretStore || !input.tenantId)) {
+      throw Object.assign(new Error('Model provider profiles require the server-side credential broker.'), {
         statusCode: 503, code: 'BROKER_AUTHORITY_REQUIRED', retryable: false,
       });
     }
+    const repository = input.repositoryId
+      ? this.localRepositories.get(`${input.tenantId}\n${input.projectId}\n${input.repositoryId}`) : null;
+    if (input.repositoryId && !repository) throw Object.assign(new Error('This local repository is not configured for the selected project.'), {
+      statusCode: 404, code: 'LOCAL_REPOSITORY_NOT_FOUND', retryable: false,
+    });
+    if (repository && (isModelProvider(profile) || profile.kind === 'provider-http')) throw Object.assign(new Error('Local repository tasks require an approved local command profile.'), {
+      statusCode: 400, code: 'LOCAL_REPOSITORY_PROFILE_INVALID', retryable: false,
+    });
+    if (repository && (repository.kind === 'git') !== Boolean(input.repositoryRefId)) throw Object.assign(new Error('Choose an explicitly allowed Git ref for this repository.'), {
+      statusCode: 400, code: 'LOCAL_REPOSITORY_REF_REQUIRED', retryable: false,
+    });
+    if (repository?.kind === 'git' && !/^[a-f0-9]{40,64}$/.test(input.repositoryCommitOid ?? '')) throw Object.assign(new Error('Reload the selected Git ref to pin its exact commit.'), {
+      statusCode: 409, code: 'LOCAL_REPOSITORY_SNAPSHOT_STALE', retryable: false,
+    });
+    const selectedGitRef = repository?.kind === 'git'
+      ? repository.allowedRefs.find((entry) => entry.id === input.repositoryRefId) : null;
+    if (repository?.kind === 'git' && !selectedGitRef) throw Object.assign(new Error('Choose an explicitly allowed Git ref.'), {
+      statusCode: 400, code: 'LOCAL_REPOSITORY_INVALID', retryable: false,
+    });
+    if (repository?.kind !== 'git' && input.repositoryCommitOid !== undefined) throw Object.assign(new Error('A Git commit can be supplied only with a configured Git ref.'), {
+      statusCode: 400, code: 'LOCAL_REPOSITORY_REF_INVALID', retryable: false,
+    });
+    if (repository && !/^[a-f0-9]{64}$/.test(input.snapshotDigest ?? '')) throw Object.assign(new Error('Reload the selected repository snapshot before requesting this task.'), {
+      statusCode: 409, code: 'LOCAL_REPOSITORY_SNAPSHOT_STALE', retryable: false,
+    });
+    const repositoryRef = repository ? {
+      id: repository.id, snapshotId: `sha256:${input.snapshotDigest}`, treeDigest: input.snapshotDigest,
+      ...(repository.kind === 'git' ? { source: {
+        type: 'git', identity: repository.identity, refId: input.repositoryRefId,
+        ref: selectedGitRef.ref,
+        label: selectedGitRef.label ?? input.repositoryRefId,
+        commitOid: input.repositoryCommitOid,
+      } } : {}),
+      verification: { id: repository.verification.id, version: repository.verification.version ?? '1.0.0',
+        commandHash: digest({ executable: repository.verification.executable, args: repository.verification.args }) },
+    } : null;
     const requestHash = digest({
       projectId: input.projectId, planId: input.planId, revision: input.revision,
       planInstanceId: input.planInstanceId ?? null, taskId: input.taskId, profileId: input.profileId,
-      ...(profile.dynamicOpenAi ? {
+      ...(repositoryRef ? { repository: repositoryRef, repositoryRefId: input.repositoryRefId ?? null,
+        repositoryCommitOid: input.repositoryCommitOid ?? null } : {}),
+      ...(isModelProvider(profile) ? {
         profileSnapshot: {
           kind: profile.kind, version: profile.version,
           credentialReference: profile.credentialReference,
           model: profile.model,
+          ...(profile.dynamicDeepSeek ? { maxOutputTokens: profile.maxOutputTokens } : {}),
           providerEndpoint: profile.providerEndpoint,
         },
       } : {}),
@@ -357,19 +515,32 @@ export class ExecutionService {
       tenantId: input.tenantId, projectId: input.projectId, principal: input.principal,
       authzGeneration: input.authzGeneration, planId: input.planId, revision: input.revision,
       planInstanceId: input.planInstanceId, taskId: input.taskId, commandId: input.commandId, requestHash,
+      repositoryRef,
       buildRun: async ({ project, plan, task, processTaskRef, client }) => {
+        let repositorySnapshot = null;
+        if (repository) {
+          repositorySnapshot = repository.kind === 'git'
+            ? await captureGitRepositorySnapshot(repository, input.repositoryRefId)
+            : await captureLocalRepositorySnapshot(repository.directory);
+          if (repositorySnapshot.treeDigest !== input.snapshotDigest
+            || (repository.kind === 'git' && repositorySnapshot.repositorySource.commitOid !== input.repositoryCommitOid)) throw Object.assign(new Error('The configured repository snapshot or Git commit changed after it was selected. Reload the repository and retry.'), {
+            statusCode: 409, code: 'LOCAL_REPOSITORY_SNAPSHOT_STALE', retryable: false,
+          });
+        }
         let runProfile = profile;
         let proposalContext = null;
-        if (profile.dynamicOpenAi) {
-          const binding = await this.secretStore.resolveOpenAiBinding({
-            client, tenantId: input.tenantId, reference: profile.credentialReference, model: profile.model,
+        let taskGuidance = null;
+        if (isModelProvider(profile)) {
+          const binding = await resolveModelCredentialBinding(this.secretStore, profile, {
+            client, tenantId: input.tenantId,
           });
           runProfile = { ...profile, credentialVersion: binding.version };
           const pinnedBlueprint = project.blueprintVersions?.find((candidate) => candidate.id === processTaskRef.blueprintId
             && candidate.version === processTaskRef.blueprintVersion);
-          proposalContext = createProcessTaskProposalContext({ blueprint: pinnedBlueprint, task, processTaskRef });
+          taskGuidance = createProcessTaskGuidanceSnapshot({ blueprint: pinnedBlueprint, plan, task, processTaskRef });
+          proposalContext = createProcessTaskProposalContext({ blueprint: pinnedBlueprint, task, processTaskRef, taskGuidance });
         }
-        return createExecutionRun({
+        const run = createExecutionRun({
           tenantId: input.tenantId, projectId: input.projectId, profile: runProfile, requestedBy: input.principal,
           title: task.title, objective: task.detail,
           requirements: [
@@ -384,10 +555,39 @@ export class ExecutionService {
           ],
           processTaskRef,
           proposalContext,
+          taskGuidance,
         });
+        if (repositorySnapshot) run.repositorySnapshot = repositorySnapshot;
+        return run;
       },
     });
     return result ? { ...result, run: executionRunView(result.run) } : null;
+  }
+  async listLocalRepositories({ tenantId, projectId, principal, authzGeneration }) {
+    if (typeof this.store.authorizeProjectForPrincipal !== 'function') throw principalScopeUnavailable();
+    await this.store.authorizeProjectForPrincipal({ tenantId, projectId, principal, authzGeneration });
+    const matches = [...this.localRepositories.values()].filter((repository) => repository.tenantId === tenantId && repository.projectId === projectId);
+    const listed = [];
+    for (const repository of matches) {
+      if (repository.kind === 'git') {
+        for (const allowedRef of repository.allowedRefs) {
+          const snapshot = await captureGitRepositorySnapshot(repository, allowedRef.id);
+          listed.push({ id: repository.id, selectionId: `${repository.id}:${allowedRef.id}`,
+            label: repository.label ?? repository.id, kind: 'git', identity: repository.identity,
+            refId: allowedRef.id, ref: snapshot.repositorySource.ref, refLabel: snapshot.repositorySource.label,
+            commitOid: snapshot.repositorySource.commitOid, snapshotId: snapshot.snapshotId,
+            treeDigest: snapshot.treeDigest, fileCount: snapshot.fileCount, totalBytes: snapshot.totalBytes,
+            verification: { id: repository.verification.id, version: repository.verification.version ?? '1.0.0' } });
+        }
+      } else {
+        const snapshot = await captureLocalRepositorySnapshot(repository.directory);
+        listed.push({ id: repository.id, selectionId: repository.id, label: repository.label ?? repository.id,
+          kind: 'directory', snapshotId: snapshot.snapshotId, treeDigest: snapshot.treeDigest,
+          fileCount: snapshot.fileCount, totalBytes: snapshot.totalBytes,
+          verification: { id: repository.verification.id, version: repository.verification.version ?? '1.0.0' } });
+      }
+    }
+    return listed;
   }
   async cancelProcessTaskRun(input) {
     if (typeof this.store.cancelProcessTaskRun !== 'function') {
@@ -471,6 +671,17 @@ export class ExecutionService {
         if (binding.version !== credential.version) {
           throw stale('The OpenAI credential generation changed while this request was paused. Keep it paused and create a new request.');
         }
+      } else if (profile.dynamicDeepSeek) {
+        const credential = run.profile.credential;
+        if (!credential || credential.reference !== profile.credentialReference
+          || run.profile.providerModel !== profile.model
+          || run.profile.providerMaxOutputTokens !== profile.maxOutputTokens || !this.secretStore || !client) {
+          throw stale('The pinned DeepSeek profile or credential is no longer available. Keep it paused and create a new request.');
+        }
+        let binding;
+        try { binding = await resolveModelCredentialBinding(this.secretStore, profile, { client, tenantId: input.tenantId }); }
+        catch { throw stale('The pinned generic provider credential is no longer active. Keep it paused and create a new request.'); }
+        if (binding.version !== credential.version) throw stale('The generic provider credential generation changed while this request was paused. Keep it paused and create a new request.');
       } else {
         const configured = profile.credentialReference
           ? { reference: profile.credentialReference, version: profile.credentialVersion } : null;
@@ -524,6 +735,15 @@ export class ExecutionService {
     const { tenantId, projectId, planInstanceId, principal, version, reason, evidence, acknowledgeDuplicateCostWork } = input;
     return this.store.abandonUnverifiedProcessTaskInstance({ ...input, requestHash: digest({
       tenantId, projectId, planInstanceId, principal, version, reason, evidence, acknowledgeDuplicateCostWork,
+    }) });
+  }
+  async cancelProcessTaskInstance(input) {
+    if (typeof this.store.cancelProcessTaskInstance !== 'function') throw Object.assign(new Error('Terminal process-instance cancellation requires PostgreSQL-backed execution storage.'), {
+      statusCode: 503, code: 'PROCESS_TASK_RUNTIME_UNAVAILABLE', retryable: false,
+    });
+    const { tenantId, projectId, planInstanceId, principal, version, reason } = input;
+    return this.store.cancelProcessTaskInstance({ ...input, requestHash: digest({
+      tenantId, projectId, planInstanceId, principal, version, reason,
     }) });
   }
   async startHumanProcessTask(input) {
@@ -582,6 +802,7 @@ export class ExecutionService {
         projectId: input.projectId, planId: input.planId, revision: input.revision,
         planInstanceId: input.planInstanceId, taskId: input.taskId, principal: input.principal,
         disposition: input.disposition, reason: input.reason, evidence: input.evidence ?? [],
+        targetPrincipal: input.targetPrincipal ?? null, expectedVersion: input.expectedVersion ?? null,
       }),
     });
   }
@@ -600,24 +821,21 @@ export class ExecutionService {
     if (command.version !== run.version) throw Object.assign(new Error(`Version conflict: expected ${run.version}.`), { statusCode: 409 });
     const persistedVersion = run.version;
     const profile = this.profiles.get(run.profile?.id);
-    const validateCredentialBinding = profile?.dynamicOpenAi ? async (current, client) => {
+    const validateCredentialBinding = isModelProvider(profile) ? async (current, client) => {
       const credential = current.profile?.credential;
-      const staleCredential = () => Object.assign(new Error('The OpenAI credential or profile changed before approval. Create a new execution request against the current binding.'), {
+      const staleCredential = () => Object.assign(new Error('The model provider credential or profile changed before approval. Create a new execution request against the current binding.'), {
         statusCode: 409, code: 'EXECUTION_PROFILE_STALE', retryable: false,
       });
       if (!credential || credential.reference !== profile.credentialReference
-        || current.profile?.providerModel !== profile.model || current.profile?.version !== profile.version
+        || current.profile?.providerModel !== profile.model
+        || (profile.dynamicDeepSeek && current.profile?.providerMaxOutputTokens !== profile.maxOutputTokens)
+        || current.profile?.version !== profile.version
         || !this.secretStore || !client) {
         throw staleCredential();
       }
       let binding;
-      try {
-        binding = await this.secretStore.resolveOpenAiBinding({
-          client, tenantId, reference: credential.reference, model: profile.model,
-        });
-      } catch {
-        throw staleCredential();
-      }
+      try { binding = await resolveModelCredentialBinding(this.secretStore, profile, { client, tenantId }); }
+      catch { throw staleCredential(); }
       if (binding.version !== credential.version) throw staleCredential();
     } : null;
     approveExecutionRun(run, command);
@@ -649,19 +867,20 @@ export class ExecutionService {
         statusCode: 409, code: 'EXECUTION_PROFILE_STALE', retryable: false,
       });
     }
-    if (profile.dynamicOpenAi && run.profile.providerModel !== profile.model) {
-      throw Object.assign(new Error('The approved OpenAI model differs from the configured profile. Create a new execution run and approve the current model.'), { statusCode: 409, code: 'EXECUTION_PROFILE_STALE', retryable: false });
+    if (isModelProvider(profile) && (run.profile.providerModel !== profile.model
+      || (profile.dynamicDeepSeek && run.profile.providerMaxOutputTokens !== profile.maxOutputTokens))) {
+      throw Object.assign(new Error('The approved model provider settings differ from the configured profile. Create a new execution run and approve the current settings.'), { statusCode: 409, code: 'EXECUTION_PROFILE_STALE', retryable: false });
     }
     const configuredCredential = profile.credentialReference
       ? { reference: profile.credentialReference, version: profile.credentialVersion } : null;
     const approvedCredential = run.profile.credential ?? null;
     let dynamicBinding = null;
-    if (profile.dynamicOpenAi && this.secretStore) {
-      try { dynamicBinding = await this.secretStore.resolveOpenAiBinding({ tenantId, reference: profile.credentialReference, model: profile.model }); }
+    if (isModelProvider(profile) && this.secretStore) {
+      try { dynamicBinding = await resolveModelCredentialBinding(this.secretStore, profile, { tenantId }); }
       catch { dynamicBinding = null; }
     }
     if ((configuredCredential?.reference ?? null) !== (approvedCredential?.reference ?? null)
-      || (profile.dynamicOpenAi ? (dynamicBinding?.version ?? null) !== (approvedCredential?.version ?? null)
+      || (isModelProvider(profile) ? (dynamicBinding?.version ?? null) !== (approvedCredential?.version ?? null)
         : (configuredCredential?.version ?? null) !== (approvedCredential?.version ?? null))) {
       throw Object.assign(new Error('The executor credential binding changed after approval. Create a new execution run and approve the current binding.'), {
         statusCode: 409, code: 'EXECUTION_PROFILE_STALE', retryable: false,
@@ -673,22 +892,22 @@ export class ExecutionService {
     if (run.approval.requestHash !== requestHash && !validLegacyApproval) {
       throw new Error('Approved request no longer matches the work item and executor profile.');
     }
-    if (run.profile.credential && profile.kind !== 'provider-http' && !profile.dynamicOpenAi) {
+    if (run.profile.credential && profile.kind !== 'provider-http' && !isModelProvider(profile)) {
       throw Object.assign(new Error('This credential-bound profile has no broker-aware provider adapter; execution was not dispatched.'), {
         statusCode: 503, code: 'BROKER_PROVIDER_UNAVAILABLE', retryable: false,
       });
     }
     if (this.active.has(id)) throw Object.assign(new Error('Execution run is already active.'), { statusCode: 409 });
-    const providerProfile = profile.kind === 'provider-http' || profile.dynamicOpenAi;
+    const providerProfile = profile.kind === 'provider-http' || isModelProvider(profile);
     const workerLeaseDurationMs = providerProfile ? PROVIDER_WORKER_LEASE_MS : WORKER_LEASE_MS;
     if (command.scopePrincipal
       && (typeof this.store.authorizeExecutionDispatch !== 'function'
         || typeof this.store.renewExecutionLease !== 'function'
         || typeof this.store.finalizeExecution !== 'function')) throw executionFenceUnavailable();
-    if ((profile.kind === 'provider-http' || profile.dynamicOpenAi) && (!command.scopePrincipal || !this.secretStore)) {
+    if ((profile.kind === 'provider-http' || isModelProvider(profile)) && (!command.scopePrincipal || !this.secretStore)) {
       throw Object.assign(new Error('Provider execution requires current scoped authority and the server-side credential broker.'), { statusCode: 503, code: 'BROKER_AUTHORITY_REQUIRED', retryable: false });
     }
-    const configuredProvider = profile.kind === 'provider-http' || profile.dynamicOpenAi ? profile.providerEndpoint : null;
+    const configuredProvider = profile.kind === 'provider-http' || isModelProvider(profile) ? profile.providerEndpoint : null;
     if ((run.profile.providerDestinationHash ?? null) !== (configuredProvider ? digest(configuredProvider) : null)) {
       throw Object.assign(new Error('The provider destination changed after approval. Create a new execution run and approve the current destination.'), { statusCode: 409, code: 'EXECUTION_PROFILE_STALE', retryable: false });
     }
@@ -698,6 +917,7 @@ export class ExecutionService {
       approvalPrincipal: run.approval?.principal ?? null,
       authzGeneration: command.authorityGeneration ?? null,
       workerId: randomUUID(), controller: new AbortController(), cancelReason: null, handle: null,
+      dispatchAuthorizationPending: true,
       done: new Promise((resolve) => { settleActive = resolve; }),
     };
     active.run = run;
@@ -740,6 +960,14 @@ export class ExecutionService {
       const workspace = providerProfile ? null : path.resolve(path.join(profile.workspaceRoot, run.id));
       if (!providerProfile && !workspace.startsWith(`${profile.workspaceRoot}${path.sep}`)) throw new Error('Execution workspace escaped the configured root.');
       if (!providerProfile) await mkdir(workspace, { recursive: true, mode: 0o700 });
+      let repositoryBefore = null;
+      if (run.processTaskRef?.repository) {
+        if (!run.repositorySnapshot || run.repositorySnapshot.treeDigest !== run.processTaskRef.repository.treeDigest) {
+          throw Object.assign(new Error('The pinned local repository snapshot is unavailable or invalid.'), { code: 'LOCAL_REPOSITORY_SNAPSHOT_INVALID' });
+        }
+        await materializeLocalRepositorySnapshot(run.repositorySnapshot, workspace);
+        repositoryBefore = run.repositorySnapshot;
+      }
       const adapter = providerProfile ? null : this.commandAdapterFactory({ executable: profile.executable, args: profile.args, timeoutMs: profile.timeoutMs, name: profile.id, version: profile.version, environment: profile.environment, sandbox: profile.sandbox });
       const start = async () => {
       if (providerProfile) return { providerDispatchAuthorized: true };
@@ -775,6 +1003,7 @@ export class ExecutionService {
             leaseDurationMs: workerLeaseDurationMs, start,
           });
           dispatchAcknowledged = true;
+          active.dispatchAuthorizationPending = false;
         } finally {
           if (dispatchAckTimer) clearTimeout(dispatchAckTimer);
           dispatchAckTimer = null;
@@ -783,7 +1012,10 @@ export class ExecutionService {
             dispatchLeaseTimer = null;
           }
         }
-      } else handle = await start();
+      } else {
+        handle = await start();
+        active.dispatchAuthorizationPending = false;
+      }
       dispatchStarted = true;
       active.handle = providerProfile ? { terminate: () => active.controller.abort() } : handle;
       if (active.cancelReason === 'dispatch_commit_unknown') {
@@ -824,7 +1056,50 @@ export class ExecutionService {
         active.handle = handle;
         result.catch(() => {});
       }
-      const result = await handle.result;
+      let result = await handle.result;
+      if (repositoryBefore && result.status === 'COMPLETED') {
+        const repositoryAfter = await captureLocalRepositorySnapshot(workspace, { excludeGitDirectory: false });
+        const repositoryConfig = this.localRepositories.get(`${tenantId}\n${run.projectId}\n${run.processTaskRef.repository.id}`);
+        if (!repositoryConfig) throw Object.assign(new Error('The pinned local repository binding is no longer configured.'), { code: 'LOCAL_REPOSITORY_NOT_FOUND' });
+        const verificationCommandHash = digest({ executable: repositoryConfig.verification.executable, args: repositoryConfig.verification.args });
+        if (repositoryConfig.verification.id !== run.processTaskRef.repository.verification?.id
+          || (repositoryConfig.verification.version ?? '1.0.0') !== run.processTaskRef.repository.verification?.version
+          || verificationCommandHash !== run.processTaskRef.repository.verification?.commandHash) {
+          throw Object.assign(new Error('The local verification command changed after the task snapshot was pinned.'), {
+            code: 'LOCAL_REPOSITORY_VERIFICATION_STALE', statusCode: 409, retryable: false,
+          });
+        }
+        let verification = null;
+        const candidateTreeDigest = repositoryAfter.treeDigest;
+        if (repositoryConfig.verification) {
+          const verificationConfig = repositoryConfig.verification;
+          const verificationAdapter = this.commandAdapterFactory({ executable: verificationConfig.executable,
+            args: verificationConfig.args, timeoutMs: verificationConfig.timeoutMs ?? profile.timeoutMs,
+            name: verificationConfig.id, version: verificationConfig.version ?? '1.0.0', sandbox: profile.sandbox });
+          const checked = await verificationAdapter.execute({ id: `verify-${run.workItem.id}`, objective: 'Verify the exact captured candidate tree.' },
+            { id: run.id, candidateTreeDigest, repositoryId: repositoryConfig.id }, { workspace, signal: active.controller.signal });
+          const verificationStdout = redact(checked.stdout).slice(0, 20_000);
+          const verificationStderr = redact(checked.stderr).slice(0, 20_000);
+          verification = { id: verificationConfig.id, version: verificationConfig.version ?? '1.0.0',
+            commandHash: verificationCommandHash,
+            treeDigest: candidateTreeDigest, status: checked.status, exitCode: checked.exitCode,
+            stdout: verificationStdout, stderr: verificationStderr,
+            outputHash: digest({ stdout: verificationStdout, stderr: verificationStderr }) };
+          if (checked.status !== 'COMPLETED' || checked.exitCode !== 0) result = { ...result, status: 'FAILED', exitCode: checked.exitCode };
+          const afterVerification = await captureLocalRepositorySnapshot(workspace, { excludeGitDirectory: false });
+          if (afterVerification.treeDigest !== candidateTreeDigest) {
+            verification.status = 'FAILED';
+            verification.error = 'Verification modified the immutable candidate tree.';
+            result = { ...result, status: 'FAILED', exitCode: verification.exitCode ?? 1 };
+          }
+        }
+        result = { ...result, repositoryCandidate: {
+          repositoryId: repositoryConfig.id, snapshotId: repositoryBefore.snapshotId,
+          sourceTreeDigest: repositoryBefore.treeDigest, treeDigest: candidateTreeDigest,
+          ...(repositoryBefore.repositorySource ? { source: repositoryBefore.repositorySource } : {}),
+          changes: localRepositoryDiff(repositoryBefore, repositoryAfter), verification,
+        } };
+      }
       const generatedProposal = result.status === 'COMPLETED' && run.workItem?.proposalContext
         ? createGeneratedBlueprintProposal(run, result.stdout) : null;
       terminalAttempted = true;
@@ -843,7 +1118,7 @@ export class ExecutionService {
         },
         reason: active.cancelReason,
       });
-    } catch (error) {
+  } catch (error) {
       if (terminalAttempted || !runningCommitted || run.status !== 'RUNNING') throw error;
       if (command.scopePrincipal && ['PROCESS_INSTANCE_PAUSED', 'PROVIDER_ATTEMPT_CANCELLED'].includes(error.code)
         && typeof this.store.pauseUndispatchedProcessTaskRun === 'function') {
@@ -926,23 +1201,25 @@ export class ExecutionService {
     try {
       return await this.useProviderCredential(run.id, { operation: ({ credential, signal }) => {
         const instructions = run.interventionRevisions?.at(-1) ?? run.workItem;
-        const requestBody = profile.dynamicOpenAi
-          ? { model: profile.model, input: run.workItem.proposalContext
-            ? buildBlueprintProposalPrompt({ task: {
-              id: run.processTaskRef.taskId, title: run.title, detail: instructions.objective,
-            }, proposalContext: run.workItem.proposalContext, amendedRequirements: instructions.requirements })
-            : `${instructions.objective}\n\nRequirements:\n${instructions.requirements.join('\n')}`,
-          store: false, max_output_tokens: 2_000, tools: [] }
+        const proposalTask = { id: run.processTaskRef?.taskId, title: run.title, detail: instructions.objective };
+        const proposalInput = run.workItem.proposalContext
+          ? buildProcessTaskProposalPromptForRun({ run, task: proposalTask, amendedRequirements: instructions.requirements })
+          : `${instructions.objective}\n\nRequirements:\n${instructions.requirements.join('\n')}`;
+        const requestBody = isModelProvider(profile)
+          ? { model: profile.model, input: proposalInput,
+          store: false, max_output_tokens: profile.maxOutputTokens, tools: [] }
           : { objective: instructions.objective, requirements: instructions.requirements };
         return providerTransport(profile.providerEndpoint, {
           headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json', accept: 'application/json' },
           body: JSON.stringify(requestBody), signal,
           parseResponse: (parsed) => {
-            if (profile.dynamicOpenAi && parsed?.status !== 'completed') throw new Error('incomplete OpenAI response');
-            return profile.dynamicOpenAi && Array.isArray(parsed?.output)
+            if (isModelProvider(profile) && parsed?.status !== 'completed') throw Object.assign(new Error('incomplete model provider response'), { parserFailureClass: 'incomplete_response' });
+            const output = isModelProvider(profile) && Array.isArray(parsed?.output)
               ? parsed.output.flatMap((item) => item?.type === 'message' && Array.isArray(item.content)
                 ? item.content.filter((part) => part?.type === 'output_text' && typeof part.text === 'string').map((part) => part.text) : []).join('\n')
               : parsed?.result;
+            if (isModelProvider(profile) && (typeof output !== 'string' || !output.trim())) throw Object.assign(new Error('missing model output text'), { parserFailureClass: 'missing_output_text' });
+            return output;
           },
         });
       } });
@@ -950,8 +1227,14 @@ export class ExecutionService {
       if (error?.code === 'PROVIDER_OUTPUT_QUARANTINED') throw error;
       if (['PROCESS_INSTANCE_PAUSED', 'PROVIDER_ATTEMPT_CANCELLED'].includes(error?.code)) throw error;
       if (error?.code === 'PROVIDER_OUTCOME_UNKNOWN') {
+        const upstreamHttpStatus = error.upstreamHttpStatus;
+        const parserFailureClass = ['invalid_json', 'body_too_large', 'incomplete_response', 'missing_output_text', 'output_too_large'].includes(error.parserFailureClass)
+          ? error.parserFailureClass : null;
+        const providerDiagnostic = profile.dynamicDeepSeek && (Number.isInteger(upstreamHttpStatus) || parserFailureClass)
+          ? { provider: 'deepseek', ...(Number.isInteger(upstreamHttpStatus) ? { httpStatus: upstreamHttpStatus } : {}), ...(parserFailureClass ? { parserFailureClass } : {}) } : null;
         throw Object.assign(new Error('The provider may have received this request. This run will not send it again; check provider state before creating a new run.'), {
           code: 'PROVIDER_OUTCOME_UNKNOWN',
+          ...(providerDiagnostic ? { providerDiagnostic } : {}),
         });
       }
       if (error?.code === 'SECRET_CREDENTIAL_EXPIRED') {
@@ -963,6 +1246,11 @@ export class ExecutionService {
   }
 
   async #finalizeTerminal(run, { tenantId, principal, workerId, dispatchStarted, commandPrincipal, complete, failure, reason }) {
+    const diagnostic = run.profile?.kind === 'provider-deepseek' && failure?.code === 'PROVIDER_OUTCOME_UNKNOWN'
+      && failure.providerDiagnostic?.provider === 'deepseek'
+      && ((Number.isInteger(failure.providerDiagnostic?.httpStatus) && failure.providerDiagnostic.httpStatus >= 100 && failure.providerDiagnostic.httpStatus <= 599)
+        || ['invalid_json', 'body_too_large', 'incomplete_response', 'missing_output_text', 'output_too_large'].includes(failure.providerDiagnostic?.parserFailureClass))
+      ? { provider: 'deepseek', ...(Number.isInteger(failure.providerDiagnostic.httpStatus) ? { httpStatus: failure.providerDiagnostic.httpStatus } : {}), ...(failure.providerDiagnostic.parserFailureClass ? { parserFailureClass: failure.providerDiagnostic.parserFailureClass } : {}) } : null;
     const build = (terminalStatus, execution, eventType, details) => {
       const candidate = structuredClone(run);
       candidate.status = terminalStatus;
@@ -974,21 +1262,42 @@ export class ExecutionService {
     const failed = () => build('FAILED', {
       status: 'FAILED', error: redact(failure?.message ?? 'Execution failed.'),
       completedAt: new Date().toISOString(), changedArtifacts: [],
-    }, 'ExecutionFailed', { error: redact(failure?.message ?? 'Execution failed.') });
-    const interrupted = (interruptReason) => build('INTERRUPTED', {
-      status: 'INTERRUPTED', error: redact(failure?.message ?? 'Execution authorization was revoked.'),
-      completedAt: new Date().toISOString(), changedArtifacts: [],
-    }, 'ExecutionInterrupted', {
-      error: redact(failure?.message ?? 'Execution authorization was revoked.'), reason: interruptReason ?? reason ?? 'authorization_revoked',
+      ...(diagnostic ? { providerDiagnostic: diagnostic } : {}),
+    }, 'ExecutionFailed', {
+      error: redact(failure?.message ?? 'Execution failed.'),
+      ...(diagnostic ? { providerDiagnostic: diagnostic } : {}),
     });
+    const interrupted = (interruptReason) => {
+      const category = linkedRunOutcomeCategory(run, { status: 'INTERRUPTED', reason: interruptReason ?? reason ?? 'authorization_revoked' });
+      const candidate = build('INTERRUPTED', {
+        status: 'INTERRUPTED', error: redact(failure?.message ?? 'Execution authorization was revoked.'),
+        completedAt: new Date().toISOString(), changedArtifacts: [],
+      }, 'ExecutionInterrupted', {
+        error: redact(failure?.message ?? 'Execution authorization was revoked.'), reason: interruptReason ?? reason ?? 'authorization_revoked',
+      });
+      if (category) candidate.linkedOutcomeCategory = category;
+      return candidate;
+    };
+    const failedRun = () => {
+      const candidate = failed();
+      const category = linkedRunOutcomeCategory(run, { status: 'FAILED', errorCode: failure?.code });
+      if (category) candidate.linkedOutcomeCategory = category;
+      return candidate;
+    };
 
     if (principal) {
       const finalized = await this.store.finalizeExecution({
         tenantId, projectId: run.projectId, principal, runId: run.id, workerId,
         expectedVersion: run.version, dispatchStarted, forceInterruptionReason: reason,
         complete: () => {
-          if (!complete) return failed();
+          if (!complete) return failedRun();
           const candidate = complete(structuredClone(run));
+          if (candidate.status === 'FAILED') {
+            const category = linkedRunOutcomeCategory(candidate, {
+              status: 'FAILED', errorCode: failure?.code,
+            });
+            if (category) candidate.linkedOutcomeCategory = category;
+          }
           candidate.version += 1;
           candidate.updatedAt = new Date().toISOString();
           return candidate;
@@ -997,7 +1306,11 @@ export class ExecutionService {
       });
       return finalized.run;
     }
-    const candidate = complete ? complete(structuredClone(run)) : (reason ? interrupted(reason) : failed());
+    const candidate = complete ? complete(structuredClone(run)) : (reason ? interrupted(reason) : failedRun());
+    if (complete && candidate.status === 'FAILED') {
+      const category = linkedRunOutcomeCategory(candidate, { status: 'FAILED', errorCode: failure?.code });
+      if (category) candidate.linkedOutcomeCategory = category;
+    }
     await this.store.save(candidate, { expectedVersion: run.version });
     return candidate;
   }

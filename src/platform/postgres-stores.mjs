@@ -9,11 +9,15 @@ import {
   verifyAggregateRow,
   verifyCommandRow,
 } from './postgres.mjs';
-import { releaseApprovalCandidate } from '../sdlc/engine.mjs';
+import { pinProjectSourceObject, releaseApprovalCandidate, verifyAcceptedG6Plan, verifySourceBinding } from '../sdlc/engine.mjs';
 import { digest } from '../sdlc/contracts.mjs';
-import { buildBlueprintProposalPrompt } from '../execution/proposals.mjs';
+import { latestBlueprint } from '../model.mjs';
+import { SOFTWARE_PLAN_COMPILER_VERSION, verifySoftwareDeliveryDraft } from '../sdlc/software-plan-compiler.mjs';
+import { softwareRuntimePlanSnapshot, verifySoftwareRuntimePlanSnapshot } from '../sdlc/software-runtime-plan.mjs';
+import { buildBlueprintProposalPrompt, buildLegacyBlueprintProposalPrompt } from '../execution/proposals.mjs';
 import {
   cancelProcessTaskExecutionRun,
+  cancelProcessTaskExecutionRunByInstance,
   amendPausedProcessTaskExecutionRun,
   executionApprovalRequestHash,
   pauseProcessTaskExecutionRun,
@@ -27,6 +31,35 @@ const IDENTIFIERS = {
   execution_run: /^execution-run-[0-9a-f-]{36}$/,
 };
 const HUMAN_APPROVER_ROLES = new Set(['execution-approver', 'release-approver', 'control-owner']);
+const PROCESS_CONTROL_ACTORS = Object.freeze({
+  ProcessTaskInstancePauseRequested: 'authorized controller',
+  ProcessTaskInstancePaused: 'authorized controller',
+  ProcessTaskInstanceResumed: 'authorized controller',
+  ProcessTaskInstanceAbandonedUnverified: 'project owner',
+  ProcessTaskInstanceCancelled: 'authorized controller',
+});
+
+function safeProcessTaskControlEvents(events) {
+  if (!Array.isArray(events)) return [];
+  return events.slice(-100).flatMap((event) => {
+    if (!event || typeof event !== 'object' || Array.isArray(event)
+      || typeof event.type !== 'string' || !Object.hasOwn(PROCESS_CONTROL_ACTORS, event.type)
+      || typeof event.at !== 'string' || event.at.length > 64 || !Number.isFinite(Date.parse(event.at))) return [];
+    const source = event.data && typeof event.data === 'object' && !Array.isArray(event.data) ? event.data : {};
+    const data = {};
+    if (typeof source.reason === 'string' && source.reason.trim()) data.reason = source.reason.trim().slice(0, 1000);
+    if (event.type === 'ProcessTaskInstanceAbandonedUnverified') {
+      for (const field of ['runIds', 'attemptIds', 'evidence']) {
+        const maximumLength = field === 'evidence' ? 1000 : 160;
+        data[field] = Array.isArray(source[field]) ? source[field].slice(0, 20)
+          .flatMap((value) => typeof value === 'string' && value.trim() ? [value.trim().slice(0, maximumLength)] : []) : [];
+      }
+      data.acknowledgeDuplicateCostWork = source.acknowledgeDuplicateCostWork === true;
+    }
+    return [{ type: event.type, at: event.at,
+      actor: event.actor === 'system' ? 'system' : PROCESS_CONTROL_ACTORS[event.type], data }];
+  });
+}
 
 function requiresHumanApprover(roles) {
   return Array.isArray(roles) && roles.some((role) => HUMAN_APPROVER_ROLES.has(role));
@@ -50,6 +83,115 @@ function projectAccessDenied() {
   const error = new Error('Project membership does not allow this action.');
   Object.assign(error, { statusCode: 403, code: 'ACTION_FORBIDDEN', retryable: false });
   return error;
+}
+
+async function resolveRuntimeProcessPlan(client, { tenantId, projectId, project, planId, revision }) {
+  if (!project) {
+    const projectRow = await client.query(`select * from orgward.aggregates
+      where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2 for share`, [tenantId, projectId]);
+    if (!projectRow.rowCount) return null;
+    project = verifyAggregateRow(projectRow.rows[0]);
+  }
+  const saved = (project?.processPlans ?? []).find((candidate) => candidate.id === planId
+    && Number(candidate.revision ?? 1) === Number(revision));
+  if (saved) return saved;
+  const result = await client.query(`select project_id, case_id, runtime_revision, snapshot_hash, snapshot
+    from orgward.software_delivery_runtime_plans
+    where tenant_id=$1 and project_id=$2 and plan_id=$3 and runtime_revision=$4 for share`, [tenantId, projectId, planId, revision]);
+  if (!result.rowCount) return null;
+  const row = result.rows[0];
+  if (Number(row.runtime_revision) !== Number(revision) || row.project_id !== projectId || row.snapshot?.binding?.caseId !== row.case_id
+    || row.snapshot?.id !== planId || row.snapshot_hash !== row.snapshot?.snapshotHash
+    || row.snapshot?.binding?.projectId !== projectId || !verifySoftwareRuntimePlanSnapshot(row.snapshot)) {
+    throw persistenceIntegrity('An immutable software delivery runtime snapshot failed provenance verification.');
+  }
+  const sourceRows = await client.query(`select d.plan_hash,d.plan,r.review_hash,r.review
+    from orgward.software_delivery_plans d
+    join orgward.software_delivery_assignment_reviews r
+      on r.tenant_id=d.tenant_id and r.project_id=d.project_id and r.case_id=d.case_id and r.plan_id=d.plan_id
+    where d.tenant_id=$1 and d.project_id=$2 and d.case_id=$3 and d.plan_id=$4 and r.review_revision=$5`,
+  [tenantId, projectId, row.case_id, planId, row.snapshot.binding.reviewRevision]);
+  if (sourceRows.rowCount !== 1 || sourceRows.rows[0].plan_hash !== contentHash(sourceRows.rows[0].plan)
+    || sourceRows.rows[0].review_hash !== sourceRows.rows[0].review?.reviewHash
+    || digest(Object.fromEntries(Object.entries(sourceRows.rows[0].review).filter(([key]) => key !== 'reviewHash')))
+      !== sourceRows.rows[0].review_hash) {
+    throw persistenceIntegrity('The immutable runtime snapshot no longer matches its stored draft and owner review.');
+  }
+  try {
+    const recomputed = softwareRuntimePlanSnapshot({ draft: sourceRows.rows[0].plan, review: sourceRows.rows[0].review,
+      project, principal: row.snapshot.createdBy });
+    if (canonicalJson(recomputed) !== canonicalJson(row.snapshot)) {
+      throw persistenceIntegrity('The immutable runtime snapshot does not match its source draft and reviewed assignments.');
+    }
+  } catch (error) {
+    if (error?.statusCode) throw error;
+    throw persistenceIntegrity('The immutable runtime snapshot could not be rebuilt from its source draft and review.');
+  }
+  return row.snapshot;
+}
+
+function verifyRuntimePlanTasks(plan, runtimes) {
+  if (!plan || !Array.isArray(plan.tasks)) throw persistenceIntegrity('A process runtime references a missing saved task graph.');
+  const tasks = new Map(plan.tasks.map((task) => [task.id, task]));
+  if (tasks.size !== plan.tasks.length) throw persistenceIntegrity('A saved task graph contains duplicate task identities.');
+  for (const runtime of runtimes) {
+    const task = tasks.get(runtime.task_id);
+    if (!task || runtime.process_plan_id !== plan.id || Number(runtime.plan_revision) !== Number(plan.revision ?? 1)
+      || runtime.blueprint_id !== plan.source.blueprintId || Number(runtime.blueprint_version) !== Number(plan.source.blueprintVersion)) {
+      throw persistenceIntegrity('A process task runtime does not match its immutable graph snapshot.');
+    }
+    if (plan.kind === 'software_delivery_runtime_plan'
+      && (runtime.actor_type !== 'human' || runtime.execution_run_id
+        || task.assignee?.actorId !== runtime.actor_id || task.assignee?.roleId !== runtime.role_id
+        || task.assignee?.principal !== runtime.assigned_principal
+        || task.assignee?.membershipGeneration !== Number(runtime.assigned_membership_generation)
+        || task.assignee?.authzGeneration !== Number(runtime.assigned_authz_generation))) {
+      throw persistenceIntegrity('A human software runtime row does not match its immutable reviewed assignment.');
+    }
+  }
+  return tasks;
+}
+
+function verifyCompleteSoftwareRuntimeInstance(plan, runtimes, tasks = new Map(plan?.tasks?.map((task) => [task.id, task]) ?? [])) {
+  if (plan?.kind !== 'software_delivery_runtime_plan') return;
+  const taskIds = new Set(runtimes.map((runtime) => runtime.task_id));
+  if (taskIds.size !== tasks.size || [...tasks.keys()].some((taskId) => !taskIds.has(taskId))) {
+    throw persistenceIntegrity('A promoted software checkpoint instance is missing one or more snapshot task rows.');
+  }
+}
+
+async function loadProcessInstancePlan(client, { tenantId, projectId, control, runtimes }) {
+  const plan = await resolveRuntimeProcessPlan(client, { tenantId, projectId,
+    planId: control.process_plan_id, revision: Number(control.plan_revision) });
+  const tasks = verifyRuntimePlanTasks(plan, runtimes);
+  verifyCompleteSoftwareRuntimeInstance(plan, runtimes, tasks);
+  if (plan.kind === 'software_delivery_runtime_plan'
+    && runtimes.some((runtime) => runtime.actor_type !== 'human' || runtime.execution_run_id)) {
+    throw persistenceIntegrity('A human-only software delivery instance contains unsupported agent runtime state.');
+  }
+  return { plan, tasks };
+}
+
+async function verifyProcessRuntimeTaskDefinition(client, { tenantId, projectId, planId, revision, taskId, runtime }) {
+  const plan = await resolveRuntimeProcessPlan(client, { tenantId, projectId, planId, revision });
+  const tasks = verifyRuntimePlanTasks(plan, [runtime]);
+  if (plan?.kind === 'software_delivery_runtime_plan') {
+    const instanceRows = await client.query(`select * from orgward.process_task_instances
+      where tenant_id=$1 and project_id=$2 and plan_instance_id=$3 order by task_id for share`,
+    [tenantId, projectId, runtime.plan_instance_id]);
+    const instanceTasks = verifyRuntimePlanTasks(plan, instanceRows.rows);
+    verifyCompleteSoftwareRuntimeInstance(plan, instanceRows.rows, instanceTasks);
+  }
+  const task = tasks.get(taskId);
+  if (plan.kind === 'software_delivery_runtime_plan'
+    && (!task || task.assignee?.kind !== 'blueprint-actor' || task.assignee.actorId !== runtime.actor_id
+      || task.assignee.roleId !== runtime.role_id || task.assignee.principal !== runtime.assigned_principal
+      || task.assignee.membershipGeneration !== Number(runtime.assigned_membership_generation)
+      || task.assignee.authzGeneration !== Number(runtime.assigned_authz_generation)
+      || runtime.actor_type !== 'human' || runtime.execution_run_id)) {
+    throw persistenceIntegrity('A human software runtime task no longer matches its immutable assignment snapshot.');
+  }
+  return { plan, task };
 }
 
 async function lockProjectAccess(client, { tenantId, projectId, principal, minimum = 'reader' }) {
@@ -76,6 +218,46 @@ async function lockProjectAccess(client, { tenantId, projectId, principal, minim
   `, [tenantId, projectId]);
   if (!project.rowCount) throw projectAccessDenied();
   return { access, generation: Number(membership.rows[0].generation) };
+}
+
+async function verifyCurrentHumanSoftwareAssignments(client, { tenantId, projectId, project, plan }) {
+  const blueprint = project.blueprintVersions?.find((entry) => entry.id === plan.source.blueprintId
+    && entry.version === plan.source.blueprintVersion);
+  const objects = Object.values(blueprint?.areas ?? {}).flatMap((area) => area.items ?? []);
+  const byId = new Map(objects.map((object) => [object.id, object]));
+  const assignments = new Map();
+  for (const task of plan.tasks) {
+    const actor = byId.get(task.assignee?.actorId);
+    const role = byId.get(task.assignee?.roleId);
+    const linked = actor && role?.type === 'role' && ((actor.assignedRoles ?? []).includes(role.id)
+      || (blueprint.relations ?? []).some((relation) => relation.source === actor.id
+        && relation.target === role.id && relation.type === 'assigned-to'));
+    if (actor?.type !== 'actor-human' || !linked) throw conflict(
+      'Software delivery promotion supports only currently bound human checkpoint assignments.', null, 'SOFTWARE_AGENT_RUNTIME_UNSUPPORTED');
+    const result = await client.query(`select b.status, b.target_principal, b.target_membership_generation,
+        b.target_authz_generation, identity.actor_type, identity.status as identity_status,
+        identity.display_name, identity.authz_generation as current_authz_generation, membership.access,
+        membership.generation as current_membership_generation, membership.revoked_at
+      from orgward.project_actor_binding_proposals b
+      join orgward.oidc_principals identity on identity.tenant_id=b.tenant_id and identity.principal=b.target_principal
+      join orgward.project_memberships membership on membership.tenant_id=b.tenant_id
+        and membership.project_id=b.project_id and membership.principal=b.target_principal
+      where b.tenant_id=$1 and b.project_id=$2 and b.blueprint_version=$3 and b.actor_id=$4 and b.role_id=$5
+      for update of b, identity, membership`, [tenantId, projectId, plan.source.blueprintVersion, actor.id, role.id]);
+    const matches = result.rows.filter((row) => row.status === 'enabled' && row.actor_type === 'human'
+      && row.identity_status === 'active' && row.revoked_at === null && ['owner', 'editor'].includes(row.access)
+      && Number(row.target_authz_generation) === Number(row.current_authz_generation)
+      && Number(row.target_membership_generation) === Number(row.current_membership_generation)
+      && row.target_principal === task.assignee?.principal
+      && `${projectId}:${row.target_principal}` === task.assignee?.membershipId
+      && Number(row.current_membership_generation) === Number(task.assignee?.membershipGeneration)
+      && Number(row.current_authz_generation) === Number(task.assignee?.authzGeneration));
+    const current = matches.length === 1 ? matches[0] : null;
+    if (!current) throw conflict('A reviewed human assignment is no longer uniquely current. Review assignments again before continuing.', null, 'ACTOR_BINDING_STALE');
+    assignments.set(task.id, { actor, role, principal: current.target_principal,
+      membershipGeneration: Number(current.current_membership_generation), authzGeneration: Number(current.current_authz_generation) });
+  }
+  return assignments;
 }
 
 async function lockIdentityRows(client, tenantId, principals) {
@@ -121,8 +303,15 @@ function processTaskRuntimeView(row, principal = null) {
     id: entry.id, type: entry.type, at: entry.at,
     actor: entry.type === 'HumanTaskEscalationResolved' ? 'project owner'
       : String(entry.type ?? '').startsWith('HumanTask') ? 'assigned human' : entry.actor,
-    data: structuredClone(entry.data ?? {}),
+    data: (() => {
+      const data = entry.data && typeof entry.data === 'object' && !Array.isArray(entry.data)
+        ? structuredClone(entry.data) : {};
+      delete data.fromPrincipal;
+      delete data.toPrincipal;
+      return data;
+    })(),
   })) : [];
+  const canResolveEscalation = Boolean(principal && row.can_resolve_escalation);
   return {
     projectId: row.project_id,
     processPlanId: row.process_plan_id,
@@ -146,7 +335,14 @@ function processTaskRuntimeView(row, principal = null) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     assignedToCurrentPrincipal: Boolean(principal && row.assigned_to_current_principal),
-      canResolveEscalation: Boolean(principal && row.can_resolve_escalation),
+    effectiveAssignmentOverridden: Boolean(row.has_effective_assignment_override),
+    ...(row.can_view_effective_assignee && typeof row.effective_assignee_display_name === 'string'
+      && row.effective_assignee_display_name.trim()
+      ? { effectiveAssigneeDisplayName: row.effective_assignee_display_name.trim() } : {}),
+    canResolveEscalation,
+    canApplyHumanTaskOutput: Boolean(principal && row.can_apply_human_task_output),
+    ...(canResolveEscalation && row.status === 'ESCALATED'
+      ? { humanReassignmentCandidates: structuredClone(row.human_reassignment_candidates ?? []) } : {}),
     instanceControl: row.instance_control_status ? {
       status: row.instance_control_status,
       version: Number(row.instance_control_version),
@@ -154,9 +350,18 @@ function processTaskRuntimeView(row, principal = null) {
       canRecover: Boolean(row.can_recover_instance),
       pauseReason: row.instance_control_pause_reason ?? null,
       pauseBoundary: structuredClone(row.instance_control_pause_boundary ?? {}),
-      events: structuredClone(row.instance_control_events ?? []),
+      events: safeProcessTaskControlEvents(row.instance_control_events),
       canAbandonUnverified: Boolean(row.can_abandon_unverified),
+      canCancel: Boolean(row.can_cancel_instance),
     } : null,
+  };
+}
+
+function effectiveHumanAssignee(runtime) {
+  return {
+    principal: runtime.effective_assigned_principal ?? runtime.assigned_principal,
+    membershipGeneration: Number(runtime.effective_assigned_membership_generation ?? runtime.assigned_membership_generation),
+    authzGeneration: Number(runtime.effective_assigned_authz_generation ?? runtime.assigned_authz_generation),
   };
 }
 
@@ -164,7 +369,7 @@ function validateHumanTaskNotes(evidence, { required = false } = {}) {
   if (!Array.isArray(evidence) || evidence.length > 20
     || evidence.some((entry) => typeof entry !== 'string' || !entry.trim() || entry.trim().length > 1000)
     || (required && evidence.length === 0)) {
-    throw conflict('Provide up to 20 short evidence notes; at least one is required for a succeeded resolution.', null, 'INVALID_HUMAN_TASK_OUTCOME');
+    throw conflict('Provide up to 20 short evidence notes; at least one is required for a succeeded or reassigned resolution.', null, 'INVALID_HUMAN_TASK_OUTCOME');
   }
   return evidence.map((entry) => entry.trim());
 }
@@ -176,9 +381,10 @@ function validateHumanTaskReason(reason) {
   return reason.trim();
 }
 
-async function hasVerifiedHumanTaskSuccess(client, runtime) {
+export async function hasVerifiedHumanTaskSuccess(client, runtime) {
   const outcome = runtime?.outcome;
   const evidence = runtime?.evidence;
+  const assignee = effectiveHumanAssignee(runtime);
   if (runtime?.actor_type !== 'human' || outcome?.result !== 'succeeded'
     || !Array.isArray(evidence) || evidence.length === 0
     || evidence.some((entry) => typeof entry !== 'string' || !entry.trim())
@@ -194,7 +400,7 @@ async function hasVerifiedHumanTaskSuccess(client, runtime) {
     const { contentHash: declaredContentHash, ...eventContent } = event;
     if (!declaredContentHash || contentHash(eventContent) !== declaredContentHash) return false;
     if (event.type === 'HumanTaskCompleted') {
-      return event.actor === runtime.assigned_principal
+      return event.actor === assignee.principal
         && event.data.result === 'succeeded' && Array.isArray(event.data.evidence)
         && sameEvidence(event.data.evidence)
         && sameEvidence(evidence);
@@ -225,20 +431,41 @@ async function selectProcessTaskRuntimeForPrincipal(client, {
 }) {
   return client.query(`
     select r.*,
-      (r.assigned_principal = $5 and assigned.status = 'active'
-        and r.assigned_authz_generation = assigned.authz_generation
-        and r.assigned_membership_generation = assigned_membership.generation
+      (coalesce(r.effective_assigned_principal, r.assigned_principal) = $5 and assigned.status = 'active'
+        and coalesce(r.effective_assigned_authz_generation, r.assigned_authz_generation) = assigned.authz_generation
+        and coalesce(r.effective_assigned_membership_generation, r.assigned_membership_generation) = assigned_membership.generation
         and assigned_membership.revoked_at is null) as assigned_to_current_principal,
+      (r.effective_assigned_principal is not null) as has_effective_assignment_override,
+      assigned.display_name as effective_assignee_display_name,
       (caller.status = 'active' and caller.actor_type = 'human'
         and caller.authz_generation = $6 and caller.roles @> array['workspace-write']::text[]
         and caller_membership.access = 'owner' and caller_membership.revoked_at is null)
-        as can_resolve_escalation
+        as can_view_effective_assignee,
+      (caller.status = 'active' and caller.actor_type = 'human'
+        and caller.authz_generation = $6 and caller.roles @> array['workspace-write']::text[]
+        and caller_membership.access = 'owner' and caller_membership.revoked_at is null)
+        as can_resolve_escalation,
+      case when r.status = 'ESCALATED' and r.actor_type = 'human'
+        and caller.status = 'active' and caller.actor_type = 'human'
+        and caller.authz_generation = $6 and caller.roles @> array['workspace-write']::text[]
+        and caller_membership.access = 'owner' and caller_membership.revoked_at is null then (
+          select coalesce(jsonb_agg(jsonb_build_object('principal', eligible.principal, 'displayName', eligible.display_name)
+            order by eligible.display_name, eligible.principal), '[]'::jsonb)
+          from orgward.project_memberships eligible_membership
+          join orgward.oidc_principals eligible
+            on eligible.tenant_id = eligible_membership.tenant_id and eligible.principal = eligible_membership.principal
+          where eligible_membership.tenant_id = r.tenant_id and eligible_membership.project_id = r.project_id
+            and eligible_membership.revoked_at is null and eligible_membership.access in ('owner','editor')
+            and eligible.status = 'active' and eligible.actor_type = 'human'
+            and eligible.roles @> array['workspace-write']::text[]
+            and eligible.principal <> coalesce(r.effective_assigned_principal, r.assigned_principal)
+        ) else '[]'::jsonb end as human_reassignment_candidates
     from orgward.process_task_instances r
     left join orgward.oidc_principals assigned
-      on assigned.tenant_id = r.tenant_id and assigned.principal = r.assigned_principal
+      on assigned.tenant_id = r.tenant_id and assigned.principal = coalesce(r.effective_assigned_principal, r.assigned_principal)
     left join orgward.project_memberships assigned_membership
       on assigned_membership.tenant_id = r.tenant_id and assigned_membership.project_id = r.project_id
-        and assigned_membership.principal = r.assigned_principal
+        and assigned_membership.principal = coalesce(r.effective_assigned_principal, r.assigned_principal)
     left join orgward.oidc_principals caller
       on caller.tenant_id = r.tenant_id and caller.principal = $5
     left join orgward.project_memberships caller_membership
@@ -341,6 +568,10 @@ function requireProcessTaskControlNotAbandoned(control, version = null) {
   if (control?.status === 'ABANDONED_UNVERIFIED') {
     throw conflict('This process instance was closed with an unverified provider outcome and is terminal.',
       version ?? Number(control.version), 'PROCESS_INSTANCE_ABANDONED_UNVERIFIED');
+  }
+  if (control?.status === 'CANCELLED') {
+    throw conflict('This process instance was cancelled and is terminal.',
+      version ?? Number(control.version), 'PROCESS_INSTANCE_CANCELLED');
   }
 }
 
@@ -621,8 +852,9 @@ class PostgresDocumentStore {
       if (this.kind === 'execution_run' && state.processTaskRef && expectedVersion !== null) {
         const control = await lockProcessTaskControl(client, state.tenantId, state.processTaskRef.planInstanceId);
         if (!control) throw persistenceIntegrity('A linked process task has no durable instance control record.');
-        if (workerFinalization && control.status === 'ABANDONED_UNVERIFIED') {
-          throw conflict('A late worker result cannot advance an instance closed with an unverified provider outcome.', state.version, 'PROCESS_INSTANCE_ABANDONED_UNVERIFIED');
+        if (workerFinalization && ['ABANDONED_UNVERIFIED', 'CANCELLED'].includes(control.status)) {
+          throw conflict('A late worker result cannot advance a terminal process instance.', state.version,
+            control.status === 'CANCELLED' ? 'PROCESS_INSTANCE_CANCELLED' : 'PROCESS_INSTANCE_ABANDONED_UNVERIFIED');
         }
         if (!instanceControlMutation && ['AWAITING_APPROVAL', 'APPROVED', 'RUNNING'].includes(state.status)) {
           requireActiveProcessTaskControl(control, state.version);
@@ -655,10 +887,11 @@ class PostgresDocumentStore {
         const control = await client.query(`select status from orgward.process_task_instance_controls
           where tenant_id=$1 and plan_instance_id=$2`, [state.tenantId, state.processTaskRef.planInstanceId]);
         const current = verifyAggregateRow(existing.rows[0]);
-        if (['PAUSED', 'ABANDONED_UNVERIFIED'].includes(control.rows[0]?.status) && current.status === 'RUNNING'
+        if (['PAUSED', 'ABANDONED_UNVERIFIED', 'CANCELLED'].includes(control.rows[0]?.status) && current.status === 'RUNNING'
           && ['SUCCEEDED', 'FAILED', 'INTERRUPTED', 'CANCELLED'].includes(state.status)) {
           throw conflict('A late run result cannot change a process instance after its terminal boundary.', current.version,
-            control.rows[0]?.status === 'ABANDONED_UNVERIFIED' ? 'PROCESS_INSTANCE_ABANDONED_UNVERIFIED' : 'PROCESS_INSTANCE_PAUSED');
+            control.rows[0]?.status === 'ABANDONED_UNVERIFIED' ? 'PROCESS_INSTANCE_ABANDONED_UNVERIFIED'
+              : control.rows[0]?.status === 'CANCELLED' ? 'PROCESS_INSTANCE_CANCELLED' : 'PROCESS_INSTANCE_PAUSED');
         }
       }
       if (expectedVersion === null) {
@@ -914,8 +1147,9 @@ class PostgresDocumentStore {
       const processTaskRef = runHint.rows[0]?.ref;
       if (processTaskRef?.planInstanceId) {
         const control = await lockProcessTaskControl(client, tenantId, processTaskRef.planInstanceId);
-        if (control?.status === 'ABANDONED_UNVERIFIED') {
-          throw conflict('A late worker result cannot advance an instance closed with an unverified provider outcome.', expectedVersion, 'PROCESS_INSTANCE_ABANDONED_UNVERIFIED');
+        if (['ABANDONED_UNVERIFIED', 'CANCELLED'].includes(control?.status)) {
+          throw conflict('A late worker result cannot advance a terminal process instance.', expectedVersion,
+            control.status === 'CANCELLED' ? 'PROCESS_INSTANCE_CANCELLED' : 'PROCESS_INSTANCE_ABANDONED_UNVERIFIED');
         }
       }
 
@@ -967,6 +1201,15 @@ class PostgresDocumentStore {
       if (interruptionReason && (nextRun.status !== 'INTERRUPTED'
         || nextRun.execution?.changedArtifacts?.length !== 0)) {
         throw persistenceIntegrity('A revoked or expired worker cannot persist successful artifact metadata.');
+      }
+      // The dispatch ledger is the authority for delivery uncertainty. Keep this
+      // closed marker in the existing allowlisted execution JSON; never derive it
+      // from error text or transport/parser diagnostics.
+      const uncertainAttempt = await client.query(`select 1 from orgward.provider_dispatch_attempts
+        where tenant_id=$1 and run_id=$2 and status='outcome_unknown' limit 1`, [tenantId, runId]);
+      if (uncertainAttempt.rowCount && ['FAILED', 'INTERRUPTED'].includes(nextRun.status)) {
+        nextRun.execution ??= {};
+        nextRun.execution.providerDiagnostic = { outcome: 'outcome_unknown' };
       }
       await this.saveInTransaction(client, nextRun, { expectedVersion, workerFinalization: true });
       return { run: nextRun, status: nextRun.status, interrupted: Boolean(interruptionReason), reason: interruptionReason };
@@ -1238,6 +1481,7 @@ export class PostgresProjectStore extends PostgresDocumentStore {
         for share
       `, [tenantId, projectId, principal]);
       if (!membership.rowCount || !['owner', 'editor'].includes(membership.rows[0].access)) return null;
+      const canReviewExactAssignments = membership.rows[0].access === 'owner';
       const selected = await client.query(`
         select * from orgward.aggregates
         where tenant_id = $1 and aggregate_kind = 'project' and aggregate_id = $2
@@ -1289,6 +1533,9 @@ export class PostgresProjectStore extends PostgresDocumentStore {
           roleId: row.role_id,
           roleName: role?.name ?? 'Unknown blueprint role',
           targetName: row.target_name,
+          ...(canReviewExactAssignments ? { targetPrincipal: row.target_principal } : {}),
+          targetMembershipGeneration: Number(row.target_membership_generation),
+          targetAuthzGeneration: Number(row.target_authz_generation),
           targetType: row.target_type,
           targetStatus: targetEligible ? 'active_project_member' : 'no_longer_eligible',
           eligibilityStatus,
@@ -1653,9 +1900,470 @@ export class PostgresChangeCaseStore extends PostgresDocumentStore {
 export class PostgresExecutionRunStore extends PostgresDocumentStore {
   constructor(persistence) { super(persistence, 'execution_run'); }
 
+  async compileSoftwareDeliveryDraft({
+    tenantId, projectId, caseId, principal, authzGeneration, expectedProjectVersion,
+    expectedCaseVersion, expectedCaseStateHash, g6PlanHash, compilerVersion, buildPlan,
+  }) {
+    if (!tenantId || !projectId || !caseId || !principal || typeof buildPlan !== 'function') throw projectAccessDenied();
+    return this.persistence.transaction(async (client) => {
+      await lockProjectAccess(client, { tenantId, projectId, principal, minimum: 'owner' });
+      await requirePrincipalAuthority(client, { tenantId, principal, roles: ['workspace-write'], authzGeneration });
+      const projectRow = await client.query(`
+        select * from orgward.aggregates where tenant_id = $1 and aggregate_kind = 'project' and aggregate_id = $2 for update
+      `, [tenantId, projectId]);
+      if (!projectRow.rowCount) return null;
+      const project = verifyAggregateRow(projectRow.rows[0]);
+      if (project.version !== expectedProjectVersion) throw conflict('The saved project changed. Reload before compiling the delivery draft.', project.version);
+      const caseRow = await client.query(`
+        select * from orgward.aggregates where tenant_id = $1 and aggregate_kind = 'change_case' and aggregate_id = $2 for share
+      `, [tenantId, caseId]);
+      if (!caseRow.rowCount) return null;
+      const changeCase = verifyAggregateRow(caseRow.rows[0]);
+      if (changeCase.version !== expectedCaseVersion || caseRow.rows[0].state_hash !== expectedCaseStateHash
+        || changeCase.tenantId !== tenantId || changeCase.projectId !== projectId) {
+        throw conflict('The accepted change case changed during compilation. Reload before retrying.', changeCase.version, 'ACCEPTED_PLAN_STALE');
+      }
+      const plan = await buildPlan({ project, changeCase });
+      if (!plan || plan.status !== 'DRAFT' || plan.kind !== 'software_delivery'
+        || plan.binding?.g6PlanHash !== g6PlanHash || plan.compilerVersion !== compilerVersion) {
+        throw persistenceIntegrity('A software delivery compiler returned a plan with invalid bindings.');
+      }
+      const planHash = contentHash(plan);
+      const prior = await client.query(`
+        select plan_id, plan_hash, plan from orgward.software_delivery_plans
+        where tenant_id = $1 and project_id = $2 and case_id = $3 and g6_plan_hash = $4 and compiler_version = $5
+        for update
+      `, [tenantId, projectId, caseId, g6PlanHash, compilerVersion]);
+      if (prior.rowCount) {
+        const stored = prior.rows[0].plan;
+        if (prior.rows[0].plan_hash !== contentHash(stored) || prior.rows[0].plan_hash !== planHash
+          || prior.rows[0].plan_id !== plan.id) throw conflict('A different software delivery plan is already bound to this accepted G6 generation.', null, 'SOFTWARE_PLAN_BINDING_CONFLICT');
+        return { plan: stored, replayed: true };
+      }
+      await client.query(`
+        insert into orgward.software_delivery_plans
+          (tenant_id, project_id, case_id, g6_plan_hash, compiler_version, plan_id, plan_hash, plan, created_by)
+        values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
+      `, [tenantId, projectId, caseId, g6PlanHash, compilerVersion, plan.id, planHash, canonicalJson(plan), principal]);
+      return { plan, replayed: false };
+    });
+  }
+
+  async listSoftwareDeliveryDrafts({ tenantId, projectId, caseId, principal, authzGeneration }) {
+    return this.persistence.transaction(async (client) => {
+      await lockProjectAccess(client, { tenantId, projectId, principal, minimum: 'editor' });
+      await requirePrincipalAuthority(client, { tenantId, principal, anyRoleGroups: [['workspace-read', 'workspace-write']], authzGeneration });
+      const result = await client.query(`
+        select p.plan_id, p.plan_hash, p.plan,
+          review.review_revision, review.review_hash, review,
+          runtime.runtime_revision as runtime_revision,
+          runtime.snapshot_hash as runtime_snapshot_hash,
+          runtime.review_revision as runtime_review_revision,
+          runtime.review_hash as runtime_review_hash
+        from orgward.software_delivery_plans p
+        left join lateral (
+          select review_revision, review_hash, review
+          from orgward.software_delivery_assignment_reviews
+          where tenant_id = p.tenant_id and plan_id = p.plan_id
+          order by review_revision desc limit 1
+        ) review on true
+        left join lateral (
+          select runtime_revision,snapshot_hash,review_revision,review_hash
+          from orgward.software_delivery_runtime_plans
+          where tenant_id=p.tenant_id and project_id=p.project_id and case_id=p.case_id and plan_id=p.plan_id
+          order by runtime_revision desc limit 1
+        ) runtime on true
+        where p.tenant_id = $1 and p.project_id = $2 and p.case_id = $3 order by p.created_at, p.plan_id
+      `, [tenantId, projectId, caseId]);
+      const plans = [];
+      for (const row of result.rows) {
+        if (row.plan_id !== row.plan?.id || row.plan_hash !== contentHash(row.plan)) throw persistenceIntegrity('A stored software delivery plan failed its integrity check.');
+        let assignmentReview = null;
+        if (row.review_revision !== null) {
+          const { review_hash: storedReviewHash, review: storedReview } = row;
+          const reviewCore = storedReview && typeof storedReview === 'object'
+            ? Object.fromEntries(Object.entries(storedReview).filter(([key]) => key !== 'reviewHash')) : null;
+          if (!reviewCore || storedReview.reviewHash !== storedReviewHash
+            || storedReview.planId !== row.plan_id || storedReview.draftHash !== row.plan?.contentHash
+            || digest(reviewCore) !== storedReviewHash) {
+            throw persistenceIntegrity('A stored software delivery assignment review failed its integrity check.');
+          }
+          assignmentReview = storedReview;
+        }
+        let promotion = null;
+        if (row.runtime_snapshot_hash !== null) {
+          const runtime = await resolveRuntimeProcessPlan(client, { tenantId, projectId, planId: row.plan_id, revision: Number(row.runtime_revision) });
+          if (!runtime || runtime.snapshotHash !== row.runtime_snapshot_hash
+            || Number(row.runtime_review_revision) !== assignmentReview?.revision
+            || row.runtime_review_hash !== assignmentReview?.reviewHash) throw persistenceIntegrity('A stored software runtime promotion failed its review binding.');
+          promotion = { runtimeRevision: Number(row.runtime_revision), snapshotHash: row.runtime_snapshot_hash,
+            reviewRevision: Number(row.runtime_review_revision), reviewHash: row.runtime_review_hash };
+        }
+        plans.push({ plan: row.plan, assignmentReview, promotion });
+      }
+      return plans;
+    });
+  }
+
+  async promoteSoftwareDeliveryDraft({ tenantId, projectId, caseId, planId, principal, authzGeneration,
+    expectedProjectVersion, expectedCaseVersion, expectedReviewRevision, idempotencyKey, requestHash }) {
+    const operation = 'execution.software-delivery.promote';
+    if (!tenantId || !projectId || !caseId || !planId || !principal) throw projectAccessDenied();
+    return this.persistence.transaction(async (client) => {
+      const membership = await lockProjectAccess(client, { tenantId, projectId, principal, minimum: 'owner' });
+      await requirePrincipalAuthority(client, { tenantId, principal, roles: ['workspace-write'], authzGeneration, actorType: 'human' });
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${tenantId}:${operation}:${planId}`]);
+      const previous = await client.query(`select request_hash,result,result_hash from orgward.software_delivery_runtime_commands
+        where tenant_id=$1 and project_id=$2 and case_id=$3 and plan_id=$4 and runtime_revision=$5 and command_kind='promote' and idempotency_key=$6 for update`,
+      [tenantId, projectId, caseId, planId, expectedReviewRevision, idempotencyKey]);
+      if (previous.rowCount) {
+        const row = previous.rows[0];
+        if (row.request_hash !== requestHash) throw conflict('This promotion idempotency key was used with different input.', null, 'IDEMPOTENCY_CONFLICT');
+        if (contentHash(row.result) !== row.result_hash) throw persistenceIntegrity('The promotion replay receipt failed integrity verification.');
+        return { result: row.result, replayed: true };
+      }
+      const projectRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2 for update`, [tenantId, projectId]);
+      if (!projectRow.rowCount) return null;
+      const project = verifyAggregateRow(projectRow.rows[0]);
+      if (project.version !== expectedProjectVersion) throw conflict('The project changed; reload before promotion.', project.version, 'SOURCE_BINDING_STALE');
+      const caseRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 for update`, [tenantId, caseId]);
+      if (!caseRow.rowCount) return null;
+      const changeCase = verifyAggregateRow(caseRow.rows[0]);
+      if (changeCase.projectId !== projectId || changeCase.tenantId !== tenantId || changeCase.version !== expectedCaseVersion
+        || changeCase.accountableOwner !== principal) throw conflict('The accepted case or owner authority changed; reload before promotion.', changeCase.version, 'ACCEPTED_PLAN_STALE');
+      if (!verifySourceBinding(changeCase.sourceBinding).valid || changeCase.sourceBinding.projectId !== projectId
+        || changeCase.sourceBinding.projectVersion !== project.version) throw conflict('The pinned case source is stale or invalid.', project.version, 'SOURCE_BINDING_STALE');
+      const pinned = pinProjectSourceObject(project, { projectId, expectedProjectVersion: project.version,
+        expectedBlueprintId: changeCase.sourceBinding.blueprintId,
+        expectedBlueprintVersion: changeCase.sourceBinding.blueprintVersion, sourceObjectId: changeCase.sourceBinding.objectId });
+      if (pinned.sourceHash !== changeCase.sourceBinding.sourceHash || !verifyAcceptedG6Plan(changeCase).valid) {
+        throw conflict('The source or accepted G4/G5/G6 baselines changed; create a new case before promotion.', changeCase.version, 'ACCEPTED_PLAN_STALE');
+      }
+      const draftRow = await client.query(`select plan_hash,plan from orgward.software_delivery_plans
+        where tenant_id=$1 and project_id=$2 and case_id=$3 and plan_id=$4 for update`, [tenantId, projectId, caseId, planId]);
+      if (!draftRow.rowCount) return null;
+      const draft = draftRow.rows[0].plan;
+      if (draftRow.rows[0].plan_hash !== contentHash(draft) || !verifySoftwareDeliveryDraft(changeCase, draft)
+        || draft.compilerVersion !== SOFTWARE_PLAN_COMPILER_VERSION) throw conflict('The compiled software draft failed source/provenance verification.', changeCase.version, 'SOFTWARE_PLAN_INTEGRITY_INVALID');
+      const reviewRow = await client.query(`select review_revision,review_hash,review from orgward.software_delivery_assignment_reviews
+        where tenant_id=$1 and project_id=$2 and case_id=$3 and plan_id=$4 order by review_revision desc limit 1 for update`,
+      [tenantId, projectId, caseId, planId]);
+      if (!reviewRow.rowCount || Number(reviewRow.rows[0].review_revision) !== expectedReviewRevision) {
+        throw conflict('A current owner assignment review is required for promotion.', reviewRow.rowCount ? Number(reviewRow.rows[0].review_revision) : 0, 'SOFTWARE_ASSIGNMENT_REVIEW_STALE');
+      }
+      const review = reviewRow.rows[0].review;
+      if (reviewRow.rows[0].review_hash !== review.reviewHash || review.planId !== planId || review.draftHash !== draft.contentHash
+        || review.binding?.caseId !== caseId || review.binding?.projectId !== projectId
+        || review.binding?.sourceBindingHash !== changeCase.sourceBinding.bindingHash
+        || review.binding?.projectVersion !== draft.binding.projectVersion
+        || review.binding?.blueprintId !== draft.binding.blueprintId
+        || review.binding?.blueprintVersion !== draft.binding.blueprintVersion
+        || review.binding?.blueprintSchemaVersion !== draft.binding.blueprintSchemaVersion
+        || review.binding?.sourceObjectId !== draft.binding.sourceObjectId
+        || review.binding?.sourceObjectType !== draft.binding.sourceObjectType
+        || review.binding?.intentHash !== draft.binding.intentHash
+        || review.binding?.requirementsBaselineVersion !== draft.binding.requirementsBaselineVersion
+        || review.binding?.architectureBaselineVersion !== draft.binding.architectureBaselineVersion
+        || review.binding?.g6PlanHash !== draft.binding.g6PlanHash || review.binding?.sourceHash !== draft.binding.sourceHash
+        || digest(Object.fromEntries(Object.entries(review).filter(([key]) => key !== 'reviewHash'))) !== review.reviewHash) {
+        throw persistenceIntegrity('The owner assignment review does not match the compiled draft provenance.');
+      }
+      if (review.assignments.some((entry) => !entry.assignee?.principal || !entry.assignee?.membershipId
+        || !Number.isSafeInteger(entry.assignee.membershipGeneration) || !Number.isSafeInteger(entry.assignee.authzGeneration))) {
+        throw conflict('This legacy owner review does not bind an exact principal and generation. Revise the review before promotion.', null, 'SOFTWARE_ASSIGNMENT_REVIEW_BINDING_INCOMPLETE');
+      }
+      let snapshot;
+      try { snapshot = softwareRuntimePlanSnapshot({ draft, review, project, principal }); }
+      catch (error) { throw conflict(error.message, null, error.code ?? 'SOFTWARE_PLAN_INTEGRITY_INVALID'); }
+      await verifyCurrentHumanSoftwareAssignments(client, { tenantId, projectId, project, plan: snapshot });
+      const existing = await client.query(`select snapshot_hash from orgward.software_delivery_runtime_plans where tenant_id=$1 and plan_id=$2 and runtime_revision=$3 for update`, [tenantId, planId, snapshot.revision]);
+      if (existing.rowCount) {
+        if (existing.rows[0].snapshot_hash !== snapshot.snapshotHash) throw conflict('A different immutable runtime snapshot already exists for this draft.', null, 'SOFTWARE_RUNTIME_SNAPSHOT_CONFLICT');
+      } else {
+        await client.query(`insert into orgward.software_delivery_runtime_plans
+          (tenant_id,project_id,case_id,plan_id,runtime_revision,snapshot_hash,review_revision,review_hash,snapshot,created_by)
+          values ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10)`,
+        [tenantId, projectId, caseId, planId, snapshot.revision, snapshot.snapshotHash, review.revision, review.reviewHash, canonicalJson(snapshot), principal]);
+      }
+      const result = { tenantId, projectId, caseId, planId, revision: snapshot.revision, runtimeRevision: snapshot.revision, snapshotHash: snapshot.snapshotHash,
+        reviewRevision: review.revision, reviewHash: review.reviewHash };
+      await client.query(`insert into orgward.software_delivery_runtime_commands
+        (tenant_id,project_id,case_id,plan_id,runtime_revision,command_kind,idempotency_key,request_hash,result,result_hash)
+        values ($1,$2,$3,$4,$5,'promote',$6,$7,$8::jsonb,$9)`,
+      [tenantId, projectId, caseId, planId, snapshot.revision, idempotencyKey, requestHash, canonicalJson(result), contentHash(result)]);
+      return { result, replayed: false };
+    });
+  }
+
+  async startSoftwareDeliveryInstance({ tenantId, projectId, caseId, planId, revision, principal, authzGeneration, idempotencyKey, requestHash }) {
+    const operation = 'execution.software-delivery.start-instance';
+    if (!tenantId || !projectId || !caseId || !planId || !principal) throw projectAccessDenied();
+    const commandId = `software-runtime-start:${idempotencyKey}`;
+    const outcome = await this.persistence.transaction(async (client) => {
+      await lockProjectAccess(client, { tenantId, projectId, principal, minimum: 'owner' });
+      await requirePrincipalAuthority(client, { tenantId, principal, roles: ['workspace-write'], authzGeneration, actorType: 'human' });
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${tenantId}:${operation}:${planId}`]);
+      const projectRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2 for update`, [tenantId, projectId]);
+      if (!projectRow.rowCount) return null;
+      const project = verifyAggregateRow(projectRow.rows[0]);
+      const caseRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 for update`, [tenantId, caseId]);
+      if (!caseRow.rowCount) return null;
+      const changeCase = verifyAggregateRow(caseRow.rows[0]);
+      if (changeCase.projectId !== projectId || changeCase.tenantId !== tenantId || changeCase.accountableOwner !== principal) {
+        throw conflict('The case owner or project binding changed; reload before starting work.', changeCase.version, 'ACCEPTED_PLAN_STALE');
+      }
+      const previous = await client.query(`select request_hash,result,result_hash from orgward.software_delivery_runtime_commands
+        where tenant_id=$1 and project_id=$2 and case_id=$3 and plan_id=$4 and runtime_revision=$5 and command_kind='start-instance' and idempotency_key=$6 for update`,
+      [tenantId, projectId, caseId, planId, revision, idempotencyKey]);
+      if (previous.rowCount) {
+        const row = previous.rows[0];
+        if (row.request_hash !== requestHash) throw conflict('This instance-start idempotency key was used with different input.', null, 'IDEMPOTENCY_CONFLICT');
+        if (contentHash(row.result) !== row.result_hash) throw persistenceIntegrity('The instance-start replay receipt failed integrity verification.');
+        return { result: row.result, replayed: true };
+      }
+      const resolved = await resolveRuntimeProcessPlan(client, { tenantId, projectId, project, planId, revision });
+      if (!resolved || resolved.kind !== 'software_delivery_runtime_plan' || resolved.binding.caseId !== caseId) {
+        throw conflict('An owner-promoted immutable software delivery snapshot is required.', null, 'SOFTWARE_RUNTIME_PROMOTION_REQUIRED');
+      }
+      await verifyCurrentHumanSoftwareAssignments(client, { tenantId, projectId, project, plan: resolved });
+      const plan = resolved;
+      const instanceId = randomUUID();
+      await client.query(`insert into orgward.process_task_instance_controls
+        (tenant_id,project_id,process_plan_id,plan_revision,plan_instance_id,status,initiated_by,version,events)
+        values ($1,$2,$3,$4,$5,'ACTIVE',$6,0,'[]'::jsonb)`, [tenantId, projectId, planId, revision, instanceId, principal]);
+      const assignees = await verifyCurrentHumanSoftwareAssignments(client, { tenantId, projectId, project, plan });
+      for (const task of plan.tasks) {
+        const assignment = assignees.get(task.id);
+        await client.query(`insert into orgward.process_task_instances
+          (tenant_id,project_id,process_plan_id,plan_revision,plan_instance_id,task_id,blueprint_id,blueprint_version,
+            process_id,actor_id,role_id,actor_type,assigned_principal,assigned_membership_generation,assigned_authz_generation,status,version)
+          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'human',$12,$13,$14,'PLANNED',0)`,
+        [tenantId, projectId, planId, revision, instanceId, task.id, plan.source.blueprintId, plan.source.blueprintVersion,
+          plan.source.processId, assignment.actor.id, assignment.role.id, assignment.principal,
+          assignment.membershipGeneration, assignment.authzGeneration]);
+      }
+      const result = { tenantId, projectId, caseId, planId, revision, planInstanceId: instanceId,
+        snapshotHash: plan.snapshotHash, taskCount: plan.tasks.length };
+      await client.query(`insert into orgward.software_delivery_runtime_commands
+        (tenant_id,project_id,case_id,plan_id,runtime_revision,command_kind,idempotency_key,request_hash,result,result_hash)
+        values ($1,$2,$3,$4,$5,'start-instance',$6,$7,$8::jsonb,$9)`,
+      [tenantId, projectId, caseId, planId, revision, idempotencyKey, requestHash, canonicalJson(result), contentHash(result)]);
+      const event = { id: `software-runtime-start-event-${randomUUID()}`, type: 'SoftwareDeliveryInstanceStarted',
+        actor: principal, at: new Date().toISOString(), causationId: commandId,
+        data: { projectId, caseId, planId, revision, planInstanceId: instanceId, taskCount: plan.tasks.length } };
+      event.contentHash = contentHash(event);
+      await recordEvent(client, { tenantId, kind: 'process_task_instance_control', id: instanceId, version: 0, commandId, event });
+      return { result, replayed: false };
+    });
+    if (outcome && !outcome.replayed) await this.persistence.afterCommit({ operation, commandId, tenantId });
+    return outcome;
+  }
+
+  async reviewSoftwareDeliveryDraftAssignments({
+    tenantId, projectId, caseId, planId, principal, authzGeneration,
+    expectedProjectVersion, expectedCaseVersion, expectedReviewRevision, draftHash,
+    idempotencyKey, requestHash, assignments,
+  }) {
+    if (!tenantId || !projectId || !caseId || !planId || !principal) throw projectAccessDenied();
+    const invalid = (message, code = 'INVALID_SOFTWARE_ASSIGNMENT_REVIEW', statusCode = 400) => {
+      const error = new Error(message);
+      Object.assign(error, { statusCode, code, retryable: false });
+      throw error;
+    };
+    return this.persistence.transaction(async (client) => {
+      await lockProjectAccess(client, { tenantId, projectId, principal, minimum: 'owner' });
+      await requirePrincipalAuthority(client, { tenantId, principal, roles: ['workspace-write'], authzGeneration });
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${tenantId}:software-delivery-assignment:${planId}`]);
+
+      const priorCommand = await client.query(`
+        select request_hash, review_revision from orgward.software_delivery_assignment_commands
+        where tenant_id = $1 and plan_id = $2 and idempotency_key = $3
+        for update
+      `, [tenantId, planId, idempotencyKey]);
+      if (priorCommand.rowCount) {
+        const prior = priorCommand.rows[0];
+        if (prior.request_hash !== requestHash) {
+          const error = new Error('This idempotency key was already used with different assignment review input.');
+          Object.assign(error, { statusCode: 409, code: 'IDEMPOTENCY_CONFLICT', retryable: false });
+          throw error;
+        }
+        const saved = await client.query(`
+          select review_revision, review_hash, review from orgward.software_delivery_assignment_reviews
+          where tenant_id = $1 and plan_id = $2 and review_revision = $3 for share
+        `, [tenantId, planId, prior.review_revision]);
+        if (!saved.rowCount || saved.rows[0].review.reviewHash !== saved.rows[0].review_hash
+          || digest(Object.fromEntries(Object.entries(saved.rows[0].review).filter(([key]) => key !== 'reviewHash'))) !== saved.rows[0].review_hash) {
+          throw persistenceIntegrity('The saved assignment review replay failed integrity verification.');
+        }
+        return { review: saved.rows[0].review, replayed: true };
+      }
+
+      const projectRow = await client.query(`
+        select * from orgward.aggregates where tenant_id = $1 and aggregate_kind = 'project' and aggregate_id = $2 for update
+      `, [tenantId, projectId]);
+      if (!projectRow.rowCount) return null;
+      const project = verifyAggregateRow(projectRow.rows[0]);
+      if (project.version !== expectedProjectVersion) throw conflict('The project changed. Reload before saving assignment review.', project.version);
+
+      const caseRow = await client.query(`
+        select * from orgward.aggregates where tenant_id = $1 and aggregate_kind = 'change_case' and aggregate_id = $2 for share
+      `, [tenantId, caseId]);
+      if (!caseRow.rowCount) return null;
+      const changeCase = verifyAggregateRow(caseRow.rows[0]);
+      if (changeCase.version !== expectedCaseVersion || changeCase.tenantId !== tenantId || changeCase.projectId !== projectId) {
+        throw conflict('The accepted case changed. Reload before saving assignment review.', changeCase.version, 'ACCEPTED_PLAN_STALE');
+      }
+      if (changeCase.accountableOwner !== principal) throw projectAccessDenied();
+      if (!verifySourceBinding(changeCase.sourceBinding).valid || changeCase.sourceBinding.projectId !== projectId
+        || changeCase.sourceBinding.projectVersion !== expectedProjectVersion || project.version !== expectedProjectVersion) {
+        throw conflict('The pinned project source is stale or invalid. Create a new case from the current saved design.', project.version, 'SOURCE_BINDING_STALE');
+      }
+      const currentBinding = pinProjectSourceObject(project, {
+        projectId, expectedProjectVersion: project.version,
+        expectedBlueprintId: changeCase.sourceBinding.blueprintId,
+        expectedBlueprintVersion: changeCase.sourceBinding.blueprintVersion,
+        sourceObjectId: changeCase.sourceBinding.objectId,
+      });
+      if (currentBinding.sourceHash !== changeCase.sourceBinding.sourceHash) {
+        throw conflict('The pinned saved-design object changed. Create a new case from the current design.', project.version, 'SOURCE_BINDING_STALE');
+      }
+      if (!verifyAcceptedG6Plan(changeCase).valid) throw conflict('The accepted G4/G5/G6 baselines failed integrity verification.', changeCase.version, 'ACCEPTED_PLAN_STALE');
+
+      const draftRow = await client.query(`
+        select plan_hash, plan from orgward.software_delivery_plans
+        where tenant_id = $1 and project_id = $2 and case_id = $3 and plan_id = $4 for update
+      `, [tenantId, projectId, caseId, planId]);
+      if (!draftRow.rowCount) return null;
+      const draft = draftRow.rows[0].plan;
+      if (draftRow.rows[0].plan_hash !== contentHash(draft) || draft.contentHash !== draftHash
+        || draft.compilerVersion !== SOFTWARE_PLAN_COMPILER_VERSION
+        || !verifySoftwareDeliveryDraft(changeCase, draft)) {
+        throw conflict('The compiled draft changed or failed integrity verification. Reload the case before assigning work.', changeCase.version, 'SOFTWARE_PLAN_INTEGRITY_INVALID');
+      }
+      const binding = draft.binding;
+      const blueprint = latestBlueprint(project);
+      if (!blueprint || blueprint.version !== binding.blueprintVersion
+        || binding.caseId !== caseId || binding.projectId !== projectId
+        || binding.sourceHash !== changeCase.sourceBinding.sourceHash
+        || binding.intentHash !== changeCase.intent.contentHash
+        || binding.requirementsBaselineHash !== changeCase.artifacts.requirements.acceptedBaseline?.contentHash
+        || binding.architectureBaselineHash !== changeCase.artifacts.architecture.acceptedBaseline?.draftHash
+        || binding.g6PlanHash !== changeCase.artifacts.plan.contentHash) {
+        throw conflict('The compiled draft is not bound to the current accepted source and baselines.', changeCase.version, 'SOFTWARE_PLAN_INTEGRITY_INVALID');
+      }
+      if (!Array.isArray(assignments) || assignments.length !== draft.tasks.length || !draft.tasks.length) {
+        invalid('Provide exactly one assignment for every compiled DRAFT task.');
+      }
+      const taskById = new Map(draft.tasks.map((task) => [task.id, task]));
+      const seenTaskIds = new Set();
+      for (const assignment of assignments) {
+        if (!assignment || typeof assignment !== 'object' || Array.isArray(assignment)
+          || Object.keys(assignment).some((key) => !['taskId', 'actorId', 'roleId', 'targetPrincipal'].includes(key))
+          || typeof assignment.taskId !== 'string' || typeof assignment.actorId !== 'string' || typeof assignment.roleId !== 'string'
+          || typeof assignment.targetPrincipal !== 'string' || !assignment.targetPrincipal) {
+          invalid('Each assignment must name a compiled task and an exact actor/role/principal binding.');
+        }
+        if (seenTaskIds.has(assignment.taskId)) invalid('Each compiled task may appear only once.');
+        seenTaskIds.add(assignment.taskId);
+        if (!taskById.has(assignment.taskId)) invalid('An assignment names a task that is not in this compiled draft.', 'SOFTWARE_ASSIGNMENT_TASK_UNKNOWN');
+      }
+      if (seenTaskIds.size !== taskById.size) invalid('The assignment review is missing one or more compiled tasks.');
+
+      const actorBindingRows = await client.query(`
+        select b.actor_id, b.role_id, b.blueprint_version, b.target_principal,
+          b.target_membership_generation, b.target_authz_generation,
+          identity.display_name, identity.actor_type, identity.status as identity_status,
+          identity.authz_generation as current_authz_generation,
+          membership.access, membership.generation as current_membership_generation, membership.revoked_at
+        from orgward.project_actor_binding_proposals b
+        join orgward.oidc_principals identity
+          on identity.tenant_id = b.tenant_id and identity.principal = b.target_principal
+        join orgward.project_memberships membership
+          on membership.tenant_id = b.tenant_id and membership.project_id = b.project_id and membership.principal = b.target_principal
+        where b.tenant_id = $1 and b.project_id = $2 and b.blueprint_version = $3 and b.status = 'enabled'
+        order by b.actor_id, b.role_id, b.target_principal
+        for share of b, identity, membership
+      `, [tenantId, projectId, binding.blueprintVersion]);
+      const objects = Object.values(blueprint.areas ?? {}).flatMap((area) => area.items ?? []);
+      const objectsById = new Map(objects.map((object) => [object.id, object]));
+      const enabledBindings = new Map();
+      for (const row of actorBindingRows.rows) {
+        const actor = objectsById.get(row.actor_id);
+        const role = objectsById.get(row.role_id);
+        const linked = actor && role && ((actor.assignedRoles ?? []).includes(role.id)
+          || (blueprint.relations ?? []).some((relation) => relation.source === actor.id
+            && relation.target === role.id && relation.type === 'assigned-to'));
+        const actorType = actor?.type === 'actor-human' ? 'human' : actor?.type === 'actor-agent' ? 'workload' : null;
+        const current = linked && row.identity_status === 'active' && row.revoked_at === null
+          && ['owner', 'editor'].includes(row.access) && actorType === row.actor_type
+          && Number(row.target_authz_generation) === Number(row.current_authz_generation)
+          && Number(row.target_membership_generation) === Number(row.current_membership_generation);
+        if (current) enabledBindings.set(`${row.actor_id}\n${row.role_id}\n${row.target_principal}`, {
+          actorId: actor.id, actorName: actor.name, actorType,
+          roleId: role.id, roleName: role.name,
+          assigneeName: row.display_name, principal: row.target_principal,
+          membershipId: `${projectId}:${row.target_principal}`,
+          membershipGeneration: Number(row.current_membership_generation),
+          authzGeneration: Number(row.current_authz_generation),
+        });
+      }
+      const assignmentByTaskId = new Map(assignments.map((entry) => [entry.taskId, entry]));
+      const reviewedAssignments = draft.tasks.map((task) => {
+        const assignment = assignmentByTaskId.get(task.id);
+        const current = enabledBindings.get(`${assignment.actorId}\n${assignment.roleId}\n${assignment.targetPrincipal}`);
+        if (!current) throw conflict('An assigned actor binding is no longer current or eligible. Refresh the blueprint bindings and review again.', project.version, 'ACTOR_BINDING_STALE');
+        return { taskId: task.id, g6WorkItemId: task.g6WorkItemId, assignee: current };
+      });
+
+      const priorHead = await client.query(`
+        select review_revision from orgward.software_delivery_assignment_reviews
+        where tenant_id = $1 and plan_id = $2 order by review_revision desc limit 1
+      `, [tenantId, planId]);
+      const currentRevision = priorHead.rowCount ? Number(priorHead.rows[0].review_revision) : 0;
+      if (currentRevision !== expectedReviewRevision) throw conflict('The assignment review changed. Reload before saving.', currentRevision, 'SOFTWARE_ASSIGNMENT_REVIEW_STALE');
+      const revision = currentRevision + 1;
+      const reviewCore = {
+        schemaVersion: 1,
+        kind: 'software_delivery_assignment_review',
+        planId,
+        draftHash,
+        revision,
+        status: 'REVIEWED',
+        executable: false,
+        binding: {
+          projectId, caseId, sourceHash: binding.sourceHash, sourceBindingHash: changeCase.sourceBinding.bindingHash,
+          projectVersion: binding.projectVersion, blueprintId: binding.blueprintId,
+          blueprintVersion: binding.blueprintVersion, blueprintSchemaVersion: binding.blueprintSchemaVersion,
+          sourceObjectId: binding.sourceObjectId, sourceObjectType: binding.sourceObjectType,
+          intentHash: binding.intentHash,
+          requirementsBaselineVersion: binding.requirementsBaselineVersion,
+          requirementsBaselineHash: binding.requirementsBaselineHash,
+          architectureBaselineVersion: binding.architectureBaselineVersion,
+          architectureBaselineHash: binding.architectureBaselineHash,
+          g6PlanHash: binding.g6PlanHash, compilerVersion: draft.compilerVersion,
+        },
+        assignments: reviewedAssignments,
+      };
+      const normalizedReviewCore = JSON.parse(canonicalJson(reviewCore));
+      const reviewHash = digest(normalizedReviewCore);
+      const review = { ...normalizedReviewCore, reviewHash };
+      await client.query(`
+        insert into orgward.software_delivery_assignment_reviews
+          (tenant_id, project_id, case_id, plan_id, review_revision, draft_hash, review_hash, review, created_by)
+        values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
+      `, [tenantId, projectId, caseId, planId, revision, draftHash, reviewHash, canonicalJson(review), principal]);
+      await client.query(`
+        insert into orgward.software_delivery_assignment_commands
+          (tenant_id, plan_id, idempotency_key, request_hash, review_revision)
+        values ($1, $2, $3, $4, $5)
+      `, [tenantId, planId, idempotencyKey, requestHash, revision]);
+      return { review, replayed: false };
+    });
+  }
+
   async createForProcessTask({
     tenantId, projectId, principal, authzGeneration, planId, revision, planInstanceId = null,
-    taskId, commandId, requestHash, buildRun,
+    taskId, commandId, requestHash, repositoryRef = null, buildRun,
   }) {
     if (!tenantId || !projectId || !principal || typeof buildRun !== 'function') throw projectAccessDenied();
     const operation = 'execution.process-task.request';
@@ -1706,10 +2414,11 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         `, [tenantId, projectId]);
         if (!selectedProject.rowCount) return null;
         const project = verifyAggregateRow(selectedProject.rows[0]);
-        const revisions = (project.processPlans ?? []).filter((plan) => plan.id === planId)
-          .sort((left, right) => (left.revision ?? 1) - (right.revision ?? 1));
-        const plan = revisions.find((candidate) => candidate.revision === revision);
+        const plan = await resolveRuntimeProcessPlan(client, { tenantId, projectId, project, planId, revision });
         if (!plan) throw conflict('The saved process plan revision was not found.', null, 'PROCESS_PLAN_REVISION_NOT_FOUND');
+        if (plan.kind === 'software_delivery_runtime_plan') throw conflict('Owner-promoted software work contains human checkpoints only; it cannot create a model execution run.', null, 'SOFTWARE_AGENT_RUNTIME_UNSUPPORTED');
+        const revisions = (project.processPlans ?? []).filter((candidate) => candidate.id === planId)
+          .sort((left, right) => (left.revision ?? 1) - (right.revision ?? 1));
         if (!/^[0-9a-f-]{36}$/i.test(planInstanceId ?? '') && planInstanceId !== null) {
           throw conflict('The plan instance reference is invalid.', null, 'INVALID_PROCESS_PLAN_INSTANCE');
         }
@@ -1835,6 +2544,7 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
           blueprintId: plan.source.blueprintId, blueprintVersion: plan.source.blueprintVersion,
           processId: plan.source.processId, processName: plan.source.processName,
           actorId: actor.id, roleId: role.id,
+          ...(repositoryRef ? { repository: structuredClone(repositoryRef) } : {}),
         };
         const run = await buildRun({ project, plan, task, processTaskRef, client });
         if (!run || run.tenantId !== tenantId || run.projectId !== projectId
@@ -1946,7 +2656,7 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         where tenant_id = $1 and project_id = $2 and plan_instance_id = $3 and task_id = $4
         for update
       `, [tenantId, projectId, ref.planInstanceId, ref.taskId]);
-      assertLinkedWorkloadRuntime(runtimeRows.rows[0], run);
+      const runtime = assertLinkedWorkloadRuntime(runtimeRows.rows[0], run);
       cancelProcessTaskExecutionRun(run, { principal, commandId });
       await this.saveInTransaction(client, run, {
         expectedVersion: version, principal, requiredPrincipalRoles: ['workspace-write'], authzGeneration,
@@ -2137,9 +2847,11 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
       amendPausedProcessTaskExecutionRun(run, { principal, commandId, objective, requirements, reason });
       const revision = run.interventionRevisions.at(-1);
       if (run.workItem.proposalContext) {
-        buildBlueprintProposalPrompt({
+        const buildPrompt = run.workItem.taskGuidance ? buildBlueprintProposalPrompt : buildLegacyBlueprintProposalPrompt;
+        buildPrompt({
           task: { id: ref.taskId, title: run.title, detail: revision.objective },
           proposalContext: run.workItem.proposalContext,
+          ...(run.workItem.taskGuidance ? { taskGuidance: run.workItem.taskGuidance, processTaskRef: ref } : {}),
           amendedRequirements: revision.requirements,
         });
       }
@@ -2251,8 +2963,7 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         throw persistenceIntegrity('A paused process task must remain unstarted and require a new approval.');
       }
 
-      const plans = (project.processPlans ?? []).filter((candidate) => candidate.id === ref.processPlanId);
-      const plan = plans.find((candidate) => (candidate.revision ?? 1) === ref.revision);
+      const plan = await resolveRuntimeProcessPlan(client, { tenantId, projectId, project, planId: ref.processPlanId, revision: ref.revision });
       if (!plan || plan.source?.projectId !== projectId || plan.source?.blueprintId !== ref.blueprintId
         || plan.source?.blueprintVersion !== ref.blueprintVersion || plan.source?.processId !== ref.processId) {
         throw conflict('The immutable plan revision pinned to this paused task is no longer available.', run.version, 'PROCESS_PLAN_REVISION_NOT_FOUND');
@@ -2359,10 +3070,31 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
       await requirePrincipalAuthority(client, {
         tenantId, principal, anyRoleGroups: [['workspace-read', 'workspace-write', 'tenant-admin']], authzGeneration,
       });
+      const projectResult = await client.query(`select * from orgward.aggregates
+        where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2 for share`, [tenantId, projectId]);
+      if (!projectResult.rowCount) return null;
+      const project = verifyAggregateRow(projectResult.rows[0]);
       const result = await client.query(`
         select r.*, c.status as instance_control_status, c.version as instance_control_version,
           c.initiated_by as instance_control_initiated_by, c.pause_reason as instance_control_pause_reason,
           c.pause_boundary as instance_control_pause_boundary, c.events as instance_control_events,
+          (caller.status = 'active' and caller.actor_type = 'human'
+            and caller.authz_generation = $4 and caller.roles @> array['workspace-write']::text[]
+            and caller_membership.access in ('editor','owner') and caller_membership.revoked_at is null
+            and (c.initiated_by = $3 or caller_membership.access = 'owner')
+            and c.status = 'PAUSED'
+            and not exists (select 1 from orgward.process_task_instances active
+              where active.tenant_id=r.tenant_id and active.plan_instance_id=r.plan_instance_id
+                and active.status in ('IN_PROGRESS','ESCALATED','RUNNING'))
+            and not exists (select 1 from orgward.execution_worker_leases l
+              join orgward.aggregates la on la.tenant_id=l.tenant_id and la.aggregate_kind='execution_run' and la.aggregate_id=l.run_id
+              where l.tenant_id=r.tenant_id and l.lease_until>now()
+                and la.state #>> '{processTaskRef,planInstanceId}'=r.plan_instance_id::text)
+            and not exists (select 1 from orgward.provider_dispatch_attempts d
+              join orgward.aggregates da on da.tenant_id=d.tenant_id and da.aggregate_kind='execution_run' and da.aggregate_id=d.run_id
+              where d.tenant_id=r.tenant_id and da.state #>> '{processTaskRef,planInstanceId}'=r.plan_instance_id::text
+                and d.status in ('reserved','handed_off','outcome_unknown'))
+          ) as can_cancel_instance,
           (caller.status = 'active' and caller.actor_type = 'human'
             and caller.authz_generation = $4 and caller.roles @> array['workspace-write']::text[]
             and caller_membership.access in ('editor','owner') and caller_membership.revoked_at is null
@@ -2385,7 +3117,7 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
               join orgward.aggregates da on da.tenant_id=d.tenant_id and da.aggregate_kind='execution_run' and da.aggregate_id=d.run_id
               where d.tenant_id=r.tenant_id and da.state #>> '{processTaskRef,planInstanceId}'=r.plan_instance_id::text
                 and d.status in ('reserved','handed_off','outcome_unknown')
-                and da.state #>> '{profile,kind}'='provider-openai'
+                and da.state #>> '{profile,kind}' in ('provider-openai','provider-deepseek')
                 and da.state #>> '{workItem,proposalContext,target,type}'='information'
                 and case when jsonb_typeof(da.state #> '{workItem,proposalContext,sourceEnvelope,sources}')='array'
                   then jsonb_array_length(da.state #> '{workItem,proposalContext,sourceEnvelope,sources}') between 1 and 8 else false end
@@ -2395,28 +3127,49 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
               join orgward.aggregates da on da.tenant_id=d.tenant_id and da.aggregate_kind='execution_run' and da.aggregate_id=d.run_id
               where d.tenant_id=r.tenant_id and da.state #>> '{processTaskRef,planInstanceId}'=r.plan_instance_id::text
                 and d.status in ('reserved','handed_off','outcome_unknown')
-                and (d.status <> 'outcome_unknown' or da.state #>> '{profile,kind}' <> 'provider-openai'
+                and (d.status <> 'outcome_unknown' or coalesce(da.state #>> '{profile,kind}','') not in ('provider-openai','provider-deepseek')
                   or da.state #>> '{workItem,proposalContext,target,type}' <> 'information'
                   or case when jsonb_typeof(da.state #> '{workItem,proposalContext,sourceEnvelope,sources}')='array'
                     then jsonb_array_length(da.state #> '{workItem,proposalContext,sourceEnvelope,sources}') not between 1 and 8 else true end
                   or da.state ?| array['toolPlan','toolPlans','externalActions','capabilities','effects','effectPlan']
                   or (da.state->'workItem') ?| array['toolPlan','toolPlans','externalActions','capabilities','effects','effectPlan','tools']))
           ) as can_abandon_unverified,
-          (r.assigned_principal = $3 and p.status = 'active'
-            and r.assigned_authz_generation = p.authz_generation
-            and r.assigned_membership_generation = m.generation and m.revoked_at is null)
+          (coalesce(r.effective_assigned_principal, r.assigned_principal) = $3 and p.status = 'active'
+            and coalesce(r.effective_assigned_authz_generation, r.assigned_authz_generation) = p.authz_generation
+            and coalesce(r.effective_assigned_membership_generation, r.assigned_membership_generation) = m.generation and m.revoked_at is null)
             as assigned_to_current_principal,
+          (r.effective_assigned_principal is not null) as has_effective_assignment_override,
+          p.display_name as effective_assignee_display_name,
           (caller.status = 'active' and caller.actor_type = 'human'
             and caller.authz_generation = $4 and caller.roles @> array['workspace-write']::text[]
             and caller_membership.access = 'owner' and caller_membership.revoked_at is null)
-            as can_resolve_escalation
+            as can_view_effective_assignee,
+          (caller.status = 'active' and caller.actor_type = 'human'
+            and caller.authz_generation = $4 and caller.roles @> array['workspace-write']::text[]
+            and caller_membership.access = 'owner' and caller_membership.revoked_at is null)
+            as can_resolve_escalation,
+          case when r.status = 'ESCALATED' and r.actor_type = 'human'
+            and caller.status = 'active' and caller.actor_type = 'human'
+            and caller.authz_generation = $4 and caller.roles @> array['workspace-write']::text[]
+            and caller_membership.access = 'owner' and caller_membership.revoked_at is null then (
+              select coalesce(jsonb_agg(jsonb_build_object('principal', eligible.principal, 'displayName', eligible.display_name)
+                order by eligible.display_name, eligible.principal), '[]'::jsonb)
+              from orgward.project_memberships eligible_membership
+              join orgward.oidc_principals eligible
+                on eligible.tenant_id = eligible_membership.tenant_id and eligible.principal = eligible_membership.principal
+              where eligible_membership.tenant_id = r.tenant_id and eligible_membership.project_id = r.project_id
+                and eligible_membership.revoked_at is null and eligible_membership.access in ('owner','editor')
+                and eligible.status = 'active' and eligible.actor_type = 'human'
+                and eligible.roles @> array['workspace-write']::text[]
+                and eligible.principal <> coalesce(r.effective_assigned_principal, r.assigned_principal)
+            ) else '[]'::jsonb end as human_reassignment_candidates
         from orgward.process_task_instances r
         left join orgward.process_task_instance_controls c
           on c.tenant_id = r.tenant_id and c.plan_instance_id = r.plan_instance_id
         left join orgward.oidc_principals p
-          on p.tenant_id = r.tenant_id and p.principal = r.assigned_principal
+          on p.tenant_id = r.tenant_id and p.principal = coalesce(r.effective_assigned_principal, r.assigned_principal)
         left join orgward.project_memberships m
-          on m.tenant_id = r.tenant_id and m.project_id = r.project_id and m.principal = r.assigned_principal
+          on m.tenant_id = r.tenant_id and m.project_id = r.project_id and m.principal = coalesce(r.effective_assigned_principal, r.assigned_principal)
         left join orgward.oidc_principals caller
           on caller.tenant_id = r.tenant_id and caller.principal = $3
         left join orgward.project_memberships caller_membership
@@ -2426,7 +3179,33 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         order by r.created_at, r.plan_instance_id, r.task_id
         for share of r
       `, [tenantId, projectId, principal, authzGeneration]);
-      return result.rows.map((row) => processTaskRuntimeView(row, principal));
+      const plans = new Map();
+      const planRefs = new Map(result.rows.map((row) => [`${row.process_plan_id}\n${row.plan_revision}`, {
+        planId: row.process_plan_id, revision: Number(row.plan_revision),
+      }]));
+      for (const [key, ref] of planRefs) {
+        const plan = await resolveRuntimeProcessPlan(client, { tenantId, projectId, project, ...ref });
+        if (!plan) throw persistenceIntegrity('A process task instance references a missing immutable plan revision.');
+        const runtimes = result.rows.filter((row) => `${row.process_plan_id}\n${row.plan_revision}` === key);
+        const tasks = verifyRuntimePlanTasks(plan, runtimes);
+        verifyCompleteSoftwareRuntimeInstance(plan, runtimes, tasks);
+        plans.set(`${plan.id}\n${plan.revision ?? 1}`, plan);
+      }
+      const promoted = await client.query(`select plan_id,runtime_revision from orgward.software_delivery_runtime_plans
+        where tenant_id=$1 and project_id=$2 order by plan_id,runtime_revision`, [tenantId, projectId]);
+      for (const row of promoted.rows) {
+        const plan = await resolveRuntimeProcessPlan(client, { tenantId, projectId, project, planId: row.plan_id, revision: Number(row.runtime_revision) });
+        if (!plan) throw persistenceIntegrity('A promoted software delivery plan snapshot is missing.');
+        plans.set(`${plan.id}\n${plan.revision}`, plan);
+      }
+      for (const row of result.rows) {
+        const plan = plans.get(`${row.process_plan_id}\n${Number(row.plan_revision)}`);
+        const task = plan?.tasks?.find((candidate) => candidate.id === row.task_id);
+        row.can_apply_human_task_output = Boolean(row.can_resolve_escalation && row.actor_type === 'human'
+          && row.status === 'SUCCEEDED' && task?.outputs?.some((reference) => reference?.type === 'information')
+          && await hasVerifiedHumanTaskSuccess(client, row));
+      }
+      return { instances: result.rows.map((row) => processTaskRuntimeView(row, principal)), plans: [...plans.values()] };
     });
   }
 
@@ -2459,6 +3238,7 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
       const runtimes = await client.query(`select * from orgward.process_task_instances
         where tenant_id=$1 and project_id=$2 and plan_instance_id=$3 order by task_id for update`, [tenantId, projectId, planInstanceId]);
       if (!runtimes.rowCount) throw conflict('The process instance was not found.', null, 'PROCESS_TASK_INSTANCE_NOT_FOUND');
+      await loadProcessInstancePlan(client, { tenantId, projectId, control, runtimes: runtimes.rows });
       const boundary = [];
       let unresolvedWork = runtimes.rows.some((row) => ['IN_PROGRESS', 'ESCALATED', 'RUNNING'].includes(row.status));
       for (const runtime of runtimes.rows) {
@@ -2469,7 +3249,6 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         const selected = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2 for update`, [tenantId, runtime.execution_run_id]);
         if (!selected.rowCount) throw persistenceIntegrity('A linked process task run is missing during instance pause.');
         const run = verifyAggregateRow(selected.rows[0]);
-        assertLinkedWorkloadRuntime(runtime, run);
         const attempts = await client.query(`select * from orgward.provider_dispatch_attempts where tenant_id=$1 and run_id=$2 for update`, [tenantId, run.id]);
         const leases = await client.query(`select worker_id from orgward.execution_worker_leases where tenant_id=$1 and run_id=$2 and lease_until>now() for update`, [tenantId, run.id]);
         for (const attempt of attempts.rows) {
@@ -2538,9 +3317,10 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
       requireProcessTaskControlNotAbandoned(control);
       if (control.status !== 'PAUSED') throw conflict('The process instance must reach its recorded paused boundary before it can resume.', Number(control.version), 'PROCESS_INSTANCE_NOT_PAUSED');
       if (control.initiated_by !== principal && membership.access !== 'owner') throw projectAccessDenied();
-      const plan = (project.processPlans ?? []).find((candidate) => candidate.id === control.process_plan_id && candidate.revision === Number(control.plan_revision));
+      const plan = await resolveRuntimeProcessPlan(client, { tenantId, projectId, project, planId: control.process_plan_id, revision: Number(control.plan_revision) });
       if (!plan || plan.source?.projectId !== projectId) throw conflict('The immutable plan revision at the pause boundary is no longer available.', null, 'PROCESS_PLAN_REVISION_NOT_FOUND');
       const runtimes = await client.query(`select * from orgward.process_task_instances where tenant_id=$1 and plan_instance_id=$2 order by task_id for update`, [tenantId, planInstanceId]);
+      await loadProcessInstancePlan(client, { tenantId, projectId, control, runtimes: runtimes.rows });
       const byTask = new Map(runtimes.rows.map((runtime) => [runtime.task_id, runtime]));
       for (const taskId of (control.pause_boundary?.tasks ?? []).map((task) => task.taskId)) {
         const task = plan.tasks.find((candidate) => candidate.id === taskId);
@@ -2605,6 +3385,7 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
       const runtimes = await client.query(`select * from orgward.process_task_instances
         where tenant_id=$1 and project_id=$2 and plan_instance_id=$3 order by task_id for update`, [tenantId, projectId, planInstanceId]);
       if (!runtimes.rowCount) throw conflict('The process instance was not found.', null, 'PROCESS_TASK_INSTANCE_NOT_FOUND');
+      await loadProcessInstancePlan(client, { tenantId, projectId, control, runtimes: runtimes.rows });
       if (runtimes.rows.some((runtime) => ['IN_PROGRESS', 'ESCALATED', 'RUNNING'].includes(runtime.status))) {
         throw conflict('Active human or agent task work must settle before this instance can be abandoned as unverified.', Number(control.version), 'PROCESS_INSTANCE_WORK_UNRESOLVED');
       }
@@ -2613,7 +3394,8 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         where l.tenant_id=$1 and a.state #>> '{processTaskRef,planInstanceId}'=$2 and l.lease_until>now() limit 1`, [tenantId, planInstanceId]);
       if (live.rowCount) throw conflict('An active worker lease must settle before this instance can be abandoned as unverified.', Number(control.version), 'PROCESS_INSTANCE_WORK_UNRESOLVED');
       const attempts = await client.query(`select d.run_id,d.attempt_id,d.status,a.state #>> '{profile,kind}' as profile_kind,
-          (a.state #>> '{workItem,proposalContext,target,type}'='information'
+          (a.state #>> '{profile,kind}' in ('provider-openai','provider-deepseek')
+            and a.state #>> '{workItem,proposalContext,target,type}'='information'
             and case when jsonb_typeof(a.state #> '{workItem,proposalContext,sourceEnvelope,sources}')='array'
               then jsonb_array_length(a.state #> '{workItem,proposalContext,sourceEnvelope,sources}') between 1 and 8 else false end
             and not (a.state ?| array['toolPlan','toolPlans','externalActions','capabilities','effects','effectPlan']
@@ -2624,8 +3406,8 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
           and d.status in ('reserved','handed_off','outcome_unknown')
         order by d.run_id,d.attempt_id for update of d`, [tenantId, planInstanceId]);
       if (!attempts.rowCount || attempts.rows.some((attempt) => attempt.status !== 'outcome_unknown'
-        || attempt.profile_kind !== 'provider-openai' || !attempt.read_only_model_proposal)) {
-        throw conflict('This disposition is available only when every unresolved attempt is an outcome-unknown read-only OpenAI model proposal.', Number(control.version), 'PROCESS_INSTANCE_ABANDONMENT_NOT_ALLOWED');
+        || !['provider-openai', 'provider-deepseek'].includes(attempt.profile_kind) || !attempt.read_only_model_proposal)) {
+        throw conflict('This disposition is available only when every unresolved attempt is an outcome-unknown read-only model proposal.', Number(control.version), 'PROCESS_INSTANCE_ABANDONMENT_NOT_ALLOWED');
       }
       const runIds = [...new Set(attempts.rows.map((attempt) => attempt.run_id))].sort();
       const attemptIds = attempts.rows.map((attempt) => attempt.attempt_id).sort();
@@ -2641,6 +3423,110 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         values ($1,$2,$3,$4,'process_task_instance_control',$5,$6::jsonb,$7)`,
       [tenantId, operation, commandId, requestHash, planInstanceId, canonicalJson(result), contentHash(result)]);
       return { control: next, replayed: false };
+    });
+    if (outcome && !outcome.replayed) await this.persistence.afterCommit({ operation, commandId, tenantId });
+    return outcome;
+  }
+
+  async cancelProcessTaskInstance({ tenantId, projectId, planInstanceId, principal, authzGeneration,
+    version, commandId, requestHash, reason }) {
+    const operation = 'execution.process-instance.cancel';
+    const safeReason = typeof reason === 'string' ? reason.trim() : '';
+    if (!tenantId || !projectId || !planInstanceId || !principal || !commandId || !requestHash
+      || !safeReason || safeReason.length > 1000) {
+      throw conflict('Cancellation requires a short reason of up to 1000 characters.', null, 'INVALID_PROCESS_INSTANCE_CANCELLATION');
+    }
+    const outcome = await this.persistence.transaction(async (client) => {
+      const membership = await lockProjectAccess(client, { tenantId, projectId, principal, minimum: 'editor' });
+      await requirePrincipalAuthority(client, { tenantId, principal, roles: ['workspace-write'], authzGeneration, actorType: 'human' });
+      const projectRow = await client.query(`select aggregate_id from orgward.aggregates
+        where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2 for share`, [tenantId, projectId]);
+      if (!projectRow.rowCount) return null;
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${tenantId}:${operation}:${commandId}`]);
+      const prior = await client.query(`select * from orgward.command_results where tenant_id=$1 and operation=$2 and command_id=$3`, [tenantId, operation, commandId]);
+      if (prior.rowCount) {
+        if (prior.rows[0].payload_hash !== requestHash) throw conflict('This command ID was already used with different cancellation input.', null, 'IDEMPOTENCY_CONFLICT');
+        const recorded = verifyCommandRow(prior.rows[0]);
+        if (recorded.planInstanceId !== planInstanceId || recorded.projectId !== projectId) throw persistenceIntegrity('A cancellation replay has mismatched instance references.');
+        const control = await lockProcessTaskControl(client, tenantId, planInstanceId);
+        const controlEvent = control?.events?.find((event) => event.causationId === commandId
+          && event.type === 'ProcessTaskInstanceCancelled' && event.actor === principal);
+        const runIds = recorded.runIds;
+        if (!control || control.project_id !== projectId || control.status !== 'CANCELLED'
+          || !Array.isArray(runIds) || runIds.some((id, index) => typeof id !== 'string' || (index > 0 && runIds[index - 1] >= id))
+          || !controlEvent || canonicalJson(controlEvent.data?.runIds) !== canonicalJson(runIds)) {
+          throw persistenceIntegrity('A cancellation replay no longer matches its append-only event and linked runs.');
+        }
+        const replayedRunIds = [];
+        for (const runId of runIds) {
+          const selected = await client.query(`select * from orgward.aggregates
+            where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2 for share`, [tenantId, runId]);
+          if (!selected.rowCount) throw persistenceIntegrity('A cancelled linked run is missing during instance replay.');
+          const run = verifyAggregateRow(selected.rows[0]);
+          const event = run.events?.find((entry) => entry.type === 'ExecutionCancelledByProcessInstanceController'
+            && entry.causationId === commandId && entry.actor === principal
+            && entry.data?.planInstanceId === planInstanceId && entry.data?.processTaskRef?.planInstanceId === planInstanceId);
+          if (run.projectId !== projectId || run.status !== 'CANCELLED' || !event) {
+            throw persistenceIntegrity('A cancelled linked run no longer matches the instance cancellation command.');
+          }
+          replayedRunIds.push(runId);
+        }
+        if (control.initiated_by !== principal && membership.access !== 'owner') throw projectAccessDenied();
+        return { control, runIds: replayedRunIds, replayed: true };
+      }
+      const control = await lockProcessTaskControl(client, tenantId, planInstanceId);
+      if (!control || control.project_id !== projectId) return null;
+      if (Number(control.version) !== version) throw conflict('The process instance control changed; reload before retrying.', Number(control.version), 'PROCESS_INSTANCE_CONTROL_CONFLICT');
+      if (control.initiated_by !== principal && membership.access !== 'owner') throw projectAccessDenied();
+      if (control.status !== 'PAUSED') throw conflict('Only a fully paused process instance can be cancelled.', Number(control.version), 'PROCESS_INSTANCE_NOT_PAUSED');
+      const runtimes = await client.query(`select * from orgward.process_task_instances
+        where tenant_id=$1 and project_id=$2 and plan_instance_id=$3 order by task_id for update`, [tenantId, projectId, planInstanceId]);
+      if (!runtimes.rowCount) throw conflict('The process instance was not found.', null, 'PROCESS_TASK_INSTANCE_NOT_FOUND');
+      await loadProcessInstancePlan(client, { tenantId, projectId, control, runtimes: runtimes.rows });
+      if (runtimes.rows.some((runtime) => ['IN_PROGRESS', 'ESCALATED', 'RUNNING'].includes(runtime.status))) {
+        throw conflict('Active human or agent work must settle before this process instance can be cancelled.', Number(control.version), 'PROCESS_INSTANCE_WORK_UNRESOLVED');
+      }
+      const runIds = [...new Set(runtimes.rows.map((runtime) => runtime.execution_run_id).filter(Boolean))].sort();
+      const runsById = new Map();
+      for (const runId of runIds) {
+        const selected = await client.query(`select * from orgward.aggregates
+          where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2 for update`, [tenantId, runId]);
+        if (!selected.rowCount) throw persistenceIntegrity('A linked process task run is missing during instance cancellation.');
+        const run = verifyAggregateRow(selected.rows[0]);
+        const runtime = runtimes.rows.find((candidate) => candidate.execution_run_id === runId);
+        runsById.set(runId, run);
+      }
+      const attempts = await client.query(`select d.run_id,d.attempt_id,d.status from orgward.provider_dispatch_attempts d
+        where d.tenant_id=$1 and d.run_id=any($2::text[]) order by d.run_id,d.attempt_id for update`, [tenantId, runIds]);
+      const leases = await client.query(`select l.run_id from orgward.execution_worker_leases l
+        where l.tenant_id=$1 and l.run_id=any($2::text[]) and l.lease_until>now() order by l.run_id,l.worker_id for update`, [tenantId, runIds]);
+      if (leases.rowCount || attempts.rows.some((attempt) => ['reserved', 'handed_off', 'outcome_unknown'].includes(attempt.status))) {
+        throw conflict('Worker leases and unresolved provider requests must settle before cancellation.', Number(control.version), 'PROCESS_INSTANCE_WORK_UNRESOLVED');
+      }
+      const cancelledRunIds = [];
+      for (const runId of runIds) {
+        const run = runsById.get(runId);
+        if (['AWAITING_APPROVAL', 'APPROVED', 'PAUSED'].includes(run.status)) {
+          cancelProcessTaskExecutionRunByInstance(run, { principal, commandId, planInstanceId });
+          await this.saveInTransaction(client, run, { expectedVersion: Number(run.version) - 1,
+            principal, requiredPrincipalRoles: ['workspace-write'], authzGeneration,
+            instanceControlMutation: true, runtimeCommandId: commandId });
+          cancelledRunIds.push(runId);
+        } else if (['RUNNING'].includes(run.status)) {
+          throw conflict('Running linked work must settle before cancellation.', Number(control.version), 'PROCESS_INSTANCE_WORK_UNRESOLVED');
+        }
+      }
+      const next = await appendProcessTaskControl(client, control, {
+        status: 'CANCELLED', reason: safeReason, boundary: control.pause_boundary,
+        actor: principal, commandId, eventType: 'ProcessTaskInstanceCancelled',
+        eventData: { authzGeneration: Number(authzGeneration), runIds: cancelledRunIds },
+      });
+      const result = { projectId, planInstanceId, status: next.status, version: Number(next.version), reason: safeReason,
+        runIds: cancelledRunIds };
+      await client.query(`insert into orgward.command_results (tenant_id,operation,command_id,payload_hash,aggregate_kind,aggregate_id,result,result_hash)
+        values ($1,$2,$3,$4,'process_task_instance_control',$5,$6::jsonb,$7)`,
+      [tenantId, operation, commandId, requestHash, planInstanceId, canonicalJson(result), contentHash(result)]);
+      return { control: next, runIds: cancelledRunIds, replayed: false };
     });
     if (outcome && !outcome.replayed) await this.persistence.afterCommit({ operation, commandId, tenantId });
     return outcome;
@@ -2713,8 +3599,9 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
       `, [tenantId, projectId]);
       if (!selectedProject.rowCount) return null;
       const project = verifyAggregateRow(selectedProject.rows[0]);
-      const plan = (project.processPlans ?? []).find((candidate) => candidate.id === planId && candidate.revision === revision);
+      const plan = await resolveRuntimeProcessPlan(client, { tenantId, projectId, project, planId, revision });
       if (!plan || plan.source?.projectId !== projectId) throw conflict('The saved process graph revision was not found for this project.', null, 'PROCESS_PLAN_REVISION_NOT_FOUND');
+      if (plan.kind === 'software_delivery_runtime_plan' && !planInstanceId) throw conflict('Start the owner-promoted human checkpoint instance before starting a task.', null, 'PROCESS_TASK_INSTANCE_NOT_FOUND');
       const task = plan.tasks.find((candidate) => candidate.id === taskId);
       if (!task) throw conflict('The task was not found in this saved graph revision.', null, 'PROCESS_PLAN_TASK_NOT_FOUND');
       if (!Array.isArray(task.dependencies)) throw persistenceIntegrity('A saved process task has invalid dependencies.');
@@ -2818,10 +3705,13 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
           select * from orgward.process_task_instances where tenant_id=$1 and plan_instance_id=$2 and task_id=$3 for update
         `, [tenantId, instanceId, taskId]);
         runtime = inserted.rows[0];
-      } else if (runtime.assigned_principal !== principal
-        || Number(runtime.assigned_authz_generation) !== authzGeneration
-        || Number(runtime.assigned_membership_generation) !== callerMembership.generation) {
-        throw conflict('The human assignment or membership changed after this task runtime was created.', null, 'PROCESS_TASK_ACTOR_BINDING_STALE');
+      } else {
+        const assignee = effectiveHumanAssignee(runtime);
+        if (assignee.principal !== principal
+          || assignee.authzGeneration !== authzGeneration
+          || assignee.membershipGeneration !== callerMembership.generation) {
+          throw conflict('The human assignment or membership changed after this task runtime was created.', null, 'PROCESS_TASK_ACTOR_BINDING_STALE');
+        }
       }
       if (runtime.status !== 'PLANNED') throw conflict('The human task must be planned before its assigned person can start it.', Number(runtime.version), 'PROCESS_TASK_STATE_CONFLICT');
       const event = processTaskRuntimeEvent('HumanTaskStarted', principal, { taskId, processPlanId: planId, revision, planInstanceId: instanceId });
@@ -2895,9 +3785,11 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
       `, [tenantId, projectId, planId, revision, planInstanceId, taskId]);
       if (!selected.rowCount) throw conflict('The human task runtime was not found in this project instance.', null, 'PROCESS_TASK_INSTANCE_NOT_FOUND');
       const runtime = selected.rows[0];
-      if (runtime.actor_type !== 'human' || runtime.assigned_principal !== principal) throw projectAccessDenied();
-      if (Number(runtime.assigned_authz_generation) !== authzGeneration
-        || Number(runtime.assigned_membership_generation) !== callerMembership.generation) {
+      await verifyProcessRuntimeTaskDefinition(client, { tenantId, projectId, planId, revision, taskId, runtime });
+      const assignee = effectiveHumanAssignee(runtime);
+      if (runtime.actor_type !== 'human' || assignee.principal !== principal) throw projectAccessDenied();
+      if (assignee.authzGeneration !== authzGeneration
+        || assignee.membershipGeneration !== callerMembership.generation) {
         throw conflict('The human assignment or membership changed after this task runtime was created.', null, 'PROCESS_TASK_ACTOR_BINDING_STALE');
       }
       if (runtime.status === 'ESCALATED') {
@@ -2982,9 +3874,11 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
       `, [tenantId, projectId, planId, revision, planInstanceId, taskId]);
       if (!selected.rowCount) throw conflict('The human task runtime was not found in this project instance.', null, 'PROCESS_TASK_INSTANCE_NOT_FOUND');
       const runtime = selected.rows[0];
-      if (runtime.actor_type !== 'human' || runtime.assigned_principal !== principal) throw projectAccessDenied();
-      if (Number(runtime.assigned_authz_generation) !== authzGeneration
-        || Number(runtime.assigned_membership_generation) !== callerMembership.generation) {
+      await verifyProcessRuntimeTaskDefinition(client, { tenantId, projectId, planId, revision, taskId, runtime });
+      const assignee = effectiveHumanAssignee(runtime);
+      if (runtime.actor_type !== 'human' || assignee.principal !== principal) throw projectAccessDenied();
+      if (assignee.authzGeneration !== authzGeneration
+        || assignee.membershipGeneration !== callerMembership.generation) {
         throw conflict('The human assignment or membership changed after this task runtime was created.', null, 'PROCESS_TASK_ACTOR_BINDING_STALE');
       }
       if (runtime.status !== 'IN_PROGRESS') throw conflict('Only an in-progress human task can be escalated.', Number(runtime.version), 'PROCESS_TASK_STATE_CONFLICT');
@@ -3020,14 +3914,16 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
 
   async resolveHumanProcessTaskEscalation({
     tenantId, projectId, planId, revision, planInstanceId, taskId,
-    principal, authzGeneration, commandId, requestHash, disposition, reason, evidence = [],
+    principal, authzGeneration, commandId, requestHash, disposition, reason, evidence = [], targetPrincipal = null, expectedVersion = null,
   }) {
     if (!tenantId || !projectId || !planId || !planInstanceId || !taskId || !principal) throw projectAccessDenied();
-    if (!['resume', 'succeeded', 'failed'].includes(disposition)) {
-      throw conflict('Choose resume, succeeded, or failed as the owner resolution.', null, 'INVALID_HUMAN_TASK_ESCALATION');
+    if (!['resume', 'reassign', 'succeeded', 'failed'].includes(disposition)
+      || (disposition === 'reassign') !== (typeof targetPrincipal === 'string' && /^oidc:[a-f0-9]{64}$/i.test(targetPrincipal))
+      || (disposition === 'reassign') !== (Number.isSafeInteger(expectedVersion) && expectedVersion > 0)) {
+      throw conflict('Choose resume, reassign, succeeded, or failed and provide an assignee only for reassignment.', null, 'INVALID_HUMAN_TASK_ESCALATION');
     }
     const safeReason = validateHumanTaskReason(reason);
-    const safeEvidence = validateHumanTaskNotes(evidence ?? [], { required: disposition === 'succeeded' });
+    const safeEvidence = validateHumanTaskNotes(evidence ?? [], { required: disposition === 'succeeded' || disposition === 'reassign' });
     const operation = 'execution.process-task.human-escalation-resolve';
     const outcome = await this.persistence.transaction(async (client) => {
       await lockProjectAccess(client, { tenantId, projectId, principal, minimum: 'owner' });
@@ -3056,7 +3952,7 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
       if (!control || control.project_id !== projectId) throw persistenceIntegrity('A human task has no matching process instance control.');
       requireProcessTaskControlNotAbandoned(control);
       if (control.status === 'PAUSED') throw conflict('The process instance is paused; a late human resolution cannot change its boundary.', null, 'PROCESS_INSTANCE_PAUSED');
-      if (disposition === 'resume') requireActiveProcessTaskControl(control);
+      if (disposition === 'resume' || disposition === 'reassign') requireActiveProcessTaskControl(control);
       if (control.status === 'PAUSED' && disposition === 'resume') throw conflict('The process instance is paused; human work cannot resume until the instance resumes.', null, 'PROCESS_INSTANCE_PAUSED');
 
       const selected = await client.query(`
@@ -3067,53 +3963,143 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
       `, [tenantId, projectId, planId, revision, planInstanceId, taskId]);
       if (!selected.rowCount) throw conflict('The human task runtime was not found in this project instance.', null, 'PROCESS_TASK_INSTANCE_NOT_FOUND');
       const runtime = selected.rows[0];
+      if (disposition === 'reassign' && Number(runtime.version) !== expectedVersion) {
+        throw conflict('This human task changed before reassignment. Refresh the current task and try again.', Number(runtime.version), 'PROCESS_TASK_STATE_CONFLICT');
+      }
+      const { task: immutableTask } = await verifyProcessRuntimeTaskDefinition(client, { tenantId, projectId, planId, revision, taskId, runtime });
+      if (!immutableTask) throw persistenceIntegrity('The escalated human task is missing from its immutable plan snapshot.');
       if (runtime.actor_type !== 'human') throw conflict('Only a human task can be resolved through this path.', null, 'PROCESS_TASK_ASSIGNMENT_CONFLICT');
       if (runtime.status !== 'ESCALATED') throw conflict('Only an escalated human task can be resolved by its project owner.', Number(runtime.version), 'PROCESS_TASK_STATE_CONFLICT');
 
       if (disposition === 'resume') {
-        const binding = await client.query(`
-          select b.status, b.target_principal, b.target_membership_generation, b.target_authz_generation,
-            identity.actor_type, identity.status as identity_status,
-            identity.authz_generation as current_authz_generation,
-            membership.access, membership.generation as current_membership_generation, membership.revoked_at
-          from orgward.project_actor_binding_proposals b
-          join orgward.oidc_principals identity
-            on identity.tenant_id=b.tenant_id and identity.principal=b.target_principal
-          join orgward.project_memberships membership
-            on membership.tenant_id=b.tenant_id and membership.project_id=b.project_id
-              and membership.principal=b.target_principal
-          where b.tenant_id=$1 and b.project_id=$2 and b.blueprint_version=$3
-            and b.actor_id=$4 and b.role_id=$5 and b.target_principal=$6
-          for update of b, identity, membership
-        `, [tenantId, projectId, runtime.blueprint_version, runtime.actor_id, runtime.role_id, runtime.assigned_principal]);
-        if (!binding.rowCount) throw conflict('The original assignee no longer has a current enabled human binding; this task cannot resume.', null, 'PROCESS_TASK_ACTOR_BINDING_STALE');
-        const target = binding.rows[0];
-        if (target.status !== 'enabled' || target.actor_type !== 'human' || target.identity_status !== 'active'
-          || target.revoked_at !== null || !['owner', 'editor'].includes(target.access)
-          || Number(target.target_authz_generation) !== Number(target.current_authz_generation)
-          || Number(target.target_membership_generation) !== Number(target.current_membership_generation)
-          || Number(target.current_authz_generation) !== Number(runtime.assigned_authz_generation)
-          || Number(target.current_membership_generation) !== Number(runtime.assigned_membership_generation)) {
-          throw conflict('The original assignee identity, membership, generations, or pinned enabled binding changed; this task cannot resume.', null, 'PROCESS_TASK_ACTOR_BINDING_STALE');
+        const currentAssignee = effectiveHumanAssignee(runtime);
+        if (runtime.effective_assigned_principal) {
+          const identity = await client.query(`
+            select status, actor_type, roles, authz_generation
+            from orgward.oidc_principals
+            where tenant_id=$1 and principal=$2
+            for update
+          `, [tenantId, currentAssignee.principal]);
+          const membership = await client.query(`
+            select access, generation, revoked_at
+            from orgward.project_memberships
+            where tenant_id=$1 and project_id=$2 and principal=$3
+            for update
+          `, [tenantId, projectId, currentAssignee.principal]);
+          if (!identity.rowCount || !membership.rowCount
+            || identity.rows[0].status !== 'active' || identity.rows[0].actor_type !== 'human'
+            || !identity.rows[0].roles.includes('workspace-write')
+            || membership.rows[0].revoked_at !== null
+            || !['owner', 'editor'].includes(membership.rows[0].access)
+            || Number(identity.rows[0].authz_generation) !== currentAssignee.authzGeneration
+            || Number(membership.rows[0].generation) !== currentAssignee.membershipGeneration) {
+            throw conflict('The effective assignee identity, membership, or saved authority generations changed; reassign this task or update the saved plan.', null, 'PROCESS_TASK_ACTOR_BINDING_STALE');
+          }
+        } else {
+          const binding = await client.query(`
+            select b.status, b.target_principal, b.target_membership_generation, b.target_authz_generation,
+              identity.actor_type, identity.status as identity_status,
+              identity.authz_generation as current_authz_generation,
+              membership.access, membership.generation as current_membership_generation, membership.revoked_at
+            from orgward.project_actor_binding_proposals b
+            join orgward.oidc_principals identity
+              on identity.tenant_id=b.tenant_id and identity.principal=b.target_principal
+            join orgward.project_memberships membership
+              on membership.tenant_id=b.tenant_id and membership.project_id=b.project_id
+                and membership.principal=b.target_principal
+            where b.tenant_id=$1 and b.project_id=$2 and b.blueprint_version=$3
+              and b.actor_id=$4 and b.role_id=$5 and b.target_principal=$6
+            for update of b, identity, membership
+          `, [tenantId, projectId, runtime.blueprint_version, runtime.actor_id, runtime.role_id, currentAssignee.principal]);
+          if (!binding.rowCount) throw conflict('The current assignee no longer has a current enabled human binding; reassign this task or update the saved plan.', null, 'PROCESS_TASK_ACTOR_BINDING_STALE');
+          const target = binding.rows[0];
+          if (target.status !== 'enabled' || target.actor_type !== 'human' || target.identity_status !== 'active'
+            || target.revoked_at !== null || !['owner', 'editor'].includes(target.access)
+            || Number(target.target_authz_generation) !== Number(target.current_authz_generation)
+            || Number(target.target_membership_generation) !== Number(target.current_membership_generation)
+            || Number(target.current_authz_generation) !== currentAssignee.authzGeneration
+            || Number(target.current_membership_generation) !== currentAssignee.membershipGeneration) {
+            throw conflict('The current assignee identity, membership, generations, or pinned enabled binding changed; reassign this task or update the saved plan.', null, 'PROCESS_TASK_ACTOR_BINDING_STALE');
+          }
         }
       }
 
-      const status = disposition === 'resume' ? 'IN_PROGRESS' : disposition === 'succeeded' ? 'SUCCEEDED' : 'FAILED';
-      const taskOutcome = disposition === 'resume' ? runtime.outcome : { result: disposition };
-      const taskEvidence = disposition === 'resume' ? runtime.evidence : safeEvidence;
+      let effectiveAssignmentUpdate = null;
+      let reassignmentEventData = null;
+      if (disposition === 'reassign') {
+        const currentAssignee = effectiveHumanAssignee(runtime);
+        if (targetPrincipal === currentAssignee.principal) {
+          throw conflict('Choose a different active human for reassignment.', Number(runtime.version), 'PROCESS_TASK_ASSIGNMENT_CONFLICT');
+        }
+        if (immutableTask.assignee?.kind !== 'blueprint-actor'
+          || immutableTask.assignee.actorId !== runtime.actor_id || immutableTask.assignee.roleId !== runtime.role_id
+          || !runtime.blueprint_id || !Number.isSafeInteger(Number(runtime.blueprint_version))) {
+          throw persistenceIntegrity('The escalated human assignment does not match its immutable actor and role snapshot.');
+        }
+        const targetIdentity = await client.query(`
+          select status, actor_type, roles, authz_generation
+          from orgward.oidc_principals
+          where tenant_id=$1 and principal=$2
+          for update
+        `, [tenantId, targetPrincipal]);
+        const targetMembership = await client.query(`
+          select access, generation, revoked_at
+          from orgward.project_memberships
+          where tenant_id=$1 and project_id=$2 and principal=$3
+          for update
+        `, [tenantId, projectId, targetPrincipal]);
+        if (!targetIdentity.rowCount || !targetMembership.rowCount
+          || targetIdentity.rows[0].status !== 'active' || targetIdentity.rows[0].actor_type !== 'human'
+          || !targetIdentity.rows[0].roles.includes('workspace-write')
+          || targetMembership.rows[0].revoked_at !== null
+          || !['owner', 'editor'].includes(targetMembership.rows[0].access)) {
+          throw conflict('Choose an active human with workspace write access and an active editor or owner membership in this project.', null, 'PROCESS_TASK_REASSIGNEE_UNAVAILABLE');
+        }
+        const targetAuthzGeneration = Number(targetIdentity.rows[0].authz_generation);
+        const targetMembershipGeneration = Number(targetMembership.rows[0].generation);
+        if (!Number.isSafeInteger(targetAuthzGeneration) || targetAuthzGeneration < 1
+          || !Number.isSafeInteger(targetMembershipGeneration) || targetMembershipGeneration < 1) {
+          throw persistenceIntegrity('The reassignee has invalid current authority generations.');
+        }
+        effectiveAssignmentUpdate = {
+          principal: targetPrincipal,
+          membershipGeneration: targetMembershipGeneration,
+          authzGeneration: targetAuthzGeneration,
+        };
+        reassignmentEventData = {
+          fromPrincipal: currentAssignee.principal,
+          fromMembershipGeneration: currentAssignee.membershipGeneration,
+          fromAuthzGeneration: currentAssignee.authzGeneration,
+          toPrincipal: targetPrincipal,
+          toMembershipGeneration: targetMembershipGeneration,
+          toAuthzGeneration: targetAuthzGeneration,
+          reassigned: true,
+        };
+      }
+
+      const status = ['resume', 'reassign'].includes(disposition) ? 'IN_PROGRESS' : disposition === 'succeeded' ? 'SUCCEEDED' : 'FAILED';
+      const taskOutcome = ['resume', 'reassign'].includes(disposition) ? runtime.outcome : { result: disposition };
+      const taskEvidence = ['resume', 'reassign'].includes(disposition) ? runtime.evidence : safeEvidence;
       const event = processTaskRuntimeEvent('HumanTaskEscalationResolved', principal, {
         taskId, processPlanId: planId, revision, planInstanceId,
-        disposition, reason: safeReason, evidence: safeEvidence,
+        disposition: disposition === 'reassign' ? 'resume' : disposition,
+        ...(disposition === 'reassign' ? { ownerAction: 'reassign', ...reassignmentEventData } : {}),
+        reason: safeReason, evidence: safeEvidence,
       });
       const updated = await client.query(`
         update orgward.process_task_instances
         set status=$5, outcome=$6::jsonb, evidence=$7::jsonb, version=version+1,
           completed_at=case when $5 in ('SUCCEEDED', 'FAILED') then now() else null end,
+          effective_assigned_principal=coalesce($9, effective_assigned_principal),
+          effective_assigned_membership_generation=coalesce($10, effective_assigned_membership_generation),
+          effective_assigned_authz_generation=coalesce($11, effective_assigned_authz_generation),
           updated_at=now(), events=events || $8::jsonb
         where tenant_id=$1 and plan_instance_id=$2 and task_id=$3 and version=$4
         returning *
       `, [tenantId, planInstanceId, taskId, Number(runtime.version), status,
-        canonicalJson(taskOutcome), canonicalJson(taskEvidence), canonicalJson([event])]);
+        canonicalJson(taskOutcome), canonicalJson(taskEvidence), canonicalJson([event]),
+        effectiveAssignmentUpdate?.principal ?? null, effectiveAssignmentUpdate?.membershipGeneration ?? null,
+        effectiveAssignmentUpdate?.authzGeneration ?? null]);
       if (!updated.rowCount) throw conflict('The escalated task changed before the owner resolution was saved.', Number(runtime.version));
       await recordEvent(client, {
         tenantId, kind: 'process_task_instance', id: `${planInstanceId}:${taskId}`,
@@ -3167,7 +4153,7 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         let control = null;
         if (hint.processTaskRef) {
           control = await lockProcessTaskControl(client, hint.tenantId, hint.processTaskRef.planInstanceId);
-          if (!control || ['PAUSED', 'ABANDONED_UNVERIFIED'].includes(control.status)) continue;
+          if (!control || ['PAUSED', 'ABANDONED_UNVERIFIED', 'CANCELLED'].includes(control.status)) continue;
         }
         const locked = await client.query(`select * from orgward.aggregates
           where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2
@@ -3184,7 +4170,8 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         const run = verifyAggregateRow(row);
         const previousVersion = run.version;
         const previousEvents = Array.isArray(run.events) ? run.events.length : 0;
-        await recover(run);
+        const shouldRecover = await recover(run);
+        if (shouldRecover === false) continue;
         await updateAggregate(client, run, 'execution_run', previousVersion);
         if (run.processTaskRef) {
           await syncProcessTaskRuntimeFromRun(client, run);

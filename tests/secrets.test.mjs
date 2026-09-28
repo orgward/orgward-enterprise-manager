@@ -345,7 +345,13 @@ test('tenant administrators manage encrypted credential references with rotation
   const source = await ui.text();
   assert.match(source, /Provider credentials/);
   assert.match(source, /type="password"/);
-  assert.match(source, /Generic fixed-version provider credential/);
+  assert.match(source, /Generic encrypted credential · DeepSeek profile or fixed-version provider/);
+  assert.match(source, /Generic encrypted references can serve an operator-configured DeepSeek model profile or supported fixed-version providers/);
+  assert.match(source, /installation operator must configure the profile with this same reference and selected model/);
+  assert.match(source, /generic form does not validate the credential or model access/);
+  assert.match(source, /server encryption key must be configured for the stored credential to be usable/);
+  assert.doesNotMatch(source, /Generic fixed-version credentials remain available for server-configured fixture providers/);
+  assert.doesNotMatch(source, /secret-canary/);
 });
 
 test('OpenAI candidate validation stages encrypted key, denies cross-tenant access, and activates with explicit unconfirmed revocation state', async (t) => {

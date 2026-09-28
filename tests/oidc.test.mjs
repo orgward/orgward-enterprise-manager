@@ -140,6 +140,35 @@ async function request(base, endpoint, { bearer, headers = {}, ...init } = {}) {
   return { status: response.status, body: await response.json() };
 }
 
+async function savedSdlcSource(base, projectId, prefix, bearer) {
+  const answers = [
+    'A small membership service that reduces customer downtime.',
+    'Independent customers need reliable service records.',
+    'Recurring fees fund preventive maintenance.',
+    'A human approves safety critical work.',
+  ];
+  let response = await request(base, `/api/v1/projects/${projectId}`, { bearer });
+  assert.equal(response.status, 200);
+  for (const [index, content] of answers.entries()) {
+    response = await request(base, `/api/v1/projects/${projectId}/messages`, {
+      bearer, method: 'POST',
+      body: JSON.stringify({
+        schemaVersion: '1.0', commandId: `${prefix}-answer-${index + 1}`,
+        expectedVersion: response.body.data.version, payload: { content },
+      }),
+    });
+    assert.equal(response.status, 200);
+  }
+  const project = response.body.data;
+  const blueprint = project.latestBlueprint;
+  const source = Object.values(blueprint.areas).flatMap((area) => area.items).find((item) => item.type === 'information');
+  assert.ok(source);
+  return {
+    projectId, sourceObjectId: source.id, expectedProjectVersion: project.version,
+    expectedBlueprintId: blueprint.id, expectedBlueprintVersion: blueprint.version,
+  };
+}
+
 test('OIDC access tokens require a trusted signature, issuer, audience, validity and tenant; roles are server mapped', async () => {
   const verifierNowMs = Date.UTC(2026, 0, 1, 0, 0, 0);
   const verifierNowSeconds = Math.floor(verifierNowMs / 1000);
@@ -300,10 +329,11 @@ test('OIDC change cases and execution runs inherit project scope across list, re
   });
   assert.equal(aliceProject.status, 201);
   const projectId = aliceProject.body.data.id;
+  const sourceSelection = await savedSdlcSource(app.base, projectId, 'scope-alice-source', token());
 
   const changeCase = await request(app.base, '/api/sdlc/cases', {
     bearer: token(), method: 'POST',
-    body: JSON.stringify({ projectId, mode: 'custom', rawIntent: 'Scope this change to my workspace.' }),
+    body: JSON.stringify({ ...sourceSelection, mode: 'custom', rawIntent: 'Scope this change to my workspace.' }),
   });
   assert.equal(changeCase.status, 201);
   assert.equal(changeCase.body.projectId, projectId);
@@ -336,11 +366,13 @@ test('OIDC change cases and execution runs inherit project scope across list, re
     bearer: token({ sub: 'bob' }), method: 'POST',
     body: JSON.stringify({ schemaVersion: '1.0', commandId: 'scope-bob-project', payload: { name: 'Bob scope' } }),
   });
+  assert.equal(bobProject.status, 201);
+  const bobSourceSelection = await savedSdlcSource(app.base, bobProject.body.data.id, 'scope-bob-source', token({ sub: 'bob' }));
   const crossProjectCase = await request(app.base, '/api/sdlc/cases', {
     bearer: token(), method: 'POST',
-    body: JSON.stringify({ projectId: bobProject.body.data.id, mode: 'custom', rawIntent: 'Attempt cross project scope.' }),
+    body: JSON.stringify({ ...bobSourceSelection, mode: 'custom', rawIntent: 'Attempt cross project scope.' }),
   });
-  assert.equal(crossProjectCase.status, 403);
+  assert.equal(crossProjectCase.status, 404);
   const crossProjectRun = await request(app.base, '/api/execution/runs', {
     bearer: token(), method: 'POST',
     body: JSON.stringify({ projectId: bobProject.body.data.id, profileId: 'test-scoped-profile', title: 'Cross scope', objective: 'Must fail.' }),

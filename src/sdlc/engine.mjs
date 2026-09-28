@@ -45,11 +45,93 @@ function fail(definition, subjects, findings, status = 'FAILED', score = 0) {
   return evaluation(definition, subjects, status, findings, score);
 }
 
-export function createChangeCase(input = {}) {
+function sourceBindingError(statusCode, code, message) {
+  return Object.assign(new Error(message), { statusCode, code });
+}
+
+export function verifySourceBinding(binding) {
+  const snapshot = binding?.snapshot;
+  const snapshotKeys = snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)
+    ? Object.keys(snapshot).sort() : [];
+  const validShape = binding && typeof binding === 'object'
+    && typeof binding.projectId === 'string' && /^project-[0-9a-f-]{36}$/i.test(binding.projectId)
+    && Number.isInteger(binding.projectVersion) && binding.projectVersion > 0
+    && typeof binding.blueprintId === 'string' && /^blueprint-[0-9a-f-]{36}$/i.test(binding.blueprintId)
+    && Number.isInteger(binding.blueprintVersion) && binding.blueprintVersion > 0
+    && (typeof binding.blueprintSchemaVersion === 'string' || Number.isInteger(binding.blueprintSchemaVersion))
+    && typeof binding.objectId === 'string' && typeof binding.objectType === 'string'
+    && typeof binding.sourceHash === 'string' && /^[a-f0-9]{64}$/i.test(binding.sourceHash)
+    && typeof binding.bindingHash === 'string' && /^[a-f0-9]{64}$/i.test(binding.bindingHash)
+    && snapshotKeys.join(',') === 'detail,id,name,type'
+    && snapshot.id === binding.objectId && snapshot.type === binding.objectType
+    && typeof snapshot.name === 'string' && typeof snapshot.detail === 'string';
+  const actualHash = validShape ? digest(snapshot) : null;
+  const actualBindingHash = validShape ? digest({
+    projectId: binding.projectId, projectVersion: binding.projectVersion,
+    blueprintId: binding.blueprintId, blueprintVersion: binding.blueprintVersion,
+    blueprintSchemaVersion: binding.blueprintSchemaVersion,
+    objectId: binding.objectId, objectType: binding.objectType, sourceHash: binding.sourceHash,
+  }) : null;
+  const valid = validShape && actualHash === binding.sourceHash && actualBindingHash === binding.bindingHash;
+  return {
+    valid,
+    expectedHash: validShape ? binding.sourceHash : null,
+    actualHash,
+    expectedBindingHash: validShape ? binding.bindingHash : null,
+    actualBindingHash,
+    reason: valid ? null : 'The pinned saved-design source failed its integrity check.',
+  };
+}
+
+export function pinProjectSourceObject(project, selection = {}) {
+  if (!project || typeof project.id !== 'string' || !Array.isArray(project.blueprintVersions)) {
+    throw sourceBindingError(404, 'SOURCE_PROJECT_NOT_FOUND', 'The saved project source was not found.');
+  }
+  if (!Number.isInteger(selection.expectedProjectVersion) || !selection.expectedBlueprintId
+    || !Number.isInteger(selection.expectedBlueprintVersion) || !selection.sourceObjectId) {
+    throw sourceBindingError(400, 'SOURCE_REFERENCE_REQUIRED', 'Choose a saved design object and submit its project and blueprint versions.');
+  }
+  if (project.version !== selection.expectedProjectVersion) {
+    throw sourceBindingError(409, 'SOURCE_PROJECT_VERSION_STALE', 'The saved project changed. Reload its current design and select the source again.');
+  }
+  const blueprint = project.blueprintVersions.at(-1);
+  if (!blueprint || blueprint.id !== selection.expectedBlueprintId || blueprint.version !== selection.expectedBlueprintVersion) {
+    throw sourceBindingError(409, 'SOURCE_BLUEPRINT_VERSION_STALE', 'The saved blueprint changed. Reload its current design and select the source again.');
+  }
+  const source = Object.values(blueprint.areas ?? {}).flatMap((area) => area.items ?? [])
+    .find((item) => item.id === selection.sourceObjectId);
+  if (!source) {
+    throw sourceBindingError(404, 'SOURCE_OBJECT_NOT_FOUND', 'The selected object is not present in the current saved blueprint.');
+  }
+  if (typeof source.type !== 'string' || typeof source.name !== 'string' || typeof source.detail !== 'string') {
+    throw sourceBindingError(409, 'SOURCE_OBJECT_INVALID', 'The selected saved design object is missing required source fields.');
+  }
+  const snapshot = { id: source.id, type: source.type, name: source.name, detail: source.detail };
+  const sourceHash = digest(snapshot);
+  const binding = {
+    projectId: project.id, projectVersion: project.version, blueprintId: blueprint.id,
+    blueprintVersion: blueprint.version, blueprintSchemaVersion: blueprint.blueprintSchemaVersion ?? 1,
+    objectId: source.id, objectType: source.type, sourceHash, snapshot,
+  };
+  binding.bindingHash = digest({
+    projectId: binding.projectId, projectVersion: binding.projectVersion,
+    blueprintId: binding.blueprintId, blueprintVersion: binding.blueprintVersion,
+    blueprintSchemaVersion: binding.blueprintSchemaVersion,
+    objectId: binding.objectId, objectType: binding.objectType, sourceHash: binding.sourceHash,
+  });
+  const verified = verifySourceBinding(binding);
+  if (!verified.valid) {
+    throw sourceBindingError(409, 'SOURCE_HASH_INVALID', 'The selected saved design source could not be verified.');
+  }
+  return binding;
+}
+
+export function createChangeCase(input = {}, { sourceBinding = null } = {}) {
   const createdAt = now();
   const mutation = MUTATIONS[input.mutation] ? input.mutation : 'none';
   const tenantId = safeText(input.tenantId, 80) || 'tenant-reference-bank';
-  const projectId = safeText(input.projectId, 80) || null;
+  const pinnedSource = sourceBinding ? structuredClone(sourceBinding) : null;
+  const projectId = pinnedSource?.projectId ?? (safeText(input.projectId, 80) || null);
   const caseId = id('change-case');
   const rawIntent = safeText(input.rawIntent) || 'Allow corporate customers to update beneficial-owner information digitally while preserving KYC/AML controls, data integrity, authorization, auditability, and downstream consistency.';
   const golden = input.mode !== 'custom';
@@ -82,12 +164,14 @@ export function createChangeCase(input = {}) {
       assumptions: ['Corporate representatives are already enrolled in the synthetic IAM service'],
       nonGoals: [],
       proposedSolution: 'Add a governed digital change flow through owned APIs and control services.',
-      openQuestions: [], confidence: golden ? 'HIGH' : 'LOW', sourceRefs: ['request:raw-intent'], revision: 1,
+      openQuestions: [], confidence: golden ? 'HIGH' : 'LOW',
+      sourceRefs: [pinnedSource ? `blueprint:${pinnedSource.blueprintId}:v${pinnedSource.blueprintVersion}:${pinnedSource.objectId}` : 'request:raw-intent'], revision: 1,
     },
+    ...(pinnedSource ? { sourceBinding: pinnedSource } : {}),
     intentHistory: [],
     clarifications: [],
     proofs: { obligations: [], results: [], assessments: [], actions: [], loopCounters: {} },
-    enterpriseSnapshot: referenceOrganization(mutation),
+    enterpriseSnapshot: { ...referenceOrganization(mutation), sourceKind: 'synthetic-reference-model', sourceLabel: 'Synthetic reference organization' },
     artifacts: {},
     evidenceLedger: [],
     evaluations: [],
@@ -151,7 +235,137 @@ export function normalizeChangeCase(changeCase) {
   changeCase.intent.revision ??= 1;
   changeCase.intent.contentHash ??= intentHash(changeCase.intent);
   changeCase.intentHistory ??= [structuredClone(changeCase.intent)];
+  if (changeCase.artifacts?.requirements) {
+    changeCase.artifacts.requirements.draftRevision ??= 1;
+    changeCase.artifacts.requirements.draftHistory ??= [];
+  }
   return changeCase;
+}
+
+function requirementDraftHash(requirements) {
+  return digest(requirements.map(({ id: requirementId, kind, statement, rationale, actor, precondition, observableResult, independentVerification, derivedFrom, affectedObjects, priority, acceptanceCriteria, verificationMethod, owner, risk, sourceLinks }) => ({
+    id: requirementId, kind, statement, rationale, actor, precondition, observableResult, independentVerification,
+    derivedFrom, affectedObjects, priority, acceptanceCriteria, verificationMethod, owner, risk, sourceLinks,
+  })));
+}
+
+function validateRequirementDraft(requirements, changeCase = null) {
+  const findings = [];
+  const seen = new Set();
+  for (const requirement of requirements) {
+    if (!requirement.id || seen.has(requirement.id)) findings.push(finding('REQUIREMENT_ID_INVALID', 'HIGH', 'Requirement IDs must be present and unique.', requirement.id ?? 'requirements', 'Keep each stable requirement ID unique.'));
+    seen.add(requirement.id);
+    if (typeof requirement.statement !== 'string' || !requirement.statement.trim() || requirement.statement.trim().length > 500) findings.push(finding('REQUIREMENT_STATEMENT_INVALID', 'HIGH', `${requirement.id} needs a statement of 1–500 characters.`, requirement.id, 'Provide a concise requirement statement.'));
+    if (typeof requirement.rationale !== 'string' || !requirement.rationale.trim() || requirement.rationale.trim().length > 500) findings.push(finding('REQUIREMENT_RATIONALE_INVALID', 'HIGH', `${requirement.id} needs a rationale of 1–500 characters.`, requirement.id, 'Explain why this requirement follows from the linked intent/source.'));
+    for (const field of ['actor', 'precondition', 'observableResult', 'independentVerification', 'owner']) {
+      if (typeof requirement[field] !== 'string' || !requirement[field].trim() || requirement[field].trim().length > 500) findings.push(finding('REQUIREMENT_FIELD_INVALID', 'HIGH', `${requirement.id} needs a valid ${field}.`, requirement.id, `Provide a concise ${field}.`));
+    }
+    if (!['MUST', 'SHOULD'].includes(requirement.priority)) findings.push(finding('REQUIREMENT_PRIORITY_INVALID', 'HIGH', `${requirement.id} has an invalid priority.`, requirement.id, 'Choose MUST or SHOULD.'));
+    if (!['SCENARIO_AND_OUTCOME', 'AUTOMATED_TEST'].includes(requirement.verificationMethod)) findings.push(finding('REQUIREMENT_METHOD_INVALID', 'HIGH', `${requirement.id} has an unsupported verification method.`, requirement.id, 'Choose a supported verification method.'));
+    if (!Array.isArray(requirement.derivedFrom) || !requirement.derivedFrom.length) findings.push(finding('ORPHAN_REQUIREMENT', 'HIGH', `${requirement.id} has no upstream source.`, requirement.id, 'Retain at least one source-intent link.'));
+    if (changeCase?.sourceBinding) {
+      const links = requirement.sourceLinks ?? [];
+      const validLinks = links.length === 2
+        && links.some((entry) => entry.type === 'INTENT' && entry.ref === changeCase.intent.id)
+        && links.some((entry) => entry.type === 'SAVED_DESIGN_OBJECT' && entry.ref === changeCase.sourceBinding.objectId && entry.hash === changeCase.sourceBinding.sourceHash);
+      if (!validLinks) findings.push(finding('REQUIREMENT_SOURCE_LINK_INVALID', 'HIGH', `${requirement.id} is missing its pinned intent/source link.`, requirement.id, 'Restore the stable links to the case intent and pinned saved-design object.'));
+    }
+    if (!Array.isArray(requirement.acceptanceCriteria) || !requirement.acceptanceCriteria.length || requirement.acceptanceCriteria.some((value) => typeof value !== 'string' || !value.trim() || value.length > 500)) findings.push(finding('UNTESTABLE_REQUIREMENT', 'HIGH', `${requirement.id} needs one or more valid acceptance criteria.`, requirement.id, 'Add verifiable acceptance criteria.'));
+    if (!requirement.verificationMethod) findings.push(finding('UNTESTABLE_REQUIREMENT', 'HIGH', `${requirement.id} has no verification method.`, requirement.id, 'Select a verification method.'));
+    if (/delete all audit evidence/i.test(requirement.statement)) findings.push(finding('REQUIREMENT_CONTRADICTION', 'CRITICAL', `${requirement.id} contradicts immutable audit control.`, requirement.id, 'Remove or resolve the contradiction with the control owner.'));
+  }
+  return findings;
+}
+
+function requirementBaselineValid(changeCase) {
+  const artifact = changeCase.artifacts.requirements;
+  const baseline = artifact?.acceptedBaseline;
+  return Boolean(changeCase.sourceBinding && baseline
+    && baseline.version === 1 && baseline.draftRevision === artifact.draftRevision
+    && baseline.contentHash === requirementDraftHash(baseline.requirements)
+    && baseline.contentHash === requirementDraftHash(artifact.requirements)
+    && baseline.intentHash === intentHash(changeCase.intent)
+    && baseline.sourceHash === changeCase.sourceBinding.sourceHash
+    && validateRequirementDraft(baseline.requirements, changeCase).length === 0);
+}
+
+function requirementsForDesign(changeCase) {
+  return changeCase.sourceBinding
+    ? changeCase.artifacts.requirements.acceptedBaseline.requirements
+    : changeCase.artifacts.requirements.requirements;
+}
+
+export function editRequirementDraft(changeCase, command = {}) {
+  normalizeChangeCase(changeCase);
+  const { key, requestHash, replayed } = commandKey(changeCase, command, 'edit-requirements');
+  if (replayed) return { changeCase, replayed: true };
+  const artifact = changeCase.artifacts.requirements;
+  if (!changeCase.sourceBinding || changeCase.currentStage !== 'S4' || !artifact || artifact.acceptedBaseline) throw commandError('Requirements are not open for editing.', 409);
+  if (command.expectedDraftRevision !== artifact.draftRevision) throw commandError(`Requirement draft revision conflict: current revision is ${artifact.draftRevision}.`, 409);
+  const requirement = artifact.requirements.find((entry) => entry.id === command.requirementId);
+  if (!requirement) throw commandError('Requirement not found.', 404);
+  const changes = command.changes;
+  if (!changes || typeof changes !== 'object' || Array.isArray(changes)) throw commandError('Requirement changes must be an object.');
+  const allowed = ['statement', 'rationale', 'actor', 'precondition', 'observableResult', 'independentVerification', 'owner', 'priority', 'verificationMethod', 'acceptanceCriteria'];
+  if (Object.keys(changes).some((keyName) => !allowed.includes(keyName)) || !Object.keys(changes).length) throw commandError('Only requirement content and verification fields can be edited.');
+  for (const field of ['statement', 'rationale', 'actor', 'precondition', 'observableResult', 'independentVerification', 'owner', 'priority', 'verificationMethod']) {
+    if (Object.hasOwn(changes, field) && typeof changes[field] !== 'string') throw commandError(`Requirement ${field} must be text.`);
+  }
+  for (const field of ['statement', 'rationale', 'actor', 'precondition', 'observableResult', 'independentVerification', 'owner', 'priority', 'verificationMethod']) {
+    if (Object.hasOwn(changes, field)) requirement[field] = safeText(changes[field], 500);
+  }
+  if (Object.hasOwn(changes, 'acceptanceCriteria')) {
+    if (!Array.isArray(changes.acceptanceCriteria) || changes.acceptanceCriteria.length > 8 || changes.acceptanceCriteria.some((value) => typeof value !== 'string')) throw commandError('Provide up to eight text acceptance criteria.');
+    requirement.acceptanceCriteria = changes.acceptanceCriteria.map((value) => safeText(value, 500));
+  }
+  artifact.draftRevision += 1;
+  artifact.validationFindings = validateRequirementDraft(artifact.requirements, changeCase);
+  const actor = safeText(command.actor, 120) || changeCase.accountableOwner;
+  artifact.draftHistory.push({ revision: artifact.draftRevision, requirementId: requirement.id, changes: structuredClone(changes), actor, at: now() });
+  return finishCommand(changeCase, key, requestHash, 'edit-requirements', actor, 'RequirementDraftEdited', { draftRevision: artifact.draftRevision, requirementId: requirement.id, changedFields: Object.keys(changes).sort() });
+}
+
+export function acceptRequirementDraft(changeCase, command = {}) {
+  normalizeChangeCase(changeCase);
+  const { key, requestHash, replayed } = commandKey(changeCase, command, 'accept-requirements');
+  if (replayed) return { changeCase, replayed: true };
+  const artifact = changeCase.artifacts.requirements;
+  if (!changeCase.sourceBinding || changeCase.currentStage !== 'S4' || !artifact) throw commandError('The source-bound requirements gate is not awaiting acceptance.', 409);
+  if (artifact.acceptedBaseline) throw commandError('An accepted requirements baseline is already frozen.', 409);
+  if (command.expectedDraftRevision !== artifact.draftRevision) throw commandError(`Requirement draft revision conflict: current revision is ${artifact.draftRevision}.`, 409);
+  const actor = safeText(command.actor, 120);
+  if (!actor || actor !== changeCase.accountableOwner || actor !== changeCase.createdBy) {
+    const error = new Error('Only the case owner can accept the requirements baseline.');
+    error.statusCode = 403;
+    throw error;
+  }
+  const findings = validateRequirementDraft(artifact.requirements, changeCase);
+  artifact.validationFindings = findings;
+  if (findings.length) throw commandError('Requirements must pass validation before the owner can accept them.', 409);
+  const contentHash = requirementDraftHash(artifact.requirements);
+  artifact.acceptedBaseline = {
+    version: 1, draftRevision: artifact.draftRevision, contentHash,
+    intentHash: intentHash(changeCase.intent), sourceHash: changeCase.sourceBinding.sourceHash,
+    acceptedBy: actor, acceptedAt: now(), requirements: structuredClone(artifact.requirements),
+  };
+  artifact.acceptedBaseline.requirements.forEach((entry) => { entry.status = 'ACCEPTED'; });
+  const stage = stageAt(changeCase.currentStageIndex);
+  const startedAt = now();
+  const result = requirementsEngineering(changeCase);
+  if (result.status !== 'PASSED') throw commandError('Accepted requirements did not satisfy the G4 quality gate.', 409);
+  changeCase.evaluations.push(result);
+  changeCase.gateHistory.push(gateDecision(stage, result, result.id));
+  changeCase.stageRuns.push(stageRun(changeCase, stage, 'PASSED', startedAt, result.subjectRefs));
+  changeCase.metrics.stagePasses += 1;
+  changeCase.events.push(eventEnvelope(changeCase, 'GatePassed', actor, { stage: stage.id, gate: stage.gate, evaluationRef: result.id, status: result.status }, changeCase.events.at(-1)?.id));
+  changeCase.currentStageIndex += 1;
+  const next = stageAt(changeCase.currentStageIndex);
+  changeCase.currentStage = next?.id ?? null;
+  changeCase.status = next ? 'RUNNING' : 'PASSED';
+  return finishCommand(changeCase, key, requestHash, 'accept-requirements', actor, 'RequirementBaselineAccepted', {
+    draftRevision: artifact.draftRevision, baselineVersion: 1, contentHash, intentHash: artifact.acceptedBaseline.intentHash,
+    sourceHash: artifact.acceptedBaseline.sourceHash, gate: stage.gate,
+  });
 }
 
 function proofFor(changeCase, proofRef) {
@@ -578,6 +792,21 @@ function contextDiscovery(changeCase) {
     });
     changeCase.evidenceLedger.push(record); evidenceRefs.push(record.id);
   }
+  let sourceBindingEvidenceRef = null;
+  if (changeCase.sourceBinding) {
+    const binding = changeCase.sourceBinding;
+    const record = evidence(changeCase, {
+      sourceId: `orgward:project:${binding.projectId}:blueprint:${binding.blueprintId}:v${binding.blueprintVersion}`,
+      sourceType: 'saved-design-object', objectRef: binding.objectId,
+      authority: 'SAVED_PROJECT_DESIGN', freshness: 'PINNED', classification: 'INTERNAL',
+      content: { ...binding.snapshot, sourceHash: binding.sourceHash, bindingHash: binding.bindingHash },
+      relevance: 1,
+      provenanceChain: [`project:${binding.projectId}`, `blueprint:${binding.blueprintId}:v${binding.blueprintVersion}`, `object:${binding.objectId}`, `sha256:${binding.sourceHash}`, `binding:${binding.bindingHash}`],
+    });
+    changeCase.evidenceLedger.push(record);
+    evidenceRefs.push(record.id);
+    sourceBindingEvidenceRef = record.id;
+  }
   const has = (objectId) => changeCase.enterpriseSnapshot.objects.some((object) => object.id === objectId && object.authority === 'AUTHORITATIVE');
   const coverage = REQUIRED_CONTEXT_DOMAINS.map((domain) => {
     const criticalMissing = (domain === 'regulation' && !has('obligation-kyc')) || (domain === 'control' && !has('control-screening'));
@@ -593,7 +822,14 @@ function contextDiscovery(changeCase) {
   });
   for (const entry of forged) findings.push(finding('PROVENANCE_HASH_INVALID', 'CRITICAL', `${entry.name} does not match its recorded source hash.`, entry.id, 'Reject the source and retrieve evidence from an authoritative adapter.'));
   for (const entry of untrusted) findings.push(finding('UNTRUSTED_CONTENT_ISOLATED', 'INFO', `${entry.name} was retained as data and excluded from authoritative coverage.`, entry.id, 'No action required unless an authorized owner promotes the source.', evidenceRefs));
-  changeCase.artifacts.context = { plan, coverage, evidenceRefs, provenanceManifestHash: digest(evidenceRefs) };
+  changeCase.artifacts.context = {
+    plan, coverage, evidenceRefs,
+    ...(changeCase.sourceBinding ? { sourceBindingHash: changeCase.sourceBinding.sourceHash, sourceBindingIntegrityHash: changeCase.sourceBinding.bindingHash, sourceBindingEvidenceRef } : {}),
+    provenanceManifestHash: changeCase.sourceBinding
+      ? digest({ evidenceRefs, sourceBindingHash: changeCase.sourceBinding.sourceHash, sourceBindingIntegrityHash: changeCase.sourceBinding.bindingHash })
+      : digest(evidenceRefs),
+    sourceModel: 'synthetic-reference-model',
+  };
   return findings.some((entry) => entry.severity === 'CRITICAL') ? fail('context-sufficiency', [plan.id], findings, 'FAILED', coverage.reduce((sum, entry) => sum + entry.score, 0) / coverage.length) : pass('context-sufficiency', [plan.id], 1, findings);
 }
 
@@ -603,15 +839,35 @@ function impactAnalysis(changeCase) {
   const objectMap = new Map(changeCase.enterpriseSnapshot.objects.map((object) => [object.id, object]));
   const impacts = selected.filter((objectRef) => objectMap.has(objectRef)).map((objectRef, index) => ({
     id: id('impact'), objectRef, objectType: objectMap.get(objectRef).type, impactType: index < 10 ? 'DIRECT' : 'INDIRECT',
-    confidence: 1, reason: 'Reachable from the intent through the reference enterprise dependency neighborhood.',
+    confidence: 1, reason: 'Synthetic reference-model impact; not derived from the selected saved design.',
     evidenceRefs: changeCase.artifacts.context.evidenceRefs.filter((ref) => changeCase.evidenceLedger.find((entry) => entry.id === ref)?.objectRef === objectRef),
     dependencyPath: ['goal-digital-owner-update', objectRef], ownerRef: objectMap.get(objectRef).owner ?? null,
   }));
+  if (changeCase.sourceBinding) {
+    const binding = changeCase.sourceBinding;
+    const existing = impacts.find((entry) => entry.objectRef === binding.objectId);
+    if (existing) {
+      existing.isRequestedSource = true;
+      existing.reason = 'Selected saved-design source for this change; adjacent relationships below are synthetic reference-model analysis.';
+      existing.evidenceRefs = [...new Set([...existing.evidenceRefs, changeCase.artifacts.context.sourceBindingEvidenceRef])];
+      existing.sourceHash = binding.sourceHash;
+    } else {
+      impacts.unshift({
+        id: id('impact'), objectRef: binding.objectId, objectType: binding.objectType, impactType: 'DIRECT',
+        confidence: 1, reason: 'Selected saved-design source for this change; downstream impact has not yet been derived from project relationships.',
+        evidenceRefs: [changeCase.artifacts.context.sourceBindingEvidenceRef], dependencyPath: [], ownerRef: null,
+        isRequestedSource: true, sourceHash: binding.sourceHash,
+      });
+    }
+  }
   const actual = new Set(impacts.map((impact) => impact.objectRef));
   const missing = [...EXPECTED_IMPACTS].filter((objectRef) => objectMap.has(objectRef) && !actual.has(objectRef));
   const findings = missing.map((objectRef) => finding('IMPACT_OMISSION', 'HIGH', `Independent critic found omitted impacted object ${objectRef}.`, objectRef, 'Add the downstream dependency and re-run impact analysis.'));
   const recall = EXPECTED_IMPACTS.size ? (EXPECTED_IMPACTS.size - missing.length) / EXPECTED_IMPACTS.size : 1;
-  changeCase.artifacts.impact = { impacts, critic: { expected: [...EXPECTED_IMPACTS], missing, precision: 1, recall } };
+  changeCase.artifacts.impact = {
+    impacts, sourceModel: 'synthetic-reference-model',
+    critic: { expected: [...EXPECTED_IMPACTS], missing, precision: 1, recall },
+  };
   return findings.length ? fail('impact-completeness', impacts.map((entry) => entry.id), findings, 'FAILED', recall) : pass('impact-completeness', impacts.map((entry) => entry.id), recall);
 }
 
@@ -628,24 +884,331 @@ function governanceAnalysis(changeCase) {
 }
 
 function requirementsEngineering(changeCase) {
-  const requirements = REQUIREMENT_SEED.map(([idValue, kind, statement, derivedFrom, criterion], index) => ({
-    id: idValue, kind, statement, rationale: 'Derived from approved intent and authoritative synthetic enterprise evidence.', derivedFrom,
-    affectedObjects: derivedFrom, priority: index < 7 ? 'MUST' : 'SHOULD', acceptanceCriteria: [criterion], verificationMethod: kind === 'BUSINESS' ? 'SCENARIO_AND_OUTCOME' : 'AUTOMATED_TEST', owner: changeCase.accountableOwner, risk: ['SECURITY', 'REGULATORY_CONTROL'].includes(kind) ? 'HIGH' : 'MEDIUM', status: 'PROPOSED',
-  }));
-  if (changeCase.mutation === 'contradictory_requirement') {
-    requirements.push({ id: 'REQ-BAD-1', kind: 'DATA', statement: 'Delete all audit evidence immediately after each request.', rationale: 'Injected mutation', derivedFrom: ['control-audit'], affectedObjects: ['control-audit'], priority: 'MUST', acceptanceCriteria: [], verificationMethod: null, owner: null, risk: 'HIGH', status: 'PROPOSED' });
+  let artifact = changeCase.artifacts.requirements;
+  if (!artifact) {
+    const sourceLinks = changeCase.sourceBinding ? [
+      { type: 'INTENT', ref: changeCase.intent.id },
+      { type: 'SAVED_DESIGN_OBJECT', ref: changeCase.sourceBinding.objectId, hash: changeCase.sourceBinding.sourceHash },
+    ] : [];
+    const requirements = REQUIREMENT_SEED.map(([idValue, kind, statement, derivedFrom, criterion], index) => ({
+      id: idValue, kind, statement, rationale: 'Synthetic reference template for owner review; verify against the linked intent and pinned saved-design source.',
+      actor: 'Authorized customer representative', precondition: 'The actor is authenticated and authorized for the requested change.',
+      observableResult: 'The requested change is saved with a durable outcome record.', derivedFrom,
+      sourceLinks: structuredClone(sourceLinks),
+      affectedObjects: derivedFrom, priority: index < 7 ? 'MUST' : 'SHOULD', acceptanceCriteria: [criterion], verificationMethod: kind === 'BUSINESS' ? 'SCENARIO_AND_OUTCOME' : 'AUTOMATED_TEST', independentVerification: 'A reviewer other than the requirement owner checks the evidence.', owner: changeCase.accountableOwner, risk: ['SECURITY', 'REGULATORY_CONTROL'].includes(kind) ? 'HIGH' : 'MEDIUM', status: 'DRAFT',
+    }));
+    if (changeCase.mutation === 'contradictory_requirement') {
+      requirements.push({ id: 'REQ-BAD-1', kind: 'DATA', statement: 'Delete all audit evidence immediately after each request.', rationale: 'Injected mutation', derivedFrom: ['control-audit'], sourceLinks: structuredClone(sourceLinks), affectedObjects: ['control-audit'], priority: 'MUST', acceptanceCriteria: [], verificationMethod: null, owner: null, risk: 'HIGH', status: 'DRAFT' });
+    }
+    artifact = changeCase.artifacts.requirements = { requirements, draftRevision: 1, draftHistory: [], mutationCoverage: { checked: ['missing', 'ambiguous', 'contradictory', 'untestable'], detected: [] } };
   }
+  const findings = validateRequirementDraft(artifact.requirements, changeCase);
+  artifact.validationFindings = findings;
+  artifact.mutationCoverage.detected = findings.map((entry) => entry.code);
+  if (findings.length) return fail('requirements-quality', artifact.requirements.map((entry) => entry.id), findings);
+  if (changeCase.sourceBinding) {
+    const baseline = artifact.acceptedBaseline;
+    const matches = requirementBaselineValid(changeCase);
+    if (!matches) return fail('requirements-quality', artifact.requirements.map((entry) => entry.id), [finding('OWNER_ACCEPTANCE_REQUIRED', 'HIGH', 'Requirements are valid but remain a draft until the case owner accepts them.', 'requirements', 'Review the revisioned draft and explicitly accept it to freeze the G4 baseline.')], 'NEEDS_HUMAN');
+  }
+  if (artifact.acceptedBaseline) {
+    artifact.requirements = structuredClone(artifact.acceptedBaseline.requirements);
+    artifact.requirements.forEach((entry) => { entry.status = 'ACCEPTED'; });
+  }
+  return pass('requirements-quality', artifact.requirements.map((entry) => entry.id));
+}
+
+function architectureDraftCore(changeCase, artifact) {
+  const requirements = changeCase.artifacts.requirements.acceptedBaseline;
+  return {
+    architectureId: artifact.architectureId,
+    revision: artifact.draftRevision,
+    options: artifact.options,
+    selectedOptionId: artifact.selectedOptionId,
+    selectionRationale: artifact.selectionRationale,
+    requirementsBaseline: { version: requirements.version, contentHash: requirements.contentHash },
+    sourceHash: changeCase.sourceBinding.sourceHash,
+    intentHash: intentHash(changeCase.intent),
+  };
+}
+
+function architectureDraftHash(changeCase, artifact) {
+  return digest(architectureDraftCore(changeCase, artifact));
+}
+
+function architectureValidation(changeCase, artifact) {
   const findings = [];
-  for (const requirement of requirements) {
-    if (!requirement.derivedFrom.length) findings.push(finding('ORPHAN_REQUIREMENT', 'HIGH', `${requirement.id} has no upstream source.`, requirement.id, 'Add an authoritative derivedFrom reference.'));
-    if (!requirement.acceptanceCriteria.length || !requirement.verificationMethod) findings.push(finding('UNTESTABLE_REQUIREMENT', 'HIGH', `${requirement.id} is not verifiable.`, requirement.id, 'Add acceptance criteria and verification method.'));
-    if (/delete all audit evidence/i.test(requirement.statement)) findings.push(finding('REQUIREMENT_CONTRADICTION', 'CRITICAL', `${requirement.id} contradicts immutable audit control.`, requirement.id, 'Remove or explicitly resolve the contradiction with the control owner.'));
+  if (!artifact?.draftHash || artifact.draftHash !== architectureDraftHash(changeCase, artifact)) {
+    findings.push(finding('ARCHITECTURE_DRAFT_INTEGRITY_INVALID', 'CRITICAL', 'The saved architecture draft hash does not match its contents.', 'architecture', 'Discard the altered draft and reconstruct it from the accepted requirements and pinned source.'));
   }
-  changeCase.artifacts.requirements = { requirements, mutationCoverage: { checked: ['missing', 'ambiguous', 'contradictory', 'untestable'], detected: findings.map((entry) => entry.code) } };
-  return findings.length ? fail('requirements-quality', requirements.map((entry) => entry.id), findings) : pass('requirements-quality', requirements.map((entry) => entry.id));
+  if (!Array.isArray(artifact?.options) || artifact.options.length < 2) findings.push(finding('ARCHITECTURE_ALTERNATIVES_REQUIRED', 'HIGH', 'At least two comparable architecture options are required.', 'architecture', 'Keep two or more stable-ID options with tradeoffs.'));
+  const ids = new Set();
+  for (const option of Array.isArray(artifact?.options) ? artifact.options : []) {
+    if (!option || typeof option !== 'object' || Array.isArray(option)) {
+      findings.push(finding('ARCHITECTURE_OPTION_INVALID', 'HIGH', 'Each architecture option must be a structured record.', 'architecture', 'Restore a valid saved option.'));
+      continue;
+    }
+    if (!option.id || ids.has(option.id)) findings.push(finding('ARCHITECTURE_OPTION_ID_INVALID', 'HIGH', 'Architecture option IDs must be present and unique.', option.id ?? 'architecture', 'Use stable distinct option IDs.'));
+    ids.add(option.id);
+    for (const field of ['name', 'summary', 'dataOwnership', 'rollbackForwardRecovery']) {
+      if (typeof option[field] !== 'string' || !option[field].trim() || option[field].trim().length > 1_000) findings.push(finding('ARCHITECTURE_OPTION_FIELD_INVALID', 'HIGH', `${option.id} needs a valid ${field}.`, option.id, `Provide ${field} within 1,000 characters.`));
+    }
+    for (const field of ['tradeoffs', 'interfaces', 'dependencies', 'healthCriteria']) {
+      if (!Array.isArray(option[field]) || option[field].length < 1 || option[field].some((value) => typeof value !== 'string' || !value.trim() || value.length > 500)) findings.push(finding('ARCHITECTURE_OPTION_LIST_INVALID', 'HIGH', `${option.id} needs nonempty ${field}.`, option.id, `Provide one or more ${field} entries.`));
+    }
+    if (!Array.isArray(option.migration) || option.migration.length < 2
+      || option.migration.some((entry, index) => entry?.step !== index + 1 || typeof entry.action !== 'string' || !entry.action.trim() || typeof entry.healthCheck !== 'string' || !entry.healthCheck.trim())) {
+      findings.push(finding('ARCHITECTURE_MIGRATION_INVALID', 'HIGH', `${option.id} needs ordered migration steps with health checks.`, option.id, 'Provide sequential migration steps and a health check for each.'));
+    }
+  }
+  if (!ids.has(artifact.selectedOptionId)) findings.push(finding('ARCHITECTURE_SELECTION_INVALID', 'HIGH', 'The selected architecture option does not exist.', 'architecture', 'Select one of the saved alternatives.'));
+  if (typeof artifact.selectionRationale !== 'string' || !artifact.selectionRationale.trim() || artifact.selectionRationale.trim().length > 1_000) findings.push(finding('ARCHITECTURE_RATIONALE_INVALID', 'HIGH', 'The selection needs a rationale of 1–1,000 characters.', 'architecture', 'Explain why this option best fits the accepted requirements and saved design.'));
+  const selected = artifact.options?.find((option) => option?.id === artifact.selectedOptionId);
+  if (selected) {
+    const selectedText = JSON.stringify(selected).toLowerCase();
+    if (/\bdirect(?:ly)?\s+(?:(?:database|db)\s+)?writ(?:e|es|ing)\b|\bwrit(?:e|es|ing)\b.{0,35}\bdirectly\b|cross[- ]system.{0,50}(?:database|db)\s+writ/i.test(selectedText)) {
+      findings.push(finding('ARCHITECTURE_CROSS_SYSTEM_WRITE', 'CRITICAL', 'The selected option proposes a direct database write.', selected.id, 'Route writes through the authoritative system’s owned API.'));
+    }
+    if (/bypass.{0,40}(authori[sz]ation|approval|requester)|skip.{0,30}(authori[sz]ation|approval)|no authori[sz]ation/i.test(selectedText)) {
+      findings.push(finding('ARCHITECTURE_AUTHORITY_BYPASS', 'CRITICAL', 'The selected option bypasses an authorization or approval boundary.', selected.id, 'Preserve the required authority and approval checks in every write path.'));
+    }
+    const migration = Array.isArray(selected.migration) ? selected.migration : [];
+    for (const [index, step] of migration.entries()) {
+      const action = step?.action?.toLowerCase() ?? '';
+      const removesSchema = /\b(drop|remove|replace|delete|decommission)\b.{0,60}\b(schema|table|column|field|database|db|legacy store|old store)\b/.test(action);
+      if (!removesSchema) continue;
+      const compatibilityEstablishedEarlier = migration.slice(0, index).some((prior) => {
+        const evidence = `${prior?.action ?? ''} ${prior?.healthCheck ?? ''}`.toLowerCase();
+        return /\b(backward compatib\w*|compatib\w*|coexist\w*|reconcil\w*|expand\w*|shadow\w*|parity)\b/.test(evidence);
+      });
+      if (!compatibilityEstablishedEarlier) {
+        findings.push(finding('ARCHITECTURE_MIGRATION_INCOMPATIBLE', 'CRITICAL', 'A migration removes or replaces existing schema before an earlier step establishes compatibility.', selected.id, 'Verify expand, coexistence or reconciliation health in an earlier migration step before removing old schema.'));
+        break;
+      }
+    }
+  }
+  const requirementBaseline = changeCase.artifacts.requirements?.acceptedBaseline;
+  if (!requirementBaselineValid(changeCase) || artifact.requirementsBaselineHash !== requirementBaseline?.contentHash || artifact.requirementsBaselineVersion !== requirementBaseline?.version) {
+    findings.push(finding('ARCHITECTURE_REQUIREMENTS_BINDING_INVALID', 'CRITICAL', 'The architecture draft is not bound to the current accepted requirements baseline.', 'architecture', 'Rebuild the draft from the accepted G4 requirements baseline.'));
+  }
+  if (artifact.sourceHash !== changeCase.sourceBinding?.sourceHash || artifact.intentHash !== intentHash(changeCase.intent)) findings.push(finding('ARCHITECTURE_SOURCE_BINDING_INVALID', 'CRITICAL', 'The architecture draft is not bound to the pinned source and current intent.', 'architecture', 'Rebuild the draft from the current pinned source and intent.'));
+  return findings;
+}
+
+function architectureBaselineValid(changeCase) {
+  const artifact = changeCase.artifacts.architecture;
+  const baseline = artifact?.acceptedBaseline;
+  if (!changeCase.sourceBinding || !baseline || !requirementBaselineValid(changeCase)) return false;
+  const core = {
+    architectureId: baseline.architectureId, revision: baseline.draftRevision,
+    options: baseline.options, selectedOptionId: baseline.selectedOptionId,
+    selectionRationale: baseline.selectionRationale,
+    requirementsBaseline: { version: baseline.requirementsBaselineVersion, contentHash: baseline.requirementsBaselineHash },
+    sourceHash: baseline.sourceHash, intentHash: baseline.intentHash,
+  };
+  try {
+    return baseline.version === 1
+    && baseline.draftRevision === artifact.draftRevision
+    && baseline.draftHash === digest(core)
+    && baseline.draftHash === architectureDraftHash(changeCase, artifact)
+    && baseline.requirementsBaselineHash === changeCase.artifacts.requirements.acceptedBaseline.contentHash
+    && baseline.requirementsBaselineVersion === changeCase.artifacts.requirements.acceptedBaseline.version
+    && baseline.sourceHash === changeCase.sourceBinding.sourceHash
+    && baseline.intentHash === intentHash(changeCase.intent)
+      && architectureValidation(changeCase, artifact).length === 0;
+  } catch {
+    return false;
+  }
+}
+
+export function verifyAcceptedG6Plan(changeCase) {
+  normalizeChangeCase(changeCase);
+  const plan = changeCase.artifacts?.plan;
+  const architecture = changeCase.artifacts?.architecture?.acceptedBaseline;
+  const g6Passed = changeCase.gateHistory?.some((entry) => entry.gate === 'G6' && entry.status === 'PASSED');
+  const workItems = plan?.workItems;
+  const workIds = Array.isArray(workItems) ? workItems.map((item) => item?.id) : [];
+  const uniqueWorkIds = workIds.every((id) => typeof id === 'string' && id.length > 0) && new Set(workIds).size === workIds.length;
+  const valid = Boolean(changeCase.sourceBinding && verifySourceBinding(changeCase.sourceBinding).valid
+    && requirementBaselineValid(changeCase) && architectureBaselineValid(changeCase)
+    && g6Passed && plan?.contentHash && Array.isArray(workItems) && workItems.length > 0
+    && digest(workItems) === plan.contentHash
+    && workItems.every((item) => item.architectureBaselineHash === architecture.draftHash)
+    && uniqueWorkIds
+    && workItems.every((item) => Array.isArray(item.dependencies) && item.dependencies.every((dependency) => workIds.includes(dependency) && dependency !== item.id)
+      && Array.isArray(item.requirementRefs) && item.requirementRefs.every((ref) => typeof ref === 'string')
+      && Array.isArray(item.decisionRefs) && item.decisionRefs.every((ref) => typeof ref === 'string')
+      && typeof item.contextPackageRef === 'string' && item.contextPackageRef.length > 0));
+  return { valid, planHash: valid ? plan.contentHash : null, reason: valid ? null : 'Accepted G4, G5, source, or G6 plan integrity/binding is invalid.' };
+}
+
+function initialArchitectureDraft(changeCase) {
+  const requirementBaseline = changeCase.artifacts.requirements.acceptedBaseline;
+  const options = [
+    {
+      id: 'ARCH-OPT-API-OUTBOX', name: 'Owned API with transactional outbox',
+      summary: 'The Party API owns writes and publishes versioned changes through an outbox.',
+      tradeoffs: ['Strong data ownership and durable publication.', 'Requires outbox operations and consumer reconciliation.'],
+      interfaces: ['POST /beneficial-owner-changes', 'ownership-change.v1'],
+      dataOwnership: 'Party MDM remains authoritative; only its owned API writes records.',
+      dependencies: ['Corporate mandate and IAM check', 'Party MDM API', 'Transactional outbox', 'CRM/reporting consumers'],
+      migration: [
+        { step: 1, action: 'Add the versioned API and event contract in shadow mode.', healthCheck: 'Contract tests pass; no production traffic moves.' },
+        { step: 2, action: 'Enable API writes and outbox publication for a limited cohort.', healthCheck: 'Write parity and event lag remain within agreed limits.' },
+        { step: 3, action: 'Expand consumers and retire the legacy intake after reconciliation.', healthCheck: 'Reconciled counts and control outcomes match.' },
+      ],
+      healthCriteria: ['API availability ≥ 99.9% during the rollout window.', 'Outbox lag stays below 60 seconds.', 'Every active change has an authorization and screening record.'],
+      rollbackForwardRecovery: 'Disable digital intake, retain accepted records and evidence, drain or reconcile the outbox, then restore traffic only after counts match.',
+    },
+    {
+      id: 'ARCH-OPT-API-SYNC', name: 'Owned API with synchronous consumer updates',
+      summary: 'The Party API remains the sole writer and synchronously coordinates downstream consumers.',
+      tradeoffs: ['Simpler initial deployment and immediate downstream visibility.', 'Higher latency and a wider failure surface when any consumer is unavailable.'],
+      interfaces: ['POST /beneficial-owner-changes', 'CRM/reporting owned APIs'],
+      dataOwnership: 'Party MDM remains authoritative; downstream systems update only through their owned APIs.',
+      dependencies: ['Corporate mandate and IAM check', 'Party MDM API', 'CRM API', 'Reporting API'],
+      migration: [
+        { step: 1, action: 'Add consumer API contracts and idempotent correlation keys.', healthCheck: 'All consumer contract and timeout tests pass.' },
+        { step: 2, action: 'Run synchronous fan-out for a limited cohort.', healthCheck: 'Latency, retry and partial-failure metrics stay within limits.' },
+        { step: 3, action: 'Expand only after reconciliation and recovery drills pass.', healthCheck: 'Repeated requests create one logical update per system.' },
+      ],
+      healthCriteria: ['End-to-end API availability ≥ 99.5% during rollout.', 'P95 completion stays below 5 seconds.', 'Partial consumer failure is surfaced and reconciled without duplicate updates.'],
+      rollbackForwardRecovery: 'Stop new digital submissions, replay only idempotent incomplete consumer updates from the correlation ledger, reconcile each system, then resume the cohort.',
+    },
+  ];
+  const artifact = {
+    architectureId: id('architecture'), draftRevision: 1, options,
+    selectedOptionId: options[0].id,
+    selectionRationale: 'The outbox option preserves authoritative ownership and permits downstream recovery without holding the customer request open.',
+    requirementsBaselineVersion: requirementBaseline.version,
+    requirementsBaselineHash: requirementBaseline.contentHash,
+    sourceHash: changeCase.sourceBinding.sourceHash, intentHash: intentHash(changeCase.intent),
+    draftHistory: [], validationFindings: [], acceptedBaseline: null,
+  };
+  artifact.draftHash = architectureDraftHash(changeCase, artifact);
+  return artifact;
+}
+
+export function editArchitectureDraft(changeCase, command = {}) {
+  normalizeChangeCase(changeCase);
+  const { key, requestHash, replayed } = commandKey(changeCase, command, 'edit-architecture');
+  if (replayed) return { changeCase, replayed: true };
+  const artifact = changeCase.artifacts.architecture;
+  if (!changeCase.sourceBinding || changeCase.currentStage !== 'S5' || !artifact || artifact.acceptedBaseline) throw commandError('Architecture is not open for editing.', 409);
+  if (!artifact.draftHash || artifact.draftHash !== architectureDraftHash(changeCase, artifact)) throw commandError('Architecture draft integrity failed; it cannot be edited or accepted.', 409);
+  if (command.expectedDraftRevision !== artifact.draftRevision) throw commandError(`Architecture draft revision conflict: current revision is ${artifact.draftRevision}.`, 409);
+  const changes = command.changes;
+  if (!changes || typeof changes !== 'object' || Array.isArray(changes) || !Object.keys(changes).length) throw commandError('Architecture changes must be a nonempty object.');
+  const optionFields = ['name', 'summary', 'tradeoffs', 'interfaces', 'dataOwnership', 'dependencies', 'migration', 'healthCriteria', 'rollbackForwardRecovery'];
+  const draftFields = ['selectedOptionId', 'selectionRationale'];
+  if (Object.keys(changes).some((field) => !optionFields.includes(field) && !draftFields.includes(field))) throw commandError('These architecture fields are not editable.');
+  const optionId = safeText(command.optionId, 100) || null;
+  if (optionFields.some((field) => Object.hasOwn(changes, field)) && !optionId) throw commandError('Select the architecture option being edited.');
+  for (const [field, value] of Object.entries(changes)) {
+    if (['selectedOptionId', 'selectionRationale', 'name', 'summary', 'dataOwnership', 'rollbackForwardRecovery'].includes(field)
+      && typeof value !== 'string') throw commandError(`${field} must be text.`);
+    if (['tradeoffs', 'interfaces', 'dependencies', 'healthCriteria'].includes(field)
+      && (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string'))) throw commandError(`${field} must be a list of text entries.`);
+    if (field === 'migration' && (!Array.isArray(value) || value.some((entry) => !entry || typeof entry !== 'object' || Array.isArray(entry)))) throw commandError('migration must be a list of ordered steps.');
+  }
+  if (optionId) {
+    const option = artifact.options.find((entry) => entry.id === optionId);
+    if (!option) throw commandError('Architecture option not found.', 404);
+    for (const field of optionFields) if (Object.hasOwn(changes, field)) option[field] = structuredClone(changes[field]);
+  }
+  if (Object.hasOwn(changes, 'selectedOptionId')) artifact.selectedOptionId = changes.selectedOptionId;
+  if (Object.hasOwn(changes, 'selectionRationale')) artifact.selectionRationale = changes.selectionRationale;
+  artifact.draftRevision += 1;
+  artifact.draftHash = architectureDraftHash(changeCase, artifact);
+  artifact.validationFindings = architectureValidation(changeCase, artifact);
+  const actor = safeText(command.actor, 120) || changeCase.accountableOwner;
+  artifact.draftHistory.push({ revision: artifact.draftRevision, optionId, changes: structuredClone(changes), actor, at: now() });
+  return finishCommand(changeCase, key, requestHash, 'edit-architecture', actor, 'ArchitectureDraftEdited', { draftRevision: artifact.draftRevision, optionId, changedFields: Object.keys(changes).sort(), draftHash: artifact.draftHash });
+}
+
+function sourceBoundArchitectureDesign(changeCase) {
+  let artifact = changeCase.artifacts.architecture;
+  if (!artifact) artifact = changeCase.artifacts.architecture = initialArchitectureDraft(changeCase);
+  artifact.validationFindings = architectureValidation(changeCase, artifact);
+  if (artifact.validationFindings.length) return fail('architecture-conformance', [artifact.architectureId], artifact.validationFindings);
+  if (!architectureBaselineValid(changeCase)) return fail('architecture-conformance', [artifact.architectureId], [finding('OWNER_ACCEPTANCE_REQUIRED', 'HIGH', 'Architecture alternatives are ready for owner review but have not been accepted.', artifact.architectureId, 'Compare the alternatives and explicitly accept the selected architecture to pass G5.')], 'NEEDS_HUMAN');
+  const baseline = artifact.acceptedBaseline;
+  const selected = baseline.options.find((entry) => entry.id === baseline.selectedOptionId);
+  const change = {
+    id: baseline.architectureId, baselineRefs: ['system-portal', 'system-customer-api', 'system-party-mdm', 'system-kyc', 'system-events'],
+    targetRefs: ['service-repository'], additions: selected.interfaces, modifications: ['Corporate Portal submission journey', 'KYC screening orchestration'], removals: [],
+    dataFlows: selected.interfaces.map((mechanism) => ({ from: 'system-portal', to: 'system-customer-api', mechanism, data: 'beneficial-owner change' })),
+    trustBoundaries: ['Portal → IAM', 'API → synthetic Authlayer policy', 'KYC → human review'], interfaces: selected.interfaces,
+    dataOwnership: selected.dataOwnership, dependencies: selected.dependencies, migration: selected.migration,
+    rollback: selected.rollbackForwardRecovery, healthCriteria: selected.healthCriteria,
+    fitnessFunctions: ['no-cross-system-db-write', 'required-authority-path', 'event-consumer-coverage', 'rollback-present'],
+    requirementsBaselineHash: baseline.requirementsBaselineHash, sourceHash: baseline.sourceHash,
+  };
+  const decision = {
+    id: 'ADR-ARCH-001', problem: 'Choose a recoverable architecture for the saved-design change.',
+    alternatives: baseline.options.map(({ id: optionId, name, summary, tradeoffs }) => ({ id: optionId, name, summary, tradeoffs })),
+    selectedOptionId: selected.id, selectedOption: selected.name, rationale: baseline.selectionRationale,
+    requirementsSatisfied: requirementsForDesign(changeCase).map((entry) => entry.id),
+    requirementsBaselineHash: baseline.requirementsBaselineHash, principlesApplied: ['data-ownership', 'recoverability'],
+    impactedObjects: change.baselineRefs, risks: selected.tradeoffs, evidenceRefs: changeCase.artifacts.context.evidenceRefs,
+  };
+  change.contentHash = digest(change); decision.contentHash = digest(decision);
+  artifact.change = change; artifact.decisions = [decision];
+  artifact.fitnessResults = change.fitnessFunctions.map((name) => ({ name, status: 'PASS' }));
+  artifact.sourceModel = 'owner-accepted-source-bound-draft';
+  return pass('architecture-conformance', [change.id, decision.id]);
+}
+
+export function acceptArchitectureDraft(changeCase, command = {}) {
+  normalizeChangeCase(changeCase);
+  const { key, requestHash, replayed } = commandKey(changeCase, command, 'accept-architecture');
+  if (replayed) return { changeCase, replayed: true };
+  const artifact = changeCase.artifacts.architecture;
+  if (!changeCase.sourceBinding || changeCase.currentStage !== 'S5' || !artifact) throw commandError('The source-bound architecture gate is not awaiting acceptance.', 409);
+  if (artifact.acceptedBaseline) throw commandError('An accepted architecture baseline is already frozen.', 409);
+  if (command.expectedDraftRevision !== artifact.draftRevision) throw commandError(`Architecture draft revision conflict: current revision is ${artifact.draftRevision}.`, 409);
+  const actor = safeText(command.actor, 120);
+  if (!actor || actor !== changeCase.accountableOwner || actor !== changeCase.createdBy) {
+    const error = new Error('Only the case owner can accept the architecture baseline.');
+    error.statusCode = 403;
+    throw error;
+  }
+  artifact.validationFindings = architectureValidation(changeCase, artifact);
+  if (artifact.validationFindings.length) throw commandError('Architecture alternatives must pass validation before owner acceptance.', 409);
+  artifact.draftHash = architectureDraftHash(changeCase, artifact);
+  artifact.acceptedBaseline = {
+    version: 1, draftRevision: artifact.draftRevision, architectureId: artifact.architectureId,
+    options: structuredClone(artifact.options), selectedOptionId: artifact.selectedOptionId,
+    selectionRationale: artifact.selectionRationale, requirementsBaselineVersion: artifact.requirementsBaselineVersion,
+    requirementsBaselineHash: artifact.requirementsBaselineHash, sourceHash: artifact.sourceHash,
+    intentHash: artifact.intentHash, draftHash: artifact.draftHash, acceptedBy: actor, acceptedAt: now(),
+  };
+  if (!architectureBaselineValid(changeCase)) throw commandError('Accepted architecture failed integrity verification.', 409);
+  const stage = stageAt(changeCase.currentStageIndex);
+  const startedAt = now();
+  const result = sourceBoundArchitectureDesign(changeCase);
+  if (result.status !== 'PASSED') throw commandError('Accepted architecture did not satisfy the G5 fitness gate.', 409);
+  changeCase.evaluations.push(result);
+  changeCase.gateHistory.push(gateDecision(stage, result, result.id));
+  changeCase.stageRuns.push(stageRun(changeCase, stage, 'PASSED', startedAt, result.subjectRefs));
+  changeCase.metrics.stagePasses += 1;
+  changeCase.events.push(eventEnvelope(changeCase, 'GatePassed', actor, { stage: stage.id, gate: stage.gate, evaluationRef: result.id, status: result.status }, changeCase.events.at(-1)?.id));
+  changeCase.currentStageIndex += 1;
+  const next = stageAt(changeCase.currentStageIndex);
+  changeCase.currentStage = next?.id ?? null;
+  changeCase.status = next ? 'RUNNING' : 'PASSED';
+  return finishCommand(changeCase, key, requestHash, 'accept-architecture', actor, 'ArchitectureBaselineAccepted', {
+    draftRevision: artifact.draftRevision, baselineVersion: artifact.acceptedBaseline.version,
+    draftHash: artifact.draftHash, requirementsBaselineHash: artifact.requirementsBaselineHash,
+    sourceHash: artifact.sourceHash, intentHash: artifact.intentHash, gate: stage.gate,
+  });
 }
 
 function architectureDesign(changeCase) {
+  if (changeCase.sourceBinding) return sourceBoundArchitectureDesign(changeCase);
+  if (changeCase.sourceBinding && !requirementBaselineValid(changeCase)) {
+    return fail('architecture-conformance', ['accepted-requirements'], [finding('ACCEPTED_REQUIREMENTS_INVALID', 'CRITICAL', 'The accepted G4 requirements baseline failed integrity verification.', 'requirements', 'Restore or re-accept a validated requirements baseline before architecture work.')]);
+  }
   const change = {
     id: id('architecture-change'), baselineRefs: ['system-portal', 'system-customer-api', 'system-party-mdm', 'system-kyc', 'system-events'],
     targetRefs: ['service-repository'],
@@ -660,7 +1223,7 @@ function architectureDesign(changeCase) {
     interfaces: ['POST /beneficial-owner-changes', 'ownership-change.v1'], migration: 'Additive schema and dual-read projection before cutover', rollback: changeCase.mutation === 'missing_rollback' ? '' : 'Disable digital intake and drain/reconcile outbox; retain evidence', observability: 'Correlation ID, screening/review counters, propagation lag, manual-work measure',
     fitnessFunctions: ['no-cross-system-db-write', 'required-authority-path', 'event-consumer-coverage', 'rollback-present'],
   };
-  const decision = { id: 'ADR-BO-001', problem: 'Introduce digital ownership maintenance without bypassing controls.', options: ['Owned API and governed events', 'Portal writes Party MDM database'], selectedOption: 'Owned API and governed events', rationale: 'Preserves data ownership, authority, and downstream consistency.', requirementsSatisfied: changeCase.artifacts.requirements.requirements.map((entry) => entry.id), principlesApplied: ['principle-api', 'principle-authority'], impactedObjects: change.baselineRefs, risks: ['risk-incorrect-owner'], assumptions: ['Synthetic integration contracts are available'], evidenceRefs: changeCase.artifacts.context.evidenceRefs, approvalRefs: [] };
+  const decision = { id: 'ADR-BO-001', problem: 'Introduce digital ownership maintenance without bypassing controls.', options: ['Owned API and governed events', 'Portal writes Party MDM database'], selectedOption: 'Owned API and governed events', rationale: 'Preserves data ownership, authority, and downstream consistency.', requirementsSatisfied: requirementsForDesign(changeCase).map((entry) => entry.id), principlesApplied: ['principle-api', 'principle-authority'], impactedObjects: change.baselineRefs, risks: ['risk-incorrect-owner'], assumptions: ['Synthetic integration contracts are available'], evidenceRefs: changeCase.artifacts.context.evidenceRefs, approvalRefs: [] };
   const findings = [];
   if (change.dataFlows.some((flow) => /direct database/i.test(flow.mechanism))) findings.push(finding('CROSS_SYSTEM_DB_ACCESS', 'CRITICAL', 'Design bypasses the owning application service with direct database access.', change.id, 'Use the versioned Customer / Party API and owned repository boundary.'));
   if (change.trustBoundaries.some((entry) => /directly marks/i.test(entry))) findings.push(finding('AUTHORITY_PATH_BYPASS', 'CRITICAL', 'Design lets the requester assert protected authority.', change.id, 'Route authority through IAM/Authlayer policy and durable approvals.'));
@@ -684,7 +1247,18 @@ function hasCycle(workItems) {
 }
 
 function deliveryPlanning(changeCase) {
-  const requirementIds = changeCase.artifacts.requirements.requirements.map((entry) => entry.id);
+  if (changeCase.sourceBinding && !requirementBaselineValid(changeCase)) {
+    return fail('plan-executability', ['accepted-requirements'], [finding('ACCEPTED_REQUIREMENTS_INVALID', 'CRITICAL', 'The accepted G4 requirements baseline failed integrity verification.', 'requirements', 'Restore or re-accept a validated requirements baseline before planning.')]);
+  }
+  if (changeCase.sourceBinding && !architectureBaselineValid(changeCase)) {
+    return fail('plan-executability', ['accepted-architecture'], [finding('ACCEPTED_ARCHITECTURE_INVALID', 'CRITICAL', 'The accepted G5 architecture baseline failed integrity verification.', 'architecture', 'Restore or re-accept a valid architecture baseline before planning.')]);
+  }
+  const requirements = requirementsForDesign(changeCase);
+  const requirementIds = requirements.map((entry) => entry.id);
+  const acceptedArchitecture = changeCase.sourceBinding ? changeCase.artifacts.architecture.acceptedBaseline : null;
+  const architectureRefs = acceptedArchitecture
+    ? [acceptedArchitecture.architectureId, acceptedArchitecture.selectedOptionId, acceptedArchitecture.draftHash]
+    : ['ADR-BO-001', changeCase.artifacts.architecture.change.id];
   const definitions = [
     ['WORK-1', 'Define versioned API, event, and data contracts', ['REQ-FUN-1', 'REQ-DATA-1', 'REQ-INT-1'], []],
     ['WORK-2', 'Implement authorization and idempotent intake', ['REQ-BUS-1', 'REQ-SEC-1', 'REQ-OPS-1'], ['WORK-1']],
@@ -700,16 +1274,16 @@ function deliveryPlanning(changeCase) {
   const workItems = definitions.map(([itemId, objective, refs, dependencies]) => {
     const contextPackage = {
       id: id('context-package'), task: itemId, objective, requirements: refs,
-      acceptanceCriteria: refs.flatMap((ref) => changeCase.artifacts.requirements.requirements.find((entry) => entry.id === ref)?.acceptanceCriteria ?? []),
-      architecture: ['ADR-BO-001', changeCase.artifacts.architecture.change.id],
-      enterpriseObjects: [...new Set(refs.flatMap((ref) => changeCase.artifacts.requirements.requirements.find((entry) => entry.id === ref)?.affectedObjects ?? []))],
+      acceptanceCriteria: refs.flatMap((ref) => requirements.find((entry) => entry.id === ref)?.acceptanceCriteria ?? []),
+      architecture: architectureRefs,
+      enterpriseObjects: [...new Set(refs.flatMap((ref) => requirements.find((entry) => entry.id === ref)?.affectedObjects ?? []))],
       contracts: itemId === 'WORK-1' ? ['POST /beneficial-owner-changes', 'ownership-change.v1'] : [],
       constraints: changeCase.intent.constraints, tests: ['unit', 'contract', 'integration', 'security'],
       provenanceManifest: changeCase.artifacts.context.provenanceManifestHash,
       exclusions: ['Real customer data', 'Production credentials', 'Legal interpretation'], tokenBudget: 8_000,
     };
     contextPackage.contentHash = digest(contextPackage); packages.push(contextPackage);
-    return { id: itemId, objective, requirementRefs: refs, decisionRefs: ['ADR-BO-001'], scope: 'beneficial-owner-reference-service', repository: 'synthetic/reference-service', component: itemId === 'WORK-5' ? 'event-consumers' : 'beneficial-owner-service', dependencies, acceptanceCriteria: contextPackage.acceptanceCriteria, contextPackageRef: contextPackage.id, risk: refs.some((ref) => ref.includes('SEC') || ref.includes('CTL')) ? 'HIGH' : 'MEDIUM', verificationRefs: [] };
+    return { id: itemId, objective, requirementRefs: refs, decisionRefs: acceptedArchitecture ? ['ADR-ARCH-001', acceptedArchitecture.selectedOptionId] : ['ADR-BO-001'], architectureBaselineHash: acceptedArchitecture?.draftHash ?? null, scope: 'beneficial-owner-reference-service', repository: 'synthetic/reference-service', component: itemId === 'WORK-5' ? 'event-consumers' : 'beneficial-owner-service', dependencies, acceptanceCriteria: contextPackage.acceptanceCriteria, contextPackageRef: contextPackage.id, risk: refs.some((ref) => ref.includes('SEC') || ref.includes('CTL')) ? 'HIGH' : 'MEDIUM', verificationRefs: [] };
   });
   const covered = new Set(workItems.flatMap((entry) => entry.requirementRefs));
   const orphan = requirementIds.filter((ref) => !covered.has(ref));

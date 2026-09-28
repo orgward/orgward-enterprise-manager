@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { verifyBlueprintProposalEvaluation } from './execution/proposals.mjs';
 
 export const AREA_DEFINITIONS = [
   ['purposeStrategy', 'Purpose & strategy'],
@@ -303,6 +304,7 @@ export function createBlueprint(project) {
   const relations = buildRelations(areas);
   const blueprint = {
     id: `blueprint-${randomUUID()}`,
+    blueprintSchemaVersion: 1,
     version: project.blueprintVersions.length + 1,
     createdAt: new Date().toISOString(),
     title: `${businessName} organisational blueprint`,
@@ -859,6 +861,13 @@ export function editBlueprintObject(project, payload, actor) {
 }
 
 export function applyBlueprintProposal(project, proposal, actor) {
+  verifyBlueprintProposalEvaluation(proposal);
+  if (proposal?.evaluation?.evaluatorVersion !== 1
+    || proposal.evaluation.rubricVersion !== 1
+    || proposal.evaluation.meaning !== 'structural-checks-only'
+    || proposal.evaluation.status !== 'passed') {
+    editFailure('The proposal is blocked by its structural evaluation and cannot be applied.', 'BLUEPRINT_PROPOSAL_EVALUATION_BLOCKED', 409);
+  }
   const previous = latestBlueprint(project);
   if (!previous || previous.id !== proposal?.blueprintId || previous.version !== proposal?.blueprintVersion) {
     editFailure('The proposal is pinned to an older blueprint version. Review it against the current design and request a new proposal.', 'BLUEPRINT_PROPOSAL_STALE', 409);

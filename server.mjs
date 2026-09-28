@@ -5,17 +5,18 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { addConversationTurn, applyBlueprintProposal, createProject, editBlueprintObject, editProcessTaskGraph, graphForBlueprint, latestBlueprint, planProcessTaskGraph, publishBlueprintInternally } from './src/model.mjs';
 import { ProjectStore } from './src/store.mjs';
-import { MUTATIONS, STAGES } from './src/sdlc/contracts.mjs';
-import { PROOF_ACTION_ATTEMPT_LIMIT, advanceCase, answerClarification, approveRelease, assessProofs, commandRequestHash, completeProofAction, createChangeCase, normalizeChangeCase, openClarification, reconcileClarification, recordObservation, recordProofResult, registerProofObligation, releaseApprovalCandidate, resumeProofAction, routeProofResult, runToCheckpoint, traceability, verifyEvidenceLedger, workspaceStatus } from './src/sdlc/engine.mjs';
+import { MUTATIONS, STAGES, digest } from './src/sdlc/contracts.mjs';
+import { PROOF_ACTION_ATTEMPT_LIMIT, acceptArchitectureDraft, acceptRequirementDraft, advanceCase, answerClarification, approveRelease, assessProofs, commandRequestHash, completeProofAction, createChangeCase, editArchitectureDraft, editRequirementDraft, normalizeChangeCase, openClarification, pinProjectSourceObject, reconcileClarification, recordObservation, recordProofResult, registerProofObligation, releaseApprovalCandidate, resumeProofAction, routeProofResult, runToCheckpoint, traceability, verifyAcceptedG6Plan, verifyEvidenceLedger, verifySourceBinding, workspaceStatus } from './src/sdlc/engine.mjs';
+import { compileSoftwareDeliveryDraft, verifySoftwareDeliveryDraft } from './src/sdlc/software-plan-compiler.mjs';
 import { ChangeCaseStore } from './src/sdlc/store.mjs';
 import { EXECUTION_STATUSES } from './src/execution/contracts.mjs';
 import { ExecutionService } from './src/execution/service.mjs';
-import { verifyGeneratedBlueprintProposal } from './src/execution/proposals.mjs';
+import { blueprintProposalEvaluationFailure, verifyGeneratedBlueprintProposal } from './src/execution/proposals.mjs';
 import { PostgresPersistence } from './src/platform/postgres.mjs';
 import { OidcAuthenticator } from './src/platform/oidc.mjs';
 import { OidcLoginFlow } from './src/platform/oidc-login.mjs';
 import { PostgresOidcSessionStore } from './src/platform/oidc-sessions.mjs';
-import { LegacyImporter, PostgresChangeCaseStore, PostgresExecutionRunStore, PostgresProjectStore } from './src/platform/postgres-stores.mjs';
+import { hasVerifiedHumanTaskSuccess, LegacyImporter, PostgresChangeCaseStore, PostgresExecutionRunStore, PostgresProjectStore } from './src/platform/postgres-stores.mjs';
 import { PostgresSecretStore } from './src/platform/secrets.mjs';
 import { parseInstallConfig } from './src/platform/install-config.mjs';
 
@@ -169,6 +170,55 @@ async function readJson(request) {
   } catch {
     throw apiFailure(400, 'INVALID_JSON', 'Request body must be valid JSON.');
   }
+}
+
+function requireJsonObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw apiFailure(400, 'INVALID_REQUEST_BODY', 'Request body must be a JSON object.');
+  }
+  return value;
+}
+
+async function requireCurrentSourceBinding(changeCase, store, request) {
+  const binding = changeCase.sourceBinding;
+  if (!binding) return;
+  if (!verifySourceBinding(binding).valid) {
+    throw apiFailure(409, 'SOURCE_BINDING_INTEGRITY_INVALID', 'The pinned saved-design source failed its integrity check. This case is read-only; create a new case from a verified saved design.', {
+      recoveryActions: [{ type: 'create_new_case', label: 'Create a new case from a verified saved design' }],
+    });
+  }
+  if (request.identity) requirePrincipalStoreMethod(store, 'getWithPrincipalAuthority');
+  let project = request.identity
+    ? await store.getWithPrincipalAuthority({
+      id: binding.projectId, tenantId: requestTenant(request), principal: requestActor(request),
+      anyPrincipalRoleGroups: [['workspace-read', 'workspace-write', 'tenant-admin']],
+      authzGeneration: request.identity.authzGeneration,
+      operation: (current) => current,
+    })
+    : await store.get(binding.projectId, requestTenant(request));
+  if (!project) throw apiFailure(404, 'SOURCE_PROJECT_NOT_FOUND', 'The pinned project source is no longer available; this case is read-only.');
+  project = normalizeProject(project, { tenantId: requestTenant(request) });
+  if (project.version !== binding.projectVersion) {
+    throw apiFailure(409, 'SOURCE_BINDING_STALE', 'The pinned source is from an older saved design. This case is read-only; create a new case from the current saved design.', {
+      recoveryActions: [{ type: 'create_new_case', label: 'Create a new case from the current saved design' }],
+    });
+  }
+  const blueprint = latestBlueprint(project);
+  if (blueprint?.id !== binding.blueprintId || blueprint?.version !== binding.blueprintVersion) {
+    throw apiFailure(409, 'SOURCE_BINDING_STALE', 'The pinned source is from an older saved design. This case is read-only; create a new case from the current blueprint to continue.', {
+      recoveryActions: [{ type: 'create_new_case', label: 'Create a new case from the current blueprint' }],
+    });
+  }
+  const currentBinding = pinProjectSourceObject(project, {
+    projectId: project.id, sourceObjectId: binding.objectId, expectedProjectVersion: project.version,
+    expectedBlueprintId: blueprint.id, expectedBlueprintVersion: blueprint.version,
+  });
+  if (currentBinding.sourceHash !== binding.sourceHash) {
+    throw apiFailure(409, 'SOURCE_BINDING_STALE', 'The pinned design object changed. This case is read-only; create a new case from the current blueprint to continue.', {
+      recoveryActions: [{ type: 'create_new_case', label: 'Create a new case from the current blueprint' }],
+    });
+  }
+  return project;
 }
 
 function projectView(project) {
@@ -601,7 +651,7 @@ async function productGateStatus(statusFile) {
 
 function sdlcView(changeCase) {
   normalizeChangeCase(changeCase);
-  return { ...changeCase, workspace: workspaceStatus(changeCase), traceability: traceability(changeCase), evidenceIntegrity: verifyEvidenceLedger(changeCase) };
+  return { ...changeCase, sourceBindingIntegrity: changeCase.sourceBinding ? verifySourceBinding(changeCase.sourceBinding) : null, workspace: workspaceStatus(changeCase), traceability: traceability(changeCase), evidenceIntegrity: verifyEvidenceLedger(changeCase) };
 }
 
 function requireVersion(changeCase, suppliedVersion) {
@@ -682,6 +732,7 @@ export function createApp({
   executionWorkspaceDirectory = path.join(ROOT, 'data', 'execution-workspaces'),
   deliveryStatusFile = path.join(ROOT, 'DELIVERY-STATUS.json'),
   executionProfiles = [],
+  localRepositories = [],
   enableLocalExecution = false,
   databaseUrl = null,
   legacyDirectories = null,
@@ -719,7 +770,8 @@ export function createApp({
     sandbox: { readOnlyFiles: [path.join(ROOT, 'workers', 'scaffold-node-service.mjs')] },
     workspaceRoot: path.resolve(executionWorkspaceDirectory), timeoutMs: 60_000,
   };
-  const executionService = new ExecutionService({ runDirectory: executionDirectory, store: executionStore, secretStore, profiles: [...executionProfiles, ...(enableLocalExecution ? [localProfile] : [])] });
+  const executionService = new ExecutionService({ runDirectory: executionDirectory, store: executionStore, secretStore,
+    profiles: [...executionProfiles, ...(enableLocalExecution ? [localProfile] : [])], localRepositories });
   if (!persistence) {
     const resolveLocalProjectAccess = async ({ tenantId, projectId, principal, minimum = 'reader' }) => {
       const project = await store.getForPrincipal(projectId, tenantId, principal);
@@ -1519,6 +1571,140 @@ export function createApp({
         return sendApi(response, 200, projectView(result.project), { correlationId, event: result.project.events.at(-1), meta: { replayed: result.replayed } });
       }
 
+      const humanTaskOutputApplyMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/human-task-outputs\/apply$/);
+      if (request.method === 'POST' && humanTaskOutputApplyMatch) {
+        requireWriteAccess(request);
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified workspace owner must apply a human task output.');
+        const body = validateCommand(await readJson(request));
+        const payload = body.payload;
+        const allowed = ['planId', 'revision', 'planInstanceId', 'taskId', 'outputObjectId',
+          'blueprintId', 'blueprintVersion', 'before', 'detail'];
+        const payloadKeys = Object.keys(payload);
+        if (payloadKeys.length !== allowed.length || payloadKeys.some((field) => !allowed.includes(field))) {
+          throw apiFailure(400, 'INVALID_HUMAN_TASK_OUTPUT', 'Provide the exact saved task output reference, pinned value, and owner-entered detail.');
+        }
+        if (!/^(?:process-plan-[0-9a-f-]{36}|software-delivery-[a-f0-9]{32})$/i.test(payload.planId ?? '')
+          || !Number.isSafeInteger(payload.revision) || payload.revision < 1
+          || !/^[0-9a-f-]{36}$/i.test(payload.planInstanceId ?? '')
+          || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(payload.taskId ?? '')
+          || !/^[a-z0-9][a-z0-9_-]{0,119}$/i.test(payload.outputObjectId ?? '')
+          || typeof payload.blueprintId !== 'string' || !payload.blueprintId.trim()
+          || !Number.isSafeInteger(payload.blueprintVersion) || payload.blueprintVersion < 1
+          || typeof payload.before !== 'string' || payload.before.length > 700
+          || typeof payload.detail !== 'string' || !payload.detail.trim() || payload.detail.length > 700) {
+          throw apiFailure(400, 'INVALID_HUMAN_TASK_OUTPUT', 'Provide a valid pinned output and owner-entered detail of 1–700 characters.');
+        }
+        requirePrincipalStoreMethod(store, 'updateWithCommandForPrincipal');
+        const tenantId = requestTenant(request);
+        const actor = requestActor(request);
+        const projectId = humanTaskOutputApplyMatch[1];
+        const command = {
+          operation: 'project.apply-human-task-output',
+          commandId: body.commandId,
+          payloadHash: payloadHash({ schemaVersion: body.schemaVersion, expectedVersion: body.expectedVersion, payload }),
+          expectedVersion: body.expectedVersion,
+          async apply(project, client) {
+            normalizeProject(project, { tenantId, actor });
+            const identity = await client.query(`select actor_type,status from orgward.oidc_principals
+              where tenant_id=$1 and principal=$2 for share`, [tenantId, actor]);
+            if (!identity.rowCount || identity.rows[0].status !== 'active' || identity.rows[0].actor_type !== 'human') {
+              throw apiFailure(403, 'HUMAN_OWNER_REQUIRED', 'A current human project owner must apply this task output.');
+            }
+            const plan = (project.processPlans ?? []).find((candidate) => candidate.id === payload.planId
+              && Number(candidate.revision ?? 1) === payload.revision);
+            if (!plan || plan.source?.projectId !== projectId
+              || plan.source.blueprintId !== payload.blueprintId
+              || Number(plan.source.blueprintVersion) !== payload.blueprintVersion) {
+              throw apiFailure(409, 'HUMAN_TASK_OUTPUT_PIN_MISMATCH', 'The saved task or blueprint pin changed. Reload the task and review the current design.');
+            }
+            const task = plan.tasks?.find((candidate) => candidate.id === payload.taskId);
+            const outputs = task?.outputs;
+            const outputReferences = Array.isArray(outputs) ? outputs.filter((reference) => reference?.objectId === payload.outputObjectId
+              && reference.type === 'information') : [];
+            if (outputReferences.length !== 1) {
+              throw apiFailure(409, 'HUMAN_TASK_OUTPUT_NOT_DECLARED', 'This exact saved task does not declare that information output.');
+            }
+            if ((project.events ?? []).some((event) => event.type === 'HumanTaskOutputApplied'
+              && event.data?.projectId === projectId && event.data?.planId === payload.planId
+              && Number(event.data?.revision) === payload.revision
+              && event.data?.planInstanceId === payload.planInstanceId && event.data?.taskId === payload.taskId
+              && event.data?.outputObjectId === payload.outputObjectId)) {
+              throw apiFailure(409, 'HUMAN_TASK_OUTPUT_ALREADY_APPLIED', 'This task output was already applied. Review its saved owner-authored version.');
+            }
+            const latest = latestBlueprint(project);
+            if (!latest || latest.id !== payload.blueprintId || latest.version !== payload.blueprintVersion) {
+              throw apiFailure(409, 'HUMAN_TASK_OUTPUT_STALE_DESIGN', 'The saved design advanced beyond this task’s pinned blueprint. Review and reconcile the output against the current design.');
+            }
+            const original = Object.values(latest.areas ?? {}).flatMap((area) => area.items ?? [])
+              .find((candidate) => candidate.id === payload.outputObjectId);
+            if (!original || original.type !== 'information' || original.name !== outputReferences[0].label
+              || original.detail !== payload.before) {
+              throw apiFailure(409, 'HUMAN_TASK_OUTPUT_STALE_VALUE', 'The pinned output value changed. Review the current design before applying an owner-authored update.');
+            }
+            const selectedRuntime = await client.query(`select * from orgward.process_task_instances
+              where tenant_id=$1 and project_id=$2 and process_plan_id=$3 and plan_revision=$4
+                and plan_instance_id=$5 and task_id=$6 for share`,
+            [tenantId, projectId, payload.planId, payload.revision, payload.planInstanceId, payload.taskId]);
+            if (!selectedRuntime.rowCount) throw apiFailure(409, 'HUMAN_TASK_CHECKPOINT_UNAVAILABLE', 'The exact saved human checkpoint is unavailable.');
+            const runtime = selectedRuntime.rows[0];
+            if (runtime.actor_type !== 'human' || runtime.status !== 'SUCCEEDED'
+              || runtime.blueprint_id !== payload.blueprintId
+              || Number(runtime.blueprint_version) !== payload.blueprintVersion
+              || task.assignee?.actorId !== runtime.actor_id || task.assignee?.roleId !== runtime.role_id
+              || Object.values(latest.areas ?? {}).flatMap((area) => area.items ?? [])
+                .find((candidate) => candidate.id === task.assignee?.actorId)?.type !== 'actor-human'
+              || !(await hasVerifiedHumanTaskSuccess(client, runtime))) {
+              throw apiFailure(409, 'HUMAN_TASK_CHECKPOINT_UNVERIFIED', 'A verified succeeded human checkpoint is required before an owner can apply this output.');
+            }
+            const verifiedCompletionEvent = runtime.events?.find((event) =>
+              ['HumanTaskCompleted', 'HumanTaskEscalationResolved'].includes(event?.type)
+              && event.data?.taskId === payload.taskId && event.data?.processPlanId === payload.planId
+              && Number(event.data?.revision) === payload.revision
+              && event.data?.planInstanceId === payload.planInstanceId
+              && (event.type === 'HumanTaskCompleted' ? event.data?.result === 'succeeded'
+                : event.data?.disposition === 'succeeded'));
+            if (!verifiedCompletionEvent?.id || !/^[a-f0-9]{64}$/.test(verifiedCompletionEvent.contentHash ?? '')) {
+              throw apiFailure(409, 'HUMAN_TASK_CHECKPOINT_UNVERIFIED', 'The succeeded checkpoint has no verifiable source event for provenance.');
+            }
+            const blueprint = editBlueprintObject(project, {
+              objectId: original.id, name: original.name, detail: payload.detail.trim(),
+            }, actor);
+            const updated = Object.values(blueprint.areas).flatMap((area) => area.items)
+              .find((candidate) => candidate.id === original.id);
+            updated.provenance ??= [];
+            updated.provenance.push({ source: 'workspace:human-task-output',
+              note: 'Content explicitly entered by a workspace owner for a saved human task output. Human evidence remains contextual provenance and was not copied or treated as validation.',
+              actor, at: blueprint.createdAt, projectId, planId: payload.planId,
+              revision: payload.revision, planInstanceId: payload.planInstanceId,
+              taskId: payload.taskId, outputObjectId: original.id,
+              sourceEventId: verifiedCompletionEvent.id, sourceEventHash: verifiedCompletionEvent.contentHash,
+              contentHash: payloadHash({ detail: payload.detail.trim() }) });
+            project.version += 1;
+            project.updatedAt = blueprint.createdAt;
+            project.updatedBy = actor;
+            project.events.push(projectEvent(project, {
+              type: 'HumanTaskOutputApplied', actor, commandId: body.commandId, correlationId,
+              data: { projectId, planId: payload.planId, revision: payload.revision,
+                planInstanceId: payload.planInstanceId, taskId: payload.taskId,
+                outputObjectId: original.id, blueprintId: payload.blueprintId,
+                blueprintVersion: payload.blueprintVersion, appliedBlueprintId: blueprint.id,
+                appliedBlueprintVersion: blueprint.version,
+                humanTaskEventId: verifiedCompletionEvent.id,
+                humanTaskEventHash: verifiedCompletionEvent.contentHash,
+                contentHash: payloadHash({ detail: payload.detail.trim() }), evidenceContextOnly: true },
+            }));
+          },
+        };
+        const result = await store.updateWithCommandForPrincipal(projectId, tenantId, command, actor, {
+          requiredPrincipalRoles: ['workspace-write'], authzGeneration: request.identity.authzGeneration,
+          minimumProjectAccess: 'owner',
+        });
+        if (!result) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
+        return sendApi(response, 200, projectView(result.project), {
+          correlationId, event: result.project.events.at(-1), meta: { replayed: result.replayed },
+        });
+      }
+
       const blueprintProposalApplyMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/blueprint-proposals\/(execution-run-[0-9a-f-]{36})\/apply$/);
       if (request.method === 'POST' && blueprintProposalApplyMatch) {
         requireWriteAccess(request);
@@ -1539,6 +1725,8 @@ export function createApp({
         if (!run || run.projectId !== projectId) throw apiFailure(404, 'BLUEPRINT_PROPOSAL_NOT_FOUND', 'The saved proposal was not found in this project.');
         const proposal = run.execution?.generatedProposal;
         verifyGeneratedBlueprintProposal(run, proposal);
+        const evaluationFailure = blueprintProposalEvaluationFailure(proposal);
+        if (evaluationFailure) throw apiFailure(409, 'BLUEPRINT_PROPOSAL_EVALUATION_BLOCKED', evaluationFailure);
         if (proposal.proposalHash !== body.payload.proposalHash) {
           throw apiFailure(409, 'BLUEPRINT_PROPOSAL_HASH_MISMATCH', 'The proposal changed. Reload its saved review before applying.');
         }
@@ -1756,11 +1944,20 @@ export function createApp({
         return sendJson(response, 200, { statuses: EXECUTION_STATUSES, profiles: executionService.capabilities(), operationMode: readOnly ? 'read_only_legacy' : 'writable', productionReady: false });
       }
 
+      if (request.method === 'GET' && pathname === '/api/execution/local-repositories') {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified workspace identity is required to list local repositories.');
+        const projectId = url.searchParams.get('projectId');
+        if (!/^project-[0-9a-f-]{36}$/i.test(projectId ?? '')) throw apiFailure(400, 'INVALID_PROJECT', 'Choose a valid project.');
+        const repositories = await executionService.listLocalRepositories({ tenantId: requestTenant(request), projectId,
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration });
+        return sendJson(response, 200, { repositories });
+      }
+
       if (request.method === 'POST' && pathname === '/api/execution/process-task-runs') {
         const body = validateCommand(await readJson(request), { versionRequired: false });
         rejectAuthorityClaims(body);
         const allowedEnvelope = new Set(['schemaVersion', 'commandId', 'payload']);
-        const payloadFields = new Set(['projectId', 'planId', 'revision', 'planInstanceId', 'taskId', 'profileId']);
+        const payloadFields = new Set(['projectId', 'planId', 'revision', 'planInstanceId', 'taskId', 'profileId', 'repositoryId', 'repositoryRefId', 'repositoryCommitOid', 'snapshotDigest']);
         const unknownEnvelope = Object.keys(body).filter((field) => !allowedEnvelope.has(field));
         const unknownPayload = Object.keys(body.payload).filter((field) => !payloadFields.has(field));
         if (unknownEnvelope.length || unknownPayload.length) {
@@ -1773,17 +1970,29 @@ export function createApp({
         }
         const { projectId, planId, revision, planInstanceId, taskId, profileId } = body.payload;
         if (!/^project-[0-9a-f-]{36}$/i.test(projectId ?? '')
-          || !/^process-plan-[0-9a-f-]{36}$/i.test(planId ?? '')
+          || !/^(?:process-plan-[0-9a-f-]{36}|software-delivery-[a-f0-9]{32})$/i.test(planId ?? '')
           || !Number.isSafeInteger(revision) || revision < 1
           || (planInstanceId !== undefined && !/^[0-9a-f-]{36}$/i.test(planInstanceId ?? ''))
           || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(taskId ?? '')
           || !/^[a-z0-9][a-z0-9_-]{1,79}$/i.test(profileId ?? '')) {
           throw apiFailure(400, 'INVALID_PROCESS_TASK_REQUEST', 'Choose a valid saved project, graph revision, task, and configured profile.');
         }
+        if ((body.payload.repositoryId === undefined) !== (body.payload.snapshotDigest === undefined)
+          || (body.payload.repositoryRefId !== undefined && (body.payload.repositoryId === undefined
+            || !/^[a-z0-9][a-z0-9_-]{0,79}$/i.test(body.payload.repositoryRefId)
+            || !/^[a-f0-9]{40,64}$/.test(body.payload.repositoryCommitOid ?? '')))
+          || (body.payload.repositoryCommitOid !== undefined && body.payload.repositoryRefId === undefined)
+          || (body.payload.repositoryId !== undefined && (!/^[a-z0-9][a-z0-9_-]{1,79}$/i.test(body.payload.repositoryId)
+            || !/^[a-f0-9]{64}$/.test(body.payload.snapshotDigest)))) {
+          throw apiFailure(400, 'INVALID_LOCAL_REPOSITORY_BINDING', 'Choose a listed repository snapshot; host paths and incomplete bindings are not accepted.');
+        }
         if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified workspace identity is required to request work from a saved task.');
         const result = await executionService.createForProcessTask({
           tenantId: requestTenant(request), projectId, planId, revision, planInstanceId,
           taskId, profileId, commandId: body.commandId,
+          repositoryId: body.payload.repositoryId, repositoryRefId: body.payload.repositoryRefId,
+          repositoryCommitOid: body.payload.repositoryCommitOid,
+          snapshotDigest: body.payload.snapshotDigest,
           principal: requestActor(request), authzGeneration: request.identity.authzGeneration,
         });
         if (!result) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'The project or authorized membership was not found.');
@@ -1881,23 +2090,29 @@ export function createApp({
           authzGeneration: request.identity.authzGeneration,
         });
         if (instances === null) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'The project or authorized membership was not found.');
-        return sendJson(response, 200, { instances });
+        const runSnapshot = await executionService.list(requestTenant(request), requestActor(request), {
+          authzGeneration: request.identity.authzGeneration,
+        });
+        if (runSnapshot === null) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'The project or authorized membership was not found.');
+        const processSnapshot = Array.isArray(instances) ? { instances, plans: [] } : instances;
+        return sendJson(response, 200, { ...processSnapshot,
+          runs: runSnapshot.filter((run) => run.projectId === projectId) });
       }
 
-      const processInstanceControlMatch = pathname.match(/^\/api\/execution\/process-task-instances\/(pause|resume|abandon-unverified)$/);
+      const processInstanceControlMatch = pathname.match(/^\/api\/execution\/process-task-instances\/(pause|resume|cancel|abandon-unverified)$/);
       if (request.method === 'POST' && processInstanceControlMatch) {
         const body = validateCommand(await readJson(request), { versionRequired: false });
         rejectAuthorityClaims(body);
         if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified human identity is required to control this process instance.');
         const action = processInstanceControlMatch[1];
         const allowed = new Set(['projectId', 'planInstanceId', 'version',
-          ...(action === 'pause' || action === 'abandon-unverified' ? ['reason'] : []),
+          ...(action === 'pause' || action === 'cancel' || action === 'abandon-unverified' ? ['reason'] : []),
           ...(action === 'abandon-unverified' ? ['evidence', 'acknowledgeDuplicateCostWork'] : [])]);
         const unknown = Object.keys(body.payload).filter((field) => !allowed.has(field));
         if (unknown.length || !/^project-[0-9a-f-]{36}$/i.test(body.payload.projectId ?? '')
           || !/^[0-9a-f-]{36}$/i.test(body.payload.planInstanceId ?? '')
           || !Number.isSafeInteger(body.payload.version) || body.payload.version < 0
-          || ((action === 'pause' || action === 'abandon-unverified') && (typeof body.payload.reason !== 'string'
+          || ((action === 'pause' || action === 'cancel' || action === 'abandon-unverified') && (typeof body.payload.reason !== 'string'
             || !body.payload.reason.trim() || body.payload.reason.length > (action === 'pause' ? 500 : 1000)))
           || (action === 'abandon-unverified' && (body.payload.acknowledgeDuplicateCostWork !== true
             || !Array.isArray(body.payload.evidence) || body.payload.evidence.length < 1 || body.payload.evidence.length > 20
@@ -1910,7 +2125,8 @@ export function createApp({
         }
         const run = action === 'pause' ? executionService.pauseProcessTaskInstance.bind(executionService)
           : action === 'resume' ? executionService.resumeProcessTaskInstance.bind(executionService)
-            : executionService.abandonUnverifiedProcessTaskInstance.bind(executionService);
+            : action === 'cancel' ? executionService.cancelProcessTaskInstance.bind(executionService)
+              : executionService.abandonUnverifiedProcessTaskInstance.bind(executionService);
         const result = await run({
           tenantId: requestTenant(request), projectId: body.payload.projectId,
           planInstanceId: body.payload.planInstanceId, version: body.payload.version,
@@ -1923,6 +2139,7 @@ export function createApp({
           status: result.control.status, version: Number(result.control.version),
           reason: result.control.pause_reason, pauseBoundary: result.control.pause_boundary,
           replayed: result.replayed, freshApprovalRequired: action === 'resume',
+          ...(action === 'cancel' ? { runIds: result.runIds ?? [] } : {}),
           ...(action === 'abandon-unverified' ? { runIds: result.control.events.at(-1)?.data?.runIds ?? [],
             attemptIds: result.control.events.at(-1)?.data?.attemptIds ?? [], evidence: result.control.events.at(-1)?.data?.evidence ?? [],
             acknowledgeDuplicateCostWork: result.control.events.at(-1)?.data?.acknowledgeDuplicateCostWork === true } : {}) });
@@ -1941,7 +2158,7 @@ export function createApp({
         const allowed = new Set(['projectId', 'planId', 'revision', 'planInstanceId', 'taskId',
           ...(action === 'complete' ? ['result', 'evidence'] : []),
           ...(action === 'escalate' ? ['reason', 'evidence'] : []),
-          ...(action === 'resolve' ? ['disposition', 'reason', 'evidence'] : []),
+          ...(action === 'resolve' ? ['disposition', 'reason', 'evidence', 'targetPrincipal', 'expectedVersion'] : []),
         ]);
         const unknown = Object.keys(body.payload).filter((field) => !allowed.has(field));
         if (unknown.length) throw apiFailure(400, 'INVALID_COMMAND', 'A human task action accepts only its saved task references and action details.', {
@@ -1950,7 +2167,7 @@ export function createApp({
         const { projectId, planId, revision, planInstanceId, taskId } = body.payload;
         const startingHumanTask = action === 'start';
         if (!/^project-[0-9a-f-]{36}$/i.test(projectId ?? '')
-          || !/^process-plan-[0-9a-f-]{36}$/i.test(planId ?? '')
+          || !/^(?:process-plan-[0-9a-f-]{36}|software-delivery-[a-f0-9]{32})$/i.test(planId ?? '')
           || !Number.isSafeInteger(revision) || revision < 1
           || (startingHumanTask && planInstanceId != null && !/^[0-9a-f-]{36}$/i.test(planInstanceId))
           || (!startingHumanTask && !/^[0-9a-f-]{36}$/i.test(planInstanceId ?? ''))
@@ -1979,8 +2196,21 @@ export function createApp({
           if (!escalated) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'The project or authorized membership was not found.');
           return sendJson(response, escalated.replayed ? 200 : 201, { ...escalated.runtime, meta: { replayed: escalated.replayed } });
         }
-        const { disposition, reason, evidence } = body.payload;
-        const resolved = await executionService.resolveHumanProcessTaskEscalation({ ...command, disposition, reason, evidence });
+        const { disposition, reason, evidence, targetPrincipal } = body.payload;
+        if (disposition === 'reassign' && !/^oidc:[a-f0-9]{64}$/i.test(targetPrincipal ?? '')) {
+          throw apiFailure(400, 'INVALID_HUMAN_TASK_ESCALATION', 'Choose an eligible active human project member to reassign this checkpoint.');
+        }
+        if (disposition !== 'reassign' && targetPrincipal != null) {
+          throw apiFailure(400, 'INVALID_HUMAN_TASK_ESCALATION', 'An assignee is accepted only for a reassignment.');
+        }
+        if (disposition === 'reassign' && (!Number.isSafeInteger(body.payload.expectedVersion) || body.payload.expectedVersion < 1)) {
+          throw apiFailure(400, 'INVALID_HUMAN_TASK_ESCALATION', 'Reassignment requires the current task version. Refresh the task and try again.');
+        }
+        if (disposition !== 'reassign' && body.payload.expectedVersion != null) {
+          throw apiFailure(400, 'INVALID_HUMAN_TASK_ESCALATION', 'A task version is accepted only for reassignment.');
+        }
+        const resolved = await executionService.resolveHumanProcessTaskEscalation({ ...command, disposition, reason, evidence, targetPrincipal,
+          expectedVersion: body.payload.expectedVersion });
         if (!resolved) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'The project or authorized membership was not found.');
         return sendJson(response, resolved.replayed ? 200 : 201, { ...resolved.runtime, meta: { replayed: resolved.replayed } });
       }
@@ -2044,6 +2274,25 @@ export function createApp({
         return;
       }
 
+      const executionRepositorySourceMatch = pathname.match(/^\/api\/execution\/runs\/(execution-run-[0-9a-f-]{36})\/repository-source$/);
+      if (request.method === 'GET' && executionRepositorySourceMatch) {
+        const requestedPaths = url.searchParams.getAll('path');
+        const sendSource = (artifact) => {
+          const safeName = artifact.fileName.replace(/[\r\n"\\]/g, '_').replace(/[^\x20-\x7e]/g, '_') || 'source';
+          const encodedName = encodeURIComponent(artifact.fileName).replace(/['()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+          response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': artifact.contents.length,
+            'content-disposition': `attachment; filename="${safeName}"; filename*=UTF-8''${encodedName}`,
+            'x-content-sha256': artifact.contentHash, 'x-content-type-options': 'nosniff', 'cache-control': 'private, no-store' });
+          response.end(artifact.contents);
+        };
+        const source = requestedPaths.length === 1
+          ? await executionService.readRepositorySource(executionRepositorySourceMatch[1], requestTenant(request),
+            request.identity ? requestActor(request) : null, requestedPaths[0],
+            { authzGeneration: request.identity?.authzGeneration, onArtifact: sendSource }) : null;
+        if (!source) return sendJson(response, 404, { error: 'Pinned repository source file not found.' });
+        return;
+      }
+
       const executionRunMatch = pathname.match(/^\/api\/execution\/runs\/(execution-run-[0-9a-f-]{36})$/);
       if (request.method === 'GET' && executionRunMatch) {
         const deliverRun = (run) => sendJson(response, 200, run);
@@ -2091,18 +2340,37 @@ export function createApp({
       }
 
       if (request.method === 'POST' && pathname === '/api/sdlc/cases') {
-        const body = await readJson(request);
+        const body = requireJsonObject(await readJson(request));
         if (request.identity) {
           rejectAuthorityClaims(body);
           requirePrincipalStoreMethod(sdlcStore, 'saveForPrincipal');
         }
+        const hasSourceSelection = ['sourceObjectId', 'expectedProjectVersion', 'expectedBlueprintId', 'expectedBlueprintVersion'].some((key) => Object.hasOwn(body, key));
+        let sourceBinding = null;
+        if (body.projectId || hasSourceSelection) {
+          if (!/^project-[0-9a-f-]{36}$/.test(body.projectId ?? '')) throw apiFailure(400, 'PROJECT_REQUIRED', 'Choose a saved project for this change case.');
+          if (request.identity) requirePrincipalStoreMethod(store, 'getWithPrincipalAuthority');
+          let project = request.identity
+            ? await store.getWithPrincipalAuthority({
+              id: body.projectId, tenantId: requestTenant(request), principal: requestActor(request),
+              anyPrincipalRoleGroups: [['workspace-read', 'workspace-write', 'tenant-admin']],
+              authzGeneration: request.identity.authzGeneration,
+              operation: (current) => current,
+            })
+            : await store.get(body.projectId, requestTenant(request));
+          if (!project) throw apiFailure(404, 'SOURCE_PROJECT_NOT_FOUND', 'The saved project source was not found.');
+          project = normalizeProject(project, { tenantId: requestTenant(request) });
+          if (!hasSourceSelection) throw apiFailure(400, 'SOURCE_REFERENCE_REQUIRED', 'Choose a saved design object and submit its current project and blueprint versions.');
+          sourceBinding = pinProjectSourceObject(project, body);
+        }
         const changeCase = createChangeCase({
-          ...body,
-          ...(request.identity ? { tenantId: request.identity.tenantId, createdBy: request.identity.principal, accountableOwner: request.identity.principal } : { tenantId: requestTenant(request) }),
-        });
+          ...body, projectId: sourceBinding?.projectId,
+          ...(request.identity ? { tenantId: request.identity.tenantId, createdBy: request.identity.principal, accountableOwner: request.identity.principal }
+            : sourceBinding ? { tenantId: requestTenant(request), createdBy: requestActor(request), accountableOwner: requestActor(request) }
+              : { tenantId: requestTenant(request) }),
+        }, { sourceBinding });
         if (request.identity) {
           if (!/^project-[0-9a-f-]{36}$/.test(body.projectId ?? '')) throw apiFailure(400, 'PROJECT_REQUIRED', 'Choose a project for this change case.');
-          changeCase.projectId = body.projectId;
         }
         if (request.identity) await sdlcStore.saveForPrincipal(changeCase, {
           principal: requestActor(request),
@@ -2136,7 +2404,181 @@ export function createApp({
         return sendJson(response, 200, sdlcView(changeCase));
       }
 
-      const sdlcActionMatch = pathname.match(/^\/api\/sdlc\/cases\/(change-case-[0-9a-f-]{36})\/(advance|run|approve|observe|clarify|answer-clarification|reconcile-clarification|register-proof|record-proof|assess-proofs|route-proof|resume-proof-action|complete-proof-action)$/);
+      const softwareDeliveryPlansMatch = pathname.match(/^\/api\/sdlc\/cases\/(change-case-[0-9a-f-]{36})\/software-delivery-plans$/);
+      if (request.method === 'GET' && softwareDeliveryPlansMatch) {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'Sign in to view compiled software delivery drafts.');
+        if (!executionStore?.listSoftwareDeliveryDrafts) throw apiFailure(503, 'SOFTWARE_PLAN_STORAGE_UNAVAILABLE', 'Durable software delivery storage is unavailable.');
+        requirePrincipalStoreMethod(sdlcStore, 'withPrincipalAuthority');
+        const changeCase = await sdlcStore.withPrincipalAuthority({
+          id: softwareDeliveryPlansMatch[1], tenantId: requestTenant(request), principal: requestActor(request),
+          anyPrincipalRoleGroups: [['workspace-read', 'workspace-write', 'tenant-admin']],
+          authzGeneration: request.identity.authzGeneration, operation: (current) => current,
+        });
+        if (!changeCase) return sendJson(response, 404, { error: 'Change case not found.' });
+        normalizeChangeCase(changeCase); requireTenant(changeCase, requestTenant(request));
+        await requireCurrentSourceBinding(changeCase, store, request);
+        const plans = await executionStore.listSoftwareDeliveryDrafts({
+          tenantId: requestTenant(request), projectId: changeCase.projectId, caseId: changeCase.id,
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration,
+        });
+        return sendJson(response, 200, { plans: plans.map(({ plan, assignmentReview, promotion }) => ({
+          plan, valid: verifySoftwareDeliveryDraft(changeCase, plan), assignmentReview, promotion,
+        })) });
+      }
+
+      const softwareDeliveryAssignmentMatch = pathname.match(/^\/api\/sdlc\/cases\/(change-case-[0-9a-f-]{36})\/software-delivery-plans\/(software-delivery-[a-f0-9]{32})\/assignment-review$/);
+      if (request.method === 'POST' && softwareDeliveryAssignmentMatch) {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'Sign in as the project owner to review software delivery assignments.');
+        if (!executionStore?.reviewSoftwareDeliveryDraftAssignments) throw apiFailure(503, 'SOFTWARE_PLAN_STORAGE_UNAVAILABLE', 'Durable software delivery assignment review is unavailable.');
+        const body = requireJsonObject(await readJson(request));
+        rejectAuthorityClaims(body);
+        const allowed = new Set(['expectedProjectVersion', 'expectedCaseVersion', 'expectedReviewRevision', 'draftHash', 'idempotencyKey', 'assignments']);
+        if (Object.keys(body).some((key) => !allowed.has(key))
+          || !Number.isInteger(body.expectedProjectVersion) || body.expectedProjectVersion < 1
+          || !Number.isInteger(body.expectedCaseVersion) || body.expectedCaseVersion < 1
+          || !Number.isInteger(body.expectedReviewRevision) || body.expectedReviewRevision < 0
+          || typeof body.draftHash !== 'string' || !/^[a-f0-9]{64}$/.test(body.draftHash)
+          || typeof body.idempotencyKey !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,119}$/.test(body.idempotencyKey)
+          || !Array.isArray(body.assignments)) {
+          throw apiFailure(400, 'INVALID_SOFTWARE_ASSIGNMENT_REVIEW', 'Provide the current project, case, review and draft versions with a complete task assignment list.');
+        }
+        const caseId = softwareDeliveryAssignmentMatch[1];
+        const planId = softwareDeliveryAssignmentMatch[2];
+        requirePrincipalStoreMethod(sdlcStore, 'withPrincipalAuthority');
+        const changeCase = await sdlcStore.withPrincipalAuthority({
+          id: caseId, tenantId: requestTenant(request), principal: requestActor(request),
+          minimumProjectAccess: 'owner', requiredPrincipalRoles: ['workspace-write'],
+          authzGeneration: request.identity.authzGeneration, operation: (current) => current,
+        });
+        if (!changeCase) return sendJson(response, 404, { error: 'Change case not found.' });
+        normalizeChangeCase(changeCase); requireTenant(changeCase, requestTenant(request));
+        if (requestActor(request) !== changeCase.accountableOwner) throw apiFailure(403, 'ACTION_FORBIDDEN', 'Only the accountable project owner may review software delivery assignments.');
+        requireVersion(changeCase, body.expectedCaseVersion);
+        const project = await requireCurrentSourceBinding(changeCase, store, request);
+        if (!project || project.id !== changeCase.projectId || project.version !== body.expectedProjectVersion) {
+          throw apiFailure(409, 'SOURCE_BINDING_STALE', 'The saved project changed. Reload the current source before reviewing assignments.');
+        }
+        const authoritativeCase = await sdlcStore.get(changeCase.id, requestTenant(request));
+        if (!authoritativeCase) throw apiFailure(404, 'CHANGE_CASE_NOT_FOUND', 'Change case not found.');
+        for (const assignment of body.assignments) {
+          if (!assignment || typeof assignment !== 'object' || Array.isArray(assignment)
+            || Object.keys(assignment).some((key) => !['taskId', 'actorId', 'roleId', 'targetPrincipal'].includes(key))
+            || typeof assignment.taskId !== 'string' || typeof assignment.actorId !== 'string' || typeof assignment.roleId !== 'string'
+            || typeof assignment.targetPrincipal !== 'string' || !assignment.targetPrincipal) {
+            throw apiFailure(400, 'INVALID_SOFTWARE_ASSIGNMENT_REVIEW', 'Each assignment must name a compiled task and an exact actor/role/principal binding.');
+          }
+        }
+        const requestHash = digest({ caseId, planId, ...body });
+        const result = await executionStore.reviewSoftwareDeliveryDraftAssignments({
+          tenantId: requestTenant(request), projectId: project.id, caseId, planId,
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration,
+          expectedProjectVersion: body.expectedProjectVersion, expectedCaseVersion: body.expectedCaseVersion,
+          expectedReviewRevision: body.expectedReviewRevision, draftHash: body.draftHash,
+          idempotencyKey: body.idempotencyKey, requestHash, assignments: body.assignments,
+        });
+        if (!result) return sendJson(response, 404, { error: 'Project, case, or compiled draft not found.' });
+        return sendJson(response, result.replayed ? 200 : 201, result);
+      }
+
+      const softwareDeliveryRuntimeMatch = pathname.match(/^\/api\/sdlc\/cases\/(change-case-[0-9a-f-]{36})\/software-delivery-plans\/(software-delivery-[a-f0-9]{32})\/(promote|start-instance)$/);
+      if (request.method === 'POST' && softwareDeliveryRuntimeMatch) {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'Sign in as the accountable project owner to promote or start software delivery work.');
+        const action = softwareDeliveryRuntimeMatch[3];
+        const body = requireJsonObject(await readJson(request));
+        rejectAuthorityClaims(body);
+        const allowed = action === 'promote'
+          ? new Set(['expectedProjectVersion', 'expectedCaseVersion', 'expectedReviewRevision', 'idempotencyKey'])
+          : new Set(['runtimeRevision', 'idempotencyKey']);
+        if (Object.keys(body).some((key) => !allowed.has(key))
+          || typeof body.idempotencyKey !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,119}$/.test(body.idempotencyKey)
+          || (action === 'promote' && (!Number.isInteger(body.expectedProjectVersion) || body.expectedProjectVersion < 1
+            || !Number.isInteger(body.expectedCaseVersion) || body.expectedCaseVersion < 1
+            || !Number.isInteger(body.expectedReviewRevision) || body.expectedReviewRevision < 1))
+          || (action === 'start-instance' && (!Number.isInteger(body.runtimeRevision) || body.runtimeRevision < 1))) {
+          throw apiFailure(400, 'INVALID_SOFTWARE_DELIVERY_RUNTIME_COMMAND', 'Provide current project/case/review revisions for promotion and an idempotency key.');
+        }
+        if (!executionStore?.promoteSoftwareDeliveryDraft || !executionStore?.startSoftwareDeliveryInstance) {
+          throw apiFailure(503, 'SOFTWARE_RUNTIME_STORAGE_UNAVAILABLE', 'Software delivery runtime storage is unavailable.');
+        }
+        const caseId = softwareDeliveryRuntimeMatch[1];
+        const planId = softwareDeliveryRuntimeMatch[2];
+        requirePrincipalStoreMethod(sdlcStore, 'withPrincipalAuthority');
+        const changeCase = await sdlcStore.withPrincipalAuthority({
+          id: caseId, tenantId: requestTenant(request), principal: requestActor(request), minimumProjectAccess: 'owner',
+          requiredPrincipalRoles: ['workspace-write'], authzGeneration: request.identity.authzGeneration,
+          operation: (current) => current,
+        });
+        if (!changeCase) return sendJson(response, 404, { error: 'Change case not found.' });
+        normalizeChangeCase(changeCase); requireTenant(changeCase, requestTenant(request));
+        if (changeCase.accountableOwner !== requestActor(request)) throw apiFailure(403, 'ACTION_FORBIDDEN', 'Only the accountable case owner may promote or start this work.');
+        const requestHash = digest({ caseId, planId, action, ...body });
+        const result = action === 'promote'
+          ? await executionStore.promoteSoftwareDeliveryDraft({ tenantId: requestTenant(request), projectId: changeCase.projectId,
+            caseId, planId, principal: requestActor(request), authzGeneration: request.identity.authzGeneration,
+            expectedProjectVersion: body.expectedProjectVersion, expectedCaseVersion: body.expectedCaseVersion,
+            expectedReviewRevision: body.expectedReviewRevision, idempotencyKey: body.idempotencyKey, requestHash })
+          : await executionStore.startSoftwareDeliveryInstance({ tenantId: requestTenant(request), projectId: changeCase.projectId,
+            caseId, planId, principal: requestActor(request), authzGeneration: request.identity.authzGeneration,
+            revision: body.runtimeRevision, idempotencyKey: body.idempotencyKey, requestHash });
+        if (!result) return sendJson(response, 404, { error: 'Project, case, or software delivery draft not found.' });
+        return sendJson(response, result.replayed ? 200 : 201, result);
+      }
+
+      const compileSoftwarePlanMatch = pathname.match(/^\/api\/sdlc\/cases\/(change-case-[0-9a-f-]{36})\/compile-software-plan$/);
+      if (request.method === 'POST' && compileSoftwarePlanMatch) {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'Sign in as the project owner to compile a delivery draft.');
+        if (!executionStore?.compileSoftwareDeliveryDraft) throw apiFailure(503, 'SOFTWARE_PLAN_STORAGE_UNAVAILABLE', 'Durable software delivery storage is unavailable.');
+        const body = requireJsonObject(await readJson(request)); rejectAuthorityClaims(body);
+        if (Object.keys(body).some((key) => !['version', 'expectedProjectVersion', 'idempotencyKey'].includes(key))
+          || !Number.isInteger(body.version) || !Number.isInteger(body.expectedProjectVersion)
+          || typeof body.idempotencyKey !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{7,119}$/.test(body.idempotencyKey)) {
+          throw apiFailure(400, 'INVALID_SOFTWARE_PLAN_COMMAND', 'Provide the current case and project versions and an idempotency key.');
+        }
+        requirePrincipalStoreMethod(sdlcStore, 'withPrincipalAuthority');
+        const changeCase = await sdlcStore.withPrincipalAuthority({
+          id: compileSoftwarePlanMatch[1], tenantId: requestTenant(request), principal: requestActor(request),
+          minimumProjectAccess: 'owner', requiredPrincipalRoles: ['workspace-write'],
+          authzGeneration: request.identity.authzGeneration, operation: (current) => current,
+        });
+        if (!changeCase) return sendJson(response, 404, { error: 'Change case not found.' });
+        normalizeChangeCase(changeCase); requireTenant(changeCase, requestTenant(request));
+        if (requestActor(request) !== changeCase.accountableOwner) throw apiFailure(403, 'ACTION_FORBIDDEN', 'Only the accountable case owner may compile its software delivery draft.');
+        requireVersion(changeCase, body.version);
+        const project = await requireCurrentSourceBinding(changeCase, store, request);
+        if (!project || project.id !== changeCase.projectId) throw apiFailure(409, 'SOURCE_BINDING_REQUIRED', 'A current saved-project source binding is required.');
+        if (project.version !== body.expectedProjectVersion) throw apiFailure(409, 'VERSION_CONFLICT', 'The project changed. Reload before compiling the delivery draft.');
+        const draft = compileSoftwareDeliveryDraft(changeCase);
+        const authoritativeCase = await sdlcStore.get(changeCase.id, requestTenant(request));
+        if (!authoritativeCase) throw apiFailure(404, 'CHANGE_CASE_NOT_FOUND', 'Change case not found.');
+        const result = await executionStore.compileSoftwareDeliveryDraft({
+          tenantId: requestTenant(request), projectId: project.id, caseId: changeCase.id,
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration,
+          expectedProjectVersion: body.expectedProjectVersion, expectedCaseVersion: changeCase.version,
+          expectedCaseStateHash: digest(authoritativeCase), g6PlanHash: draft.binding.g6PlanHash,
+          compilerVersion: draft.compilerVersion,
+          async buildPlan({ project: lockedProject, changeCase: lockedCase }) {
+            if (!verifyAcceptedG6Plan(lockedCase).valid || !verifySoftwareDeliveryDraft(lockedCase, draft)) {
+              throw apiFailure(409, 'ACCEPTED_PLAN_STALE', 'The accepted G6 plan changed during compilation. Reload the case and compile again.');
+            }
+            const binding = lockedCase.sourceBinding;
+            if (!binding || binding.projectId !== lockedProject.id || binding.projectVersion !== lockedProject.version) {
+              throw apiFailure(409, 'SOURCE_BINDING_STALE', 'The saved design changed during compilation. Reload before retrying.');
+            }
+            const currentBinding = pinProjectSourceObject(lockedProject, {
+              projectId: lockedProject.id, expectedProjectVersion: lockedProject.version,
+              expectedBlueprintId: binding.blueprintId, expectedBlueprintVersion: binding.blueprintVersion,
+              sourceObjectId: binding.objectId,
+            });
+            if (currentBinding.sourceHash !== binding.sourceHash) throw apiFailure(409, 'SOURCE_BINDING_STALE', 'The saved design changed during compilation. Reload before retrying.');
+            return draft;
+          },
+        });
+        if (!result) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
+        if (!verifySoftwareDeliveryDraft(changeCase, result.plan)) throw apiFailure(409, 'SOFTWARE_PLAN_INTEGRITY_INVALID', 'The compiled delivery draft failed integrity verification.');
+        return sendJson(response, result.replayed ? 200 : 201, { plan: result.plan, replayed: result.replayed });
+      }
+
+      const sdlcActionMatch = pathname.match(/^\/api\/sdlc\/cases\/(change-case-[0-9a-f-]{36})\/(advance|run|approve|observe|clarify|answer-clarification|reconcile-clarification|register-proof|record-proof|assess-proofs|route-proof|resume-proof-action|complete-proof-action|edit-requirements|accept-requirements|edit-architecture|accept-architecture)$/);
       if (request.method === 'POST' && sdlcActionMatch) {
         if (request.identity) {
           requirePrincipalStoreMethod(sdlcStore, 'withPrincipalAuthority');
@@ -2157,7 +2599,7 @@ export function createApp({
         if (!changeCase) return sendJson(response, 404, { error: 'Change case not found.' });
         normalizeChangeCase(changeCase);
         requireTenant(changeCase, requestTenant(request));
-        const body = await readJson(request);
+        const body = requireJsonObject(await readJson(request));
         if (request.identity) rejectAuthorityClaims(body);
         if (request.identity && action === 'approve' && request.identity.principal === changeCase.createdBy) {
           throw apiFailure(403, 'SEGREGATION_OF_DUTIES', 'The change requester cannot approve its protected release.', {
@@ -2173,7 +2615,7 @@ export function createApp({
               ...(action === 'approve' ? { authorityGeneration: request.identity.authzGeneration } : {}),
             }
           : body;
-        const exactIdempotencyAction = ['clarify', 'answer-clarification', 'reconcile-clarification', 'register-proof', 'record-proof', 'assess-proofs', 'route-proof', 'resume-proof-action', 'complete-proof-action'].includes(action);
+        const exactIdempotencyAction = ['clarify', 'answer-clarification', 'reconcile-clarification', 'register-proof', 'record-proof', 'assess-proofs', 'route-proof', 'resume-proof-action', 'complete-proof-action', 'edit-requirements', 'accept-requirements', 'edit-architecture', 'accept-architecture'].includes(action);
         const priorCommand = body.idempotencyKey && changeCase.idempotency[body.idempotencyKey];
         if (priorCommand && !exactIdempotencyAction) {
           const requestHash = commandRequestHash(authorizedBody);
@@ -2190,6 +2632,7 @@ export function createApp({
           }
           return sendJson(response, 200, { ...sdlcView(changeCase), command: { action, replayed: true, steps: 0 } });
         }
+        await requireCurrentSourceBinding(changeCase, store, request);
         if (changeCase.status === 'STOPPED' && !priorCommand) {
           const error = new Error('Case is STOPPED; no further changes are allowed.');
           error.statusCode = 409;
@@ -2203,6 +2646,10 @@ export function createApp({
           : action === 'run' ? runToCheckpoint(changeCase, authorizedBody)
             : action === 'approve' ? approveRelease(changeCase, authorizedBody)
               : action === 'observe' ? recordObservation(changeCase, authorizedBody)
+                : action === 'edit-requirements' ? editRequirementDraft(changeCase, authorizedBody)
+                  : action === 'accept-requirements' ? acceptRequirementDraft(changeCase, authorizedBody)
+                    : action === 'edit-architecture' ? editArchitectureDraft(changeCase, authorizedBody)
+                      : action === 'accept-architecture' ? acceptArchitectureDraft(changeCase, authorizedBody)
                 : action === 'clarify' ? openClarification(changeCase, authorizedBody)
                   : action === 'answer-clarification' ? answerClarification(changeCase, authorizedBody)
                     : action === 'reconcile-clarification' ? reconcileClarification(changeCase, authorizedBody)
@@ -2339,6 +2786,7 @@ export function createApp({
     } catch (error) {
       if (pathname === '/auth/callback') return loginError(response, oidcLoginFlow ? new URL(oidcLoginFlow.redirectUri).protocol === 'https:' : false);
       if (pathname.startsWith('/api/v1/') || pathname.startsWith('/api/execution/process-task-')
+        || /^\/api\/sdlc\/cases\/change-case-[0-9a-f-]{36}\/(?:software-delivery-plans(?:\/|$)|compile-software-plan$)/.test(pathname)
         || /^\/api\/execution\/runs\/execution-run-[0-9a-f-]{36}\/(cancel|pause|resume|amend)$/.test(pathname)) {
         return sendApiError(response, error, correlationId);
       }
@@ -2397,6 +2845,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   }
   const { host, port, authMode, dataDirectory, sdlcDirectory, executionDirectory, executionWorkspaceDirectory,
     enableLocalExecution, databaseUrl, secretEncryptionKey, openAiCredentialReference, openAiModel,
+    deepSeekCredentialReference, deepSeekModel, deepSeekMaxOutputTokens,
     openAiAdminApiKey, openAiOrganizationId, openAiTenantProjects,
     legacyReadOnlyMode, oidc, roleMap, tenantBindings, bootstrapPrincipals } = config;
   const { issuer: oidcIssuer, audience: oidcAudience, jwksUri: oidcJwksUri, clientId: oidcClientId,
@@ -2418,8 +2867,15 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       identityAuthenticator,
     });
   }
-  const executionProfiles = openAiCredentialReference ? [{ id: 'openai-current', kind: 'provider-openai', version: '1.0.0', label: `OpenAI · ${openAiModel}`, credentialReference: openAiCredentialReference, model: openAiModel }] : [];
-  const app = createApp({ dataDirectory, sdlcDirectory, executionDirectory, executionWorkspaceDirectory, enableLocalExecution, executionProfiles, databaseUrl, oidcAuthenticator, oidcLoginFlow, oidcBootstrapPrincipals: authMode === 'oidc' ? bootstrapPrincipals : [], secretEncryptionKey, openAiAdminApiKey, openAiOrganizationId, openAiTenantProjects, readOnly: legacyReadOnlyMode });
+  const executionProfiles = [
+    ...(openAiCredentialReference ? [{ id: 'openai-current', kind: 'provider-openai', version: '1.0.0', label: `OpenAI · ${openAiModel}`, credentialReference: openAiCredentialReference, model: openAiModel }] : []),
+    ...(deepSeekCredentialReference ? [{ id: 'deepseek-current', kind: 'provider-deepseek', version: '1.0.0', label: `DeepSeek · ${deepSeekModel}`, credentialReference: deepSeekCredentialReference, model: deepSeekModel, deepSeekMaxOutputTokens }] : []),
+  ];
+  let localRepositories = [];
+  try { localRepositories = JSON.parse(process.env.ORGWARD_LOCAL_REPOSITORIES ?? '[]'); }
+  catch { console.error('ORGWARD_LOCAL_REPOSITORIES must contain a JSON array of server-configured local repository bindings.'); process.exitCode = 1; process.exit(); }
+  if (!Array.isArray(localRepositories)) { console.error('ORGWARD_LOCAL_REPOSITORIES must contain a JSON array of server-configured local repository bindings.'); process.exitCode = 1; process.exit(); }
+  const app = createApp({ dataDirectory, sdlcDirectory, executionDirectory, executionWorkspaceDirectory, enableLocalExecution, executionProfiles, localRepositories, databaseUrl, oidcAuthenticator, oidcLoginFlow, oidcBootstrapPrincipals: authMode === 'oidc' ? bootstrapPrincipals : [], secretEncryptionKey, openAiAdminApiKey, openAiOrganizationId, openAiTenantProjects, readOnly: legacyReadOnlyMode });
   const { server } = app;
   await app.init();
   let shuttingDown = false;

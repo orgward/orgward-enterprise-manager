@@ -35,6 +35,23 @@ test('preflight reports actionable config errors without exposing secrets', () =
   assert.ok(oidc.issues.some((issue) => issue.check === 'oidc-redirect'));
 });
 
+test('DeepSeek profile requires a complete generic binding and a bounded output cap', () => {
+  const configured = parseInstallConfig(env('postgresql://orgward@localhost/orgward', {
+    ORGWARD_DEEPSEEK_CREDENTIAL_REFERENCE: 'secret-deepseek', ORGWARD_DEEPSEEK_MODEL: 'deepseek-chat',
+    ORGWARD_DEEPSEEK_MAX_OUTPUT_TOKENS: '128',
+  }));
+  assert.ok(!configured.issues.some((issue) => issue.check.startsWith('deepseek-')));
+  assert.equal(configured.config.deepSeekCredentialReference, 'secret-deepseek');
+  assert.equal(configured.config.deepSeekModel, 'deepseek-chat');
+  assert.equal(configured.config.deepSeekMaxOutputTokens, 128);
+  assert.ok(parseInstallConfig(env('postgresql://orgward@localhost/orgward', { ORGWARD_DEEPSEEK_CREDENTIAL_REFERENCE: 'secret-deepseek' }))
+    .issues.some((issue) => issue.check === 'deepseek-profile'));
+  for (const value of ['63', '513', '128.5', 'not-a-number']) {
+    assert.ok(parseInstallConfig(env('postgresql://orgward@localhost/orgward', { ORGWARD_DEEPSEEK_MAX_OUTPUT_TOKENS: value }))
+      .issues.some((issue) => issue.check === 'deepseek-output-cap'));
+  }
+});
+
 test('protected file inputs enforce source exclusivity, file safety, bounds, and redacted errors', async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'ow-install-secrets-'));
   t.after(() => rm(directory, { recursive: true, force: true }));

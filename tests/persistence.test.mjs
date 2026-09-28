@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, watch, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
 import path from 'node:path';
@@ -8,17 +9,105 @@ import test from 'node:test';
 import { createApp } from '../server.mjs';
 import { blueprintPublicationDigest, createProject, validateBlueprint } from '../src/model.mjs';
 import { coverageForBlueprint } from '../public/coverage-dashboard.mjs';
+import { linkedProcessTaskResult } from '../public/linked-process-task-result.mjs';
+import { processTaskSourceReview } from '../public/process-task-source-review.mjs';
+import { processTaskHumanInputReview } from '../public/human-task-input-review.mjs';
+import { humanTaskOutputApplicationState } from '../public/human-task-output-application.mjs';
 import { createChangeCase } from '../src/sdlc/engine.mjs';
+import { digest } from '../src/sdlc/contracts.mjs';
 import { createExecutionRun, executionApprovalRequestHash, executionEvent } from '../src/execution/contracts.mjs';
 import { buildBlueprintProposalPrompt } from '../src/execution/proposals.mjs';
 import { PostgresOidcSessionStore } from '../src/platform/oidc-sessions.mjs';
 import { contentHash } from '../src/platform/postgres.mjs';
+import {
+  compileSoftwareDeliveryDraft,
+  LEGACY_SOFTWARE_PLAN_COMPILER_VERSION,
+  SOFTWARE_PLAN_COMPILER_VERSION,
+  verifySoftwareDeliveryDraft,
+} from '../src/sdlc/software-plan-compiler.mjs';
 import { startPostgres } from './helpers/postgres.mjs';
 
 const tenantHeaders = { 'content-type': 'application/json', authorization: 'Bearer alice' };
 
 function command(commandId, payload, expectedVersion) {
   return JSON.stringify({ schemaVersion: '1.0', commandId, ...(expectedVersion === undefined ? {} : { expectedVersion }), payload });
+}
+
+function fixtureGit(directory, args, input) {
+  return execFileSync('git', [`--git-dir=${directory}`, ...args], { input, encoding: 'utf8', env: {
+    PATH: '/usr/bin:/bin', HOME: '/nonexistent', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
+    GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.test',
+    GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.test',
+  } }).trim();
+}
+
+function createFixtureGitCommit(directory, files, message) {
+  const nested = [];
+  const root = [];
+  for (const file of files) {
+    const blob = fixtureGit(directory, ['hash-object', '-w', '--stdin'], Buffer.from(file.content));
+    const segments = file.path.split('/');
+    if (segments.length === 1) root.push(`${file.mode} blob ${blob}\t${segments[0]}`);
+    else nested.push({ segment: segments[0], mode: file.mode, blob, name: segments[1] });
+  }
+  for (const segment of new Set(nested.map((entry) => entry.segment))) {
+    const subtree = fixtureGit(directory, ['mktree'], nested.filter((entry) => entry.segment === segment)
+      .map((entry) => `${entry.mode} blob ${entry.blob}\t${entry.name}\n`).join(''));
+    root.push(`040000 tree ${subtree}\t${segment}`);
+  }
+  const tree = fixtureGit(directory, ['mktree'], `${root.sort().join('\n')}\n`);
+  return fixtureGit(directory, ['commit-tree', tree, '-m', message]);
+}
+
+async function makeFixtureGitPrivate(directory) {
+  for (const name of await readdir(directory)) {
+    const child = path.join(directory, name);
+    const info = await lstat(child);
+    if (info.isDirectory()) { await makeFixtureGitPrivate(child); await chmod(child, 0o755); }
+    else if (info.isFile()) await chmod(child, 0o644);
+  }
+  await chmod(directory, 0o700);
+}
+
+function observeWorkspaceMarker(profileRoot, runId, markerName, timeoutMs = 10_000) {
+  const workspace = path.join(profileRoot, runId);
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+  const exists = async () => {
+    try { return (await readFile(path.join(workspace, markerName), 'utf8')) === 'ready'; }
+    catch { return false; }
+  };
+  const promise = (async () => {
+    try {
+      if (await exists()) return true;
+      try { await readdir(workspace); }
+      catch {
+        const parentWatcher = watch(profileRoot, { signal: controller.signal });
+        if (await exists()) return true;
+        for await (const event of parentWatcher) {
+          if (!event.filename || String(event.filename) === runId) {
+            if (await exists()) return true;
+            try { await readdir(workspace); break; } catch { /* Wait for this run's workspace. */ }
+          }
+        }
+      }
+      const workspaceWatcher = watch(workspace, { signal: controller.signal });
+      if (await exists()) return true;
+      for await (const event of workspaceWatcher) {
+        if (!event.filename || String(event.filename) === markerName) {
+          if (await exists()) return true;
+        }
+      }
+      throw new Error('The command worker did not publish its workspace start marker.');
+    } catch (error) {
+      if (timedOut) throw new Error('Timed out waiting for the command worker workspace marker.');
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  })();
+  return { promise, cancel: () => controller.abort() };
 }
 
 function testOidcAuthenticator() {
@@ -63,6 +152,53 @@ async function request(base, route, options = {}, expected = 200) {
   return body;
 }
 
+async function savedSdlcSource(base, projectId, prefix, options = {}) {
+  const answers = [
+    'A small membership service that reduces customer downtime.',
+    'Independent customers need reliable service records.',
+    'Recurring fees fund preventive maintenance.',
+    'A human approves safety critical work.',
+  ];
+  let result = await request(base, `/api/v1/projects/${projectId}`, options);
+  for (const [index, content] of answers.entries()) {
+    result = await request(base, `/api/v1/projects/${projectId}/messages`, {
+      ...options, method: 'POST', body: command(`${prefix}-answer-${index + 1}`, { content }, result.data.version),
+    });
+  }
+  const project = result.data;
+  const blueprint = project.latestBlueprint;
+  const source = Object.values(blueprint.areas).flatMap((area) => area.items).find((item) => item.type === 'information');
+  assert.ok(source, 'the saved project should contain a sourceable information object');
+  return {
+    project,
+    selection: {
+      projectId, sourceObjectId: source.id, expectedProjectVersion: project.version,
+      expectedBlueprintId: blueprint.id, expectedBlueprintVersion: blueprint.version,
+    },
+  };
+}
+
+async function acceptSdlcRequirements(base, caseId, prefix, options = {}) {
+  let current = await request(base, `/api/sdlc/cases/${caseId}`, options);
+  if (current.currentStage !== 'S4') {
+    current = await request(base, `/api/sdlc/cases/${caseId}/run`, {
+      ...options, method: 'POST', body: JSON.stringify({ version: current.version, idempotencyKey: `${prefix}-run-to-g4` }),
+    });
+  }
+  assert.equal(current.currentStage, 'S4', 'source-bound fixture reaches G4 before proceeding');
+  current = await request(base, `/api/sdlc/cases/${caseId}/accept-requirements`, {
+    ...options, method: 'POST', body: JSON.stringify({ version: current.version, expectedDraftRevision: current.artifacts.requirements.draftRevision, idempotencyKey: `${prefix}-accept` }),
+  });
+  current = await request(base, `/api/sdlc/cases/${caseId}/advance`, {
+    ...options, method: 'POST', body: JSON.stringify({ version: current.version, idempotencyKey: `${prefix}-open-g5` }),
+  });
+  assert.equal(current.currentStage, 'S5', 'source-bound fixture pauses at owner-reviewed G5');
+  assert.equal(current.status, 'NEEDS_HUMAN');
+  return request(base, `/api/sdlc/cases/${caseId}/accept-architecture`, {
+    ...options, method: 'POST', body: JSON.stringify({ version: current.version, expectedDraftRevision: current.artifacts.architecture.draftRevision, idempotencyKey: `${prefix}-accept-architecture` }),
+  });
+}
+
 async function start(databaseUrl, options = {}) {
   const oidcAuthenticator = options.oidcAuthenticator ?? testOidcAuthenticator();
   const app = createApp({ databaseUrl, ...options, oidcAuthenticator });
@@ -86,6 +222,7 @@ async function start(databaseUrl, options = {}) {
 }
 
 async function close(app) {
+  app.server.closeIdleConnections?.();
   await new Promise((resolve, reject) => app.server.close((error) => error ? reject(error) : resolve()));
   await app.close();
 }
@@ -160,7 +297,7 @@ test('PostgreSQL commits state, command result, audit and outbox atomically unde
   assert.deepEqual((await request(app.base, '/api/v1/projects', { headers: { authorization: 'Bearer tenant-b-admin' } })).data, []);
   const foundation = await request(app.base, '/api/v1/foundation');
   assert.equal(foundation.data.persistence.status, 'postgresql_transactional');
-  assert.equal(foundation.data.persistence.schemaVersion, '027-process-instance-unverified-abandonment');
+  assert.equal(foundation.data.persistence.schemaVersion, '035-human-task-effective-assignment');
 });
 
 test('retry after a post-commit response failure returns the original result without another event', async (t) => {
@@ -2431,13 +2568,16 @@ test('blueprint actor identity proposals are restricted, type-checked, pinned, i
   assert.equal(readerList.status, 404);
   const editorList = await request(app.base, route, { headers: { authorization: 'Bearer bob' } });
   assert.equal(editorList.data.proposals[0].targetName, 'Hidden assignment recipient');
+  assert.equal(Object.hasOwn(editorList.data.proposals[0], 'targetPrincipal'), false,
+    'editors can review status without seeing the exact principal reserved for owner assignment review');
   const tenantBList = await fetch(`${app.base}${route}`, { headers: { authorization: 'Bearer tenant-b-admin@tenant-b' } });
   assert.equal(tenantBList.status, 404);
   let registry = await request(app.base, route);
   assert.equal(registry.data.proposals.length, 1);
   assert.equal(registry.data.proposals[0].targetName, 'Hidden assignment recipient');
   assert.equal(registry.data.proposals[0].targetStatus, 'active_project_member');
-  assert.equal(Object.hasOwn(registry.data.proposals[0], 'targetPrincipal'), false);
+  assert.equal(registry.data.proposals[0].targetPrincipal, principal('bob'),
+    'the project owner needs the exact principal to explicitly bind an assignment review');
   const agentPayload = { actorId: 'actor-design-assistant', roleId: 'role-design-assistant', targetPrincipal: principal('servicebot'), blueprintVersion: 1 };
   const agentProposal = await post('alice', 'actor-binding-propose-agent', agentPayload, project.version);
   project = agentProposal.data;
@@ -2479,7 +2619,7 @@ test('blueprint actor identity proposals are restricted, type-checked, pinned, i
   const enabledRegistryRow = registry.data.proposals.find((proposal) => proposal.actorId === 'actor-founder');
   assert.equal(enabledRegistryRow.status, 'enabled');
   assert.ok(enabledRegistryRow.eligibilityStatus.includes('eligible'));
-  assert.equal(Object.hasOwn(enabledRegistryRow, 'targetPrincipal'), false);
+  assert.equal(enabledRegistryRow.targetPrincipal, principal('bob'));
   const agentEnablePayload = { actorId: agentPayload.actorId, roleId: agentPayload.roleId, blueprintVersion: 1 };
   await app.persistence.query("update orgward.oidc_principals set actor_type='human' where tenant_id='tenant-a' and principal=$1", [principal('servicebot')]);
   const changedType = await enable('alice', 'actor-binding-enable-type-change', agentEnablePayload, project.version, 409);
@@ -2742,12 +2882,18 @@ test('database corruption fails closed and retention removes only delivered expi
 
 test('change cases and execution runs use PostgreSQL compare-and-swap state across restart', async (t) => {
   const postgres = await startPostgres();
+  const oidcAuthenticator = testOidcAuthenticator();
   const workspace = await mkdtemp(path.join(tmpdir(), 'orgward-pg-execution-'));
   const profile = {
     id: 'pg-profile', label: 'PostgreSQL profile', kind: 'command', version: '1.0.0',
     executable: process.execPath, args: [], workspaceRoot: workspace,
   };
-  let app = await start(postgres.databaseUrl, { executionProfiles: [profile] });
+  const startCommitCalls = [];
+  let app = await start(postgres.databaseUrl, { executionProfiles: [profile], oidcAuthenticator, persistenceFaults: {
+    afterCommit({ operation, commandId }) {
+      if (operation === 'execution.software-delivery.start-instance') startCommitCalls.push(commandId);
+    },
+  } });
   t.after(async () => {
     if (app) await close(app);
     await postgres.close();
@@ -2757,8 +2903,20 @@ test('change cases and execution runs use PostgreSQL compare-and-swap state acro
   const project = await request(app.base, '/api/v1/projects', {
     method: 'POST', body: command('pg-cas-project', { name: 'CAS project' }),
   }, 201);
-  const changeCase = await request(app.base, '/api/sdlc/cases', {
-    method: 'POST', body: JSON.stringify({ projectId: project.data.id, mode: 'golden' }),
+  const { selection } = await savedSdlcSource(app.base, project.data.id, 'pg-cas-source');
+  const issuer = 'https://persistence-identity.example.test';
+  const bobPrincipal = `oidc:${createHash('sha256').update(`${issuer}\nbob`).digest('hex')}`;
+  await postgres.query(`insert into orgward.project_memberships (tenant_id, project_id, principal, access, granted_by) values ('tenant-a', $1, $2, 'editor', $3)`, [project.data.id, bobPrincipal, `oidc:${createHash('sha256').update(`${issuer}\nalice`).digest('hex')}`]);
+  const bindingRoute = `/api/v1/projects/${project.data.id}/actor-bindings/proposals`;
+  const bindingPayload = { actorId: 'actor-founder', roleId: 'role-founder', targetPrincipal: bobPrincipal, blueprintVersion: 1 };
+  let ownerProject = (await request(app.base, `/api/v1/projects/${project.data.id}`)).data;
+  await request(app.base, bindingRoute, { method: 'POST', body: command('pg-cas-assignment-propose', bindingPayload, ownerProject.version) });
+  ownerProject = (await request(app.base, `/api/v1/projects/${project.data.id}`)).data;
+  await request(app.base, `${bindingRoute}/enable`, { method: 'POST', body: command('pg-cas-assignment-enable', { actorId: 'actor-founder', roleId: 'role-founder', blueprintVersion: 1 }, ownerProject.version) });
+  ownerProject = (await request(app.base, `/api/v1/projects/${project.data.id}`)).data;
+  selection.expectedProjectVersion = ownerProject.version;
+  let changeCase = await request(app.base, '/api/sdlc/cases', {
+    method: 'POST', body: JSON.stringify({ ...selection, mode: 'golden' }),
   }, 201);
   const advances = await Promise.all([
     fetch(`${app.base}/api/sdlc/cases/${changeCase.id}/advance`, {
@@ -2773,11 +2931,435 @@ test('change cases and execution runs use PostgreSQL compare-and-swap state acro
   assert.deepEqual(advances.map((response) => response.status).sort(), [200, 409]);
   const advanced = await request(app.base, `/api/sdlc/cases/${changeCase.id}`);
   assert.equal(advanced.version, 1);
+  const requirementsAccepted = await acceptSdlcRequirements(app.base, changeCase.id, 'pg-cas-requirements');
   const runToCheckpoint = await request(app.base, `/api/sdlc/cases/${changeCase.id}/run`, {
-    method: 'POST', body: JSON.stringify({ version: advanced.version, idempotencyKey: 'pg-case-run' }),
+    method: 'POST', body: JSON.stringify({ version: requirementsAccepted.version, idempotencyKey: 'pg-case-run' }),
   });
+  const acceptedArchitecture = requirementsAccepted.artifacts.architecture.acceptedBaseline;
+  const acceptedRequirements = requirementsAccepted.artifacts.requirements.acceptedBaseline;
+  assert.ok(acceptedArchitecture?.draftHash, 'G5 acceptance persists its canonical architecture hash');
+  assert.equal(acceptedArchitecture.requirementsBaselineHash, acceptedRequirements.contentHash);
+  assert.equal(acceptedArchitecture.requirementsBaselineVersion, acceptedRequirements.version);
+  assert.equal(acceptedArchitecture.sourceHash, requirementsAccepted.sourceBinding.sourceHash);
+  assert.equal(acceptedArchitecture.intentHash, requirementsAccepted.intent.contentHash);
+  assert.ok(runToCheckpoint.artifacts.plan.workItems.length > 0, 'G6 planning artifact is present');
+  assert.ok(runToCheckpoint.artifacts.plan.workItems.every((item) => item.architectureBaselineHash === acceptedArchitecture.draftHash));
+  const compileBody = (idempotencyKey) => JSON.stringify({
+    version: runToCheckpoint.version, expectedProjectVersion: selection.expectedProjectVersion, idempotencyKey,
+  });
+  const compiled = await request(app.base, `/api/sdlc/cases/${changeCase.id}/compile-software-plan`, {
+    method: 'POST', body: compileBody('pg-t28-compile-first'),
+  }, 201);
+  assert.equal(compiled.plan.compilerVersion, SOFTWARE_PLAN_COMPILER_VERSION);
+  assert.equal(compiled.plan.kind, 'software_delivery');
+  assert.equal(compiled.plan.status, 'DRAFT');
+  assert.equal(compiled.plan.binding.g6PlanHash, runToCheckpoint.artifacts.plan.contentHash);
+  assert.equal(compiled.plan.binding.architectureBaselineHash, acceptedArchitecture.draftHash);
+  assert.equal(compiled.plan.binding.requirementsBaselineHash, acceptedRequirements.contentHash);
+  assert.equal(compiled.plan.binding.sourceHash, runToCheckpoint.sourceBinding.sourceHash);
+  assert.equal(compiled.plan.binding.projectVersion, selection.expectedProjectVersion);
+  assert.equal(compiled.plan.binding.blueprintId, runToCheckpoint.sourceBinding.blueprintId);
+  assert.equal(compiled.plan.binding.blueprintVersion, runToCheckpoint.sourceBinding.blueprintVersion);
+  assert.equal(compiled.plan.binding.sourceObjectId, runToCheckpoint.sourceBinding.objectId);
+  assert.equal(compiled.plan.binding.intentHash, runToCheckpoint.intent.contentHash);
+  assert.ok(compiled.plan.tasks.every((task) => task.status === 'DRAFT'));
+  const compiledTaskByWorkItem = new Map(compiled.plan.tasks.map((task) => [task.g6WorkItemId, task]));
+  assert.equal(compiledTaskByWorkItem.size, runToCheckpoint.artifacts.plan.workItems.length);
+  for (const workItem of runToCheckpoint.artifacts.plan.workItems) {
+    const compiledTask = compiledTaskByWorkItem.get(workItem.id);
+    assert.deepEqual(compiledTask.requirementRefs, workItem.requirementRefs);
+    assert.deepEqual(compiledTask.decisionRefs, workItem.decisionRefs);
+    assert.deepEqual(compiledTask.dependencies, workItem.dependencies.map((dependency) => compiledTaskByWorkItem.get(dependency).id));
+    assert.equal(compiledTask.contextPackageRef, workItem.contextPackageRef);
+  }
+  assert.equal((await postgres.query("select count(*)::int count from orgward.aggregates where tenant_id = 'tenant-a' and aggregate_kind = 'execution_run'")).rows[0].count, 0,
+    'compilation creates no executable run aggregate');
+  assert.equal((await postgres.query("select count(*)::int count from orgward.process_task_instances where tenant_id = 'tenant-a' and project_id = $1", [project.data.id])).rows[0].count, 0,
+    'compilation creates no process runtime');
+  assert.equal((await request(app.base, `/api/v1/projects/${project.data.id}`)).data.version, selection.expectedProjectVersion,
+    'the engine sidecar does not mutate or stale the pinned project aggregate');
+  assert.equal((await request(app.base, `/api/v1/projects/${project.data.id}`)).data.processPlans, undefined,
+    'software delivery plans remain separate from processPlans');
+  const replayedCompile = await request(app.base, `/api/sdlc/cases/${changeCase.id}/compile-software-plan`, {
+    method: 'POST', body: compileBody('pg-t28-compile-replay'),
+  }, 200);
+  assert.equal(replayedCompile.replayed, true);
+  assert.equal(replayedCompile.plan.contentHash, compiled.plan.contentHash);
+  assert.equal((await request(app.base, `/api/sdlc/cases/${changeCase.id}/software-delivery-plans`)).plans.length, 1);
+
+  const assignmentReviewBody = {
+    expectedProjectVersion: selection.expectedProjectVersion, expectedCaseVersion: runToCheckpoint.version,
+    expectedReviewRevision: 0, draftHash: compiled.plan.contentHash, idempotencyKey: 'pg-assignment-review-1',
+    assignments: compiled.plan.tasks.map((task) => ({ taskId: task.id, actorId: 'actor-founder', roleId: 'role-founder', targetPrincipal: bobPrincipal })),
+  };
+  const assignmentReviewRoute = `/api/sdlc/cases/${changeCase.id}/software-delivery-plans/${compiled.plan.id}/assignment-review`;
+  const reviewed = await request(app.base, assignmentReviewRoute, { method: 'POST', body: JSON.stringify(assignmentReviewBody) }, 201);
+  assert.equal(reviewed.review.revision, 1);
+  assert.equal(reviewed.review.status, 'REVIEWED');
+  assert.equal(reviewed.review.executable, false);
+  assert.equal(reviewed.review.draftHash, compiled.plan.contentHash);
+  assert.equal(reviewed.review.assignments.length, compiled.plan.tasks.length);
+  const replayedReview = await request(app.base, assignmentReviewRoute, { method: 'POST', body: JSON.stringify(assignmentReviewBody) }, 200);
+  assert.equal(replayedReview.replayed, true);
+  assert.equal(replayedReview.review.reviewHash, reviewed.review.reviewHash);
+  const changedReplay = await request(app.base, assignmentReviewRoute, { method: 'POST', body: JSON.stringify({ ...assignmentReviewBody, assignments: assignmentReviewBody.assignments.map((assignment, index) => index ? assignment : { ...assignment, roleId: 'role-changed' }) }) }, 409);
+  assert.equal(changedReplay.error.code, 'IDEMPOTENCY_CONFLICT', JSON.stringify(changedReplay));
+  const staleRevision = await request(app.base, assignmentReviewRoute, { method: 'POST', body: JSON.stringify({ ...assignmentReviewBody, expectedReviewRevision: 0, idempotencyKey: 'pg-assignment-stale-revision' }) }, 409);
+  assert.equal(staleRevision.error.code, 'SOFTWARE_ASSIGNMENT_REVIEW_STALE');
+  for (const [id, assignments] of [
+    ['missing', assignmentReviewBody.assignments.slice(1)],
+    ['duplicate', [...assignmentReviewBody.assignments.slice(1), assignmentReviewBody.assignments[0], assignmentReviewBody.assignments[0]]],
+    ['unknown', [...assignmentReviewBody.assignments.slice(1), { ...assignmentReviewBody.assignments[0], taskId: 'unknown-task' }]],
+  ]) {
+    const invalidAssignments = await request(app.base, assignmentReviewRoute, { method: 'POST', body: JSON.stringify({ ...assignmentReviewBody, expectedReviewRevision: 1, idempotencyKey: `pg-assignment-${id}-invalid`, assignments }) }, 400);
+    assert.ok(['INVALID_SOFTWARE_ASSIGNMENT_REVIEW', 'SOFTWARE_ASSIGNMENT_TASK_UNKNOWN'].includes(invalidAssignments.error.code));
+  }
+  assert.equal((await postgres.query('select count(*)::int count from orgward.software_delivery_assignment_reviews where plan_id = $1', [compiled.plan.id])).rows[0].count, 1,
+    'stale, replay-conflict, and invalid task lists do not mutate the saved review');
+  const bobDenied = await request(app.base, assignmentReviewRoute, { method: 'POST', headers: { authorization: 'Bearer bob' }, body: JSON.stringify({ ...assignmentReviewBody, expectedReviewRevision: 1, idempotencyKey: 'pg-assignment-bob-denied' }) }, 404);
+  assert.equal(bobDenied.error, 'Change case not found.');
+  assert.equal((await request(app.base, `/api/sdlc/cases/${changeCase.id}/software-delivery-plans`)).plans.find((entry) => entry.plan.id === compiled.plan.id).assignmentReview.reviewHash, reviewed.review.reviewHash);
+  const crossTenantReview = await request(app.base, assignmentReviewRoute, { method: 'POST', headers: { authorization: 'Bearer alice@tenant-b' }, body: JSON.stringify({ ...assignmentReviewBody, expectedReviewRevision: 1, idempotencyKey: 'pg-assignment-cross-tenant' }) }, 404);
+  assert.equal(crossTenantReview.error, 'Change case not found.');
+  assert.equal((await postgres.query('select count(*)::int count from orgward.software_delivery_assignment_reviews where plan_id = $1', [compiled.plan.id])).rows[0].count, 1,
+    'editor and cross-tenant denial leave the owner review unchanged');
+
+  const priorAuthz = await postgres.query('select authz_generation from orgward.oidc_principals where tenant_id = $1 and principal = $2', ['tenant-a', bobPrincipal]);
+  await postgres.query('update orgward.oidc_principals set authz_generation = authz_generation + 1 where tenant_id = $1 and principal = $2', ['tenant-a', bobPrincipal]);
+  const staleActorReview = await request(app.base, assignmentReviewRoute, { method: 'POST', body: JSON.stringify({ ...assignmentReviewBody, expectedReviewRevision: 1, idempotencyKey: 'pg-assignment-stale-actor' }) }, 409);
+  assert.equal(staleActorReview.error.code, 'ACTOR_BINDING_STALE');
+  assert.equal((await postgres.query('select count(*)::int count from orgward.software_delivery_assignment_reviews where plan_id = $1', [compiled.plan.id])).rows[0].count, 1,
+    'a stale enabled binding does not append a review');
+  await postgres.query('update orgward.oidc_principals set authz_generation = $3 where tenant_id = $1 and principal = $2', ['tenant-a', bobPrincipal, priorAuthz.rows[0].authz_generation]);
+  const revisedReviewBody = { ...assignmentReviewBody, expectedReviewRevision: 1, idempotencyKey: 'pg-assignment-review-2' };
+  const revisedReview = await request(app.base, assignmentReviewRoute, { method: 'POST', body: JSON.stringify(revisedReviewBody) }, 201);
+  assert.equal(revisedReview.review.revision, 2);
+  assert.equal((await postgres.query('select count(*)::int count from orgward.software_delivery_assignment_reviews where plan_id = $1', [compiled.plan.id])).rows[0].count, 2,
+    'a corrected current binding appends a new immutable review revision');
+
+  const ambiguousReview = await request(app.base, assignmentReviewRoute, { method: 'POST', body: JSON.stringify({
+    ...assignmentReviewBody, expectedReviewRevision: 2, idempotencyKey: 'pg-assignment-ambiguous-principal',
+    assignments: assignmentReviewBody.assignments.map(({ targetPrincipal, ...assignment }) => assignment),
+  }) }, 400);
+  assert.equal(ambiguousReview.error.code, 'INVALID_SOFTWARE_ASSIGNMENT_REVIEW',
+    'assignment review requires an explicit principal instead of choosing a binding by query order');
+
+  const legacyReview = structuredClone(revisedReview.review);
+  for (const assignment of legacyReview.assignments) {
+    delete assignment.assignee.principal;
+    delete assignment.assignee.membershipId;
+    delete assignment.assignee.membershipGeneration;
+    delete assignment.assignee.authzGeneration;
+  }
+  const legacyReviewCore = Object.fromEntries(Object.entries(legacyReview).filter(([key]) => key !== 'reviewHash'));
+  legacyReview.reviewHash = contentHash(legacyReviewCore);
+  await postgres.query(`update orgward.software_delivery_assignment_reviews set review_hash=$1,review=$2::jsonb
+    where tenant_id='tenant-a' and plan_id=$3 and review_revision=2`, [legacyReview.reviewHash, JSON.stringify(legacyReview), compiled.plan.id]);
+  const runtimeRoute = `/api/sdlc/cases/${changeCase.id}/software-delivery-plans/${compiled.plan.id}`;
+  const promotionBody = (expectedReviewRevision, idempotencyKey) => ({
+    expectedProjectVersion: selection.expectedProjectVersion, expectedCaseVersion: runToCheckpoint.version,
+    expectedReviewRevision, idempotencyKey,
+  });
+  const legacyPromotion = await request(app.base, `${runtimeRoute}/promote`, {
+    method: 'POST', body: JSON.stringify(promotionBody(2, 'pg-runtime-promote-legacy')),
+  }, 409);
+  assert.equal(legacyPromotion.error.code, 'SOFTWARE_ASSIGNMENT_REVIEW_BINDING_INCOMPLETE');
+  assert.equal((await postgres.query('select count(*)::int count from orgward.software_delivery_runtime_plans where plan_id=$1', [compiled.plan.id])).rows[0].count, 0,
+    'legacy reviews without explicit identity generations cannot create a runtime snapshot');
+  const restoredReview = await request(app.base, assignmentReviewRoute, { method: 'POST', body: JSON.stringify({
+    ...assignmentReviewBody, expectedReviewRevision: 2, idempotencyKey: 'pg-assignment-review-3',
+  }) }, 201);
+  assert.equal(restoredReview.review.revision, 3);
+  const unsupportedReview = structuredClone(restoredReview.review);
+  unsupportedReview.assignments[0].assignee.actorType = 'workload';
+  const unsupportedReviewCore = Object.fromEntries(Object.entries(unsupportedReview).filter(([key]) => key !== 'reviewHash'));
+  unsupportedReview.reviewHash = contentHash(unsupportedReviewCore);
+  await postgres.query(`update orgward.software_delivery_assignment_reviews set review_hash=$1,review=$2::jsonb
+    where tenant_id='tenant-a' and plan_id=$3 and review_revision=3`,
+  [unsupportedReview.reviewHash, JSON.stringify(unsupportedReview), compiled.plan.id]);
+  const unsupportedPromotion = await request(app.base, `${runtimeRoute}/promote`, {
+    method: 'POST', body: JSON.stringify(promotionBody(3, 'pg-runtime-promote-agent-unsupported')),
+  }, 409);
+  assert.equal(unsupportedPromotion.error.code, 'SOFTWARE_AGENT_RUNTIME_UNSUPPORTED');
+  assert.equal((await postgres.query('select count(*)::int count from orgward.software_delivery_runtime_plans where plan_id=$1', [compiled.plan.id])).rows[0].count, 0,
+    'unsupported work remains a draft with no runtime snapshot');
+  await postgres.query(`update orgward.software_delivery_assignment_reviews set review_hash=$1,review=$2::jsonb
+    where tenant_id='tenant-a' and plan_id=$3 and review_revision=3`,
+  [restoredReview.review.reviewHash, JSON.stringify(restoredReview.review), compiled.plan.id]);
+  const stalePromotion = await request(app.base, `${runtimeRoute}/promote`, {
+    method: 'POST', body: JSON.stringify({ ...promotionBody(3, 'pg-runtime-promote-stale'), expectedProjectVersion: selection.expectedProjectVersion + 1 }),
+  }, 409);
+  assert.equal(stalePromotion.error.code, 'SOURCE_BINDING_STALE');
+  const crossTenantPromotion = await request(app.base, `${runtimeRoute}/promote`, {
+    headers: { authorization: 'Bearer alice@tenant-b' }, method: 'POST', body: JSON.stringify(promotionBody(3, 'pg-runtime-promote-cross-tenant')),
+  }, 404);
+  assert.equal(crossTenantPromotion.error, 'Change case not found.');
+  assert.equal((await postgres.query('select count(*)::int count from orgward.software_delivery_runtime_plans where plan_id=$1', [compiled.plan.id])).rows[0].count, 0,
+    'stale project and cross-tenant promotion leave no snapshot');
+  const promoted = await request(app.base, `${runtimeRoute}/promote`, {
+    method: 'POST', body: JSON.stringify(promotionBody(3, 'pg-runtime-promote-1')),
+  }, 201);
+  assert.equal(promoted.result.runtimeRevision, 3);
+  await assert.rejects(postgres.query(`update orgward.software_delivery_runtime_plans set snapshot_hash=repeat('0',64)
+    where tenant_id='tenant-a' and plan_id=$1 and runtime_revision=3`, [compiled.plan.id]), { code: 'P0001' },
+  'the database trigger rejects updates to immutable runtime snapshots');
+  const promotionReplay = await request(app.base, `${runtimeRoute}/promote`, {
+    method: 'POST', body: JSON.stringify(promotionBody(3, 'pg-runtime-promote-1')),
+  }, 200);
+  assert.equal(promotionReplay.replayed, true);
+  assert.equal(promotionReplay.result.snapshotHash, promoted.result.snapshotHash);
+  const promotionConflict = await request(app.base, `${runtimeRoute}/promote`, {
+    method: 'POST', body: JSON.stringify({ ...promotionBody(3, 'pg-runtime-promote-1'), expectedProjectVersion: selection.expectedProjectVersion + 1 }),
+  }, 409);
+  assert.equal(promotionConflict.error.code, 'IDEMPOTENCY_CONFLICT');
+
+  const alicePrincipal = `oidc:${createHash('sha256').update(`${issuer}\nalice`).digest('hex')}`;
+  await postgres.query(`update orgward.project_memberships set revoked_at=now(),revoked_by=$3
+    where tenant_id='tenant-a' and project_id=$1 and principal=$2`, [project.data.id, bobPrincipal, alicePrincipal]);
+  const staleStart = await request(app.base, `${runtimeRoute}/start-instance`, {
+    method: 'POST', body: JSON.stringify({ runtimeRevision: 3, idempotencyKey: 'pg-runtime-start-revoked' }),
+  }, 409);
+  assert.equal(staleStart.error.code, 'ACTOR_BINDING_STALE');
+  assert.equal((await postgres.query('select count(*)::int count from orgward.process_task_instances where process_plan_id=$1', [compiled.plan.id])).rows[0].count, 0,
+    'revoked assignment leaves no runtime rows');
+  await postgres.query(`update orgward.project_memberships set revoked_at=null,revoked_by=null
+    where tenant_id='tenant-a' and project_id=$1 and principal=$2`, [project.data.id, bobPrincipal]);
+
+  const instanceBody = { runtimeRevision: 3, idempotencyKey: 'pg-runtime-start-1' };
+  const startedSoftware = await request(app.base, `${runtimeRoute}/start-instance`, { method: 'POST', body: JSON.stringify(instanceBody) }, 201);
+  const startedSoftwareReplay = await request(app.base, `${runtimeRoute}/start-instance`, { method: 'POST', body: JSON.stringify(instanceBody) }, 200);
+  assert.equal(startedSoftwareReplay.result.planInstanceId, startedSoftware.result.planInstanceId);
+  assert.deepEqual(startCommitCalls, ['software-runtime-start:pg-runtime-start-1'], 'afterCommit runs once for a newly committed instance and not for replay');
+  const startAudit = await postgres.query(`select event_type,command_id,event from orgward.audit_log
+    where tenant_id='tenant-a' and aggregate_kind='process_task_instance_control' and aggregate_id=$1`, [startedSoftware.result.planInstanceId]);
+  assert.equal(startAudit.rowCount, 1);
+  assert.equal(startAudit.rows[0].event_type, 'SoftwareDeliveryInstanceStarted');
+  assert.equal(startAudit.rows[0].event.causationId, startAudit.rows[0].command_id);
+  assert.equal(startAudit.rows[0].event.data.planInstanceId, startedSoftware.result.planInstanceId);
+  assert.equal((await postgres.query(`select count(*)::int count from orgward.software_delivery_runtime_commands
+    where tenant_id='tenant-a' and idempotency_key=$1 and command_kind='start-instance'`, [instanceBody.idempotencyKey])).rows[0].count, 1);
+  assert.equal((await postgres.query('select events from orgward.process_task_instance_controls where tenant_id=$1 and plan_instance_id=$2', ['tenant-a', startedSoftware.result.planInstanceId])).rows[0].events.length, 0,
+    'initial control history remains empty until a control action occurs');
+  const caseAggregate = (await postgres.query(`select state from orgward.aggregates where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`, [changeCase.id])).rows[0].state;
+  const reassignedCase = { ...caseAggregate, accountableOwner: bobPrincipal };
+  await postgres.query(`update orgward.aggregates set state=$2::jsonb,state_hash=$3
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`,
+  [changeCase.id, JSON.stringify(reassignedCase), contentHash(reassignedCase)]);
+  const staleOwnerKey = instanceBody.idempotencyKey;
+  const controlsBeforeStaleReplay = (await postgres.query(`select count(*)::int count from orgward.process_task_instance_controls where tenant_id='tenant-a'`)).rows[0].count;
+  const tasksBeforeStaleReplay = (await postgres.query(`select count(*)::int count from orgward.process_task_instances where tenant_id='tenant-a' and plan_instance_id=$1`, [startedSoftware.result.planInstanceId])).rows[0].count;
+  await assert.rejects(app.executionService.store.startSoftwareDeliveryInstance({
+    tenantId: 'tenant-a', projectId: project.data.id, caseId: changeCase.id, planId: compiled.plan.id, revision: 3,
+    principal: alicePrincipal, authzGeneration: await authzGeneration(app, 'alice'), idempotencyKey: staleOwnerKey,
+    requestHash: contentHash({ staleOwnerKey }),
+  }), (error) => error.code === 'ACCEPTED_PLAN_STALE');
+  assert.equal((await postgres.query(`select count(*)::int count from orgward.software_delivery_runtime_commands where tenant_id='tenant-a' and idempotency_key=$1`, [staleOwnerKey])).rows[0].count, 1,
+    'a stale-owner replay is denied without adding a second command receipt');
+  assert.equal((await postgres.query(`select count(*)::int count from orgward.audit_log where tenant_id='tenant-a' and event_type='SoftwareDeliveryInstanceStarted'`)).rows[0].count, 1,
+    'a rejected stale-owner start appends no event');
+  assert.equal((await postgres.query(`select count(*)::int count from orgward.process_task_instance_controls where tenant_id='tenant-a'`)).rows[0].count, controlsBeforeStaleReplay,
+    'a rejected stale-owner replay creates no instance');
+  assert.equal((await postgres.query(`select count(*)::int count from orgward.process_task_instances where tenant_id='tenant-a' and plan_instance_id=$1`, [startedSoftware.result.planInstanceId])).rows[0].count, tasksBeforeStaleReplay,
+    'a rejected stale-owner replay creates no task rows');
+  assert.deepEqual(startCommitCalls, ['software-runtime-start:pg-runtime-start-1'], 'a denied replay does not invoke afterCommit');
+  const restoredCase = { ...reassignedCase, accountableOwner: alicePrincipal };
+  await postgres.query(`update orgward.aggregates set state=$2::jsonb,state_hash=$3
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`,
+  [changeCase.id, JSON.stringify(restoredCase), contentHash(restoredCase)]);
+  const softwareRows = await postgres.query(`select status,actor_type,execution_run_id from orgward.process_task_instances
+    where tenant_id='tenant-a' and process_plan_id=$1 and plan_revision=3 and plan_instance_id=$2 order by task_id`,
+  [compiled.plan.id, startedSoftware.result.planInstanceId]);
+  assert.equal(softwareRows.rowCount, compiled.plan.tasks.length);
+  assert.ok(softwareRows.rows.every((row) => row.status === 'PLANNED' && row.actor_type === 'human' && row.execution_run_id === null));
+
+  const rootTask = compiled.plan.tasks.find((task) => task.dependencies.length === 0);
+  const dependentTask = compiled.plan.tasks.find((task) => task.dependencies.includes(rootTask.id));
+  assert.ok(rootTask && dependentTask, 'the software draft includes a root and a dependent human task');
+  const rejectedAgentRun = await request(app.base, '/api/execution/process-task-runs', {
+    headers: { authorization: 'Bearer bob' }, method: 'POST',
+    body: command('pg-runtime-agent-run-rejected', { projectId: project.data.id, planId: compiled.plan.id,
+      revision: 3, planInstanceId: startedSoftware.result.planInstanceId, taskId: rootTask.id, profileId: profile.id }),
+  }, 409);
+  assert.equal(rejectedAgentRun.error.code, 'SOFTWARE_AGENT_RUNTIME_UNSUPPORTED');
+  assert.equal((await postgres.query("select count(*)::int count from orgward.aggregates where tenant_id='tenant-a' and aggregate_kind='execution_run'")).rows[0].count, 0,
+    'a software checkpoint cannot enter model proposal or run creation');
+  const softwareTaskRoute = (action) => `/api/execution/process-task-instances/${action}`;
+  const taskRef = { projectId: project.data.id, planId: compiled.plan.id, revision: 3,
+    planInstanceId: startedSoftware.result.planInstanceId, taskId: rootTask.id };
+  const startedTask = await request(app.base, softwareTaskRoute('start'), {
+    headers: { authorization: 'Bearer bob' }, method: 'POST', body: command('pg-runtime-human-start', taskRef),
+  }, 201);
+  const escalatedTask = await request(app.base, softwareTaskRoute('escalate'), {
+    headers: { authorization: 'Bearer bob' }, method: 'POST', body: command('pg-runtime-human-escalate', { ...taskRef, reason: 'Need owner review.' }),
+  }, 201);
+  assert.equal(escalatedTask.status, 'ESCALATED');
+  const resumedTask = await request(app.base, softwareTaskRoute('resolve'), {
+    method: 'POST', body: command('pg-runtime-human-resume', { ...taskRef, disposition: 'resume', reason: 'Owner reviewed the checkpoint.' }),
+  }, 201);
+  assert.equal(resumedTask.status, 'IN_PROGRESS');
+  const dependentBeforeSuccess = await request(app.base, softwareTaskRoute('start'), {
+    headers: { authorization: 'Bearer bob' }, method: 'POST', body: command('pg-runtime-dependent-before-success', {
+      ...taskRef, taskId: dependentTask.id,
+    }),
+  }, 409);
+  assert.equal(dependentBeforeSuccess.error.code, 'PROCESS_TASK_DEPENDENCY_UNSATISFIED');
+  const completedTask = await request(app.base, softwareTaskRoute('complete'), {
+    headers: { authorization: 'Bearer bob' }, method: 'POST', body: command('pg-runtime-human-complete', {
+      ...taskRef, result: 'succeeded', evidence: ['Owner-reviewed delivery checkpoint completed.'],
+    }),
+  }, 201);
+  assert.equal(completedTask.status, 'SUCCEEDED');
+  const startedDependent = await request(app.base, softwareTaskRoute('start'), {
+    headers: { authorization: 'Bearer bob' }, method: 'POST', body: command('pg-runtime-dependent-after-success', {
+      ...taskRef, taskId: dependentTask.id,
+    }),
+  }, 201);
+  assert.equal(startedDependent.planInstanceId, startedSoftware.result.planInstanceId);
+  const completedDependent = await request(app.base, softwareTaskRoute('complete'), {
+    headers: { authorization: 'Bearer bob' }, method: 'POST', body: command('pg-runtime-dependent-complete', {
+      ...taskRef, taskId: dependentTask.id, result: 'succeeded', evidence: ['Prerequisite checkpoint is complete.'],
+    }),
+  }, 201);
+  assert.equal(completedDependent.status, 'SUCCEEDED');
+  const controlRoute = (action) => `/api/execution/process-task-instances/${action}`;
+  const currentControl = async () => (await request(app.base,
+    `/api/execution/process-task-instances?projectId=${project.data.id}`)).instances
+    .find((runtime) => runtime.planInstanceId === startedSoftware.result.planInstanceId).instanceControl;
+  const pauseBody = (control, commandId) => command(commandId, { projectId: project.data.id,
+    planInstanceId: startedSoftware.result.planInstanceId, version: control.version,
+    reason: 'Pause the human checkpoint instance for a controlled review.' });
+  const pausedSoftware = await request(app.base, controlRoute('pause'), {
+    method: 'POST', body: pauseBody(await currentControl(), 'pg-runtime-instance-pause'),
+  });
+  assert.equal(pausedSoftware.status, 'PAUSED');
+  const resumedSoftware = await request(app.base, controlRoute('resume'), {
+    method: 'POST', body: command('pg-runtime-instance-resume', { projectId: project.data.id,
+      planInstanceId: startedSoftware.result.planInstanceId, version: pausedSoftware.version }),
+  });
+  assert.equal(resumedSoftware.status, 'ACTIVE');
+  const pausedForCancel = await request(app.base, controlRoute('pause'), {
+    method: 'POST', body: pauseBody(await currentControl(), 'pg-runtime-instance-pause-again'),
+  });
+  assert.equal(pausedForCancel.status, 'PAUSED');
+  const cancelledSoftware = await request(app.base, controlRoute('cancel'), {
+    method: 'POST', body: command('pg-runtime-instance-cancel', { projectId: project.data.id,
+      planInstanceId: startedSoftware.result.planInstanceId, version: pausedForCancel.version,
+      reason: 'Stop the completed human checkpoint instance.' }),
+  });
+  assert.equal(cancelledSoftware.status, 'CANCELLED');
+  const runtimeRead = await request(app.base, `/api/execution/process-task-instances?projectId=${project.data.id}`);
+  assert.equal(runtimeRead.plans.find((plan) => plan.id === compiled.plan.id)?.snapshotHash, promoted.result.snapshotHash);
+  assert.ok(runtimeRead.instances.some((runtime) => runtime.planInstanceId === startedSoftware.result.planInstanceId
+    && runtime.taskId === rootTask.id && runtime.status === 'SUCCEEDED'
+    && runtime.instanceControl.status === 'CANCELLED'));
+  const missingTaskRow = await postgres.query(`select * from orgward.process_task_instances
+    where tenant_id='tenant-a' and plan_instance_id=$1 and task_id=$2`,
+  [startedSoftware.result.planInstanceId, dependentTask.id]);
+  assert.equal(missingTaskRow.rowCount, 1);
+  await postgres.query('alter table orgward.process_task_instances disable trigger process_task_instance_no_delete');
+  try {
+    await postgres.query(`delete from orgward.process_task_instances
+      where tenant_id='tenant-a' and plan_instance_id=$1 and task_id=$2`,
+    [startedSoftware.result.planInstanceId, dependentTask.id]);
+    const incompleteSnapshotRead = await request(app.base,
+      `/api/execution/process-task-instances?projectId=${project.data.id}`, {}, 503);
+    assert.equal(incompleteSnapshotRead.error.code, 'PERSISTENCE_INTEGRITY',
+      'reads fail closed when a promoted software instance is missing a snapshot task row');
+  } finally {
+    const saved = missingTaskRow.rows[0];
+    await postgres.query(`insert into orgward.process_task_instances (
+      tenant_id,project_id,process_plan_id,plan_revision,plan_instance_id,task_id,blueprint_id,blueprint_version,
+      process_id,actor_id,role_id,actor_type,assigned_principal,assigned_membership_generation,assigned_authz_generation,
+      status,execution_run_id,version,outcome,evidence,events,started_at,completed_at,created_at,updated_at
+    ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,$20::jsonb,$21::jsonb,$22,$23,$24,$25)`, [
+      saved.tenant_id, saved.project_id, saved.process_plan_id, saved.plan_revision, saved.plan_instance_id, saved.task_id,
+      saved.blueprint_id, saved.blueprint_version, saved.process_id, saved.actor_id, saved.role_id, saved.actor_type,
+      saved.assigned_principal, saved.assigned_membership_generation, saved.assigned_authz_generation, saved.status,
+      saved.execution_run_id, saved.version, JSON.stringify(saved.outcome), JSON.stringify(saved.evidence), JSON.stringify(saved.events),
+      saved.started_at, saved.completed_at, saved.created_at, saved.updated_at,
+    ]);
+    await postgres.query('alter table orgward.process_task_instances enable trigger process_task_instance_no_delete');
+  }
+  const crossTenantRuntimeRead = await request(app.base, `/api/execution/process-task-instances?projectId=${project.data.id}`, {
+    headers: { authorization: 'Bearer alice@tenant-b' },
+  }, 403);
+  assert.equal(crossTenantRuntimeRead.error.code, 'ACTION_FORBIDDEN');
+
+  const secondCase = structuredClone(runToCheckpoint);
+  secondCase.id = `change-case-${randomUUID()}`;
+  await postgres.query(`
+    insert into orgward.aggregates (tenant_id, aggregate_kind, aggregate_id, version, state, state_hash, updated_at)
+    values ('tenant-a', 'change_case', $1, $2, $3::jsonb, $4, now())
+  `, [secondCase.id, secondCase.version, JSON.stringify(secondCase), contentHash(secondCase)]);
+  await postgres.query(`
+    insert into orgward.aggregate_project_scopes (tenant_id, aggregate_kind, aggregate_id, project_id)
+    values ('tenant-a', 'change_case', $1, $2)
+  `, [secondCase.id, project.data.id]);
+  const secondCaseCompile = await request(app.base, `/api/sdlc/cases/${secondCase.id}/compile-software-plan`, {
+    method: 'POST', body: compileBody('pg-t28-compile-distinct-case'),
+  }, 201);
+  assert.equal(secondCaseCompile.plan.binding.g6PlanHash, compiled.plan.binding.g6PlanHash);
+  assert.equal(secondCaseCompile.plan.binding.sourceHash, compiled.plan.binding.sourceHash);
+  assert.notEqual(secondCaseCompile.plan.binding.caseId, compiled.plan.binding.caseId);
+  assert.notEqual(secondCaseCompile.plan.generationKey, compiled.plan.generationKey);
+  assert.notEqual(secondCaseCompile.plan.id, compiled.plan.id,
+    'case-scoped v2 plan IDs avoid the table-wide tenant/plan_id uniqueness conflict');
+  assert.notEqual(secondCaseCompile.plan.tasks[0].id, compiled.plan.tasks[0].id);
+
+  const legacyDraft = compileSoftwareDeliveryDraft(runToCheckpoint, {
+    compilerVersion: LEGACY_SOFTWARE_PLAN_COMPILER_VERSION,
+  });
+  assert.equal(verifySoftwareDeliveryDraft(runToCheckpoint, legacyDraft), true,
+    'the v1 compiler reproduces the historical canonical plan for readback verification');
+  await postgres.query(`
+    insert into orgward.software_delivery_plans
+      (tenant_id, project_id, case_id, g6_plan_hash, compiler_version, plan_id, plan_hash, plan, created_by)
+    values ('tenant-a', $1, $2, $3, $4, $5, $6, $7::jsonb, 'legacy-fixture')
+  `, [project.data.id, changeCase.id, legacyDraft.binding.g6PlanHash, legacyDraft.compilerVersion,
+    legacyDraft.id, contentHash(legacyDraft), JSON.stringify(legacyDraft)]);
+  const legacyReadback = await request(app.base, `/api/sdlc/cases/${changeCase.id}/software-delivery-plans`);
+  const verifiedLegacyPlan = legacyReadback.plans.find((entry) => entry.plan.compilerVersion === LEGACY_SOFTWARE_PLAN_COMPILER_VERSION);
+  assert.ok(verifiedLegacyPlan);
+  assert.equal(verifiedLegacyPlan.valid, true,
+    'an already-persisted v1 draft remains readable and canonically verified after the v2 compiler change');
+
+  await request(app.base, `/api/sdlc/cases/${changeCase.id}/compile-software-plan`, {
+    method: 'POST', headers: { authorization: 'Bearer bob' }, body: compileBody('pg-t28-compile-denied'),
+  }, 404);
+  assert.equal((await postgres.query('select count(*)::int count from orgward.software_delivery_plans')).rows[0].count, 3,
+    'a nonmember cannot add another software delivery plan');
+  const tamperedPlan = structuredClone(compiled.plan);
+  tamperedPlan.tasks[0].title += ' tampered';
+  await postgres.query(`update orgward.software_delivery_plans set plan = $1::jsonb where tenant_id = 'tenant-a' and case_id = $2 and plan_id = $3`, [JSON.stringify(tamperedPlan), changeCase.id, compiled.plan.id]);
+  const tamperedRead = await request(app.base, `/api/sdlc/cases/${changeCase.id}/software-delivery-plans`, {}, 503);
+  assert.equal(tamperedRead.error.code, 'PERSISTENCE_INTEGRITY');
+  await postgres.query(`update orgward.software_delivery_plans set plan = $1::jsonb where tenant_id = 'tenant-a' and case_id = $2 and plan_id = $3`, [JSON.stringify(compiled.plan), changeCase.id, compiled.plan.id]);
+
+  const caseRow = await postgres.query(`select state from orgward.aggregates where tenant_id = 'tenant-a' and aggregate_kind = 'change_case' and aggregate_id = $1`, [changeCase.id]);
+  const originalCaseState = caseRow.rows[0].state;
+  const alteredCaseState = structuredClone(originalCaseState);
+  alteredCaseState.artifacts.plan.workItems[0].objective += ' tampered';
+  await postgres.query(`update orgward.aggregates set state = $1::jsonb, state_hash = $2 where tenant_id = 'tenant-a' and aggregate_kind = 'change_case' and aggregate_id = $3`, [JSON.stringify(alteredCaseState), contentHash(alteredCaseState), changeCase.id]);
+  const tamperedG6 = await request(app.base, `/api/sdlc/cases/${changeCase.id}/compile-software-plan`, {
+    method: 'POST', body: compileBody('pg-t28-compile-tampered-g6'),
+  }, 409);
+  assert.equal(tamperedG6.error.code, 'G6_PLAN_INTEGRITY_INVALID');
+  assert.equal((await postgres.query('select count(*)::int count from orgward.software_delivery_plans where case_id = $1', [changeCase.id])).rows[0].count, 2);
+  await postgres.query(`update orgward.aggregates set state = $1::jsonb, state_hash = $2 where tenant_id = 'tenant-a' and aggregate_kind = 'change_case' and aggregate_id = $3`, [JSON.stringify(originalCaseState), contentHash(originalCaseState), changeCase.id]);
+
+  const projectRow = await postgres.query(`select state from orgward.aggregates where tenant_id = 'tenant-a' and aggregate_kind = 'project' and aggregate_id = $1`, [project.data.id]);
+  const originalProjectState = projectRow.rows[0].state;
+  const advancedProjectState = structuredClone(originalProjectState);
+  advancedProjectState.version += 1;
+  await postgres.query(`update orgward.aggregates set version = $1, state = $2::jsonb, state_hash = $3 where tenant_id = 'tenant-a' and aggregate_kind = 'project' and aggregate_id = $4`, [advancedProjectState.version, JSON.stringify(advancedProjectState), contentHash(advancedProjectState), project.data.id]);
+  const staleSource = await request(app.base, `/api/sdlc/cases/${changeCase.id}/compile-software-plan`, {
+    method: 'POST', body: compileBody('pg-t28-compile-stale-source'),
+  }, 409);
+  assert.equal(staleSource.error.code, 'SOURCE_BINDING_STALE');
+  assert.equal((await postgres.query('select count(*)::int count from orgward.software_delivery_plans where case_id = $1', [changeCase.id])).rows[0].count, 2);
+  await postgres.query(`update orgward.aggregates set version = $1, state = $2::jsonb, state_hash = $3 where tenant_id = 'tenant-a' and aggregate_kind = 'project' and aggregate_id = $4`, [originalProjectState.version, JSON.stringify(originalProjectState), contentHash(originalProjectState), project.data.id]);
   await request(app.base, `/api/sdlc/cases/${changeCase.id}/run`, {
-    method: 'POST', body: JSON.stringify({ version: advanced.version, idempotencyKey: 'pg-case-run', note: 'changed retry' }),
+    method: 'POST', body: JSON.stringify({ version: requirementsAccepted.version, idempotencyKey: 'pg-case-run', note: 'changed retry' }),
   }, 409);
   const caseEvidence = await postgres.query(`
     select jsonb_array_length(state -> 'events') event_count,
@@ -2790,10 +3372,6 @@ test('change cases and execution runs use PostgreSQL compare-and-swap state acro
     method: 'POST', body: JSON.stringify({ projectId: project.data.id, profileId: profile.id, title: 'Durable run', objective: 'Survive restart.' }),
   }, 201);
   await request(app.base, '/api/v1/foundation', { headers: { authorization: 'Bearer bob' } });
-  const bobPrincipal = `oidc:${createHash('sha256').update('https://persistence-identity.example.test\nbob').digest('hex')}`;
-  await request(app.base, `/api/v1/projects/${project.data.id}/members`, {
-    method: 'POST', body: JSON.stringify({ principal: bobPrincipal, access: 'editor' }),
-  });
   const approved = await request(app.base, `/api/execution/runs/${run.id}/approve`, {
     method: 'POST', headers: { authorization: 'Bearer bob' }, body: JSON.stringify({ version: run.version }),
   });
@@ -2801,12 +3379,65 @@ test('change cases and execution runs use PostgreSQL compare-and-swap state acro
   await close(app);
   app = null;
 
-  app = await start(postgres.databaseUrl, { executionProfiles: [profile] });
-  assert.equal((await request(app.base, `/api/sdlc/cases/${changeCase.id}`)).version, runToCheckpoint.version);
+  app = await start(postgres.databaseUrl, { executionProfiles: [profile], oidcAuthenticator });
+  const reloadedCase = await request(app.base, `/api/sdlc/cases/${changeCase.id}`);
+  assert.equal(reloadedCase.version, runToCheckpoint.version);
+  const reloadedArchitecture = reloadedCase.artifacts.architecture.acceptedBaseline;
+  assert.equal(reloadedArchitecture.draftHash, acceptedArchitecture.draftHash);
+  assert.equal(reloadedArchitecture.requirementsBaselineHash, acceptedRequirements.contentHash);
+  assert.equal(reloadedArchitecture.requirementsBaselineVersion, acceptedRequirements.version);
+  assert.equal(reloadedArchitecture.sourceHash, reloadedCase.sourceBinding.sourceHash);
+  assert.equal(reloadedArchitecture.intentHash, reloadedCase.intent.contentHash);
+  assert.ok(reloadedCase.artifacts.plan.workItems.every((item) => item.architectureBaselineHash === reloadedArchitecture.draftHash));
+  const reloadedSoftwareDrafts = await request(app.base, `/api/sdlc/cases/${changeCase.id}/software-delivery-plans`);
+  assert.equal(reloadedSoftwareDrafts.plans.length, 2);
+  assert.ok(reloadedSoftwareDrafts.plans.every((entry) => entry.valid));
+  const reloadedV2Draft = reloadedSoftwareDrafts.plans.find((entry) => entry.plan.compilerVersion === SOFTWARE_PLAN_COMPILER_VERSION);
+  const reloadedV1Draft = reloadedSoftwareDrafts.plans.find((entry) => entry.plan.compilerVersion === LEGACY_SOFTWARE_PLAN_COMPILER_VERSION);
+  assert.equal(reloadedV2Draft.plan.contentHash, compiled.plan.contentHash);
+  assert.equal(reloadedV2Draft.plan.id, compiled.plan.id);
+  assert.equal(reloadedV2Draft.assignmentReview.reviewHash, restoredReview.review.reviewHash);
+  assert.equal(reloadedV2Draft.assignmentReview.revision, 3);
+  assert.equal(reloadedV2Draft.assignmentReview.executable, false);
+  assert.equal(reloadedV1Draft.plan.contentHash, legacyDraft.contentHash);
+  const restartedRuntime = await request(app.base, `/api/execution/process-task-instances?projectId=${project.data.id}`);
+  assert.equal(restartedRuntime.plans.find((plan) => plan.id === compiled.plan.id)?.snapshotHash, promoted.result.snapshotHash);
+  const restartedTaskRuntimes = restartedRuntime.instances.filter((runtime) =>
+    runtime.projectId === project.data.id && runtime.processPlanId === compiled.plan.id && runtime.revision === 3
+    && runtime.planInstanceId === startedSoftware.result.planInstanceId);
+  const restartedRootTask = restartedTaskRuntimes.find((runtime) => runtime.taskId === rootTask.id);
+  const restartedDependentTask = restartedTaskRuntimes.find((runtime) => runtime.taskId === dependentTask.id);
+  assert.ok(restartedRootTask, 'the completed checkpoint resolves under its exact project/plan/revision/instance/task identity after restart');
+  assert.equal(restartedRootTask.status, 'SUCCEEDED');
+  assert.deepEqual(restartedRootTask.outcome, { result: 'succeeded' });
+  assert.deepEqual(restartedRootTask.evidence, ['Owner-reviewed delivery checkpoint completed.']);
+  assert.ok(restartedRootTask.events.some((event) => event.type === 'HumanTaskCompleted'
+    && event.data.taskId === rootTask.id && event.data.processPlanId === compiled.plan.id
+    && event.data.revision === 3 && event.data.planInstanceId === startedSoftware.result.planInstanceId
+    && event.data.result === 'succeeded' && event.data.evidence.includes('Owner-reviewed delivery checkpoint completed.')),
+  'the matching HumanTaskCompleted event and evidence persist after restart');
+  assert.ok(restartedDependentTask, 'the dependent outcome resolves under its own task identity after restart');
+  assert.deepEqual(restartedDependentTask.outcome, { result: 'succeeded' });
+  assert.deepEqual(restartedDependentTask.evidence, ['Prerequisite checkpoint is complete.'],
+    'task evidence does not appear under a different task in the same process instance');
+  const persistedCheckpoint = await postgres.query(`select project_id,process_plan_id,plan_revision,plan_instance_id,task_id,status,outcome,evidence,events
+    from orgward.process_task_instances where tenant_id='tenant-a' and project_id=$1 and process_plan_id=$2
+      and plan_revision=3 and plan_instance_id=$3 and task_id=$4`,
+  [project.data.id, compiled.plan.id, startedSoftware.result.planInstanceId, rootTask.id]);
+  assert.equal(persistedCheckpoint.rowCount, 1);
+  assert.equal(persistedCheckpoint.rows[0].project_id, project.data.id);
+  assert.equal(persistedCheckpoint.rows[0].process_plan_id, compiled.plan.id);
+  assert.equal(Number(persistedCheckpoint.rows[0].plan_revision), 3);
+  assert.equal(persistedCheckpoint.rows[0].plan_instance_id, startedSoftware.result.planInstanceId);
+  assert.equal(persistedCheckpoint.rows[0].task_id, rootTask.id);
+  assert.equal(persistedCheckpoint.rows[0].status, 'SUCCEEDED');
+  assert.deepEqual(persistedCheckpoint.rows[0].outcome, { result: 'succeeded' });
+  assert.deepEqual(persistedCheckpoint.rows[0].evidence, ['Owner-reviewed delivery checkpoint completed.']);
+  assert.ok(persistedCheckpoint.rows[0].events.some((event) => event.type === 'HumanTaskCompleted'));
   assert.equal((await request(app.base, `/api/execution/runs/${run.id}`)).status, 'APPROVED');
   const kinds = await postgres.query("select aggregate_kind, count(*)::int count from orgward.aggregates group by aggregate_kind order by aggregate_kind");
   assert.deepEqual(kinds.rows, [
-    { aggregate_kind: 'change_case', count: 1 },
+    { aggregate_kind: 'change_case', count: 2 },
     { aggregate_kind: 'execution_run', count: 1 },
     { aggregate_kind: 'project', count: 1 },
   ]);
@@ -2823,9 +3454,11 @@ test('PostgreSQL revalidates authenticated SDLC release approval authority atomi
   const project = await request(app.base, '/api/v1/projects', {
     ...as('alice'), method: 'POST', body: command('sdlc-release-project', { name: 'Governed release' }),
   }, 201);
-  const changeCase = await request(app.base, '/api/sdlc/cases', {
-    ...as('alice'), method: 'POST', body: JSON.stringify({ projectId: project.data.id, mode: 'golden' }),
+  const { selection } = await savedSdlcSource(app.base, project.data.id, 'sdlc-release-source', as('alice'));
+  let changeCase = await request(app.base, '/api/sdlc/cases', {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ ...selection, mode: 'golden' }),
   }, 201);
+  changeCase = await acceptSdlcRequirements(app.base, changeCase.id, 'sdlc-release-requirements', as('alice'));
   const atApproval = await request(app.base, `/api/sdlc/cases/${changeCase.id}/run`, {
     ...as('alice'), method: 'POST', body: JSON.stringify({ version: changeCase.version, idempotencyKey: 'sdlc-release-run' }),
   });
@@ -2906,9 +3539,11 @@ test('PostgreSQL requires human identities for SDLC release approval and legacy 
   const project = await request(app.base, '/api/v1/projects', {
     ...as('alice'), method: 'POST', body: command('workload-release-project', { name: 'Human-only release approval' }),
   }, 201);
-  const changeCase = await request(app.base, '/api/sdlc/cases', {
-    ...as('alice'), method: 'POST', body: JSON.stringify({ projectId: project.data.id, mode: 'golden' }),
+  const { selection } = await savedSdlcSource(app.base, project.data.id, 'workload-release-source', as('alice'));
+  let changeCase = await request(app.base, '/api/sdlc/cases', {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ ...selection, mode: 'golden' }),
   }, 201);
+  changeCase = await acceptSdlcRequirements(app.base, changeCase.id, 'workload-release-requirements', as('alice'));
   const atApproval = await request(app.base, `/api/sdlc/cases/${changeCase.id}/run`, {
     ...as('alice'), method: 'POST', body: JSON.stringify({ version: changeCase.version, idempotencyKey: 'workload-release-run' }),
   });
@@ -2972,9 +3607,11 @@ test('PostgreSQL fences S9 release consumption against revoked approver authorit
   const project = await request(app.base, '/api/v1/projects', {
     ...as('alice'), method: 'POST', body: command('sdlc-consume-project', { name: 'Approval consumption' }),
   }, 201);
-  const changeCase = await request(app.base, '/api/sdlc/cases', {
-    ...as('alice'), method: 'POST', body: JSON.stringify({ projectId: project.data.id, mode: 'golden' }),
+  const { selection } = await savedSdlcSource(app.base, project.data.id, 'sdlc-consume-source', as('alice'));
+  let changeCase = await request(app.base, '/api/sdlc/cases', {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ ...selection, mode: 'golden' }),
   }, 201);
+  changeCase = await acceptSdlcRequirements(app.base, changeCase.id, 'sdlc-consume-requirements', as('alice'));
   const atApproval = await request(app.base, `/api/sdlc/cases/${changeCase.id}/run`, {
     ...as('alice'), method: 'POST', body: JSON.stringify({ version: changeCase.version, idempotencyKey: 'sdlc-consume-run' }),
   });
@@ -3064,11 +3701,13 @@ test('PostgreSQL enforces project scope for cases and runs, denies reader writes
   const aliceProject = await request(app.base, '/api/v1/projects', {
     ...as('alice'), method: 'POST', body: command('scope-pg-alice-project', { name: 'Alice project' }),
   }, 201);
+  const { selection } = await savedSdlcSource(app.base, aliceProject.data.id, 'scope-pg-alice-source', as('alice'));
   const bobProject = await request(app.base, '/api/v1/projects', {
     ...as('bob'), method: 'POST', body: command('scope-pg-bob-project', { name: 'Bob project' }),
   }, 201);
-  const changeCase = await request(app.base, '/api/sdlc/cases', {
-    ...as('alice'), method: 'POST', body: JSON.stringify({ projectId: aliceProject.data.id, mode: 'golden' }),
+  const { selection: bobSelection } = await savedSdlcSource(app.base, bobProject.data.id, 'scope-pg-bob-source', as('bob'));
+  let changeCase = await request(app.base, '/api/sdlc/cases', {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ ...selection, mode: 'golden' }),
   }, 201);
   const run = await request(app.base, '/api/execution/runs', {
     ...as('alice'), method: 'POST', body: JSON.stringify({
@@ -3081,13 +3720,29 @@ test('PostgreSQL enforces project scope for cases and runs, denies reader writes
   await request(app.base, `/api/sdlc/cases/${changeCase.id}`, as('bob'), 404);
   await request(app.base, `/api/execution/runs/${run.id}`, as('bob'), 404);
   await request(app.base, '/api/sdlc/cases', {
-    ...as('alice'), method: 'POST', body: JSON.stringify({ projectId: bobProject.data.id, mode: 'golden' }),
-  }, 403);
+    ...as('alice'), method: 'POST', body: JSON.stringify({ ...bobSelection, mode: 'golden' }),
+  }, 404);
   await request(app.base, '/api/execution/runs', {
     ...as('alice'), method: 'POST', body: JSON.stringify({
       projectId: bobProject.data.id, profileId: profile.id, title: 'Cross-project run', objective: 'Must be denied.',
     }),
   }, 403);
+
+  await request(app.base, `/api/v1/projects/${aliceProject.data.id}/members`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ principal: principal('bob'), access: 'editor' }),
+  });
+  changeCase = await request(app.base, `/api/sdlc/cases/${changeCase.id}/run`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: changeCase.version, idempotencyKey: 'scope-case-to-g4' }),
+  });
+  assert.equal(changeCase.currentStage, 'S4');
+  const beforeOwnerDenial = structuredClone(changeCase);
+  await request(app.base, `/api/sdlc/cases/${changeCase.id}/accept-requirements`, {
+    ...as('bob'), method: 'POST', body: JSON.stringify({ version: changeCase.version, expectedDraftRevision: changeCase.artifacts.requirements.draftRevision, idempotencyKey: 'scope-non-owner-accept' }),
+  }, 403);
+  changeCase = await request(app.base, `/api/sdlc/cases/${changeCase.id}`, as('alice'));
+  assert.equal(changeCase.version, beforeOwnerDenial.version);
+  assert.deepEqual(changeCase.events, beforeOwnerDenial.events);
+  changeCase = await acceptSdlcRequirements(app.base, changeCase.id, 'scope-owner-accept', as('alice'));
 
   await request(app.base, `/api/v1/projects/${aliceProject.data.id}/members`, {
     ...as('alice'), method: 'POST', body: JSON.stringify({ principal: principal('bob'), access: 'reader' }),
@@ -4026,6 +4681,7 @@ test('PostgreSQL revalidates workspace-write generation in authenticated SDLC cr
   const project = await request(app.base, '/api/v1/projects', {
     ...as('alice'), method: 'POST', body: command('sdlc-workspace-write-project', { name: 'SDLC write authority' }),
   }, 201);
+  const { selection } = await savedSdlcSource(app.base, project.data.id, 'sdlc-workspace-write-source', as('alice'));
   const restoreAlice = async () => trustedGrantRoles(
     app, 'alice', ['workspace-read', 'workspace-write', 'tenant-admin'],
   );
@@ -4046,7 +4702,7 @@ test('PostgreSQL revalidates workspace-write generation in authenticated SDLC cr
     return originalSave(state, options);
   };
   const pendingCreate = fetch(`${app.base}/api/sdlc/cases`, {
-    ...as('alice'), method: 'POST', body: JSON.stringify({ projectId: project.data.id, mode: 'golden' }),
+    ...as('alice'), method: 'POST', body: JSON.stringify({ ...selection, mode: 'golden' }),
   });
   await createPaused;
   await removeUnrelatedRole();
@@ -4062,7 +4718,7 @@ test('PostgreSQL revalidates workspace-write generation in authenticated SDLC cr
   await restoreAlice();
 
   const changeCase = await request(app.base, '/api/sdlc/cases', {
-    ...as('alice'), method: 'POST', body: JSON.stringify({ projectId: project.data.id, mode: 'golden' }),
+    ...as('alice'), method: 'POST', body: JSON.stringify({ ...selection, mode: 'golden' }),
   }, 201);
   const originalAuthorityRead = app.sdlcStore.withPrincipalAuthority.bind(app.sdlcStore);
   let authorityReadReached;
@@ -4149,7 +4805,7 @@ test('PostgreSQL revalidates workspace-write generation in authenticated SDLC cr
   assert.equal(unchanged.events.length, completedAction.events.length);
 
   const replayCase = await request(app.base, '/api/sdlc/cases', {
-    ...as('alice'), method: 'POST', body: JSON.stringify({ projectId: project.data.id, mode: 'golden' }),
+    ...as('alice'), method: 'POST', body: JSON.stringify({ ...selection, mode: 'golden' }),
   }, 201);
   const clarificationBody = {
     version: replayCase.version, idempotencyKey: 'sdlc-write-authority-exact-replay',
@@ -4668,7 +5324,7 @@ test('tenant-scoped principal migration preserves existing identity and audit re
   }, 201);
   assert.equal(projectA.data.createdBy, alicePrincipal);
   assert.equal(projectB.data.createdBy, alicePrincipal);
-  assert.equal((await app.persistence.status()).schemaVersion, '027-process-instance-unverified-abandonment');
+  assert.equal((await app.persistence.status()).schemaVersion, '035-human-task-effective-assignment');
   assert.deepEqual((await postgres.query(`
     select tenant_id, status from orgward.oidc_principals where principal = $1 order by tenant_id
   `, [alicePrincipal])).rows, [
@@ -4977,8 +5633,25 @@ test('execution dispatch commit uncertainty closes the worker and persists only 
         observedHandle = handle;
         spawns += 1;
         leasesAtUncertainBoundary = await leaseCount();
-        handle.child.once('close', () => { childClosedAt = Date.now(); });
-        await new Promise((resolve) => setTimeout(resolve, 5_500));
+        const closedBeforeDeadline = await new Promise((resolve) => {
+          let settled = false;
+          let timeout;
+          const finish = (closed) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            handle.child.off('close', onClose);
+            if (closed) childClosedAt = Date.now();
+            resolve(closed);
+          };
+          const onClose = () => finish(true);
+          if (handle.child.closed) finish(true);
+          else {
+            handle.child.once('close', onClose);
+            timeout = setTimeout(() => finish(false), 5_000);
+          }
+        });
+        if (closedBeforeDeadline) await new Promise((resolve) => setTimeout(resolve, 550));
         acknowledgmentAt = Date.now();
         remainingLeaseAtAcknowledgment = (await postgres.query(`
           select floor(extract(epoch from lease_until - now()) * 1000)::int remaining_ms
@@ -5440,14 +6113,199 @@ test('saved process becomes an isolated durable planning graph without entering 
   assert.deepEqual((await request(app.base, '/api/execution/runs', as('alice'))).runs, []);
 });
 
+test('owner-authored human task information output is pinned, versioned, audited, and replayable after restart', async (t) => {
+  const postgres = await startPostgres();
+  const oidcAuthenticator = testOidcAuthenticator();
+  let app = await start(postgres.databaseUrl, { oidcAuthenticator });
+  const as = (subject) => ({ headers: { authorization: `Bearer ${subject}` } });
+  const principal = (subject) => `oidc:${createHash('sha256').update(`https://persistence-identity.example.test\n${subject}`).digest('hex')}`;
+  t.after(async () => { if (app) await close(app); await postgres.close(); });
+
+  let project = (await request(app.base, '/api/v1/projects', {
+    ...as('alice'), method: 'POST', body: command('human-output-project', { name: 'Human output journey' }),
+  }, 201)).data;
+  for (const [index, content] of [
+    'A local service reduces emergency restaurant downtime.',
+    'Restaurant owners receive preventive maintenance and documented repairs.',
+    'Monthly membership and parts keep travel, inventory, and cash exposure manageable.',
+    'A human approves safety-critical repairs and spending.',
+  ].entries()) {
+    project = (await request(app.base, `/api/v1/projects/${project.id}/messages`, {
+      ...as('alice'), method: 'POST', body: command(`human-output-answer-${index}`, { content }, project.version),
+    })).data;
+  }
+  const membersRoute = `/api/v1/projects/${project.id}/members`;
+  await request(app.base, membersRoute, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ principal: principal('bob'), access: 'editor' }),
+  });
+  const bindingsRoute = `/api/v1/projects/${project.id}/actor-bindings/proposals`;
+  project = (await request(app.base, bindingsRoute, {
+    ...as('alice'), method: 'POST', body: command('human-output-binding', {
+      actorId: 'actor-founder', roleId: 'role-founder', targetPrincipal: principal('bob'), blueprintVersion: 1,
+    }, project.version),
+  })).data;
+  project = (await request(app.base, `${bindingsRoute}/enable`, {
+    ...as('alice'), method: 'POST', body: command('human-output-binding-enable', {
+      actorId: 'actor-founder', roleId: 'role-founder', blueprintVersion: 1,
+    }, project.version),
+  })).data;
+  const plansRoute = `/api/v1/projects/${project.id}/process-plans`;
+  const planned = await request(app.base, plansRoute, {
+    ...as('alice'), method: 'POST', body: command('human-output-plan', { processId: 'process-learn' }, project.version),
+  }, 201);
+  const plan = planned.data.processPlans.at(-1);
+  const revisionResponse = await request(app.base, `${plansRoute}/${plan.id}/revisions`, {
+    ...as('alice'), method: 'POST', body: command('human-output-plan-revision', {
+      tasks: plan.tasks.map((task) => ({ taskId: task.id, title: task.title, detail: task.detail,
+        dependencies: task.dependencies, actorId: 'actor-founder', roleId: 'role-founder' })),
+    }, planned.data.version),
+  });
+  const savedPlan = revisionResponse.data.processPlans.at(-1);
+  const task = savedPlan.tasks.find((candidate) => candidate.id === 'task-process-learn');
+  const output = task.outputs.find((candidate) => candidate.type === 'information');
+  assert.ok(output, 'the exact saved human task declares an information output');
+  const startPayload = { projectId: project.id, planId: savedPlan.id, revision: savedPlan.revision, taskId: task.id };
+  const started = await request(app.base, '/api/execution/process-task-instances/start', {
+    ...as('bob'), method: 'POST', body: command('human-output-start', startPayload),
+  }, 201);
+  const refs = { ...startPayload, planInstanceId: started.planInstanceId };
+  const outputRoute = `/api/v1/projects/${project.id}/human-task-outputs/apply`;
+  const projectBeforeOutput = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
+  const pinnedBlueprint = projectBeforeOutput.blueprintVersions.find((entry) => entry.id === savedPlan.source.blueprintId
+    && entry.version === savedPlan.source.blueprintVersion);
+  const pinnedOutput = Object.values(pinnedBlueprint.areas).flatMap((area) => area.items)
+    .find((entry) => entry.id === output.objectId);
+  const payload = { planId: savedPlan.id, revision: savedPlan.revision, planInstanceId: started.planInstanceId,
+    taskId: task.id, outputObjectId: output.objectId, blueprintId: savedPlan.source.blueprintId,
+    blueprintVersion: savedPlan.source.blueprintVersion, before: pinnedOutput.detail,
+    detail: 'Owner-authored proposed priority: resolve repeat failures first.' };
+  const incompleteCheckpoint = await request(app.base, outputRoute, {
+    ...as('alice'), method: 'POST', body: command('human-output-before-checkpoint', payload, projectBeforeOutput.version),
+  }, 409);
+  assert.equal(incompleteCheckpoint.error.code, 'HUMAN_TASK_CHECKPOINT_UNVERIFIED');
+  const evidence = 'A contextual note that must not become the output detail.';
+  const completed = await request(app.base, '/api/execution/process-task-instances/complete', {
+    ...as('bob'), method: 'POST', body: command('human-output-complete', {
+      ...refs, result: 'succeeded', evidence: [evidence],
+    }),
+  }, 201);
+  const completionEventHashRow = await app.persistence.query(`select entry->>'contentHash' as hash
+    from orgward.process_task_instances r cross join lateral jsonb_array_elements(r.events) entry
+    where r.tenant_id='tenant-a' and r.project_id=$1 and r.plan_instance_id=$2 and r.task_id=$3
+      and entry->>'id'=$4`, [project.id, started.planInstanceId, task.id, completed.events.at(-1).id]);
+  const completionEventHash = completionEventHashRow.rows[0]?.hash;
+  assert.match(completionEventHash ?? '', /^[a-f0-9]{64}$/);
+  const runtimeRows = (await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances;
+  const ownerRuntime = runtimeRows.find((runtime) => runtime.taskId === task.id && runtime.planInstanceId === started.planInstanceId);
+  const editorRuntime = (await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('bob'))).instances
+    .find((runtime) => runtime.taskId === task.id && runtime.planInstanceId === started.planInstanceId);
+  assert.equal(ownerRuntime.canApplyHumanTaskOutput, true);
+  assert.equal(editorRuntime.canApplyHumanTaskOutput, false);
+  const nonOwner = await request(app.base, outputRoute, {
+    ...as('bob'), method: 'POST', body: command('human-output-editor-denied', payload, projectBeforeOutput.version),
+  }, 403);
+  assert.equal(nonOwner.error.code, 'ACTION_FORBIDDEN');
+  const staleVersion = await request(app.base, outputRoute, {
+    ...as('alice'), method: 'POST', body: command('human-output-version-conflict', payload, projectBeforeOutput.version - 1),
+  }, 409);
+  assert.equal(staleVersion.error.code, 'VERSION_CONFLICT');
+  const stalePinValue = await request(app.base, outputRoute, {
+    ...as('alice'), method: 'POST', body: command('human-output-before-conflict', { ...payload, before: 'stale value' }, projectBeforeOutput.version),
+  }, 409);
+  assert.equal(stalePinValue.error.code, 'HUMAN_TASK_OUTPUT_STALE_VALUE');
+  const commandBody = command('human-output-apply', payload, projectBeforeOutput.version);
+  const applied = await request(app.base, outputRoute, { ...as('alice'), method: 'POST', body: commandBody }, 200);
+  assert.equal(applied.data.version, projectBeforeOutput.version + 1);
+  assert.equal(applied.data.latestBlueprint.version, savedPlan.source.blueprintVersion + 1);
+  assert.equal(applied.event.type, 'HumanTaskOutputApplied');
+  assert.deepEqual(applied.event.data, {
+    projectId: project.id, planId: savedPlan.id, revision: savedPlan.revision,
+    planInstanceId: started.planInstanceId, taskId: task.id, outputObjectId: output.objectId,
+    blueprintId: savedPlan.source.blueprintId, blueprintVersion: savedPlan.source.blueprintVersion,
+    appliedBlueprintId: applied.data.latestBlueprint.id, appliedBlueprintVersion: savedPlan.source.blueprintVersion + 1,
+    humanTaskEventId: completed.events.at(-1).id, humanTaskEventHash: completionEventHash,
+    contentHash: createHash('sha256').update(JSON.stringify({ detail: payload.detail })).digest('hex'), evidenceContextOnly: true,
+  });
+  const outputObject = Object.values(applied.data.latestBlueprint.areas).flatMap((area) => area.items)
+    .find((entry) => entry.id === output.objectId);
+  assert.equal(outputObject.detail, payload.detail);
+  assert.equal(outputObject.detail.includes(evidence), false);
+  assert.equal(outputObject.provenance.at(-1).source, 'workspace:human-task-output');
+  assert.equal(outputObject.provenance.at(-1).sourceEventId, completed.events.at(-1).id);
+  assert.equal(outputObject.provenance.at(-1).sourceEventHash, completionEventHash);
+  assert.match(outputObject.provenance.at(-1).note, /contextual provenance and was not copied or treated as validation/i);
+  const runtimeAfterApply = (await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances
+    .find((runtime) => runtime.taskId === task.id && runtime.planInstanceId === started.planInstanceId);
+  assert.deepEqual(runtimeAfterApply.events, ownerRuntime.events, 'task result and event history remain immutable');
+  const replay = await request(app.base, outputRoute, { ...as('alice'), method: 'POST', body: commandBody }, 200);
+  assert.equal(replay.meta.replayed, true);
+  assert.equal(replay.data.events.filter((event) => event.type === 'HumanTaskOutputApplied').length, 1);
+
+  await close(app);
+  app = await start(postgres.databaseUrl, { oidcAuthenticator });
+  const restored = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
+  const restoredPlan = restored.processPlans.find((candidate) => candidate.id === savedPlan.id
+    && candidate.revision === savedPlan.revision);
+  const restoredTask = restoredPlan.tasks.find((candidate) => candidate.id === task.id);
+  const restoredTaskOutput = restoredTask.outputs.find((candidate) => candidate.objectId === output.objectId);
+  const restoredRuntime = (await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances
+    .find((candidate) => candidate.planInstanceId === started.planInstanceId && candidate.taskId === task.id);
+  assert.equal(humanTaskOutputApplicationState({ project: restored, plan: restoredPlan, task: restoredTask,
+    runtime: restoredRuntime, output: restoredTaskOutput }).kind, 'applied',
+  'the exact source-linked output version still projects as applied after PostgreSQL restart');
+  const event = restored.events.find((candidate) => candidate.type === 'HumanTaskOutputApplied'
+    && candidate.data?.planInstanceId === started.planInstanceId && candidate.data?.outputObjectId === output.objectId);
+  assert.ok(event, 'the output application event remains linked to its human task after restart');
+  const restoredOutput = Object.values(restored.latestBlueprint.areas).flatMap((area) => area.items)
+    .find((entry) => entry.id === output.objectId);
+  assert.equal(restoredOutput.detail, payload.detail);
+  assert.equal(restoredOutput.provenance.at(-1).contentHash, event.data.contentHash);
+  assert.equal((await request(app.base, outputRoute, { ...as('alice'), method: 'POST', body: commandBody }, 200)).meta.replayed, true,
+    'the atomic command result is replayable after restart');
+  const secondWrite = await request(app.base, outputRoute, {
+    ...as('alice'), method: 'POST', body: command('human-output-second-apply', payload, restored.version),
+  }, 409);
+  assert.equal(secondWrite.error.code, 'HUMAN_TASK_OUTPUT_ALREADY_APPLIED');
+  const stalePinnedWrite = await request(app.base, outputRoute, {
+    ...as('alice'), method: 'POST', body: command('human-output-stale-pin-after-design-advance', {
+      ...payload, planInstanceId: '00000000-0000-4000-8000-000000000001',
+    }, restored.version),
+  }, 409);
+  assert.equal(stalePinnedWrite.error.code, 'HUMAN_TASK_OUTPUT_STALE_DESIGN');
+});
+
 test('saved process task requests are linked, idempotent, dependency-gated, and durable', async (t) => {
   const postgres = await startPostgres();
   const oidcAuthenticator = testOidcAuthenticator();
+  oidcAuthenticator.setDisplayName('bob', 'Bob Reviewer');
+  oidcAuthenticator.setDisplayName('carol', 'Carol Reviewer');
   const profileRoot = await mkdtemp(path.join(tmpdir(), 'orgward-process-task-profile-'));
+  const repositoryRoot = await mkdtemp(path.join(tmpdir(), 'orgward-process-task-repository-'));
+  const gitRepositoryRoot = await mkdtemp(path.join(tmpdir(), 'orgward-process-task-git-'));
+  const gitRepositoryDirectory = path.join(gitRepositoryRoot, 'reference.git');
+  await mkdir(gitRepositoryDirectory);
+  execFileSync('git', ['init', '--bare', gitRepositoryDirectory], { stdio: 'ignore', env: { PATH: '/usr/bin:/bin', HOME: '/nonexistent' } });
+  const initialGitCommit = createFixtureGitCommit(gitRepositoryDirectory, [
+    { path: 'src/change.js', mode: '100644', content: 'before\n' },
+    { path: 'remove.txt', mode: '100644', content: 'remove me' },
+    { path: 'mode-only.txt', mode: '100644', content: 'same bytes' },
+  ], 'initial local source');
+  fixtureGit(gitRepositoryDirectory, ['update-ref', 'refs/heads/main', initialGitCommit]);
+  await makeFixtureGitPrivate(gitRepositoryDirectory);
+  await mkdir(path.join(repositoryRoot, 'src'), { recursive: true, mode: 0o700 });
+  await writeFile(path.join(repositoryRoot, 'src', 'change.js'), 'before\n');
+  await chmod(path.join(repositoryRoot, 'src', 'change.js'), 0o755);
+  await writeFile(path.join(repositoryRoot, 'remove.txt'), 'remove me');
+  await writeFile(path.join(repositoryRoot, 'mode-only.txt'), 'same bytes');
   let providerCallCount = 0;
   let providerRequest = null;
   let providerResponseGate = null;
   let failNextProviderResponse = false;
+  let nextProposalDetailOverride = null;
   const providerFixture = createServer(async (request, response) => {
     providerCallCount += 1;
     const chunks = [];
@@ -5461,7 +6319,8 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     if (typeof providerRequest.body.input === 'string') {
       try {
         const promptJson = providerRequest.body.input.slice(providerRequest.body.input.lastIndexOf('\n\n') + 2);
-        citedSourceId = JSON.parse(promptJson).sourceEnvelope.sources[0].id;
+        const parsedPrompt = JSON.parse(promptJson);
+        citedSourceId = (parsedPrompt.taskAndSourceData?.sourceEnvelope ?? parsedPrompt.sourceEnvelope).sources[0].id;
       } catch { /* non-proposal provider fixtures retain their default citation */ }
     }
     if (providerResponseGate) {
@@ -5475,9 +6334,12 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
       response.destroy();
       return;
     }
+    const proposedDetail = nextProposalDetailOverride
+      ?? 'Recurring repair signals are grouped into service needs for founder review.';
+    nextProposalDetailOverride = null;
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({
-      proposedDetail: 'Recurring repair signals are grouped into service needs for founder review.',
+      proposedDetail,
       rationale: 'The saved customer signal describes recurring repair history.',
       citations: [citedSourceId],
     }) }] }] }));
@@ -5485,10 +6347,24 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   await new Promise((resolve) => providerFixture.listen(0, '127.0.0.1', resolve));
   const providerOrigin = `http://127.0.0.1:${providerFixture.address().port}`;
   const openAiFixtureSecret = 'fixture-openai-credential-never-returned';
+  const repositoryVerification = {
+    id: 'local-node-check', version: '2', executable: process.execPath,
+    args: ['-e', "const fs=require('node:fs');const assert=require('node:assert/strict');assert.equal(fs.readFileSync('src/change.js','utf8'),'after\\n');assert.equal(fs.readFileSync('added.txt','utf8'),'added by local agent');assert.equal(fs.existsSync('remove.txt'),false);assert.equal(fs.statSync('src/change.js').mode & 0o111,0);assert.notEqual(fs.statSync('mode-only.txt').mode & 0o111,0);process.stdout.write('candidate verified')"],
+  };
   const profiles = [
     {
       id: 'process-task-success', label: 'Local task runner', kind: 'command', version: '1.0.0',
       executable: process.execPath, args: ['-e', "process.stdout.write('task completed')"], workspaceRoot: profileRoot,
+    },
+    {
+      id: 'process-task-repository-agent', label: 'Local repository agent', kind: 'command', version: '1.0.0',
+      executable: process.execPath, args: ['-e', "const fs=require('node:fs');fs.writeFileSync('src/change.js','after\\n');fs.chmodSync('src/change.js',0o644);fs.chmodSync('mode-only.txt',0o755);fs.unlinkSync('remove.txt');fs.writeFileSync('added.txt','added by local agent');process.stdout.write('candidate prepared')"], workspaceRoot: profileRoot,
+    },
+    {
+      id: 'process-task-artifact', label: 'Local task runner with saved artifact', kind: 'command', version: '1.0.0',
+      executable: process.execPath,
+      args: ['-e', "const fs=require('node:fs');fs.writeFileSync('task-result.txt','Persisted process task artifact bytes.');process.stdout.write('task completed')"],
+      workspaceRoot: profileRoot,
     },
     {
       id: 'process-task-failure', label: 'Failing local task runner', kind: 'command', version: '1.0.0',
@@ -5496,12 +6372,19 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     },
     {
       id: 'process-task-slow', label: 'Slow local task runner', kind: 'command', version: '1.0.0',
-      executable: process.execPath, args: ['-e', "setTimeout(() => process.stdout.write('task completed'), 1200)"], workspaceRoot: profileRoot,
+      executable: process.execPath,
+      args: ['-e', "const fs=require('node:fs');fs.writeFileSync('worker-started','ready');const timer=setInterval(()=>{if(fs.existsSync('worker-release')){clearInterval(timer);process.stdout.write('task completed')}},5)"],
+      workspaceRoot: profileRoot,
     },
     {
       id: 'process-task-openai', label: 'Fixture OpenAI model', kind: 'provider-openai', version: '1.0.0',
       credentialReference: 'secret-process-task-openai', model: 'gpt-fixture',
       openAiEndpoint: `${providerOrigin}/v1/responses`,
+    },
+    {
+      id: 'process-task-deepseek', label: 'DeepSeek · deepseek-fixture', kind: 'provider-deepseek', version: '1.0.0',
+      credentialReference: 'secret-process-task-deepseek', model: 'deepseek-fixture', deepSeekMaxOutputTokens: 128,
+      deepSeekEndpoint: `${providerOrigin}/responses`,
     },
     {
       id: 'process-task-provider-http', label: 'Fixture generic provider', kind: 'provider-http', version: '1.0.0',
@@ -5537,9 +6420,12 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   t.after(async () => {
     releaseTaskBindingLookup();
     if (app) await close(app);
+    providerFixture.closeIdleConnections?.();
     await new Promise((resolve) => providerFixture.close(resolve));
     await postgres.close();
     await rm(profileRoot, { recursive: true, force: true });
+    await rm(repositoryRoot, { recursive: true, force: true });
+    await rm(gitRepositoryRoot, { recursive: true, force: true });
   });
 
   await app.secretStore.put({
@@ -5552,6 +6438,12 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     tenantId: 'tenant-a', actor: principal('alice'), actorAuthzGeneration: await authzGeneration(app, 'alice'),
     reference: 'secret-process-task-http', commandId: 'process-task-http-secret-v1', expectedVersion: 0,
     value: 'fixture-provider-http-credential', reason: 'Create generic provider test credential',
+    expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+  });
+  await app.secretStore.put({
+    tenantId: 'tenant-a', actor: principal('alice'), actorAuthzGeneration: await authzGeneration(app, 'alice'),
+    reference: 'secret-process-task-deepseek', commandId: 'process-task-deepseek-secret-v1', expectedVersion: 0,
+    value: 'fixture-deepseek-credential', reason: 'Create generic DeepSeek fixture credential',
     expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
   });
   await app.persistence.query(`update orgward.secret_references set active_provider='openai', active_model='gpt-fixture'
@@ -5577,6 +6469,17 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   let project = (await request(app.base, '/api/v1/projects', {
     ...as('alice'), method: 'POST', body: command('process-task-project', { name: 'Assigned service workflow' }),
   }, 201)).data;
+  const localRepositoryBinding = {
+    id: 'reference-service', tenantId: 'tenant-a', projectId: project.id, directory: repositoryRoot,
+    label: 'Synthetic reference service', verification: repositoryVerification,
+  };
+  const gitRepositoryBinding = {
+    id: 'git-reference', kind: 'git', tenantId: 'tenant-a', projectId: project.id,
+    identity: 'reference-service', gitDirectory: gitRepositoryDirectory, label: 'Reference service source',
+    allowedRefs: [{ id: 'main', ref: 'refs/heads/main', label: 'main' }], verification: repositoryVerification,
+  };
+  app.executionService.localRepositories.set(`tenant-a\n${project.id}\nreference-service`, localRepositoryBinding);
+  app.executionService.localRepositories.set(`tenant-a\n${project.id}\ngit-reference`, gitRepositoryBinding);
   const answers = [
     'A repair membership that reduces emergency restaurant downtime.',
     'Restaurant owners receive preventive maintenance and documented repairs.',
@@ -5631,6 +6534,120 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   const currentPlan = revised.data.processPlans.at(-1);
   const planInput = { projectId: project.id, planId: plan.id, revision: 2, taskId: 'task-process-learn', profileId: 'process-task-failure' };
   const successInput = { ...planInput, profileId: 'process-task-success' };
+  const repositoryListRoute = `/api/execution/local-repositories?projectId=${encodeURIComponent(project.id)}`;
+  const repositoryInventory = await request(app.base, repositoryListRoute, as('alice'));
+  assert.equal(repositoryInventory.repositories.length, 2);
+  assert.equal(repositoryInventory.repositories.some((repository) => repository.id === 'reference-service'), true);
+  const gitRepositorySelection = repositoryInventory.repositories.find((repository) => repository.id === 'git-reference');
+  assert.equal(gitRepositorySelection.kind, 'git');
+  assert.equal(gitRepositorySelection.identity, 'reference-service');
+  assert.equal(gitRepositorySelection.ref, 'refs/heads/main');
+  assert.equal(gitRepositorySelection.commitOid, initialGitCommit);
+  assert.equal(JSON.stringify(repositoryInventory).includes(gitRepositoryDirectory), false, 'the API never returns configured host paths');
+  const deniedRepositoryInventory = await request(app.base, repositoryListRoute, as('readonly'), 403);
+  assert.ok(deniedRepositoryInventory.error, 'a read-only project member cannot enumerate local repository bindings');
+  const arbitraryHostPath = await taskRequest('process-task-repository-host-path-denied', {
+    ...planInput, profileId: 'process-task-repository-agent', repositoryPath: repositoryRoot,
+  }, 'alice', 400);
+  assert.equal(arbitraryHostPath.error.code, 'INVALID_COMMAND', 'clients cannot choose host filesystem paths');
+  const staleRepositoryDigest = repositoryInventory.repositories[0].treeDigest;
+  const crossProjectRepository = await taskRequest('process-task-repository-cross-project', {
+    ...planInput, profileId: 'process-task-repository-agent', repositoryId: 'other-project-repository',
+    snapshotDigest: staleRepositoryDigest,
+  }, 'alice', 404);
+  assert.ok(crossProjectRepository.error, 'a repository configured for another project is not selectable here');
+  await writeFile(path.join(repositoryRoot, 'remove.txt'), 'changed after selection');
+  const staleRepositoryRequest = await taskRequest('process-task-repository-stale', {
+    ...planInput, profileId: 'process-task-repository-agent', repositoryId: 'reference-service', snapshotDigest: staleRepositoryDigest,
+  }, 'alice', 409);
+  assert.equal(staleRepositoryRequest.error.code, 'LOCAL_REPOSITORY_SNAPSHOT_STALE');
+  assert.equal((await postgres.query(`select 1 from orgward.command_results where tenant_id='tenant-a'
+    and operation='execution.process-task.request' and command_id='process-task-repository-stale'`)).rowCount, 0,
+  'a stale repository snapshot leaves no idempotency receipt');
+  assert.equal((await postgres.query(`select 1 from orgward.process_task_instances where tenant_id='tenant-a'
+    and project_id=$1 and process_plan_id=$2 and task_id=$3`, [project.id, plan.id, planInput.taskId])).rowCount, 0,
+  'a stale repository snapshot leaves no task runtime');
+  const selectedRepository = (await request(app.base, repositoryListRoute, as('alice'))).repositories[0];
+  const repositoryRequestPayload = { ...planInput, profileId: 'process-task-repository-agent',
+    repositoryId: 'reference-service', snapshotDigest: selectedRepository.treeDigest };
+  const repositoryRun = await taskRequest('process-task-repository-candidate', repositoryRequestPayload);
+  assert.equal(repositoryRun.processTaskRef.repository.id, 'reference-service');
+  assert.equal(repositoryRun.processTaskRef.repository.treeDigest, selectedRepository.treeDigest);
+  assert.equal(Object.hasOwn(repositoryRun, 'repositorySnapshot'), false, 'private pinned source bytes are never returned by the run API');
+  await writeFile(path.join(repositoryRoot, 'src', 'change.js'), 'changed after task pin\n');
+  const repositoryReplay = await taskRequest('process-task-repository-candidate', repositoryRequestPayload, 'alice', 200);
+  assert.equal(repositoryReplay.meta.replayed, true, 'a retry replays the durable pinned run without rereading the changed source tree');
+  assert.equal(repositoryReplay.id, repositoryRun.id);
+  const repositoryExecuted = await approveAndExecute(repositoryRun);
+  assert.equal(repositoryExecuted.status, 'SUCCEEDED');
+  assert.deepEqual(repositoryExecuted.execution.repositoryCandidate.changes.map((change) => [change.path, change.change]), [
+    ['added.txt', 'added'], ['mode-only.txt', 'mode_changed'], ['remove.txt', 'deleted'], ['src/change.js', 'modified'],
+  ]);
+  assert.equal(repositoryExecuted.execution.repositoryCandidate.sourceTreeDigest, selectedRepository.treeDigest);
+  assert.equal(repositoryExecuted.execution.repositoryCandidate.verification.id, 'local-node-check');
+  assert.equal(repositoryExecuted.execution.repositoryCandidate.verification.status, 'COMPLETED');
+  assert.equal(repositoryExecuted.execution.repositoryCandidate.verification.exitCode, 0);
+  assert.equal(repositoryExecuted.execution.repositoryCandidate.verification.commandHash,
+    digest({ executable: repositoryVerification.executable, args: repositoryVerification.args }));
+  assert.equal(repositoryExecuted.execution.repositoryCandidate.verification.outputHash,
+    digest({ stdout: 'candidate verified', stderr: '' }));
+  assert.equal(repositoryExecuted.execution.repositoryCandidate.verification.treeDigest,
+    repositoryExecuted.execution.repositoryCandidate.treeDigest, 'verification is bound to the exact candidate tree');
+  assert.equal(await readFile(path.join(repositoryRoot, 'src', 'change.js'), 'utf8'), 'changed after task pin\n',
+    'the local repository source is never modified by the candidate run');
+  const invalidGitRef = await taskRequest('process-task-git-ref-denied', {
+    ...planInput, profileId: 'process-task-repository-agent', repositoryId: 'git-reference', repositoryRefId: 'unlisted',
+    repositoryCommitOid: initialGitCommit, snapshotDigest: gitRepositorySelection.treeDigest,
+  }, 'alice', 400);
+  assert.equal(invalidGitRef.error.code, 'LOCAL_REPOSITORY_INVALID', 'the client cannot select a ref outside the server allowlist');
+  assert.equal((await postgres.query(`select 1 from orgward.command_results where tenant_id='tenant-a'
+    and operation='execution.process-task.request' and command_id='process-task-git-ref-denied'`)).rowCount, 0,
+  'an unlisted Git ref creates no request receipt');
+  const branchMovedBeforeCapture = createFixtureGitCommit(gitRepositoryDirectory, [
+    { path: 'src/change.js', mode: '100644', content: 'before\n' },
+    { path: 'remove.txt', mode: '100644', content: 'remove me' },
+    { path: 'mode-only.txt', mode: '100644', content: 'same bytes' },
+    { path: 'README.md', mode: '100644', content: 'branch moved before capture\n' },
+  ], 'move branch after selection');
+  fixtureGit(gitRepositoryDirectory, ['update-ref', 'refs/heads/main', branchMovedBeforeCapture]);
+  await makeFixtureGitPrivate(gitRepositoryDirectory);
+  const staleGitTaskRequest = await taskRequest('process-task-git-stale-selection', {
+    ...planInput, profileId: 'process-task-repository-agent', repositoryId: 'git-reference', repositoryRefId: 'main',
+    repositoryCommitOid: initialGitCommit, snapshotDigest: gitRepositorySelection.treeDigest,
+  }, 'alice', 409);
+  assert.equal(staleGitTaskRequest.error.code, 'LOCAL_REPOSITORY_SNAPSHOT_STALE');
+  assert.equal((await postgres.query(`select 1 from orgward.command_results where tenant_id='tenant-a'
+    and operation='execution.process-task.request' and command_id='process-task-git-stale-selection'`)).rowCount, 0,
+  'a moved ref cannot create a run using a stale selection');
+  const selectedGitAtCapture = (await request(app.base, repositoryListRoute, as('alice'))).repositories
+    .find((repository) => repository.id === 'git-reference');
+  assert.equal(selectedGitAtCapture.commitOid, branchMovedBeforeCapture);
+  const gitRepositoryRun = await taskRequest('process-task-git-candidate', {
+    ...planInput, profileId: 'process-task-repository-agent', repositoryId: 'git-reference',
+    repositoryRefId: selectedGitAtCapture.refId, repositoryCommitOid: selectedGitAtCapture.commitOid,
+    snapshotDigest: selectedGitAtCapture.treeDigest,
+  });
+  assert.equal(gitRepositoryRun.processTaskRef.repository.source.commitOid, branchMovedBeforeCapture);
+  assert.equal(gitRepositoryRun.processTaskRef.repository.source.identity, 'reference-service');
+  assert.equal(gitRepositoryRun.processTaskRef.repository.source.ref, 'refs/heads/main');
+  assert.equal(Object.hasOwn(gitRepositoryRun, 'repositorySnapshot'), false, 'the API never returns captured Git tree bytes');
+  const movedGitCommit = createFixtureGitCommit(gitRepositoryDirectory, [
+    { path: 'src/change.js', mode: '100644', content: 'before\n' },
+    { path: 'remove.txt', mode: '100644', content: 'remove me' },
+    { path: 'mode-only.txt', mode: '100644', content: 'same bytes' },
+    { path: 'README.md', mode: '100644', content: 'branch moved after task capture\n' },
+  ], 'move allowed branch after task capture');
+  fixtureGit(gitRepositoryDirectory, ['update-ref', 'refs/heads/main', movedGitCommit]);
+  await makeFixtureGitPrivate(gitRepositoryDirectory);
+  assert.notEqual(movedGitCommit, initialGitCommit);
+  const gitReplayAfterBranchMove = await taskRequest('process-task-git-candidate', {
+    ...planInput, profileId: 'process-task-repository-agent', repositoryId: 'git-reference',
+    repositoryRefId: selectedGitAtCapture.refId, repositoryCommitOid: selectedGitAtCapture.commitOid,
+    snapshotDigest: selectedGitAtCapture.treeDigest,
+  }, 'alice', 200);
+  assert.equal(gitReplayAfterBranchMove.meta.replayed, true,
+    'an ambiguous retry after branch movement replays its captured run without resolving the new ref');
+  assert.equal(gitReplayAfterBranchMove.processTaskRef.repository.source.commitOid, branchMovedBeforeCapture);
   const blockedOpenAiDependency = await taskRequest('process-task-openai-dependency-blocked', {
     projectId: project.id, planId: plan.id, revision: 2, taskId: 'task-process-deliver', profileId: 'process-task-openai',
   }, 'alice', 409);
@@ -5659,6 +6676,12 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(openAiRequest.status, 'AWAITING_APPROVAL');
   assert.deepEqual(openAiRequest.profile.credential, { reference: 'secret-process-task-openai', version: 1 });
   assert.equal(openAiRequest.profile.providerModel, 'gpt-fixture');
+  assert.equal(openAiRequest.workItem.taskGuidance.roleId, openAiRequest.processTaskRef.roleId);
+  assert.equal(openAiRequest.workItem.taskGuidance.actorId, openAiRequest.processTaskRef.actorId);
+  assert.equal(openAiRequest.workItem.taskGuidance.blueprintId, openAiRequest.processTaskRef.blueprintId);
+  assert.equal(openAiRequest.workItem.taskGuidance.blueprintVersion, openAiRequest.processTaskRef.blueprintVersion);
+  assert.equal(openAiRequest.workItem.taskGuidance.graphRevision, openAiRequest.processTaskRef.revision);
+  assert.match(openAiRequest.workItem.taskGuidance.guidanceDigest, /^[a-f0-9]{64}$/);
   assert.equal(JSON.stringify(openAiRequest).includes(openAiFixtureSecret), false, 'run responses contain no credential material');
   const openAiRunState = await app.persistence.query(`select state from orgward.aggregates
     where tenant_id='tenant-a' and aggregate_kind='execution_run' and aggregate_id=$1`, [openAiRequest.id]);
@@ -5710,6 +6733,13 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   });
   assert.equal(openAiSuccessfulRequest.status, 'AWAITING_APPROVAL');
   assert.equal(openAiSuccessfulRequest.profile.credential.version, 3);
+  const sourceReviewBeforeRestart = processTaskSourceReview(openAiSuccessfulRequest);
+  assert.equal(sourceReviewBeforeRestart.kind, 'snapshot');
+  assert.equal(sourceReviewBeforeRestart.blueprintId, openAiSuccessfulRequest.processTaskRef.blueprintId);
+  assert.equal(sourceReviewBeforeRestart.blueprintVersion, openAiSuccessfulRequest.processTaskRef.blueprintVersion);
+  assert.equal(sourceReviewBeforeRestart.sources[0].id, 'information-customer-signal');
+  assert.equal(sourceReviewBeforeRestart.target.id, 'information-prioritised-need');
+  await request(app.base, `/api/execution/runs/${openAiSuccessfulRequest.id}`, as('tenant-b-admin'), 404);
   const openAiPaused = await request(app.base, `/api/execution/runs/${openAiSuccessfulRequest.id}/pause`, {
     ...as('alice'), method: 'POST', body: JSON.stringify({ commandId: 'process-task-openai-current-pause',
       projectId: project.id, version: openAiSuccessfulRequest.version }),
@@ -5771,6 +6801,8 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
       task: { id: openAiSuccessfulRequest.processTaskRef.taskId, title: openAiSuccessfulRequest.title,
         detail: openAiAmended.interventionRevisions[0].objective },
       proposalContext: openAiSuccessfulRequest.workItem.proposalContext,
+      taskGuidance: openAiSuccessfulRequest.workItem.taskGuidance,
+      processTaskRef: openAiSuccessfulRequest.processTaskRef,
       amendedRequirements: openAiAmended.interventionRevisions[0].requirements,
     }),
     store: false, max_output_tokens: 2_000, tools: [],
@@ -5903,8 +6935,49 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   await close(app);
   app = await start(postgres.databaseUrl, {
     executionProfiles: profiles, oidcAuthenticator, secretEncryptionKey: Buffer.alloc(32, 0x5c),
-    openAiValidationEndpoint: `${providerOrigin}/v1/models`,
+    openAiValidationEndpoint: `${providerOrigin}/v1/models`, localRepositories: [localRepositoryBinding, gitRepositoryBinding],
   });
+  assert.equal((await request(app.base, '/api/execution/local-repositories?projectId=' + encodeURIComponent(project.id), as('alice')))
+    .repositories.find((repository) => repository.id === 'git-reference').commitOid, movedGitCommit,
+  'the repository inventory observes the current branch after restart');
+  const openAiRequestAfterRestart = await request(app.base, `/api/execution/runs/${openAiRequest.id}`, as('alice'));
+  assert.deepEqual(openAiRequestAfterRestart.workItem.taskGuidance, openAiRequest.workItem.taskGuidance,
+    'the exact request-time role guidance snapshot and digest survive aggregate reload');
+  const openAiSuccessfulRequestAfterRestart = await request(app.base,
+    `/api/execution/runs/${openAiSuccessfulRequest.id}`, as('alice'));
+  assert.deepEqual(openAiSuccessfulRequestAfterRestart.workItem.proposalContext, openAiSuccessfulRequest.workItem.proposalContext,
+    'the exact provider input envelope and target survive aggregate reload');
+  assert.deepEqual(processTaskSourceReview(openAiSuccessfulRequestAfterRestart), sourceReviewBeforeRestart,
+    'restart review uses the exact saved input snapshot and does not consult current blueprint records');
+  const gitRepositoryExecuted = await approveAndExecute(gitRepositoryRun);
+  assert.equal(gitRepositoryExecuted.status, 'SUCCEEDED');
+  assert.equal(gitRepositoryExecuted.execution.repositoryCandidate.source.commitOid, branchMovedBeforeCapture,
+    'the reviewed run remains pinned to the commit captured before branch movement and restart');
+  assert.equal(gitRepositoryExecuted.execution.repositoryCandidate.source.identity, 'reference-service');
+  assert.equal(gitRepositoryExecuted.execution.repositoryCandidate.source.ref, 'refs/heads/main');
+  assert.equal(await readFile(path.join(profileRoot, gitRepositoryRun.id, 'src', 'change.js'), 'utf8'), 'after\n');
+  assert.equal(await readFile(path.join(profileRoot, gitRepositoryRun.id, 'added.txt'), 'utf8'), 'added by local agent');
+  assert.equal(fixtureGit(gitRepositoryDirectory, ['rev-parse', 'refs/heads/main']), movedGitCommit,
+    'candidate execution does not write or push to the bare repository');
+  const attemptedPush = await fetch(`${app.base}/api/execution/runs/${gitRepositoryRun.id}/repository-push`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({}),
+  });
+  assert.equal(attemptedPush.status, 404, 'no repository push endpoint exists');
+  assert.deepEqual(await attemptedPush.json(), { error: 'Route not found.' });
+  const repositoryCandidateAfterRestart = await request(app.base, `/api/execution/runs/${repositoryRun.id}`, as('alice'));
+  assert.deepEqual(repositoryCandidateAfterRestart.execution.repositoryCandidate, repositoryExecuted.execution.repositoryCandidate,
+    'the pinned local repository candidate and verification receipt survive application restart');
+  const repositoryCandidateFile = await fetch(`${app.base}/api/execution/runs/${repositoryRun.id}/artifact?path=${encodeURIComponent('src/change.js')}`, as('alice'));
+  assert.equal(repositoryCandidateFile.status, 200);
+  assert.equal(repositoryCandidateFile.headers.get('x-content-sha256'), createHash('sha256').update('after\n').digest('hex'));
+  assert.equal(await repositoryCandidateFile.text(), 'after\n');
+  const pinnedRepositorySource = await fetch(`${app.base}/api/execution/runs/${repositoryRun.id}/repository-source?path=${encodeURIComponent('src/change.js')}`, as('alice'));
+  assert.equal(pinnedRepositorySource.status, 200);
+  assert.equal(pinnedRepositorySource.headers.get('x-content-sha256'), createHash('sha256').update('before\n').digest('hex'));
+  assert.equal(await pinnedRepositorySource.text(), 'before\n');
+  const gitRepositoryAfterRestart = await request(app.base, `/api/execution/runs/${gitRepositoryRun.id}`, as('alice'));
+  assert.equal(gitRepositoryAfterRestart.execution.repositoryCandidate.source.commitOid, branchMovedBeforeCapture);
+  assert.equal(gitRepositoryAfterRestart.execution.repositoryCandidate.source.identity, 'reference-service');
   const amendedAfterRestart = await request(app.base, `/api/execution/runs/${pendingPauseRequest.id}`, as('alice'));
   assert.deepEqual(amendedAfterRestart.interventionRevisions, amendedPending.interventionRevisions,
     'the append-only instruction snapshot survives application restart');
@@ -6083,6 +7156,10 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   const beforeAuthorizationPause = await requestInstancePause(beforeAuthorizationRun, beforeAuthorizationControl,
     'process-instance-pause-before-auth');
   assert.equal(beforeAuthorizationPause.status, 'PAUSE_REQUESTED');
+  await new Promise((resolve) => setTimeout(resolve, 1_250));
+  const beforeAuthorizationInFlight = await app.executionService.store.get(beforeAuthorizationRun.id, 'tenant-a');
+  assert.equal(beforeAuthorizationInFlight.status, 'RUNNING', 'recovery leaves an in-process pre-dispatch startup active');
+  assert.equal(beforeAuthorizationInFlight.events.some(({ type }) => type === 'ExecutionInterrupted'), false);
   releaseBeforeAuthorization();
   const beforeAuthorizationResult = await beforeAuthorizationExecution;
   app.executionService.store.authorizeExecutionDispatch = originalAuthorize;
@@ -6194,6 +7271,8 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   });
   const recoveredUnknownRun = await request(app.base, `/api/execution/runs/${unresolvedAfterRestartRun.id}`, as('alice'));
   assert.equal(recoveredUnknownRun.status, 'INTERRUPTED', 'application restart recovers the persisted linked RUNNING task');
+  assert.equal(recoveredUnknownRun.linkedOutcomeCategory, 'outcome_unverified',
+    'restarted provider work retains safe unverified-outcome guidance without raw diagnostics');
   const recoveredUnknownAttempt = await app.persistence.query(`select status,attempt_id from orgward.provider_dispatch_attempts
     where tenant_id='tenant-a' and run_id=$1`, [unresolvedAfterRestartRun.id]);
   assert.equal(recoveredUnknownAttempt.rows[0]?.status, 'outcome_unknown', 'recovery preserves the unknown external effect');
@@ -6211,6 +7290,10 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   const unknownBoundaryAfterRestart = await instanceControlForRun(unresolvedAfterRestartRun);
   assert.equal(unknownBoundaryAfterRestart.status, 'PAUSE_REQUESTED', 'unknown provider outcomes keep the pause request pending across restart');
   assert.equal(unknownBoundaryAfterRestart.pauseBoundary.tasks[0].attemptId, unknownAttempt.rows[0].attempt_id);
+  assert.equal(unknownBoundaryAfterRestart.pauseBoundary.tasks[0].attemptStatus, 'outcome_unknown',
+    'the local attempt reference survives restart without upgrading the external outcome');
+  assert.equal((await request(app.base, `/api/execution/runs/${unresolvedAfterRestartRun.id}`, as('alice'))).status, 'INTERRUPTED',
+    'showing the local reference does not mutate the linked run result');
   const blockedUnknownResume = await request(app.base, '/api/execution/process-task-instances/resume', {
     ...as('alice'), method: 'POST', body: JSON.stringify({ schemaVersion: '1.0', commandId: 'process-instance-unknown-resume-blocked',
       payload: { projectId: project.id, planInstanceId: unresolvedAfterRestartRun.processTaskRef.planInstanceId,
@@ -6268,7 +7351,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
       events=events || $1::jsonb,updated_at=now()
     where tenant_id='tenant-a' and plan_instance_id=$2`,
   [JSON.stringify([triggerEvent]), unresolvedAfterRestartRun.processTaskRef.planInstanceId]),
-  /Only unresolved outcomes from built-in OpenAI model tasks/);
+  /Only unresolved outcomes from read-only OpenAI or DeepSeek model proposals/);
   await app.persistence.query(`update orgward.aggregates set state=$1::jsonb,state_hash=$2
     where tenant_id='tenant-a' and aggregate_kind='execution_run' and aggregate_id=$3`,
   [JSON.stringify(readOnlyRunSnapshot), contentHash(readOnlyRunSnapshot), unresolvedAfterRestartRun.id]);
@@ -6293,7 +7376,9 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(terminalUnknownControl.status, 'ABANDONED_UNVERIFIED');
   const abandonmentEvent = terminalUnknownControl.events.at(-1);
   assert.equal(abandonmentEvent.type, 'ProcessTaskInstanceAbandonedUnverified');
-  assert.equal(abandonmentEvent.actor, principal('alice'));
+  assert.equal(abandonmentEvent.actor, 'project owner');
+  assert.equal(JSON.stringify(terminalUnknownControl.events).includes(principal('alice')), false,
+    'process control event projection keeps raw audit principals private from project readers');
   assert.equal(abandonmentEvent.data.reason, abandonmentPayload.reason);
   assert.deepEqual(abandonmentEvent.data.evidence, abandonmentPayload.evidence);
   assert.equal(abandonmentEvent.data.acknowledgeDuplicateCostWork, true);
@@ -6365,6 +7450,68 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   });
   assert.equal(freshNewInstanceApproval.status, 'APPROVED', 'a retry is a distinct process instance with fresh independent approval');
 
+  const deepSeekUnknownRun = await taskRequest('process-task-deepseek-unknown-request', {
+    ...planInput, profileId: 'process-task-deepseek',
+  });
+  assert.equal(deepSeekUnknownRun.profile.kind, 'provider-deepseek');
+  assert.equal(deepSeekUnknownRun.profile.providerModel, 'deepseek-fixture');
+  assert.equal(deepSeekUnknownRun.profile.providerMaxOutputTokens, 128);
+  const deepSeekPaused = await request(app.base, `/api/execution/runs/${deepSeekUnknownRun.id}/pause`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ commandId: 'process-task-deepseek-pause-before-approval',
+      projectId: project.id, version: deepSeekUnknownRun.version }),
+  });
+  assert.equal(deepSeekPaused.status, 'PAUSED');
+  const deepSeekResumed = await request(app.base, `/api/execution/runs/${deepSeekUnknownRun.id}/resume`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ commandId: 'process-task-deepseek-resume-before-approval',
+      projectId: project.id, version: deepSeekPaused.version }),
+  });
+  assert.equal(deepSeekResumed.status, 'AWAITING_APPROVAL');
+  assert.deepEqual(deepSeekResumed.profile.credential, deepSeekUnknownRun.profile.credential,
+    'resuming revalidates and preserves the exact generic credential generation');
+  assert.equal(deepSeekResumed.profile.providerMaxOutputTokens, 128);
+  const deepSeekApproval = await request(app.base, `/api/execution/runs/${deepSeekUnknownRun.id}/approve`, {
+    ...as('bob'), method: 'POST', body: JSON.stringify({ version: deepSeekResumed.version }),
+  });
+  assert.equal(deepSeekApproval.status, 'APPROVED');
+  failNextProviderResponse = true;
+  const deepSeekUnknownResult = await request(app.base, `/api/execution/runs/${deepSeekUnknownRun.id}/execute`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: deepSeekApproval.version }),
+  });
+  assert.ok(['FAILED', 'INTERRUPTED'].includes(deepSeekUnknownResult.status));
+  const deepSeekAttempt = await app.persistence.query(`select status,attempt_id from orgward.provider_dispatch_attempts
+    where tenant_id='tenant-a' and run_id=$1`, [deepSeekUnknownRun.id]);
+  assert.equal(deepSeekAttempt.rows[0]?.status, 'outcome_unknown');
+  const deepSeekControlBeforePause = await instanceControlForRun(deepSeekUnknownRun);
+  const deepSeekPause = await requestInstancePause(deepSeekUnknownRun, deepSeekControlBeforePause, 'process-task-deepseek-unknown-pause');
+  assert.equal(deepSeekPause.status, 'PAUSE_REQUESTED');
+  const deepSeekControlBeforeAbandon = await instanceControlForRun(deepSeekUnknownRun);
+  assert.equal(deepSeekControlBeforeAbandon.canAbandonUnverified, true,
+    'the owner projection permits the read-only DeepSeek proposal outcome after the pause fence');
+  const deepSeekAbandonPayload = { projectId: project.id, planInstanceId: deepSeekUnknownRun.processTaskRef.planInstanceId,
+    version: deepSeekControlBeforeAbandon.version,
+    reason: 'The DeepSeek response was lost and cannot be verified.',
+    evidence: ['Loopback provider dispatch was outcome_unknown.', 'The task envelope contains only saved proposal inputs.'],
+    acknowledgeDuplicateCostWork: true };
+  const deepSeekAbandoned = await request(app.base, abandonRoute, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ schemaVersion: '1.0', commandId: 'process-task-deepseek-unknown-abandon', payload: deepSeekAbandonPayload }),
+  });
+  assert.equal(deepSeekAbandoned.status, 'ABANDONED_UNVERIFIED');
+  assert.deepEqual(deepSeekAbandoned.runIds, [deepSeekUnknownRun.id]);
+  assert.deepEqual(deepSeekAbandoned.attemptIds, [deepSeekAttempt.rows[0].attempt_id]);
+  const deepSeekAbandonReplay = await request(app.base, abandonRoute, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ schemaVersion: '1.0', commandId: 'process-task-deepseek-unknown-abandon', payload: deepSeekAbandonPayload }),
+  });
+  assert.equal(deepSeekAbandonReplay.replayed, true);
+  await close(app);
+  app = await start(postgres.databaseUrl, { executionProfiles: profiles, oidcAuthenticator, secretEncryptionKey: Buffer.alloc(32, 0x5c),
+    openAiValidationEndpoint: `${providerOrigin}/v1/models` });
+  const deepSeekAfterRestart = await instanceControlForRun(deepSeekUnknownRun);
+  assert.equal(deepSeekAfterRestart.status, 'ABANDONED_UNVERIFIED');
+  assert.deepEqual(deepSeekAfterRestart.events.at(-1).data.evidence, deepSeekAbandonPayload.evidence);
+  const deepSeekAttemptAfterRestart = await app.persistence.query(`select status,attempt_id from orgward.provider_dispatch_attempts
+    where tenant_id='tenant-a' and run_id=$1`, [deepSeekUnknownRun.id]);
+  assert.deepEqual(deepSeekAttemptAfterRestart.rows, deepSeekAttempt.rows);
+
   const genericProviderRun = await taskRequest('process-instance-abandon-provider-http-request', {
     ...planInput, profileId: 'process-task-provider-http',
   });
@@ -6433,11 +7580,37 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   const pauseDispatchRaceApproval = await request(app.base, `/api/execution/runs/${pauseDispatchRaceRequest.id}/approve`, {
     ...as('bob'), method: 'POST', body: JSON.stringify({ version: pauseDispatchRaceRequest.version }),
   });
-  const [pauseDispatchRacePause, pauseDispatchRaceExecute] = await Promise.all([
-    rawPost(`/api/execution/runs/${pauseDispatchRaceRequest.id}/pause`, 'alice', {
+  const pauseDispatchRacePausePromise = rawPost(`/api/execution/runs/${pauseDispatchRaceRequest.id}/pause`, 'alice', {
       commandId: 'process-task-pause-dispatch-race-command', projectId: project.id, version: pauseDispatchRaceApproval.version,
-    }),
-    rawPost(`/api/execution/runs/${pauseDispatchRaceRequest.id}/execute`, 'alice', { version: pauseDispatchRaceApproval.version }),
+    });
+  const pauseDispatchRaceExecutePromise = rawPost(`/api/execution/runs/${pauseDispatchRaceRequest.id}/execute`, 'alice', { version: pauseDispatchRaceApproval.version });
+  const pauseDispatchRaceWorkspace = path.join(profileRoot, pauseDispatchRaceRequest.id);
+  const pauseDispatchRaceReleaseMarker = path.join(pauseDispatchRaceWorkspace, 'worker-release');
+  const pauseDispatchRaceStarted = observeWorkspaceMarker(profileRoot, pauseDispatchRaceRequest.id, 'worker-started');
+  let pauseDispatchRaceObserved;
+  let pauseDispatchWorkerStarted = false;
+  try {
+    pauseDispatchRaceObserved = await Promise.race([
+      pauseDispatchRaceStarted.promise.then(() => ({ winner: 'dispatch' }), (error) => { throw error; }),
+      pauseDispatchRacePausePromise.then((result) => result.status === 200 && result.body?.status === 'PAUSED'
+        ? { winner: 'pause', pauseResult: result } : new Promise(() => {})),
+    ]);
+    if (pauseDispatchRaceObserved.winner === 'dispatch') {
+      pauseDispatchWorkerStarted = true;
+      assert.equal((await readFile(path.join(pauseDispatchRaceWorkspace, 'worker-started'), 'utf8')), 'ready');
+      await writeFile(pauseDispatchRaceReleaseMarker, 'release', { mode: 0o600 });
+    } else {
+      assert.equal(pauseDispatchRaceObserved.pauseResult.status, 200);
+      assert.equal(pauseDispatchRaceObserved.pauseResult.body.status, 'PAUSED',
+        'the pause-winning barrier resolves before a command worker is dispatched');
+    }
+  } finally {
+    pauseDispatchRaceStarted.cancel();
+    if (pauseDispatchWorkerStarted) await writeFile(pauseDispatchRaceReleaseMarker, 'release', { mode: 0o600 }).catch(() => {});
+  }
+  const [pauseDispatchRacePause, pauseDispatchRaceExecute] = await Promise.all([
+    pauseDispatchRacePausePromise,
+    pauseDispatchRaceExecutePromise,
   ]);
   assert.equal([pauseDispatchRacePause, pauseDispatchRaceExecute]
     .filter((result) => result.status >= 200 && result.status < 300).length, 1,
@@ -6467,6 +7640,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   });
   const failedTerminal = await approveAndExecute(firstRoot);
   assert.equal(failedTerminal.status, 'FAILED');
+  assert.equal(failedTerminal.linkedOutcomeCategory, 'command_failed');
 
   const replay = await taskRequest('process-task-root-fail', planInput, 'alice', 200);
   assert.equal(replay.meta.replayed, true);
@@ -6589,25 +7763,58 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     ...as('alice'), method: 'POST', body: JSON.stringify({ version: runningApproval.version }),
   });
   let observedRunning = null;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    observedRunning = await request(app.base, `/api/execution/runs/${runningRequest.id}`, as('alice'));
-    if (observedRunning.status === 'RUNNING') break;
-    await new Promise((resolve) => setTimeout(resolve, 10));
+  const runningWorkspace = path.join(profileRoot, runningRequest.id);
+  const workerStartedMarker = path.join(runningWorkspace, 'worker-started');
+  const workerReleaseMarker = path.join(runningWorkspace, 'worker-release');
+  const workerStartWatch = observeWorkspaceMarker(profileRoot, runningRequest.id, 'worker-started');
+  let executionResponse;
+  let executionResult;
+  let executionError = null;
+  let workerStartError = null;
+  let workerStarted = false;
+  try {
+    try {
+      await workerStartWatch.promise;
+      workerStarted = true;
+    } catch (error) { workerStartError = error; }
+    if (workerStarted) {
+      assert.equal(await readFile(workerStartedMarker, 'utf8'), 'ready');
+      observedRunning = await request(app.base, `/api/execution/runs/${runningRequest.id}`, as('alice'));
+      assert.equal(observedRunning.status, 'RUNNING', 'the worker remains RUNNING behind its workspace release barrier');
+      const runningCancelDenied = await request(app.base, `/api/execution/runs/${runningRequest.id}/cancel`, {
+        ...as('alice'), method: 'POST', body: JSON.stringify({
+          commandId: 'process-task-cancel-running-command', projectId: project.id, version: runningApproval.version,
+        }),
+      }, 409);
+      assert.equal(runningCancelDenied.error.code, 'PROCESS_TASK_CANCELLATION_UNAVAILABLE');
+      assert.match(runningCancelDenied.error.message, /running task cannot be withdrawn/i);
+    }
+  } finally {
+    // CommandExecutionAdapter binds the per-run host workspace at /workspace and
+    // starts the worker there, so this private marker releases only this fixture.
+    workerStartWatch.cancel();
+    await writeFile(workerReleaseMarker, 'release', { mode: 0o600 }).catch(() => {});
+    try {
+      executionResponse = await executionInFlight;
+      executionResult = await executionResponse.json();
+    } catch (error) { executionError = error; }
   }
-  assert.equal(observedRunning.status, 'RUNNING', 'the worker run enters RUNNING before cancellation is attempted');
-  const runningCancelDenied = await request(app.base, `/api/execution/runs/${runningRequest.id}/cancel`, {
-    ...as('alice'), method: 'POST', body: JSON.stringify({
-      commandId: 'process-task-cancel-running-command', projectId: project.id, version: runningApproval.version,
-    }),
-  }, 409);
-  assert.equal(runningCancelDenied.error.code, 'PROCESS_TASK_CANCELLATION_UNAVAILABLE');
-  assert.match(runningCancelDenied.error.message, /running task cannot be withdrawn/i);
-  const executionResponse = await executionInFlight;
-  const executionResult = await executionResponse.json();
-  assert.equal(executionResponse.status, 200, JSON.stringify(executionResult));
+  if (!workerStarted) {
+    const failureDetail = {
+      markerError: workerStartError?.message ?? 'no marker signal',
+      executionHttpStatus: executionResponse?.status ?? null,
+      runStatus: executionResult?.status ?? null,
+      events: executionResult?.events?.map((event) => event.type) ?? [],
+      executionStatus: executionResult?.execution?.status ?? null,
+      error: executionResult?.error?.code ?? executionResult?.error?.message ?? executionError?.message ?? null,
+    };
+    assert.equal(workerStarted, true,
+      `the command worker writes its start marker in the bound private workspace after release; ${JSON.stringify(failureDetail)}`);
+  }
+  assert.equal(executionResponse?.status, 200, JSON.stringify(executionResult));
   assert.equal(executionResult.status, 'SUCCEEDED');
 
-  const secondRoot = await taskRequest('process-task-root-retry', successInput);
+  const secondRoot = await taskRequest('process-task-root-retry', { ...successInput, profileId: 'process-task-artifact' });
   assert.notEqual(secondRoot.processTaskRef.planInstanceId, firstRoot.processTaskRef.planInstanceId,
     'a retry after terminal failure starts a fresh plan instance');
   const dependentInput = {
@@ -6622,6 +7829,9 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(blockedDependency.error.code, 'PROCESS_TASK_DEPENDENCY_UNSATISFIED');
   const successfulRoot = await approveAndExecute(secondRoot);
   assert.equal(successfulRoot.status, 'SUCCEEDED');
+  assert.deepEqual(successfulRoot.execution.changedArtifacts.map((entry) => entry.path), ['task-result.txt']);
+  assert.equal(successfulRoot.execution.changedArtifacts[0].contentHash,
+    createHash('sha256').update('Persisted process task artifact bytes.').digest('hex'));
   const dependent = await taskRequest('process-task-deliver-after-root', dependentInput);
   assert.equal(dependent.status, 'AWAITING_APPROVAL');
   assert.equal(dependent.processTaskRef.planInstanceId, secondRoot.processTaskRef.planInstanceId);
@@ -6666,6 +7876,9 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     && runtime.planInstanceId === secondRoot.processTaskRef.planInstanceId);
   assert.equal(visibleHumanRuntime.status, 'IN_PROGRESS');
   assert.equal(visibleHumanRuntime.assignedToCurrentPrincipal, true);
+  assert.equal(visibleHumanRuntime.effectiveAssignmentOverridden, false);
+  assert.equal(Object.hasOwn(visibleHumanRuntime, 'effectiveAssigneeDisplayName'), false,
+    'the current human is represented as self without returning a profile field');
   assert.equal(visibleHumanRuntime.canResolveEscalation, false, 'an assigned editor cannot resolve a task escalation');
   assert.equal(JSON.stringify(visibleHumanRuntime).includes(principal('bob')), false,
     'runtime reads identify whether the caller is assigned without exposing the private target principal');
@@ -6700,6 +7913,9 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   await request(app.base, membersRoute, {
     ...as('alice'), method: 'POST', body: JSON.stringify({ principal: principal('readonly'), access: 'editor' }),
   });
+  await request(app.base, membersRoute, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ principal: principal('carol'), access: 'editor' }),
+  });
   const readerEscalated = await request(app.base,
     `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, {
     ...as('readonly'),
@@ -6708,6 +7924,10 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     && runtime.planInstanceId === secondRoot.processTaskRef.planInstanceId);
   assert.equal(readerEscalatedRuntime.status, 'ESCALATED');
   assert.equal(readerEscalatedRuntime.canResolveEscalation, false);
+  assert.equal(Object.hasOwn(readerEscalatedRuntime, 'effectiveAssigneeDisplayName'), false,
+    'project readers do not receive the current assignee display name');
+  assert.equal(Object.hasOwn(readerEscalatedRuntime, 'humanReassignmentCandidates'), false,
+    'non-owners cannot see candidate assignee identities');
   assert.equal(readerEscalatedRuntime.events.at(-1).data.reason, 'Need owner review before approving the safety checkpoint.');
   const escalatedCompletionDenied = await request(app.base, '/api/execution/process-task-instances/complete', {
     ...as('bob'), method: 'POST', body: command('process-task-human-complete-while-escalated', {
@@ -6727,17 +7947,232 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     && runtime.planInstanceId === secondRoot.processTaskRef.planInstanceId);
   assert.equal(ownerVisibleRuntime.status, 'ESCALATED');
   assert.equal(ownerVisibleRuntime.canResolveEscalation, true);
+  assert.equal(ownerVisibleRuntime.effectiveAssigneeDisplayName, 'Bob Reviewer',
+    'an active project owner can identify the current assignee for oversight');
   assert.equal(ownerVisibleRuntime.events.at(-1).actor, 'assigned human');
+  assert.ok(ownerVisibleRuntime.humanReassignmentCandidates.some((candidate) => candidate.principal === principal('carol')));
+  assert.equal(ownerVisibleRuntime.humanReassignmentCandidates.some((candidate) => candidate.principal === principal('readonly')), false,
+    'a human project member without current workspace-write is not eligible');
+  assert.equal(ownerVisibleRuntime.humanReassignmentCandidates.some((candidate) => candidate.principal === principal('bob')), false,
+    'current assignee is not offered as a reassignment target');
+  assert.equal(ownerVisibleRuntime.humanReassignmentCandidates.some((candidate) => candidate.principal === principal('servicebot')), false,
+    'non-human identities are not offered as reassignment targets');
   assert.equal(JSON.stringify(ownerVisibleRuntime).includes(principal('bob')), false,
     'owner escalation details do not expose the assigned principal');
+  await app.persistence.transaction(async (client) => {
+    await client.query('savepoint same_effective_assignee_reassignment');
+    const current = await client.query(`select assigned_principal, assigned_membership_generation, assigned_authz_generation
+      from orgward.process_task_instances
+      where tenant_id='tenant-a' and project_id=$1 and plan_instance_id=$2 and task_id=$3 for update`,
+    [project.id, secondRoot.processTaskRef.planInstanceId, humanTaskPayload.taskId]);
+    const original = current.rows[0];
+    const sameAssigneeEvent = {
+      id: `process-task-event-${randomUUID()}`, type: 'HumanTaskEscalationResolved', actor: principal('alice'),
+      at: new Date().toISOString(), data: {
+        taskId: humanTaskPayload.taskId, processPlanId: humanTaskPayload.planId,
+        revision: humanTaskPayload.revision, planInstanceId: humanTaskPayload.planInstanceId,
+        disposition: 'resume', ownerAction: 'reassign', reassigned: true,
+        fromPrincipal: original.assigned_principal, toPrincipal: original.assigned_principal,
+        fromMembershipGeneration: Number(original.assigned_membership_generation),
+        toMembershipGeneration: Number(original.assigned_membership_generation),
+        fromAuthzGeneration: Number(original.assigned_authz_generation),
+        toAuthzGeneration: Number(original.assigned_authz_generation),
+        reason: 'A direct database transition must still reject a same-assignee reassignment.',
+        evidence: ['The requested owner override does not change the effective assignee.'],
+      },
+    };
+    let sameAssigneeError;
+    try {
+      await client.query(`update orgward.process_task_instances
+        set status='IN_PROGRESS', version=version+1, effective_assigned_principal=$6,
+          effective_assigned_membership_generation=$7, effective_assigned_authz_generation=$8,
+          events=events || $9::jsonb, updated_at=now()
+        where tenant_id='tenant-a' and project_id=$1 and process_plan_id=$2 and plan_revision=$3
+          and plan_instance_id=$4 and task_id=$5`,
+      [project.id, humanTaskPayload.planId, humanTaskPayload.revision, humanTaskPayload.planInstanceId,
+        humanTaskPayload.taskId, original.assigned_principal, Number(original.assigned_membership_generation),
+        Number(original.assigned_authz_generation), JSON.stringify([sameAssigneeEvent])]);
+    } catch (error) {
+      sameAssigneeError = error;
+    }
+    assert.equal(sameAssigneeError?.code, 'P0001');
+    assert.match(sameAssigneeError?.message ?? '', /distinct assignee/i,
+      'the database trigger independently rejects reassignment to the current effective assignee');
+    await client.query('rollback to savepoint same_effective_assignee_reassignment');
+    await client.query('release savepoint same_effective_assignee_reassignment');
+  });
+  const staleReassignment = await request(app.base, '/api/execution/process-task-instances/resolve', {
+    ...as('alice'), method: 'POST', body: command('process-task-human-owner-reassign-stale-version', {
+      ...humanTaskPayload, disposition: 'reassign', targetPrincipal: principal('readonly'),
+      expectedVersion: ownerVisibleRuntime.version - 1, reason: 'Current version is required.', evidence: ['Stale version must not reassign.'],
+    }),
+  }, 409);
+  assert.equal(staleReassignment.error.code, 'PROCESS_TASK_STATE_CONFLICT');
+  await request(app.base, membersRoute, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ principal: principal('readonly'), access: 'reader' }),
+  });
+  const readerTargetReassignment = await request(app.base, '/api/execution/process-task-instances/resolve', {
+    ...as('alice'), method: 'POST', body: command('process-task-human-owner-reassign-reader', {
+      ...humanTaskPayload, disposition: 'reassign', targetPrincipal: principal('readonly'),
+      expectedVersion: ownerVisibleRuntime.version, reason: 'A reader cannot own this checkpoint.', evidence: ['Owner checked current membership access.'],
+    }),
+  }, 409);
+  assert.equal(readerTargetReassignment.error.code, 'PROCESS_TASK_REASSIGNEE_UNAVAILABLE');
+  const revokedMember = await request(app.base, `${membersRoute}/${principal('readonly')}/revoke`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({}),
+  });
+  assert.equal(revokedMember.data.status, 'revoked');
+  const revokedTargetReassignment = await request(app.base, '/api/execution/process-task-instances/resolve', {
+    ...as('alice'), method: 'POST', body: command('process-task-human-owner-reassign-revoked', {
+      ...humanTaskPayload, disposition: 'reassign', targetPrincipal: principal('readonly'),
+      expectedVersion: ownerVisibleRuntime.version, reason: 'Revoked member is not eligible.', evidence: ['Owner checked current membership status.'],
+    }),
+  }, 409);
+  assert.equal(revokedTargetReassignment.error.code, 'PROCESS_TASK_REASSIGNEE_UNAVAILABLE');
+  await request(app.base, membersRoute, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ principal: principal('readonly'), access: 'editor' }),
+  });
+  const refreshedOwnerEscalationView = await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'));
+  const refreshedOwnerRuntime = refreshedOwnerEscalationView.instances.find((runtime) => runtime.taskId === 'task-process-review'
+    && runtime.planInstanceId === secondRoot.processTaskRef.planInstanceId);
+  assert.ok(refreshedOwnerRuntime.humanReassignmentCandidates.some((candidate) => candidate.principal === principal('carol')),
+    'an active editor with current workspace-write appears as an eligible target');
+  assert.equal(refreshedOwnerRuntime.version, ownerVisibleRuntime.version,
+    'membership target changes do not alter the task version before resolution');
+  const sameHumanReassignment = await request(app.base, '/api/execution/process-task-instances/resolve', {
+    ...as('alice'), method: 'POST', body: command('process-task-human-owner-reassign-same', {
+      ...humanTaskPayload, disposition: 'reassign', targetPrincipal: principal('bob'),
+      expectedVersion: ownerVisibleRuntime.version, reason: 'Same assignee is not a reassignment.', evidence: ['No assignment change.'],
+    }),
+  }, 409);
+  assert.equal(sameHumanReassignment.error.code, 'PROCESS_TASK_ASSIGNMENT_CONFLICT');
+  const unavailableReassignment = await request(app.base, '/api/execution/process-task-instances/resolve', {
+    ...as('alice'), method: 'POST', body: command('process-task-human-owner-reassign-outsider', {
+      ...humanTaskPayload, disposition: 'reassign', targetPrincipal: principal('outsider'),
+      expectedVersion: ownerVisibleRuntime.version, reason: 'Target is not a project member.', evidence: ['Do not assign an outsider.'],
+    }),
+  }, 409);
+  assert.equal(unavailableReassignment.error.code, 'PROCESS_TASK_REASSIGNEE_UNAVAILABLE');
+  const readOriginalAssignmentState = async () => (await app.persistence.query(`
+    select status, version, effective_assigned_principal, effective_assigned_membership_generation,
+      effective_assigned_authz_generation, events
+    from orgward.process_task_instances
+    where tenant_id='tenant-a' and project_id=$1 and plan_instance_id=$2 and task_id=$3
+  `, [project.id, secondRoot.processTaskRef.planInstanceId, humanTaskPayload.taskId])).rows[0];
+  const beforeCrossTenantTarget = await readOriginalAssignmentState();
+  const crossTenantReassignment = await request(app.base, '/api/execution/process-task-instances/resolve', {
+    ...as('alice'), method: 'POST', body: command('process-task-human-owner-reassign-cross-tenant', {
+      ...humanTaskPayload, disposition: 'reassign', targetPrincipal: principal('tenant-b-admin'),
+      expectedVersion: ownerVisibleRuntime.version, reason: 'A principal from another tenant is not eligible.',
+      evidence: ['Owner checked that the target belongs to another tenant.'],
+    }),
+  }, 409);
+  assert.equal(crossTenantReassignment.error.code, 'PROCESS_TASK_REASSIGNEE_UNAVAILABLE');
+  assert.deepEqual(await readOriginalAssignmentState(), beforeCrossTenantTarget,
+    'cross-tenant reassignment denial leaves version, override and event history unchanged');
+  const editorReassignmentDenied = await request(app.base, '/api/execution/process-task-instances/resolve', {
+    ...as('bob'), method: 'POST', body: command('process-task-human-editor-reassign', {
+      ...humanTaskPayload, disposition: 'reassign', targetPrincipal: principal('carol'),
+      expectedVersion: ownerVisibleRuntime.version, reason: 'Editor cannot reassign.', evidence: ['Owner approval required.'],
+    }),
+  }, 403);
+  assert.equal(editorReassignmentDenied.error.code, 'ACTION_FORBIDDEN');
   const resumedHuman = await request(app.base, '/api/execution/process-task-instances/resolve', {
     ...as('alice'), method: 'POST', body: command('process-task-human-owner-resume', {
-      ...humanTaskPayload, disposition: 'resume', reason: 'Binding and assignment are still current.', evidence: ['Owner review recorded.'],
+      ...humanTaskPayload, disposition: 'reassign', targetPrincipal: principal('carol'),
+      expectedVersion: refreshedOwnerRuntime.version, reason: 'The original assignee needs to hand off this checkpoint.',
+      evidence: ['Owner verified the handoff to the active human project editor.'],
     }),
   }, 201);
   assert.equal(resumedHuman.status, 'IN_PROGRESS');
   assert.equal(resumedHuman.events.at(-1).type, 'HumanTaskEscalationResolved');
   assert.equal(resumedHuman.events.at(-1).actor, 'project owner');
+  assert.equal(resumedHuman.events.at(-1).data.ownerAction, 'reassign');
+  assert.equal(resumedHuman.events.at(-1).data.disposition, 'resume');
+  assert.equal(Object.hasOwn(resumedHuman.events.at(-1).data, 'toPrincipal'), false,
+    'API history redacts the target principal while the audit retains the exact target');
+  assert.equal(JSON.stringify(resumedHuman).includes(principal('carol')), false,
+    'owner mutation response does not leak private principal identifiers');
+  const reassignedRuntimeRead = await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('carol'));
+  const reassignedRuntime = reassignedRuntimeRead.instances.find((runtime) => runtime.taskId === 'task-process-review'
+    && runtime.planInstanceId === secondRoot.processTaskRef.planInstanceId);
+  assert.equal(reassignedRuntime.status, 'IN_PROGRESS');
+  assert.equal(reassignedRuntime.assignedToCurrentPrincipal, true,
+    'the effective owner override authorizes the selected active human to complete the checkpoint');
+  assert.equal(reassignedRuntime.effectiveAssignmentOverridden, true);
+  assert.equal(Object.hasOwn(reassignedRuntime, 'effectiveAssigneeDisplayName'), false,
+    'the current assignee sees self rather than an identity profile value');
+  assert.equal(Object.hasOwn(reassignedRuntime, 'humanReassignmentCandidates'), false,
+    'candidate identities are limited to project owners');
+  const ownerAfterReassignmentRead = await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'));
+  const ownerAfterReassignment = ownerAfterReassignmentRead.instances.find((runtime) => runtime.taskId === 'task-process-review'
+    && runtime.planInstanceId === secondRoot.processTaskRef.planInstanceId);
+  assert.equal(ownerAfterReassignment.effectiveAssigneeDisplayName, 'Carol Reviewer',
+    'an authorized owner receives the server-derived effective assignee name after reassignment');
+  assert.equal(JSON.stringify(ownerAfterReassignment).includes(principal('carol')), false,
+    'the owner gets a display label without a principal identifier');
+  const readerAfterReassignmentRead = await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('readonly'));
+  const readerAfterReassignment = readerAfterReassignmentRead.instances.find((runtime) => runtime.taskId === 'task-process-review'
+    && runtime.planInstanceId === secondRoot.processTaskRef.planInstanceId);
+  assert.equal(readerAfterReassignment.effectiveAssignmentOverridden, true);
+  assert.equal(readerAfterReassignment.assignedToCurrentPrincipal, false);
+  assert.equal(Object.hasOwn(readerAfterReassignment, 'effectiveAssigneeDisplayName'), false);
+  assert.equal(JSON.stringify(readerAfterReassignment).includes('Carol Reviewer'), false,
+    'other project readers see the override but no assignee identity');
+  const formerAssigneeRuntimeRead = await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('bob'));
+  const formerAssigneeRuntime = formerAssigneeRuntimeRead.instances.find((runtime) => runtime.taskId === 'task-process-review'
+    && runtime.planInstanceId === secondRoot.processTaskRef.planInstanceId);
+  assert.equal(formerAssigneeRuntime.assignedToCurrentPrincipal, false,
+    'the original assignee loses mutation authority after reassignment');
+  assert.equal(Object.hasOwn(formerAssigneeRuntime, 'effectiveAssigneeDisplayName'), false,
+    'the former assignee does not receive the current assignee identity');
+  const effectiveAssignmentCheckPlan = `process-plan-effective-assignment-check-${randomUUID()}`;
+  await app.persistence.transaction(async (client) => {
+    await client.query('savepoint effective_assignment_fixture');
+    const insertRuntime = async (taskId, effectivePrincipal, membershipGeneration, authzGeneration) => client.query(`
+      insert into orgward.process_task_instances (
+        tenant_id, project_id, process_plan_id, plan_revision, plan_instance_id, task_id,
+        blueprint_id, blueprint_version, process_id, actor_type,
+        assigned_principal, assigned_membership_generation, assigned_authz_generation,
+        status, effective_assigned_principal, effective_assigned_membership_generation,
+        effective_assigned_authz_generation
+      ) values ('tenant-a',$1,$2,1,$3,$4,'blueprint-effective-assignment-check',1,'process-effective-assignment-check','human',
+        $5,1,1,'PLANNED',$6,$7,$8)
+    `, [project.id, effectiveAssignmentCheckPlan, randomUUID(), taskId, principal('bob'),
+      effectivePrincipal, membershipGeneration, authzGeneration]);
+    await insertRuntime('legacy-null-effective-assignment', null, null, null);
+    await insertRuntime('complete-effective-assignment', principal('carol'), 20, 30);
+    await insertRuntime('complete-assignment-returning-to-original', principal('bob'), 20, 30);
+    const partialTuples = [
+      ['principal-only', principal('carol'), null, null],
+      ['membership-only', null, 20, null],
+      ['authz-only', null, null, 30],
+      ['principal-membership', principal('carol'), 20, null],
+      ['principal-authz', principal('carol'), null, 30],
+      ['membership-authz', null, 20, 30],
+    ];
+    for (const [index, [caseName, target, membershipGeneration, authzGeneration]] of partialTuples.entries()) {
+      const savepoint = `effective_assignment_case_${index}`;
+      await client.query(`savepoint ${savepoint}`);
+      let insertError;
+      try {
+        await insertRuntime(`invalid-effective-assignment-${caseName}`, target, membershipGeneration, authzGeneration);
+      } catch (error) {
+        insertError = error;
+      }
+      assert.equal(insertError?.code, '23514', `${caseName} effective assignment tuple must fail its check constraint`);
+      assert.equal(insertError?.constraint, 'process_task_effective_assignment_all_or_none');
+      await client.query(`rollback to savepoint ${savepoint}`);
+      await client.query(`release savepoint ${savepoint}`);
+    }
+    await client.query('rollback to savepoint effective_assignment_fixture');
+    await client.query('release savepoint effective_assignment_fixture');
+  });
   const missingOwnerReason = await request(app.base, '/api/execution/process-task-instances/resolve', {
     ...as('alice'), method: 'POST', body: command('process-task-human-owner-resume-no-reason', {
       ...humanTaskPayload, disposition: 'resume', reason: '', evidence: [],
@@ -6746,17 +8181,110 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(missingOwnerReason.error.code, 'INVALID_HUMAN_TASK_ESCALATION');
   const ownerResolutionReplay = await request(app.base, '/api/execution/process-task-instances/resolve', {
     ...as('alice'), method: 'POST', body: command('process-task-human-owner-resume', {
-      ...humanTaskPayload, disposition: 'resume', reason: 'Binding and assignment are still current.', evidence: ['Owner review recorded.'],
+      ...humanTaskPayload, disposition: 'reassign', targetPrincipal: principal('carol'),
+      expectedVersion: refreshedOwnerRuntime.version, reason: 'The original assignee needs to hand off this checkpoint.',
+      evidence: ['Owner verified the handoff to the active human project editor.'],
     }),
   }, 200);
   assert.equal(ownerResolutionReplay.meta.replayed, true);
   assert.equal(ownerResolutionReplay.events.filter((event) => event.type === 'HumanTaskEscalationResolved').length, 1);
   const changedOwnerResolutionReplay = await request(app.base, '/api/execution/process-task-instances/resolve', {
     ...as('alice'), method: 'POST', body: command('process-task-human-owner-resume', {
-      ...humanTaskPayload, disposition: 'resume', reason: 'Different resolution.', evidence: ['Owner review recorded.'],
+      ...humanTaskPayload, disposition: 'reassign', targetPrincipal: principal('carol'),
+      expectedVersion: refreshedOwnerRuntime.version, reason: 'Different resolution.', evidence: ['Owner verified the handoff to the active human project editor.'],
     }),
   }, 409);
   assert.equal(changedOwnerResolutionReplay.error.code, 'IDEMPOTENCY_CONFLICT');
+  const oldHumanCompletionDenied = await request(app.base, '/api/execution/process-task-instances/complete', {
+    ...as('bob'), method: 'POST', body: command('process-task-human-old-assignee-complete-after-reassign', {
+      ...humanTaskPayload, result: 'succeeded', evidence: ['Old assignment cannot complete after handoff.'],
+    }),
+  }, 403);
+  assert.equal(oldHumanCompletionDenied.error.code, 'ACTION_FORBIDDEN');
+  const carolEscalation = await request(app.base, '/api/execution/process-task-instances/escalate', {
+    ...as('carol'), method: 'POST', body: command('process-task-human-carol-escalate-before-return', {
+      ...humanTaskPayload, reason: 'The checkpoint should return to its original assigned human.',
+      evidence: ['Carol documented the handoff reason before returning the assignment.'],
+    }),
+  }, 201);
+  assert.equal(carolEscalation.status, 'ESCALATED');
+  const carolPinnedBindings = await app.persistence.query(`
+    select count(*)::int as count from orgward.project_actor_binding_proposals
+    where tenant_id='tenant-a' and project_id=$1 and blueprint_version=$2
+      and actor_id=$3 and role_id=$4 and target_principal=$5 and status='enabled'
+  `, [project.id, ownerVisibleRuntime.blueprintVersion, ownerVisibleRuntime.actorId,
+    ownerVisibleRuntime.roleId, principal('carol')]);
+  assert.equal(carolPinnedBindings.rows[0].count, 0,
+    'the reassigned human has no enabled pinned actor-role binding');
+  const ownerResumedCarol = await request(app.base, '/api/execution/process-task-instances/resolve', {
+    ...as('alice'), method: 'POST', body: command('process-task-human-owner-resume-effective-assignee', {
+      ...humanTaskPayload, disposition: 'resume', reason: 'Current effective human authority remains valid.', evidence: [],
+    }),
+  }, 201);
+  assert.equal(ownerResumedCarol.status, 'IN_PROGRESS',
+    'owner resume validates the saved effective assignment without requiring a pinned actor binding');
+  const carolReEscalation = await request(app.base, '/api/execution/process-task-instances/escalate', {
+    ...as('carol'), method: 'POST', body: command('process-task-human-carol-escalate-before-return-2', {
+      ...humanTaskPayload, reason: 'The checkpoint should now return to its original assigned human.',
+      evidence: ['Carol documented the second handoff reason.'],
+    }),
+  }, 201);
+  assert.equal(carolReEscalation.status, 'ESCALATED');
+  const returnOwnerView = await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'));
+  const returnOwnerRuntime = returnOwnerView.instances.find((runtime) => runtime.taskId === 'task-process-review'
+    && runtime.planInstanceId === secondRoot.processTaskRef.planInstanceId);
+  assert.ok(returnOwnerRuntime.humanReassignmentCandidates.some((candidate) => candidate.principal === principal('bob')),
+    'the original assigned human is eligible after another person currently holds the assignment');
+  const reassignedBackToOriginal = await request(app.base, '/api/execution/process-task-instances/resolve', {
+    ...as('alice'), method: 'POST', body: command('process-task-human-owner-reassign-back-original', {
+      ...humanTaskPayload, disposition: 'reassign', targetPrincipal: principal('bob'),
+      expectedVersion: returnOwnerRuntime.version, reason: 'Return the checkpoint to its original assigned human.',
+      evidence: ['Owner verified the current effective assignee and original human eligibility.'],
+    }),
+  }, 201);
+  assert.equal(reassignedBackToOriginal.status, 'IN_PROGRESS');
+  assert.equal(reassignedBackToOriginal.events.filter((event) => event.type === 'HumanTaskEscalationResolved').length, 3);
+  assert.equal(JSON.stringify(reassignedBackToOriginal).includes(principal('bob')), false,
+    'the return reassignment response keeps the selected principal private');
+  const reassignedBackReplay = await request(app.base, '/api/execution/process-task-instances/resolve', {
+    ...as('alice'), method: 'POST', body: command('process-task-human-owner-reassign-back-original', {
+      ...humanTaskPayload, disposition: 'reassign', targetPrincipal: principal('bob'),
+      expectedVersion: returnOwnerRuntime.version, reason: 'Return the checkpoint to its original assigned human.',
+      evidence: ['Owner verified the current effective assignee and original human eligibility.'],
+    }),
+  }, 200);
+  assert.equal(reassignedBackReplay.meta.replayed, true);
+  assert.equal(reassignedBackReplay.events.filter((event) => event.type === 'HumanTaskEscalationResolved').length, 3);
+  const bobAfterReturnRead = await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('bob'));
+  const bobAfterReturn = bobAfterReturnRead.instances.find((runtime) => runtime.taskId === 'task-process-review'
+    && runtime.planInstanceId === secondRoot.processTaskRef.planInstanceId);
+  assert.equal(bobAfterReturn.assignedToCurrentPrincipal, true,
+    'the effective assignment can return to the original human with current generations');
+  const effectiveAssignmentAtReturn = await app.persistence.query(`
+    select r.effective_assigned_principal, r.effective_assigned_membership_generation,
+      r.effective_assigned_authz_generation, membership.generation as current_membership_generation,
+      identity.authz_generation as current_authz_generation
+    from orgward.process_task_instances r
+    join orgward.project_memberships membership
+      on membership.tenant_id=r.tenant_id and membership.project_id=r.project_id
+        and membership.principal=r.effective_assigned_principal
+    join orgward.oidc_principals identity
+      on identity.tenant_id=r.tenant_id and identity.principal=r.effective_assigned_principal
+    where r.tenant_id='tenant-a' and r.project_id=$1 and r.plan_instance_id=$2 and r.task_id=$3
+  `, [project.id, secondRoot.processTaskRef.planInstanceId, humanTaskPayload.taskId]);
+  assert.equal(effectiveAssignmentAtReturn.rows[0].effective_assigned_principal, principal('bob'));
+  assert.equal(Number(effectiveAssignmentAtReturn.rows[0].effective_assigned_membership_generation),
+    Number(effectiveAssignmentAtReturn.rows[0].current_membership_generation));
+  assert.equal(Number(effectiveAssignmentAtReturn.rows[0].effective_assigned_authz_generation),
+    Number(effectiveAssignmentAtReturn.rows[0].current_authz_generation));
+  const carolAfterReturnRead = await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('carol'));
+  const carolAfterReturn = carolAfterReturnRead.instances.find((runtime) => runtime.taskId === 'task-process-review'
+    && runtime.planInstanceId === secondRoot.processTaskRef.planInstanceId);
+  assert.equal(carolAfterReturn.assignedToCurrentPrincipal, false,
+    'the previous effective assignee loses authority after the return reassignment');
   const completedHuman = await request(app.base, '/api/execution/process-task-instances/complete', {
     ...as('bob'), method: 'POST', body: command('process-task-human-complete', {
       ...humanTaskPayload, result: 'succeeded', evidence: ['Safety review recorded by assigned founder.'],
@@ -6852,6 +8380,155 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
       result: 'succeeded', evidence: ['Dependent checkpoint completed.'],
     }),
   }, 201);
+
+  const cancellationStart = async (label) => request(app.base, '/api/execution/process-task-instances/start', {
+    ...as('bob'), method: 'POST', body: command(`process-task-cancel-${label}-start`, {
+      ...humanRootStartPayload,
+    }),
+  }, 201);
+  const cancellationComplete = async (label, started) => request(app.base, '/api/execution/process-task-instances/complete', {
+    ...as('bob'), method: 'POST', body: command(`process-task-cancel-${label}-complete`, {
+      ...humanRootStartPayload, planInstanceId: started.planInstanceId,
+      result: 'succeeded', evidence: [`${label} checkpoint evidence retained.`],
+    }),
+  }, 201);
+  const cancellationControl = async (started) => (await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('bob'))).instances
+    .find((runtime) => runtime.planInstanceId === started.planInstanceId).instanceControl;
+  const cancellationStartBody = (started, version, reason) => ({ schemaVersion: '1.0',
+    commandId: `process-instance-cancel-${started.planInstanceId}`, payload: {
+      projectId: project.id, planInstanceId: started.planInstanceId, version, reason,
+    } });
+  const initiatorCancellationInstance = await cancellationStart('initiator');
+  await cancellationComplete('initiator', initiatorCancellationInstance);
+  const initiatorControl = await cancellationControl(initiatorCancellationInstance);
+  const cancelWhileActive = await request(app.base, '/api/execution/process-task-instances/cancel', {
+    ...as('bob'), method: 'POST', body: JSON.stringify(cancellationStartBody(initiatorCancellationInstance,
+      initiatorControl.version, 'This must wait for the paused boundary.')),
+  }, 409);
+  assert.equal(cancelWhileActive.error.code, 'PROCESS_INSTANCE_NOT_PAUSED');
+  const initiatorPaused = await request(app.base, '/api/execution/process-task-instances/pause', {
+    ...as('bob'), method: 'POST', body: JSON.stringify({ schemaVersion: '1.0',
+      commandId: `process-instance-cancel-${initiatorCancellationInstance.planInstanceId}-pause`, payload: {
+        projectId: project.id, planInstanceId: initiatorCancellationInstance.planInstanceId,
+        version: initiatorControl.version, reason: 'All checkpoint work has settled.',
+      } }),
+  });
+  assert.equal(initiatorPaused.status, 'PAUSED');
+  const initiatorCancelBody = cancellationStartBody(initiatorCancellationInstance, initiatorPaused.version,
+    'The completed review is retained and this instance should stop.');
+  const editorCancellationDenied = await request(app.base, '/api/execution/process-task-instances/cancel', {
+    ...as('carol'), method: 'POST', body: JSON.stringify({ ...initiatorCancelBody,
+      commandId: `process-instance-cancel-${initiatorCancellationInstance.planInstanceId}-editor` }),
+  }, 403);
+  assert.equal(editorCancellationDenied.error.code, 'ACTION_FORBIDDEN',
+    'a project editor who is not the initiator cannot cancel the instance');
+  const initiatorCancelled = await request(app.base, '/api/execution/process-task-instances/cancel', {
+    ...as('bob'), method: 'POST', body: JSON.stringify(initiatorCancelBody),
+  });
+  assert.equal(initiatorCancelled.status, 'CANCELLED', 'the non-owner initiator may cancel a fully drained instance');
+  assert.equal(initiatorCancelled.reason, 'The completed review is retained and this instance should stop.');
+  const initiatorCancelReplay = await request(app.base, '/api/execution/process-task-instances/cancel', {
+    ...as('bob'), method: 'POST', body: JSON.stringify(initiatorCancelBody),
+  });
+  assert.equal(initiatorCancelReplay.replayed, true);
+  const initiatorResumeDenied = await request(app.base, '/api/execution/process-task-instances/resume', {
+    ...as('bob'), method: 'POST', body: JSON.stringify({ schemaVersion: '1.0',
+      commandId: `process-instance-cancel-${initiatorCancellationInstance.planInstanceId}-resume`, payload: {
+        projectId: project.id, planInstanceId: initiatorCancellationInstance.planInstanceId,
+        version: initiatorCancelled.version,
+      } }),
+  }, 409);
+  assert.equal(initiatorResumeDenied.error.code, 'PROCESS_INSTANCE_CANCELLED');
+  const lateHumanStart = await request(app.base, '/api/execution/process-task-instances/start', {
+    ...as('bob'), method: 'POST', body: command('process-task-cancel-late-start', {
+      ...humanRootStartPayload, planInstanceId: initiatorCancellationInstance.planInstanceId,
+    }),
+  }, 409);
+  assert.equal(lateHumanStart.error.code, 'PROCESS_INSTANCE_CANCELLED');
+  const lateHumanCompletion = await request(app.base, '/api/execution/process-task-instances/complete', {
+    ...as('bob'), method: 'POST', body: command('process-task-cancel-late-complete', {
+      ...humanRootStartPayload, planInstanceId: initiatorCancellationInstance.planInstanceId,
+      result: 'succeeded', evidence: ['A late write must not replace the recorded evidence.'],
+    }),
+  }, 409);
+  assert.equal(lateHumanCompletion.error.code, 'PROCESS_INSTANCE_CANCELLED');
+  const ownerCancellationInstance = await cancellationStart('owner');
+  await cancellationComplete('owner', ownerCancellationInstance);
+  const ownerControl = await cancellationControl(ownerCancellationInstance);
+  const ownerPaused = await request(app.base, '/api/execution/process-task-instances/pause', {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ schemaVersion: '1.0',
+      commandId: `process-instance-cancel-${ownerCancellationInstance.planInstanceId}-pause`, payload: {
+        projectId: project.id, planInstanceId: ownerCancellationInstance.planInstanceId,
+        version: ownerControl.version, reason: 'Owner review closed the completed instance.',
+      } }),
+  });
+  assert.equal(ownerPaused.status, 'PAUSED');
+  const ownerCancelled = await request(app.base, '/api/execution/process-task-instances/cancel', {
+    ...as('alice'), method: 'POST', body: JSON.stringify(cancellationStartBody(ownerCancellationInstance,
+      ownerPaused.version, 'Project owner closed the drained instance.')),
+  });
+  assert.equal(ownerCancelled.status, 'CANCELLED', 'a current project owner may cancel another human initiator’s drained instance');
+
+  const cancellationWithLinkedRun = await taskRequest('process-task-cancel-unresolved-attempt', {
+    ...planInput, profileId: 'process-task-failure',
+  }, 'bob');
+  const linkedRunRuntime = (await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances
+    .find((runtime) => runtime.executionRunId === cancellationWithLinkedRun.id);
+  const linkedRunPaused = await request(app.base, '/api/execution/process-task-instances/pause', {
+    ...as('bob'), method: 'POST', body: JSON.stringify({ schemaVersion: '1.0',
+      commandId: 'process-instance-cancel-unresolved-pause', payload: {
+        projectId: project.id, planInstanceId: cancellationWithLinkedRun.processTaskRef.planInstanceId,
+        version: linkedRunRuntime.instanceControl.version, reason: 'Settle this local approval request before closure.',
+      } }),
+  });
+  assert.equal(linkedRunPaused.status, 'PAUSED');
+  const attemptId = '51000000-0000-4000-8000-000000000001';
+  const workerId = '51000000-0000-4000-8000-000000000002';
+  await app.persistence.query(`insert into orgward.provider_dispatch_attempts
+    (tenant_id,run_id,project_id,principal,worker_id,attempt_id,credential_reference,credential_version,status)
+    values ('tenant-a',$1,$2,$3,$4,$5,'secret-process-task-openai',1,'reserved')`,
+  [cancellationWithLinkedRun.id, project.id, principal('alice'), workerId, attemptId]);
+  const unresolvedAttemptCancel = await request(app.base, '/api/execution/process-task-instances/cancel', {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ schemaVersion: '1.0', commandId: 'process-instance-cancel-attempt-denied',
+      payload: { projectId: project.id, planInstanceId: cancellationWithLinkedRun.processTaskRef.planInstanceId,
+        version: linkedRunPaused.version, reason: 'Do not close while an attempt is reserved.' } }),
+  }, 409);
+  assert.equal(unresolvedAttemptCancel.error.code, 'PROCESS_INSTANCE_WORK_UNRESOLVED');
+  await app.persistence.query(`update orgward.provider_dispatch_attempts
+    set status='cancelled',finished_at=now(),updated_at=now() where tenant_id='tenant-a' and run_id=$1 and attempt_id=$2`,
+  [cancellationWithLinkedRun.id, attemptId]);
+  await app.persistence.query(`insert into orgward.execution_worker_leases
+    (tenant_id,run_id,project_id,principal,worker_id,lease_until)
+    values ('tenant-a',$1,$2,$3,$4,now()+interval '1 minute')`,
+  [cancellationWithLinkedRun.id, project.id, principal('alice'), workerId]);
+  const liveLeaseCancel = await request(app.base, '/api/execution/process-task-instances/cancel', {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ schemaVersion: '1.0', commandId: 'process-instance-cancel-lease-denied',
+      payload: { projectId: project.id, planInstanceId: cancellationWithLinkedRun.processTaskRef.planInstanceId,
+        version: linkedRunPaused.version, reason: 'Do not close while a worker lease is live.' } }),
+  }, 409);
+  assert.equal(liveLeaseCancel.error.code, 'PROCESS_INSTANCE_WORK_UNRESOLVED');
+  await app.persistence.query(`delete from orgward.execution_worker_leases where tenant_id='tenant-a' and run_id=$1`,
+  [cancellationWithLinkedRun.id]);
+  const resolvedLinkedRunCancelBody = { schemaVersion: '1.0', commandId: 'process-instance-cancel-attempt-resolved',
+    payload: { projectId: project.id, planInstanceId: cancellationWithLinkedRun.processTaskRef.planInstanceId,
+      version: linkedRunPaused.version, reason: 'The local request and worker lease are settled.' } };
+  const resolvedLinkedRunCancel = await request(app.base, '/api/execution/process-task-instances/cancel', {
+    ...as('alice'), method: 'POST', body: JSON.stringify(resolvedLinkedRunCancelBody),
+  });
+  assert.equal(resolvedLinkedRunCancel.status, 'CANCELLED');
+  assert.deepEqual(resolvedLinkedRunCancel.runIds, [cancellationWithLinkedRun.id]);
+  const ownerCannotWithdrawRequesterRun = await request(app.base, `/api/execution/runs/${cancellationWithLinkedRun.id}/cancel`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ projectId: project.id,
+      version: cancellationWithLinkedRun.version, commandId: 'owner-standalone-run-withdrawal' }),
+  }, 403);
+  assert.equal(ownerCannotWithdrawRequesterRun.error.code, 'ACTION_FORBIDDEN');
+  const cancelledLinkedRunRead = await request(app.base, `/api/execution/runs/${cancellationWithLinkedRun.id}`, as('alice'));
+  assert.equal(cancelledLinkedRunRead.status, 'CANCELLED');
+  assert.equal(cancelledLinkedRunRead.events.at(-1).type, 'ExecutionCancelledByProcessInstanceController');
+  assert.equal(cancelledLinkedRunRead.events.at(-1).causationId, resolvedLinkedRunCancelBody.commandId);
+  assert.equal(cancelledLinkedRunRead.events.at(-1).data.priorStatus, 'PAUSED');
 
   const mixedPlanProject = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
   const mixedPlanCreated = await request(app.base, plansRoute, {
@@ -6970,7 +8647,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     /succeeded human checkpoint requires at least one evidence note/i,
     'the database refuses an empty-evidence success transition even when the appended event otherwise matches');
   await assert.rejects(() => tryDirectHumanSuccess(principal('alice'), ['Note from the wrong identity.'], 'wrong-actor'),
-    /assigned person/i, 'the database ties HumanTaskCompleted provenance to its immutable assigned principal');
+    /effective assignee/i, 'the database ties HumanTaskCompleted provenance to the current effective assignee');
   const mixedHumanAfterForgedAttempts = await request(app.base,
     `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'));
   assert.equal(mixedHumanAfterForgedAttempts.instances.find((runtime) => runtime.planInstanceId === mixedHumanStart.planInstanceId
@@ -6987,18 +8664,18 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(mixedDependentWhileEscalated.error.code, 'PROCESS_TASK_DEPENDENCY_UNSATISFIED');
   const mixedEscalationResumed = await request(app.base, '/api/execution/process-task-instances/resolve', {
     ...as('alice'), method: 'POST', body: command('process-task-mixed-assigned-root-resume', {
-      ...mixedAssignedHumanRefs, disposition: 'resume', reason: 'The assigned human can complete the saved checkpoint.', evidence: ['Owner review recorded.'],
+      ...mixedAssignedHumanRefs, disposition: 'resume', reason: 'The assigned human can complete the saved checkpoint.', evidence: ['Owner checked the assignment.', 'Owner recorded permission to resume.'],
     }),
   }, 201);
   assert.equal(mixedEscalationResumed.status, 'IN_PROGRESS');
   const mixedHumanCompleted = await request(app.base, '/api/execution/process-task-instances/complete', {
     ...as('bob'), method: 'POST', body: command('process-task-mixed-assigned-root-complete', {
-      ...mixedAssignedHumanRefs, result: 'succeeded', evidence: ['Assigned human verified the checkpoint.'],
+      ...mixedAssignedHumanRefs, result: 'succeeded', evidence: ['Assigned human verified the checkpoint.', 'Supporting evidence matches the saved task.'],
     }),
   }, 201);
   assert.equal(mixedHumanCompleted.status, 'SUCCEEDED');
   assert.equal(mixedHumanCompleted.events.at(-1).type, 'HumanTaskCompleted');
-  assert.deepEqual(mixedHumanCompleted.evidence, ['Assigned human verified the checkpoint.']);
+  assert.deepEqual(mixedHumanCompleted.evidence, ['Assigned human verified the checkpoint.', 'Supporting evidence matches the saved task.']);
   const mixedInstanceControl = (await request(app.base,
     `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances
     .find((runtime) => runtime.planInstanceId === mixedHumanStart.planInstanceId).instanceControl;
@@ -7057,11 +8734,11 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   const mixedCheckpointCompleted = await request(app.base, '/api/execution/process-task-instances/complete', {
     ...as('bob'), method: 'POST', body: command('process-task-mixed-inserted-checkpoint-complete', {
       ...mixedCheckpointStartPayload, planInstanceId: mixedHumanStart.planInstanceId,
-      result: 'succeeded', evidence: ['The original review result and supporting notes were checked.'],
+      result: 'succeeded', evidence: ['The original review result was checked.', 'Supporting notes were verified against the saved design.'],
     }),
   }, 201);
   assert.equal(mixedCheckpointCompleted.status, 'SUCCEEDED');
-  assert.deepEqual(mixedCheckpointCompleted.evidence, ['The original review result and supporting notes were checked.']);
+  assert.deepEqual(mixedCheckpointCompleted.evidence, ['The original review result was checked.', 'Supporting notes were verified against the saved design.']);
 
   const providerCallsBeforeCheckpointDependent = providerCallCount;
   const mixedOpenAiDependentRequest = await taskRequest('process-task-mixed-checkpoint-openai-request', {
@@ -7223,6 +8900,16 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     }),
   }, 409);
   assert.equal(staleResumeDenied.error.code, 'PROCESS_TASK_ACTOR_BINDING_STALE');
+  const staleResumeCurrentState = (await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances
+    .find((runtime) => runtime.planInstanceId === staleResumeRefs.planInstanceId
+      && runtime.taskId === staleResumeRefs.taskId);
+  assert.equal(staleResumeCurrentState.status, 'ESCALATED',
+    'after a definitive stale-binding conflict, a fresh runtime read still exposes the authoritative escalation');
+  assert.equal(staleResumeCurrentState.events.at(-1).type, 'HumanTaskEscalated',
+    'the refreshed history retains the current checkpoint transition instead of the rejected owner action');
+  assert.equal(staleResumeCurrentState.canResolveEscalation, true,
+    'the current owner action remains available after refreshing the stale UI state');
   const staleHumanBinding = await request(app.base, '/api/execution/process-task-instances/start', {
     ...as('bob'), method: 'POST', body: command('process-task-human-root-stale-binding', humanRootStartPayload),
   }, 409);
@@ -7320,12 +9007,12 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   const actorDesignBeforeProposalApply = Object.values(projectBeforeProposalApply.latestBlueprint.areas).flatMap((area) => area.items)
     .filter((item) => item.type === 'actor-human' || item.type === 'actor-agent');
   const processPlansBeforeProposalApply = structuredClone(projectBeforeProposalApply.processPlans);
+  const runtimeBeforeProposalApply = (await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances;
   const editorProposalApply = await request(app.base, proposalApplyPath, {
     ...as('bob'), method: 'POST', body: command('proposal-apply-editor-denied', { proposalHash: generatedProposal.proposalHash }, projectBeforeProposalApply.version),
   }, 403);
   assert.equal(editorProposalApply.error.code, 'ACTION_FORBIDDEN');
-  const runtimeBeforeProposalApply = (await request(app.base,
-    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances;
   const appliedProposal = await request(app.base, proposalApplyPath, {
     ...as('alice'), method: 'POST', body: command('proposal-apply-success', { proposalHash: generatedProposal.proposalHash }, projectBeforeProposalApply.version),
   });
@@ -7334,6 +9021,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(appliedProposal.event.data.proposalHash, generatedProposal.proposalHash);
   assert.equal(appliedProposal.event.data.epistemicStatus, 'proposed-design');
   assert.deepEqual(appliedProposal.event.data.sourceIds, ['information-customer-signal']);
+  assert.deepEqual(appliedProposal.event.data.sourceHashes, generatedProposal.citations.map(({ hash }) => hash));
   assert.equal(project.latestBlueprint.version, projectBeforeProposalApply.latestBlueprint.version + 1);
   assert.equal(project.latestBlueprint.epistemicStatus, 'proposed-design');
   const appliedTarget = Object.values(project.latestBlueprint.areas).flatMap((area) => area.items)
@@ -7342,12 +9030,17 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(project.blueprintVersions.find((entry) => entry.id === generatedProposal.blueprintId).version,
     generatedProposal.blueprintVersion, 'the pinned source version remains in immutable project history');
   assert.equal(project.latestBlueprint.edit.proposalProvenance.proposalHash, generatedProposal.proposalHash);
-  assert.deepEqual(project.latestBlueprint.edit.proposalProvenance.citations, [{ id: 'information-customer-signal', hash: generatedProposal.citations[0].hash }]);
+  assert.deepEqual(project.latestBlueprint.edit.proposalProvenance.citations,
+    [{ id: 'information-customer-signal', hash: generatedProposal.citations[0].hash }]);
   assert.deepEqual(Object.values(project.latestBlueprint.areas).flatMap((area) => area.items)
     .filter((item) => item.type === 'actor-human' || item.type === 'actor-agent'), actorDesignBeforeProposalApply,
   'proposal application does not change actor assignments or authority design');
   assert.deepEqual(project.processPlans, processPlansBeforeProposalApply,
     'proposal application preserves immutable plan revisions and task assignments');
+  const runtimeAfterProposalApply = (await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances;
+  assert.deepEqual(runtimeAfterProposalApply, runtimeBeforeProposalApply,
+    'applying proposed detail does not change process runtime or assignment state');
   const proposalApplyReplay = await request(app.base, proposalApplyPath, {
     ...as('alice'), method: 'POST', body: command('proposal-apply-success', { proposalHash: generatedProposal.proposalHash }, projectBeforeProposalApply.version),
   });
@@ -7363,12 +9056,209 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     ...as('alice'), method: 'POST', body: command('proposal-apply-stale-version', { proposalHash: generatedProposal.proposalHash }, project.version),
   }, 409);
   assert.equal(staleProposalApply.error.code, 'BLUEPRINT_PROPOSAL_STALE');
-  const runtimeAfterProposalApply = (await request(app.base,
+
+  await request(app.base, membersRoute, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ principal: principal('servicebot'), access: 'editor' }),
+  });
+  const bindCurrentBlueprintActor = async ({ actorId, roleId, target, label }) => {
+    const current = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
+    const blueprintVersion = current.latestBlueprint.version;
+    project = (await request(app.base, bindingRoute, {
+      ...as('alice'), method: 'POST', body: command(`proposal-journey-bind-${label}`, {
+        actorId, roleId, targetPrincipal: principal(target), blueprintVersion,
+      }, current.version),
+    })).data;
+    project = (await request(app.base, bindingEnableRoute, {
+      ...as('alice'), method: 'POST', body: command(`proposal-journey-enable-${label}`, {
+        actorId, roleId, blueprintVersion,
+      }, project.version),
+    })).data;
+  };
+  await bindCurrentBlueprintActor({ actorId: 'actor-founder', roleId: 'role-founder', target: 'alice', label: 'human' });
+  await bindCurrentBlueprintActor({ actorId: 'actor-design-assistant', roleId: 'role-design-assistant', target: 'servicebot', label: 'agent' });
+  const freshPlanCreated = await request(app.base, plansRoute, {
+    ...as('alice'), method: 'POST', body: command('proposal-journey-current-blueprint-plan', { processId: 'process-review' }, project.version),
+  }, 201);
+  const freshPlan = freshPlanCreated.data.processPlans.at(-1);
+  assert.equal(freshPlan.source.blueprintVersion, project.latestBlueprint.version);
+  const freshAgentBaseTask = freshPlan.tasks.find((task) => task.dependencies.length > 0);
+  assert.ok(freshAgentBaseTask, 'the current saved process includes its dependent agent work');
+  const freshRevisionPayload = { tasks: freshPlan.tasks.map((task) => {
+    const isRoot = task.dependencies.length === 0;
+    return {
+      taskId: task.id, title: task.title, detail: task.detail, dependencies: task.dependencies,
+      actorId: isRoot ? 'actor-founder' : 'actor-design-assistant',
+      roleId: isRoot ? 'role-founder' : 'role-design-assistant',
+    };
+  }), humanCheckpoint: {
+    beforeTaskId: freshAgentBaseTask.id, title: 'Verify the refreshed review result',
+    detail: 'A bound human checks the source evidence before the dependent agent task.',
+    actorId: 'actor-founder', roleId: 'role-founder',
+  } };
+  const freshRevisionResponse = await request(app.base, `${plansRoute}/${freshPlan.id}/revisions`, {
+    ...as('alice'), method: 'POST', body: command('proposal-journey-current-blueprint-revision', freshRevisionPayload, freshPlanCreated.data.version),
+  });
+  const freshRevision = freshRevisionResponse.data.processPlans.find((entry) => entry.id === freshPlan.id
+    && entry.revision === freshPlan.revision + 1);
+  const freshHumanRoot = freshRevision.tasks.find((task) => task.dependencies.length === 0);
+  const freshHumanCheckpoint = freshRevision.tasks.find((task) => task.id.startsWith('task-human-checkpoint-'));
+  const freshAgentTask = freshRevision.tasks.find((task) => task.assignee.actorId === 'actor-design-assistant');
+  assert.ok(freshHumanRoot && freshHumanCheckpoint && freshAgentTask);
+  assert.deepEqual(freshAgentTask.dependencies, [freshHumanCheckpoint.id]);
+  const freshPlanInstanceStart = await request(app.base, '/api/execution/process-task-instances/start', {
+    ...as('alice'), method: 'POST', body: command('proposal-journey-root-start', {
+      projectId: project.id, planId: freshPlan.id, revision: freshRevision.revision, taskId: freshHumanRoot.id,
+    }),
+  }, 201);
+  const freshPlanInstanceId = freshPlanInstanceStart.planInstanceId;
+  await request(app.base, '/api/execution/process-task-instances/complete', {
+    ...as('alice'), method: 'POST', body: command('proposal-journey-root-complete', {
+      projectId: project.id, planId: freshPlan.id, revision: freshRevision.revision,
+      planInstanceId: freshPlanInstanceId, taskId: freshHumanRoot.id,
+      result: 'succeeded', evidence: ['The refreshed process review was checked.'],
+    }),
+  }, 201);
+  const freshCheckpointStarted = await request(app.base, '/api/execution/process-task-instances/start', {
+    ...as('alice'), method: 'POST', body: command('proposal-journey-checkpoint-start', {
+      projectId: project.id, planId: freshPlan.id, revision: freshRevision.revision,
+      planInstanceId: freshPlanInstanceId, taskId: freshHumanCheckpoint.id,
+    }),
+  }, 201);
+  assert.equal(freshCheckpointStarted.status, 'IN_PROGRESS');
+  const freshCheckpointCompleted = await request(app.base, '/api/execution/process-task-instances/complete', {
+    ...as('alice'), method: 'POST', body: command('proposal-journey-checkpoint-complete', {
+      projectId: project.id, planId: freshPlan.id, revision: freshRevision.revision,
+      planInstanceId: freshPlanInstanceId, taskId: freshHumanCheckpoint.id,
+      result: 'succeeded', evidence: ['Fresh source notes were verified before continuing.'],
+    }),
+  }, 201);
+  assert.equal(freshCheckpointCompleted.status, 'SUCCEEDED');
+  const providerCallsBeforeFreshDependent = providerCallCount;
+  const freshDependentRequest = await taskRequest('proposal-journey-dependent-agent-request', {
+    projectId: project.id, planId: freshPlan.id, revision: freshRevision.revision,
+    planInstanceId: freshPlanInstanceId, taskId: freshAgentTask.id, profileId: 'process-task-openai',
+  });
+  assert.equal(freshDependentRequest.status, 'AWAITING_APPROVAL');
+  const freshDependentApproved = await request(app.base, `/api/execution/runs/${freshDependentRequest.id}/approve`, {
+    ...as('bob'), method: 'POST', body: JSON.stringify({ version: freshDependentRequest.version }),
+  });
+  const freshDependentRun = await request(app.base, `/api/execution/runs/${freshDependentRequest.id}/execute`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: freshDependentApproved.version }),
+  });
+  assert.equal(freshDependentRun.status, 'SUCCEEDED');
+  assert.equal(freshDependentRun.processTaskRef.planInstanceId, freshPlanInstanceId);
+  assert.equal(providerCallCount, providerCallsBeforeFreshDependent + 1,
+    'the refreshed dependent proposal uses only the loopback provider after the human checkpoint succeeds');
+  const freshDependentProposal = freshDependentRun.execution.generatedProposal;
+  assert.equal(freshDependentProposal.blueprintVersion, freshPlan.source.blueprintVersion);
+  assert.equal(freshDependentProposal.status, 'proposed');
+  assert.deepEqual(freshDependentProposal.citations.map(({ id }) => id), [
+    freshDependentRun.workItem.proposalContext.sourceEnvelope.sources[0].id,
+  ]);
+  const blockedPlanInstanceStart = await request(app.base, '/api/execution/process-task-instances/start', {
+    ...as('alice'), method: 'POST', body: command('proposal-journey-blocked-root-start', {
+      projectId: project.id, planId: freshPlan.id, revision: freshRevision.revision, taskId: freshHumanRoot.id,
+    }),
+  }, 201);
+  const blockedPlanInstanceId = blockedPlanInstanceStart.planInstanceId;
+  await request(app.base, '/api/execution/process-task-instances/complete', {
+    ...as('alice'), method: 'POST', body: command('proposal-journey-blocked-root-complete', {
+      projectId: project.id, planId: freshPlan.id, revision: freshRevision.revision,
+      planInstanceId: blockedPlanInstanceId, taskId: freshHumanRoot.id,
+      result: 'succeeded', evidence: ['The current workflow root was reviewed.'],
+    }),
+  }, 201);
+  await request(app.base, '/api/execution/process-task-instances/start', {
+    ...as('alice'), method: 'POST', body: command('proposal-journey-blocked-checkpoint-start', {
+      projectId: project.id, planId: freshPlan.id, revision: freshRevision.revision,
+      planInstanceId: blockedPlanInstanceId, taskId: freshHumanCheckpoint.id,
+    }),
+  }, 201);
+  await request(app.base, '/api/execution/process-task-instances/complete', {
+    ...as('alice'), method: 'POST', body: command('proposal-journey-blocked-checkpoint-complete', {
+      projectId: project.id, planId: freshPlan.id, revision: freshRevision.revision,
+      planInstanceId: blockedPlanInstanceId, taskId: freshHumanCheckpoint.id,
+      result: 'succeeded', evidence: ['The source notes were checked for this instance.'],
+    }),
+  }, 201);
+  nextProposalDetailOverride = freshDependentProposal.target.before;
+  const blockedProposalRequest = await taskRequest('proposal-journey-blocked-proposal-request', {
+    projectId: project.id, planId: freshPlan.id, revision: freshRevision.revision,
+    planInstanceId: blockedPlanInstanceId, taskId: freshAgentTask.id, profileId: 'process-task-openai',
+  });
+  const blockedProposalApproved = await request(app.base, `/api/execution/runs/${blockedProposalRequest.id}/approve`, {
+    ...as('bob'), method: 'POST', body: JSON.stringify({ version: blockedProposalRequest.version }),
+  });
+  const blockedProposalRun = await request(app.base, `/api/execution/runs/${blockedProposalRequest.id}/execute`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: blockedProposalApproved.version }),
+  });
+  assert.equal(blockedProposalRun.status, 'SUCCEEDED');
+  const blockedProposal = blockedProposalRun.execution.generatedProposal;
+  assert.ok(blockedProposal, 'the unchanged output remains visible as a generated proposal');
+  assert.equal(blockedProposal.proposedDetail, freshDependentProposal.target.before);
+  assert.equal(blockedProposal.evaluation.status, 'blocked');
+  assert.equal(blockedProposal.evaluation.checks.find((check) => check.id === 'proposed-detail-changes-target').status, 'blocked');
+  const blockedProposalApplyPath = `/api/v1/projects/${project.id}/blueprint-proposals/${blockedProposalRun.id}/apply`;
+  const projectBeforeBlockedApply = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
+  const runtimesBeforeBlockedApply = (await request(app.base,
     `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances;
-  const proposalRuntime = (instances) => instances.find((runtime) => runtime.planInstanceId === openAiSuccessfulRun.processTaskRef.planInstanceId
-    && runtime.taskId === openAiSuccessfulRun.processTaskRef.taskId);
-  assert.deepEqual(proposalRuntime(runtimeAfterProposalApply), proposalRuntime(runtimeBeforeProposalApply),
-    'applying proposed detail does not change process runtime or assignment state');
+  const blockedProposalApply = await request(app.base, blockedProposalApplyPath, {
+    ...as('alice'), method: 'POST', body: command('proposal-apply-blocked-unchanged', {
+      proposalHash: blockedProposal.proposalHash,
+    }, projectBeforeBlockedApply.version),
+  }, 409);
+  assert.equal(blockedProposalApply.error.code, 'BLUEPRINT_PROPOSAL_EVALUATION_BLOCKED');
+  assert.deepEqual((await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data,
+    projectBeforeBlockedApply, 'blocked apply changes no blueprint or project events');
+  assert.deepEqual((await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances,
+  runtimesBeforeBlockedApply, 'blocked apply changes no runtime state');
+  const freshProposalApplyPath = `/api/v1/projects/${project.id}/blueprint-proposals/${freshDependentRun.id}/apply`;
+  const projectBeforeFreshProposalApply = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
+  assert.equal(projectBeforeFreshProposalApply.latestBlueprint.version, freshDependentProposal.blueprintVersion,
+    'the fresh dependent result is pinned to the current blueprint and remains eligible for apply');
+  const freshPlansBeforeApply = structuredClone(projectBeforeFreshProposalApply.processPlans);
+  const freshRuntimesBeforeApply = (await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances;
+  const editorFreshProposalApply = await request(app.base, freshProposalApplyPath, {
+    ...as('bob'), method: 'POST', body: command('proposal-journey-editor-denied', {
+      proposalHash: freshDependentProposal.proposalHash,
+    }, projectBeforeFreshProposalApply.version),
+  }, 403);
+  assert.equal(editorFreshProposalApply.error.code, 'ACTION_FORBIDDEN');
+  const freshProposalApplied = await request(app.base, freshProposalApplyPath, {
+    ...as('alice'), method: 'POST', body: command('proposal-journey-apply', {
+      proposalHash: freshDependentProposal.proposalHash,
+    }, projectBeforeFreshProposalApply.version),
+  });
+  const freshProposalApplyEvent = freshProposalApplied.event;
+  project = freshProposalApplied.data;
+  assert.equal(freshProposalApplyEvent.type, 'BlueprintProposalApplied');
+  assert.equal(freshProposalApplyEvent.data.runId, freshDependentRun.id);
+  assert.equal(freshProposalApplyEvent.data.proposalHash, freshDependentProposal.proposalHash);
+  assert.deepEqual(freshProposalApplyEvent.data.sourceIds, freshDependentProposal.citations.map(({ id }) => id));
+  assert.deepEqual(freshProposalApplyEvent.data.sourceHashes, freshDependentProposal.citations.map(({ hash }) => hash));
+  assert.equal(project.latestBlueprint.version, freshDependentProposal.blueprintVersion + 1);
+  assert.equal(project.latestBlueprint.edit.proposalProvenance.proposalHash, freshDependentProposal.proposalHash);
+  assert.deepEqual(project.latestBlueprint.edit.proposalProvenance.citations,
+    freshDependentProposal.citations.map(({ id, hash }) => ({ id, hash })));
+  const freshAppliedTarget = Object.values(project.latestBlueprint.areas).flatMap((area) => area.items)
+    .find((item) => item.id === freshDependentProposal.target.id);
+  assert.equal(freshAppliedTarget.detail, freshDependentProposal.proposedDetail);
+  assert.deepEqual(project.processPlans, freshPlansBeforeApply,
+    'applying the current dependent proposal leaves all immutable plan revisions pinned');
+  const freshRuntimesAfterApply = (await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances;
+  assert.deepEqual(freshRuntimesAfterApply, freshRuntimesBeforeApply,
+    'applying the proposal does not mutate the checkpoint or dependent process runtime');
+  const freshApplyReplay = await request(app.base, freshProposalApplyPath, {
+    ...as('alice'), method: 'POST', body: command('proposal-journey-apply', {
+      proposalHash: freshDependentProposal.proposalHash,
+    }, projectBeforeFreshProposalApply.version),
+  });
+  assert.equal(freshApplyReplay.meta.replayed, true);
+  assert.equal(freshApplyReplay.data.events.filter((event) => event.type === 'BlueprintProposalApplied'
+    && event.data?.proposalHash === freshDependentProposal.proposalHash).length, 1);
 
   await assert.rejects(() => app.persistence.query(`
     update orgward.aggregates
@@ -7421,23 +9311,141 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     assert.deepEqual(run.processTaskRef, [firstRoot, secondRoot, dependent].find((candidate) => candidate.id === run.id).processTaskRef);
   }
   const restoredProject = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
+  const restoredHumanPlan = restoredProject.processPlans.find((candidate) => candidate.id === humanRootPlan.id
+    && candidate.revision === humanRootRevision.revision);
+  assert.ok(restoredHumanPlan, 'the saved human task plan remains available after PostgreSQL restart');
+  const restoredHumanTask = restoredHumanPlan.tasks.find((candidate) => candidate.id === rootHumanTask.id);
+  const restoredHumanInputs = processTaskHumanInputReview({ task: restoredHumanTask, plan: restoredHumanPlan, project: restoredProject });
+  const pinnedInputBlueprint = restoredProject.blueprintVersions.find((candidate) =>
+    candidate.id === restoredHumanPlan.source.blueprintId && candidate.version === restoredHumanPlan.source.blueprintVersion);
+  const pinnedInputObject = Object.values(pinnedInputBlueprint.areas).flatMap((area) => area.items)
+    .find((candidate) => candidate.id === restoredHumanTask.inputs[0].objectId);
+  assert.equal(restoredHumanInputs.kind, 'inputs');
+  assert.deepEqual(restoredHumanInputs.entries[0], {
+    objectId: pinnedInputObject.id, type: pinnedInputObject.type,
+    name: pinnedInputObject.name, detail: pinnedInputObject.detail,
+  }, 'the human checkpoint input review survives restart and uses its saved plan blueprint pin');
+  const restoredBlockedProposalRun = restoredRuns.find((run) => run.id === blockedProposalRun.id);
+  assert.equal(restoredBlockedProposalRun.status, 'SUCCEEDED');
+  assert.deepEqual(restoredBlockedProposalRun.execution.generatedProposal, blockedProposal,
+    'the blocked proposal evaluation persists unchanged across PostgreSQL application restart');
+  assert.equal(restoredBlockedProposalRun.execution.generatedProposal.evaluation.status, 'blocked');
+  const projectBeforeBlockedApplyAfterRestart = structuredClone(restoredProject);
+  const runtimesBeforeBlockedApplyAfterRestart = (await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances;
+  const blockedProposalApplyAfterRestart = await request(app.base, blockedProposalApplyPath, {
+    ...as('alice'), method: 'POST', body: command('proposal-apply-blocked-unchanged-after-restart', {
+      proposalHash: blockedProposal.proposalHash,
+    }, restoredProject.version),
+  }, 409);
+  assert.equal(blockedProposalApplyAfterRestart.error.code, 'BLUEPRINT_PROPOSAL_EVALUATION_BLOCKED');
+  assert.deepEqual((await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data,
+    projectBeforeBlockedApplyAfterRestart, 'blocked apply after restart changes no blueprint or project events');
+  assert.deepEqual((await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances,
+  runtimesBeforeBlockedApplyAfterRestart, 'blocked apply after restart changes no runtime state');
   const restoredApplyEvent = restoredProject.events.find((event) => event.type === 'BlueprintProposalApplied'
     && event.data?.proposalHash === generatedProposal.proposalHash);
   assert.ok(restoredApplyEvent, 'applied status survives restart through the project event');
   assert.equal(restoredApplyEvent.data.appliedBlueprintVersion, generatedProposal.blueprintVersion + 1);
+  const restoredGenericAppliedBlueprint = restoredProject.blueprintVersions.find((entry) =>
+    entry.version === generatedProposal.blueprintVersion + 1);
+  assert.ok(restoredGenericAppliedBlueprint);
+  assert.equal(restoredGenericAppliedBlueprint.edit.proposalProvenance.proposalHash, generatedProposal.proposalHash);
+  assert.deepEqual(restoredGenericAppliedBlueprint.edit.proposalProvenance.citations,
+    [{ id: 'information-customer-signal', hash: generatedProposal.citations[0].hash }]);
   const proposalReplayAfterRestart = await request(app.base, proposalApplyPath, {
     ...as('alice'), method: 'POST', body: command('proposal-apply-success', { proposalHash: generatedProposal.proposalHash }, projectBeforeProposalApply.version),
   });
   assert.equal(proposalReplayAfterRestart.meta.replayed, true);
   assert.equal(proposalReplayAfterRestart.data.events.filter((event) => event.type === 'BlueprintProposalApplied'
     && event.data.proposalHash === generatedProposal.proposalHash).length, 1);
+  const restoredFreshDependentRun = restoredRuns.find((run) => run.id === freshDependentRun.id);
+  assert.equal(restoredFreshDependentRun.status, 'SUCCEEDED');
+  assert.deepEqual(restoredFreshDependentRun.execution.generatedProposal, freshDependentProposal);
+  const restoredFreshApplyEvent = restoredProject.events.find((event) => event.type === 'BlueprintProposalApplied'
+    && event.data?.proposalHash === freshDependentProposal.proposalHash);
+  assert.ok(restoredFreshApplyEvent, 'the current-blueprint checkpoint-dependent proposal apply survives restart');
+  assert.equal(restoredFreshApplyEvent.data.runId, freshDependentRun.id);
+  assert.equal(restoredFreshApplyEvent.data.appliedBlueprintVersion, freshDependentProposal.blueprintVersion + 1);
+  assert.deepEqual(restoredFreshApplyEvent.data.sourceIds, freshDependentProposal.citations.map(({ id }) => id));
+  assert.deepEqual(restoredFreshApplyEvent.data.sourceHashes, freshDependentProposal.citations.map(({ hash }) => hash));
+  assert.equal(restoredProject.latestBlueprint.version, freshDependentProposal.blueprintVersion + 1);
+  assert.equal(restoredProject.latestBlueprint.edit.proposalProvenance.proposalHash, freshDependentProposal.proposalHash);
+  assert.deepEqual(restoredProject.latestBlueprint.edit.proposalProvenance.citations,
+    freshDependentProposal.citations.map(({ id, hash }) => ({ id, hash })));
+  const freshProposalReplayAfterRestart = await request(app.base, freshProposalApplyPath, {
+    ...as('alice'), method: 'POST', body: command('proposal-journey-apply', {
+      proposalHash: freshDependentProposal.proposalHash,
+    }, projectBeforeFreshProposalApply.version),
+  });
+  assert.equal(freshProposalReplayAfterRestart.meta.replayed, true);
+  assert.equal(freshProposalReplayAfterRestart.data.events.filter((event) => event.type === 'BlueprintProposalApplied'
+    && event.data?.proposalHash === freshDependentProposal.proposalHash).length, 1);
   assert.equal(restoredProject.processPlans.every((savedPlan) => savedPlan.tasks.every((task) => task.status === 'planned')), true,
     'the project graph keeps proposed task status; runtime state is derived from canonical task instances');
   assert.equal(restoredProject.processPlans.filter((savedPlan) => savedPlan.id === plan.id).at(-1).revision, 3);
   const restoredTaskInstances = (await request(app.base,
     `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('bob'))).instances;
+  const restoredReassignedHuman = restoredTaskInstances.find((runtime) => runtime.taskId === 'task-process-review'
+    && runtime.planInstanceId === secondRoot.processTaskRef.planInstanceId);
+  assert.equal(restoredReassignedHuman.status, 'SUCCEEDED');
+  assert.equal(restoredReassignedHuman.assignedToCurrentPrincipal, false,
+    'later membership revocation and regrant do not silently restore the old assignment generation');
+  const restoredEffectiveAssignment = await app.persistence.query(`
+    select effective_assigned_principal, effective_assigned_membership_generation, effective_assigned_authz_generation
+    from orgward.process_task_instances
+    where tenant_id='tenant-a' and project_id=$1 and plan_instance_id=$2 and task_id=$3
+  `, [project.id, secondRoot.processTaskRef.planInstanceId, humanTaskPayload.taskId]);
+  assert.equal(restoredEffectiveAssignment.rows[0].effective_assigned_principal, principal('bob'));
+  assert.equal(Number(restoredEffectiveAssignment.rows[0].effective_assigned_membership_generation),
+    Number(effectiveAssignmentAtReturn.rows[0].effective_assigned_membership_generation));
+  assert.equal(Number(restoredEffectiveAssignment.rows[0].effective_assigned_authz_generation),
+    Number(effectiveAssignmentAtReturn.rows[0].effective_assigned_authz_generation));
+  assert.deepEqual(restoredReassignedHuman.events.filter((event) => event.type === 'HumanTaskEscalationResolved')
+    .map((event) => ({ disposition: event.data.disposition, ownerAction: event.data.ownerAction ?? null })), [
+    { disposition: 'resume', ownerAction: 'reassign' },
+    { disposition: 'resume', ownerAction: null },
+    { disposition: 'resume', ownerAction: 'reassign' },
+  ]);
+  assert.equal(JSON.stringify(restoredReassignedHuman).includes(principal('bob')), false,
+    'the reassignment target remains private in runtime reads after restart');
+  const restoredFormerEffectiveAssignee = (await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('carol'))).instances
+    .find((runtime) => runtime.taskId === 'task-process-review' && runtime.planInstanceId === secondRoot.processTaskRef.planInstanceId);
+  assert.equal(restoredFormerEffectiveAssignee.assignedToCurrentPrincipal, false,
+    'the previous effective assignee remains unauthorized after restart');
+  const restoredInitiatorCancellation = restoredTaskInstances.find((runtime) =>
+    runtime.planInstanceId === initiatorCancellationInstance.planInstanceId && runtime.taskId === rootHumanTask.id);
+  assert.equal(restoredInitiatorCancellation.status, 'SUCCEEDED');
+  assert.deepEqual(restoredInitiatorCancellation.evidence, ['initiator checkpoint evidence retained.']);
+  assert.equal(restoredInitiatorCancellation.instanceControl.status, 'CANCELLED');
+  assert.equal(restoredInitiatorCancellation.instanceControl.events.at(-1).type, 'ProcessTaskInstanceCancelled');
+  assert.equal(restoredInitiatorCancellation.instanceControl.events.at(-1).data.reason,
+    'The completed review is retained and this instance should stop.');
+  assert.ok(Number.isFinite(Date.parse(restoredInitiatorCancellation.instanceControl.events.at(-1).at)));
+  assert.equal(JSON.stringify(restoredInitiatorCancellation.instanceControl.events).includes(principal('bob')), false,
+    'the API keeps cancellation event actors projected as safe labels');
+  const restoredOwnerCancellation = restoredTaskInstances.find((runtime) =>
+    runtime.planInstanceId === ownerCancellationInstance.planInstanceId && runtime.taskId === rootHumanTask.id);
+  assert.equal(restoredOwnerCancellation.instanceControl.status, 'CANCELLED');
   const restoredRuntime = (run) => restoredTaskInstances.find((runtime) => runtime.taskId === run.processTaskRef.taskId
     && runtime.planInstanceId === run.processTaskRef.planInstanceId);
+  const restoredSecondRoot = restoredRuns.find((run) => run.id === secondRoot.id);
+  const restoredArtifactSummary = linkedProcessTaskResult(restoredRuntime(secondRoot), restoredSecondRoot);
+  assert.deepEqual(restoredArtifactSummary.artifacts, [{
+    relativePath: 'task-result.txt', displayName: 'task-result.txt',
+    hashPrefix: successfulRoot.execution.changedArtifacts[0].contentHash.slice(0, 18),
+  }], 'the restarted linked result presenter exposes the persisted safe artifact entry');
+  const artifactUrl = `${app.base}/api/execution/runs/${encodeURIComponent(secondRoot.id)}/artifact?path=${encodeURIComponent('task-result.txt')}`;
+  const restoredArtifact = await fetch(artifactUrl, as('alice'));
+  assert.equal(restoredArtifact.status, 200);
+  assert.equal(await restoredArtifact.text(), 'Persisted process task artifact bytes.');
+  assert.equal(restoredArtifact.headers.get('x-content-sha256'), successfulRoot.execution.changedArtifacts[0].contentHash);
+  const foreignArtifact = await fetch(artifactUrl, as('tenant-b-admin'));
+  assert.equal(foreignArtifact.status, 404, 'linked row artifact route retains project tenant authorization after restart');
+  const traversalArtifact = await fetch(`${app.base}/api/execution/runs/${encodeURIComponent(secondRoot.id)}/artifact?path=${encodeURIComponent('../task-result.txt')}`, as('alice'));
+  assert.equal(traversalArtifact.status, 404, 'the row artifact link cannot bypass path traversal validation');
   assert.equal(restoredRuntime(pendingCancellation).status, 'CANCELLED');
   assert.equal(restoredRuntime(pendingCancellation).executionRunId, pendingCancellation.id);
   assert.ok(restoredRuntime(pendingCancellation).completedAt);
@@ -7450,6 +9458,18 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(cancellationReplayAfterRestart.meta.replayed, true);
   assert.equal(cancellationReplayAfterRestart.events.filter((event) => event.type === 'ExecutionCancelled').length, 1,
     'restart replay returns the saved cancellation without duplicate history');
+  const cancelledLinkedRunAfterRestart = await request(app.base,
+    `/api/execution/runs/${cancellationWithLinkedRun.id}`, as('alice'));
+  assert.equal(cancelledLinkedRunAfterRestart.status, 'CANCELLED');
+  assert.equal(cancelledLinkedRunAfterRestart.events.at(-1).type, 'ExecutionCancelledByProcessInstanceController');
+  assert.equal(cancelledLinkedRunAfterRestart.events.at(-1).causationId, resolvedLinkedRunCancelBody.commandId);
+  assert.equal(cancelledLinkedRunAfterRestart.events.at(-1).data.priorStatus, 'PAUSED');
+  const instanceCancelReplayAfterRestart = await request(app.base, '/api/execution/process-task-instances/cancel', {
+    ...as('alice'), method: 'POST', body: JSON.stringify(resolvedLinkedRunCancelBody),
+  });
+  assert.equal(instanceCancelReplayAfterRestart.replayed, true);
+  assert.deepEqual(instanceCancelReplayAfterRestart.runIds, [cancellationWithLinkedRun.id]);
+  assert.equal(instanceCancelReplayAfterRestart.status, 'CANCELLED');
   assert.equal(restoredRuntime(firstRoot).status, 'FAILED');
   assert.equal(restoredRuntime(firstRoot).executionRunId, firstRoot.id);
   assert.equal(restoredRuntime(secondRoot).status, 'SUCCEEDED');
@@ -7475,19 +9495,59 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     runtime.processPlanId === mixedPlan.id && runtime.planInstanceId === planInstanceId && runtime.taskId === taskId);
   const restoredMixedCheckpoint = restoredMixedRuntime(mixedHumanStart.planInstanceId, mixedCheckpointTask.id);
   assert.equal(restoredMixedCheckpoint.status, 'SUCCEEDED');
-  assert.deepEqual(restoredMixedCheckpoint.evidence, ['The original review result and supporting notes were checked.']);
-  assert.ok(restoredMixedCheckpoint.events.some((event) => event.type === 'HumanTaskCompleted'),
-    'the required human checkpoint evidence and completion event survive the application restart');
+  assert.deepEqual(restoredMixedCheckpoint.outcome, { result: 'succeeded' },
+    'the saved human checkpoint result survives the application restart');
+  assert.deepEqual(restoredMixedCheckpoint.evidence, ['The original review result was checked.', 'Supporting notes were verified against the saved design.']);
+  const restoredMixedCheckpointCompletion = restoredMixedCheckpoint.events.filter((event) => event.type === 'HumanTaskCompleted');
+  assert.equal(restoredMixedCheckpointCompletion.length, 1,
+    'exactly one matching human checkpoint completion event survives the application restart');
+  assert.deepEqual({
+    taskId: restoredMixedCheckpointCompletion[0].data.taskId,
+    processPlanId: restoredMixedCheckpointCompletion[0].data.processPlanId,
+    revision: restoredMixedCheckpointCompletion[0].data.revision,
+    planInstanceId: restoredMixedCheckpointCompletion[0].data.planInstanceId,
+    result: restoredMixedCheckpointCompletion[0].data.result,
+    evidence: restoredMixedCheckpointCompletion[0].data.evidence,
+  }, {
+    taskId: mixedCheckpointTask.id,
+    processPlanId: mixedPlan.id,
+    revision: mixedRevision.revision,
+    planInstanceId: mixedHumanStart.planInstanceId,
+    result: 'succeeded',
+    evidence: ['The original review result was checked.', 'Supporting notes were verified against the saved design.'],
+  }, 'the completion event carries the exact result, evidence, and checkpoint identity after restart');
   const restoredMixedOpenAiRuntime = restoredMixedRuntime(mixedHumanStart.planInstanceId, mixedAgentTask.id);
   assert.equal(restoredMixedOpenAiRuntime.status, 'SUCCEEDED');
   assert.equal(restoredMixedOpenAiRuntime.executionRunId, mixedOpenAiDependentRun.id);
   assert.ok(restoredMixedOpenAiRuntime.events.some((event) => event.type === 'ProcessTaskRunStatusChanged'
     && event.data.status === 'SUCCEEDED'), 'the same-instance task runtime records dependent-agent success after restart');
+  const restoredLinkedRunSummary = linkedProcessTaskResult(restoredMixedOpenAiRuntime, restoredMixedOpenAiRun, restoredProject);
+  assert.equal(restoredLinkedRunSummary.status, 'SUCCEEDED');
+  assert.equal(restoredLinkedRunSummary.outputPreview, null, 'raw model JSON stays hidden after restart');
+  assert.equal(restoredLinkedRunSummary.proposalPreview?.kind, 'proposal',
+    'the linked saved-plan row can render its persisted pinned model proposal after restart');
+  assert.ok(restoredLinkedRunSummary.proposalPreview.proposedDetail);
+  assert.equal(restoredLinkedRunSummary.proposalPreview.applicationStatus, 'review-only',
+    'a persisted proposal without a matching apply event remains review-only after restart');
+  assert.equal(restoredLinkedRunSummary.evidenceHash, restoredMixedOpenAiRun.execution.evidenceHash.slice(0, 18));
+  const restoredFreshDependentSummary = linkedProcessTaskResult(
+    restoredRuntime(freshDependentRun), restoredFreshDependentRun, restoredProject);
+  assert.equal(restoredFreshDependentSummary.proposalPreview.applicationStatus, 'applied');
+  assert.equal(restoredFreshDependentSummary.proposalPreview.appliedBlueprintVersion,
+    freshDependentProposal.blueprintVersion + 1);
+  assert.match(restoredFreshDependentSummary.proposalPreview.label,
+    /created a proposed design version; it did not execute work/,
+  'the saved task result reflects the matching applied proposal event without implying execution');
   const restoredAssignedMixedRoot = restoredMixedRuntime(mixedHumanStart.planInstanceId, mixedHumanRootTask.id);
   assert.equal(restoredAssignedMixedRoot.status, 'SUCCEEDED');
-  assert.deepEqual(restoredAssignedMixedRoot.evidence, ['Assigned human verified the checkpoint.']);
-  assert.deepEqual(restoredAssignedMixedRoot.events.filter((event) => ['HumanTaskEscalated', 'HumanTaskEscalationResolved', 'HumanTaskCompleted'].includes(event.type))
-    .map((event) => event.type), ['HumanTaskEscalated', 'HumanTaskEscalationResolved', 'HumanTaskCompleted']);
+  assert.deepEqual(restoredAssignedMixedRoot.evidence, ['Assigned human verified the checkpoint.', 'Supporting evidence matches the saved task.']);
+  const restoredAssignedMixedHistory = restoredAssignedMixedRoot.events.filter((event) => ['HumanTaskEscalated', 'HumanTaskEscalationResolved', 'HumanTaskCompleted'].includes(event.type));
+  assert.deepEqual(restoredAssignedMixedHistory.map((event) => event.type), ['HumanTaskEscalated', 'HumanTaskEscalationResolved', 'HumanTaskCompleted']);
+  assert.deepEqual(restoredAssignedMixedHistory.map((event) => event.data.evidence), [
+    ['Owner input requested.'],
+    ['Owner checked the assignment.', 'Owner recorded permission to resume.'],
+    ['Assigned human verified the checkpoint.', 'Supporting evidence matches the saved task.'],
+  ], 'multiple evidence notes remain attached to their original escalation, owner decision and completion after restart');
   assert.equal(JSON.stringify(restoredAssignedMixedRoot).includes(principal('bob')), false);
   const restoredOverrideMixedRoot = restoredMixedRuntime(mixedOverrideStart.planInstanceId, mixedHumanRootTask.id);
   assert.equal(restoredOverrideMixedRoot.status, 'SUCCEEDED');
@@ -7509,10 +9569,26 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   }
   const resumedHumanHistory = restoredHumanRuntime(startedHumanRoot.planInstanceId);
   assert.equal(resumedHumanHistory.status, 'SUCCEEDED');
-  assert.deepEqual(resumedHumanHistory.events.filter((event) => ['HumanTaskEscalated', 'HumanTaskEscalationResolved'].includes(event.type))
-    .map((event) => [event.type, event.actor]), [
-    ['HumanTaskEscalated', 'assigned human'], ['HumanTaskEscalationResolved', 'project owner'],
+  const persistedHumanHistory = resumedHumanHistory.events.filter((event) => [
+    'HumanTaskStarted', 'HumanTaskEscalated', 'HumanTaskEscalationResolved', 'HumanTaskCompleted',
+  ].includes(event.type));
+  assert.deepEqual(persistedHumanHistory.map((event) => [event.type, event.actor]), [
+    ['HumanTaskStarted', 'assigned human'],
+    ['HumanTaskEscalated', 'assigned human'],
+    ['HumanTaskEscalationResolved', 'project owner'],
+    ['HumanTaskCompleted', 'assigned human'],
+  ], 'the complete human checkpoint event history and safe actor labels survive app restart');
+  assert.ok(persistedHumanHistory.every((event) => Number.isFinite(Date.parse(event.at))));
+  assert.equal(persistedHumanHistory[1].data.reason, 'Owner review is required before continuing.');
+  assert.deepEqual(persistedHumanHistory[1].data.evidence, ['Question routed to owner.']);
+  assert.deepEqual([persistedHumanHistory[2].data.disposition, persistedHumanHistory[2].data.reason,
+    persistedHumanHistory[2].data.evidence], [
+    'resume', 'The original assignment is still current.', ['Owner reviewed the request.'],
   ]);
+  assert.deepEqual([persistedHumanHistory[3].data.result, persistedHumanHistory[3].data.evidence], [
+    'succeeded', ['Root human task completed.'],
+  ]);
+  assert.equal(JSON.stringify(persistedHumanHistory).includes(principal('bob')), false);
   assert.equal(restoredHumanRuntime(ownerSuccessRefs.planInstanceId).status, 'SUCCEEDED');
   assert.equal(restoredHumanRuntime(ownerFailureRefs.planInstanceId).status, 'FAILED');
   const restoredStaleEscalation = restoredHumanRuntime(staleResumeRefs.planInstanceId);

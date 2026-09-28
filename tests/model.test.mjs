@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { AREA_DEFINITIONS, addConversationTurn, createProject, editBlueprintObject, editProcessTaskGraph, planProcessTaskGraph, validateBlueprint } from '../src/model.mjs';
+import { AREA_DEFINITIONS, addConversationTurn, applyBlueprintProposal, createProject, editBlueprintObject, editProcessTaskGraph, latestBlueprint, planProcessTaskGraph, validateBlueprint } from '../src/model.mjs';
+import { createGeneratedBlueprintProposal, createProcessTaskProposalContext } from '../src/execution/proposals.mjs';
 import { coverageAreaStateLabel, coverageForBlueprint } from '../public/coverage-dashboard.mjs';
 import { compareBlueprintObjectVersions } from '../public/blueprint-comparison.mjs';
 import { getOrCreatePlanRevisionCommand, getOrCreateProcessPlanCommand, processPlanCommandKey, processPlanFailureDisposition } from '../public/process-plan-command.mjs';
@@ -27,6 +28,47 @@ test('guided chat saves a scoped brief with assumptions and unknowns', () => {
   assert.ok(project.brief.assumptions.length >= 3);
   assert.ok(project.brief.unknowns.length >= 3);
   assert.equal(project.audit.at(-1).action, 'blueprint.generated');
+});
+
+test('structurally blocked or unsupported proposals are denied at the model apply boundary', () => {
+  const project = completeDiscovery();
+  const blueprint = latestBlueprint(project);
+  const information = Object.values(blueprint.areas).flatMap((area) => area.items)
+    .filter((item) => item.type === 'information');
+  const [source, target] = information;
+  const processTaskRef = {
+    processPlanId: 'process-plan-test', revision: 1, planInstanceId: 'instance-test', taskId: 'task-test',
+    blueprintId: blueprint.id, blueprintVersion: blueprint.version, actorId: 'actor-test', roleId: 'role-test',
+  };
+  const task = { id: processTaskRef.taskId, title: 'Review information', detail: 'Review saved information.',
+    inputs: [{ objectId: source.id }], outputs: [{ objectId: target.id }] };
+  const proposalContext = createProcessTaskProposalContext({ blueprint, task, processTaskRef });
+  const run = { id: 'execution-run-test', projectId: project.id, status: 'SUCCEEDED', processTaskRef,
+    profile: { providerModel: 'fixture-model' }, workItem: { proposalContext } };
+  const sourceEnvelopeSource = proposalContext.sourceEnvelope.sources[0];
+  const proposal = createGeneratedBlueprintProposal(run, JSON.stringify({
+    proposedDetail: ` ${target.detail} `,
+    rationale: 'The pinned output already contains this wording.',
+    citations: [sourceEnvelopeSource.id],
+  }));
+  assert.equal(proposal.evaluation.status, 'blocked');
+  assert.throws(() => applyBlueprintProposal(project, proposal, 'owner'),
+    (error) => error.code === 'BLUEPRINT_PROPOSAL_EVALUATION_BLOCKED');
+  assert.throws(() => applyBlueprintProposal(project, {
+    ...proposal, evaluation: { ...proposal.evaluation, status: 'passed' },
+  }, 'owner'), (error) => error.code === 'BLUEPRINT_PROPOSAL_EVALUATION_INTEGRITY_FAILED');
+  assert.throws(() => applyBlueprintProposal(project, {
+    ...proposal, proposedDetail: 'Different proposal core with stale evaluation.',
+  }, 'owner'), (error) => error.code === 'BLUEPRINT_PROPOSAL_EVALUATION_INTEGRITY_FAILED');
+  assert.throws(() => applyBlueprintProposal(project, {
+    ...proposal, evaluation: { ...proposal.evaluation, evaluatorVersion: 999 },
+  }, 'owner'), (error) => error.code === 'BLUEPRINT_PROPOSAL_EVALUATION_VERSION_UNSUPPORTED');
+  assert.throws(() => applyBlueprintProposal(project, {
+    ...proposal, evaluation: { ...proposal.evaluation, runId: 'execution-run-forged' },
+  }, 'owner'), (error) => error.code === 'BLUEPRINT_PROPOSAL_EVALUATION_INTEGRITY_FAILED');
+  assert.throws(() => applyBlueprintProposal(project, {
+    ...proposal, evaluation: { ...proposal.evaluation, proposalCoreHash: '0'.repeat(64) },
+  }, 'owner'), (error) => error.code === 'BLUEPRINT_PROPOSAL_EVALUATION_INTEGRITY_FAILED');
 });
 
 test('generated blueprint covers every contracted area and retains epistemic metadata', () => {

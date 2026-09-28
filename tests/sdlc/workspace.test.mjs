@@ -13,7 +13,64 @@ import {
   routeProofResult,
   workspaceStatus,
 } from '../../src/sdlc/engine.mjs';
-import { caseUiModel } from '../../public/sdlc-view.mjs';
+import { digest } from '../../src/sdlc/contracts.mjs';
+import { caseUiModel, createSourceSelectionGuard } from '../../public/sdlc-view.mjs';
+
+test('source selection guard ignores a slower response for a previous project', () => {
+  const guard = createSourceSelectionGuard();
+  const first = guard.begin('project-first');
+  const second = guard.begin('project-second');
+  assert.equal(guard.isCurrent(first, 'project-second'), false);
+  assert.equal(guard.isCurrent(second, 'project-second'), true);
+  assert.equal(guard.isCurrent(second, 'project-first'), false);
+});
+
+test('case UI keeps the pinned source identity visible when the saved project advances', () => {
+  const snapshot = { id: 'info-source', type: 'information', name: 'Owner data', detail: 'Pinned detail.' };
+  const binding = {
+    projectId: 'project-source', projectVersion: 4, blueprintId: 'blueprint-source', blueprintVersion: 2,
+    blueprintSchemaVersion: 1, objectId: 'info-source', objectType: 'information', sourceHash: digest(snapshot), snapshot,
+  };
+  binding.bindingHash = digest({
+    projectId: binding.projectId, projectVersion: binding.projectVersion, blueprintId: binding.blueprintId,
+    blueprintVersion: binding.blueprintVersion, blueprintSchemaVersion: binding.blueprintSchemaVersion,
+    objectId: binding.objectId, objectType: binding.objectType, sourceHash: binding.sourceHash,
+  });
+  const changeCase = createChangeCase({ mode: 'golden' }, { sourceBinding: {
+    ...binding,
+  } });
+  changeCase.workspace = workspaceStatus(changeCase);
+  changeCase.sourceBindingIntegrity = { valid: true };
+  const pinned = caseUiModel(changeCase, {}, { id: 'project-source', version: 5, blueprintVersions: [{ version: 3 }] }).sourceBinding;
+  assert.equal(pinned.state, 'PINNED_OLDER_VERSION');
+  assert.equal(pinned.snapshot.detail, 'Pinned detail.');
+  assert.equal(pinned.sourceHash, binding.sourceHash);
+  assert.equal(caseUiModel(changeCase).sourceBinding.state, 'PROJECT_UNAVAILABLE');
+  changeCase.sourceBindingIntegrity = { valid: false };
+  assert.equal(caseUiModel(changeCase, {}, { id: 'project-source', version: 5, blueprintVersions: [{ version: 3 }] }).sourceBinding.state, 'INTEGRITY_FAILED');
+});
+
+test('case UI needs full active-project detail to distinguish current pin from unavailable summary', () => {
+  const snapshot = { id: 'info-current', type: 'information', name: 'Current source', detail: 'Exact saved detail.' };
+  const binding = {
+    projectId: 'project-current', projectVersion: 5, blueprintId: 'blueprint-current', blueprintVersion: 1,
+    blueprintSchemaVersion: 1, objectId: snapshot.id, objectType: snapshot.type, sourceHash: digest(snapshot), snapshot,
+  };
+  binding.bindingHash = digest({
+    projectId: binding.projectId, projectVersion: binding.projectVersion, blueprintId: binding.blueprintId,
+    blueprintVersion: binding.blueprintVersion, blueprintSchemaVersion: binding.blueprintSchemaVersion,
+    objectId: binding.objectId, objectType: binding.objectType, sourceHash: binding.sourceHash,
+  });
+  const changeCase = createChangeCase({ mode: 'golden' }, { sourceBinding: binding });
+  changeCase.workspace = workspaceStatus(changeCase);
+  changeCase.sourceBindingIntegrity = { valid: true };
+  const detail = {
+    id: binding.projectId, version: 5,
+    latestBlueprint: { id: binding.blueprintId, version: 1, areas: { domain: { items: [snapshot] } } },
+  };
+  assert.equal(caseUiModel(changeCase, {}, detail).sourceBinding.state, 'CURRENT');
+  assert.equal(caseUiModel(changeCase, {}, { id: detail.id, version: detail.version }).sourceBinding.state, 'PROJECT_UNAVAILABLE');
+});
 
 test('workspace status exposes questions and their next allowed decision', () => {
   const changeCase = createChangeCase({ mode: 'golden' });

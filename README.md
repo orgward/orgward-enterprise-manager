@@ -127,7 +127,25 @@ Its mutation lab proves that missing AML evidence, stale standards, forged prove
 
 Open `/execution.html` for the first real-execution increment. When the server operator enables `ORGWARD_ENABLE_LOCAL_EXECUTION=true`, a user can request a server-configured system-generation profile, a different identity must approve the immutable request, and the worker invokes a fixed absolute executable without a shell inside a per-run workspace. The included generator creates a runnable Node.js service, tests, container recipe, traced manifest, logs, artifact hashes, and an append-oriented event history.
 
-On Linux, command profiles run through `/usr/bin/bwrap`: the worker gets separate user, mount, PID, IPC, and network namespaces, read-only runtime and approved source files, a read-only context file, and only its per-run workspace writable. The adapter fails closed when bubblewrap or a required mount is unavailable. This boundary does not yet enforce CPU, memory, or persistent-workspace quotas and is not a complete hostile-code qualification. Managed identity lifecycle, a durable queue, Git integration, a real coding-model provider, deployment, HA, and production operations also remain explicit roadmap gates.
+On Linux, command profiles run through `/usr/bin/bwrap`: the worker gets separate user, mount, PID, IPC, and network namespaces, read-only runtime and approved source files, a read-only context file, and only its per-run workspace writable. The adapter fails closed when bubblewrap or a required mount is unavailable. This boundary does not yet enforce CPU, memory, or persistent-workspace quotas and is not a complete hostile-code qualification. Managed identity lifecycle, a durable queue, remote Git integration, a real coding-model provider, deployment, HA, and production operations also remain explicit roadmap gates.
+
+For local-only repository candidates, the server operator may set
+`ORGWARD_LOCAL_REPOSITORIES` to a JSON array of exact tenant/project bindings.
+Each entry has `id`, `label`, `tenantId`, `projectId`, `directory`, and a
+server-owned `verification` object containing `id`, `version`, absolute
+`executable`, and fixed string `args`. The directory is never accepted from a
+client. For example:
+
+```json
+[{"id":"reference-service","label":"Reference service","tenantId":"tenant-a","projectId":"project-00000000-0000-4000-8000-000000000000","directory":"/srv/orgward/reference-service","verification":{"id":"node-tests","version":"1","executable":"/usr/bin/node","args":["--test"]}}]
+```
+
+Project editors can select these bindings in the Execution plan view. The
+server pins a bounded file/mode snapshot in the task run, executes approved
+local profiles only in the no-network sandbox, and stores a review-only diff
+plus the exact-tree verification receipt. It never writes the candidate back
+to the configured source directory or pushes it. Remote clone/push, applying a
+candidate, and CI attestations remain out of scope.
 
 ## Run privately
 

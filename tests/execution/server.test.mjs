@@ -79,10 +79,312 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.equal(ui.status, 200);
   const executionHtml = await ui.text();
   assert.match(executionHtml, /Real executables and files/);
+  assert.match(executionHtml, /id="process-instance-refresh-status"[^>]*role="status"[^>]*aria-live="polite"/);
   assert.match(executionHtml, /id="enterprise-design-nav" href="\/"/);
+  const skipLinkStart = executionHtml.indexOf('<a id="execution-skip-link" class="execution-skip-link" href="#execution-main">');
+  const headerStart = executionHtml.indexOf('<header class="topbar">');
+  const executionMain = executionHtml.indexOf('<section id="execution-main" class="execution-main" tabindex="-1" aria-label="Execution content"');
+  assert.ok(skipLinkStart >= 0 && skipLinkStart < headerStart, 'the first Execution focus stop is a skip link before product navigation');
+  assert.ok(executionMain > headerStart, 'the skip link target is a programmatically focusable Execution content region');
+  assert.match(executionHtml, /id="execution-skip-link"[^>]*href="#execution-main"/);
+  const savedTaskPanel = executionHtml.indexOf('<div id="process-plans" aria-live="off"></div>');
+  const graphCreationForm = executionHtml.indexOf('<form id="process-plan-form"');
+  const standaloneRunForm = executionHtml.indexOf('<form id="run-form"');
+  assert.ok(savedTaskPanel >= 0 && savedTaskPanel < graphCreationForm && graphCreationForm < standaloneRunForm,
+    'existing saved process task cards are rendered before graph creation and standalone run forms in the served template');
   const executionClient = await fetch(`${base}/execution.js`);
   assert.equal(executionClient.status, 200);
   const executionSource = await executionClient.text();
+  const taskRequestHelper = await fetch(`${base}/process-task-request.mjs`);
+  assert.equal(taskRequestHelper.status, 200);
+  const taskRequestHelperSource = await taskRequestHelper.text();
+  const humanStartHelper = await fetch(`${base}/human-task-start-recovery.mjs`);
+  assert.equal(humanStartHelper.status, 200);
+  const humanStartHelperSource = await humanStartHelper.text();
+  const humanOutputHelper = await fetch(`${base}/human-task-output-application.mjs`);
+  assert.equal(humanOutputHelper.status, 200);
+  const humanOutputHelperSource = await humanOutputHelper.text();
+  assert.match(executionSource, /renderHumanTaskOutputApplication\(\{ project, plan, task, runtime, output \}\)/,
+    'the served process task row renders owner output review from its selected durable runtime');
+  assert.match(executionSource, /proposalDesignLink\(project, \{ status: 'applied',[\s\S]*?objectId: disposition\.outputObjectId \}\)/,
+    'the saved owner output link is derived from the validated applied event object');
+  assert.match(executionSource, /Saved output reference: plan \$\{disposition\.planId\} revision \$\{disposition\.revision\}, task \$\{disposition\.taskId\}, instance \$\{disposition\.planInstanceId\}, event \$\{disposition\.eventId\}\.[\s\S]*?does not open a historical snapshot/,
+    'the task result keeps its durable references visible and says the link opens current design');
+  assert.match(executionSource, /text: designLink\.label, attrs: \{ href: designLink\.href \}/,
+    'the expanded applied output disclosure renders the current design link');
+  assert.match(executionSource, /Human evidence notes remain contextual provenance\. They will not be copied into this output or treated as validation\./);
+  assert.match(executionSource, /human-task-outputs\/apply/);
+  assert.match(executionSource, /retry sends the same command and payload/i);
+  assert.match(humanOutputHelperSource, /event\.data\?\.planInstanceId === runtime\.planInstanceId/);
+  assert.match(humanOutputHelperSource, /event\.data\?\.evidenceContextOnly === true/);
+  assert.match(humanOutputHelperSource, /typeof event\.eventId === 'string'/,
+    'saved output projection uses the actual persisted project-event identifier');
+  assert.match(humanOutputHelperSource, /event\?\.id === appliedEvent\.data\.humanTaskEventId/,
+    'saved output projection requires the referenced successful completion event in the exact runtime');
+  assert.match(humanOutputHelperSource, /entry\.sourceEventHash === sourceEventHash && entry\.contentHash === outputContentHash/,
+    'saved output projection matches checkpoint and output hashes across event and provenance');
+  assert.match(humanOutputHelperSource, /kind: 'applied'/);
+  assert.doesNotMatch(executionSource, /detail\.value\s*=\s*.*runtime\.evidence/,
+    'human evidence cannot automatically populate owner-entered output detail');
+  assert.match(executionSource, /if \(!state\.meta\?\.profiles\?\.length\) \{[\s\S]*?No execution profile is configured\. Ask an OrgWard administrator to configure one before requesting approval\.[\s\S]*?\} else if \(!profileOptions\.length\) \{[\s\S]*?No configured execution profile supports this task\. Model profiles need at least one input and one information output; add those to the task or ask an OrgWard administrator to configure a non-model profile\./,
+    'the task request explains missing server profile configuration separately from task/profile incompatibility');
+  assert.match(executionSource, /profileSelect\.disabled = requestPresentation\.locked/);
+  assert.match(executionSource, /repositorySelect\.disabled = requestPresentation\.locked/);
+  assert.match(executionSource, /profileSelect\.value = savedProfileId/);
+  assert.match(executionSource, /repositorySelect\.value = savedRepository\.selectionId \?\? savedRepository\.id/);
+  assert.match(executionSource, /Saved repository snapshot \$\{pendingRequest\.payload\.repositoryId\} · unavailable or changed/);
+  assert.match(executionSource, /findPendingProcessTaskRequest\(processTaskIntentStorage\(\)/,
+    'an accepted request remains findable if the selection changes to its concrete instance');
+  assert.match(executionSource, /processTaskRequestPresentation\(pendingRequest, \{\s*submitting: isSubmittingTaskRequest, recoveringNewInstance,/,
+    'a recovered uncertain new-instance command is clearly labeled and remains tied to its original intent');
+  assert.match(taskRequestHelperSource, /Retry saved new-instance request[\s\S]*?not tied to the instance currently displayed/,
+    'the served recovery helper explicitly distinguishes the original new-instance intent from the displayed instance');
+  assert.match(executionSource, /const pendingHumanTaskStarts = syncHumanTaskStarts\(project, plan\)/,
+    'the authorized task snapshot restores and reconciles persisted human starts before rendering actions');
+  assert.match(executionSource, /humanTaskStartReconciled\(pending, \{ tenantId: project\.tenantId, principal: state\.currentPrincipal,[\s\S]*?instances: state\.taskInstances \}\)/,
+    'start receipts clear only against the current tenant, principal and authorized task runtime snapshot');
+  assert.match(executionSource, /It is not linked to the process instance selected above; retry retrieves the original server-created instance/,
+    'new-instance recovery is attached to the task row and does not attribute an uncertain command to the selected instance');
+  assert.match(humanStartHelperSource, /assignedToCurrentPrincipal !== true[\s\S]*?status: 'accepted'/,
+    'a saved start is accepted only when its response confirms in-progress work for the current assigned human');
+  const humanStartHandler = executionSource.slice(executionSource.indexOf('async function startHumanTask'), executionSource.indexOf('async function completeHumanTask'));
+  assert.match(humanStartHandler, /saveHumanTaskStart[\s\S]*?const runtime = await api\('\/api\/execution\/process-task-instances\/start'[\s\S]*?pending\.commandId, payload: pending\.payload[\s\S]*?acceptHumanTaskStart[\s\S]*?saveHumanTaskStart[\s\S]*?await refresh\(\)/,
+    'start stores and replays the exact command, then retains its accepted receipt through refresh');
+  assert.doesNotMatch(humanStartHandler, /state\.pendingHumanTaskCommands\.delete\(key\)/,
+    'the start handler leaves cleanup to exact authorized snapshot reconciliation');
+  assert.match(executionSource, /role: 'status', 'aria-live': 'polite'/,
+    'saved and uncertain request state is announced accessibly');
+  const taskRequestHandler = executionSource.slice(executionSource.indexOf('async function requestTaskApproval'), executionSource.indexOf('function openPlanEditor'));
+  assert.match(taskRequestHandler, /const accepted = acceptProcessTaskRequest\(pending, run\)[\s\S]*?savePendingProcessTaskRequest[\s\S]*?const refreshed = await refresh\(\)/,
+    'the exact accepted receipt remains persisted until the follow-up snapshot is checked');
+  const acceptedReceiptPath = taskRequestHandler.slice(taskRequestHandler.indexOf('const run = await api'), taskRequestHandler.indexOf('} catch (error)'));
+  assert.doesNotMatch(acceptedReceiptPath, /clearPendingProcessTaskRequest/,
+    'the accepted-request path does not discard its receipt before authoritative reconciliation');
+  assert.match(executionSource, /reconcileAcceptedProcessTaskRequests\(state\.runs, state\.taskInstances, state\.planningProject\.id\)/,
+    'the initial authorized refresh can clear only a linked task request confirmed in both snapshots');
+  assert.match(executionSource, /reconciledSavedProcessTaskRequests\(processTaskIntentStorage\(\), \{[\s\S]*?tenantId: state\.planningProject\?\.tenantId, principal: state\.currentPrincipal/,
+    'reload reconciles saved accepted requests for the exact active tenant and principal against the first authorized snapshots');
+  assert.match(executionSource, /processTaskRequestReconciled\(pending, \{ runs, instances \}\)/,
+    'cross-session refresh reconciliation uses the exact run and task snapshots');
+  assert.match(executionSource, /el\('summary', \{ text: view\.disclosureSummary \}\)/,
+    'the collapsed assignment disclosure uses the safe actor-selection and enabled-target summary');
+  assert.match(executionSource, /setInterval\(\(\) => \{\s*void refreshProcessInstancesFromOtherSessions\(\);\s*void refreshSelectedRunFromOtherSessions\(\);\s*\}, 15000\)/);
+  assert.match(executionSource, /document\.addEventListener\('visibilitychange'/);
+  assert.match(executionSource, /void refreshSelectedRunFromOtherSessions\(\);/);
+  assert.match(executionSource, /event\.target\?\.closest\?\.\('#execution-main'\)\) setTimeout\(retryDeferredSelectedRun, 0\)/);
+  assert.match(executionSource, /api\(`\/api\/execution\/runs\/\$\{encodeURIComponent\(runId\)\}`\)/,
+    'selected-run freshness uses the existing authenticated read endpoint without a mutation method');
+  assert.match(executionSource, /isCurrentSelectedRunRefresh\(\{ requestId, currentRequestId: selectedRunRefreshRequestId,[\s\S]*?routeProjectId: route\.searchParams\.get\('project'\) \|\| null \}\)/);
+  assert.match(executionSource, /selectedRunStatusAnnouncement\(state\.run, nextRun\)/);
+  assert.match(executionSource, /api\(`\/api\/execution\/process-task-instances\?projectId=\$\{encodeURIComponent\(projectId\)\}`\)/);
+  assert.match(executionSource, /Promise\.allSettled\(\[[\s\S]*?api\(`\/api\/v1\/projects\/\$\{encodeURIComponent\(projectId\)\}`\)[\s\S]*?\]\)/,
+    'cross-session refresh reads the current authorized project snapshot alongside runtime state');
+  assert.match(executionSource, /if \(processRead\.status === 'rejected'\) throw processRead\.reason/,
+    'a failed project read does not discard a successful process activity read');
+  assert.match(executionSource, /projectRead\.status === 'fulfilled' && projectRead\.value\?\.data\?\.id === projectId[\s\S]*?: state\.planningProject/,
+    'project-read failure retains the currently selected project snapshot while runtime refresh proceeds');
+  assert.match(executionSource, /if \(projectRefreshUnavailable\) noteProjectRefreshUnavailable\(\)/,
+    'unavailable design status remains visible even when process snapshots did not change');
+  assert.match(executionSource, /Project design update status could not be refreshed; process activity can still refresh/);
+  assert.match(executionSource, /projectRead\.value\?\.data\?\.id === projectId/,
+    'a project snapshot is accepted only when it matches the selected project');
+  assert.match(executionSource, /applyCrossSessionProcessInstances\(result\.instances,[\s\S]*?projectSnapshot, routeKey, projectRefreshUnavailable\)/,
+    'the selected project snapshot reaches guarded task-card rendering');
+  assert.match(executionSource, /state\.planningProject = projectSnapshot/,
+    'event-only project changes update task-row proposal application state');
+  assert.match(executionSource, /result\.runs \?\? \[\]/, 'the authorized process refresh applies the linked run snapshot with its runtime and plans');
+  assert.match(executionSource, /routeKey,[\s\S]*?currentRouteKey: `\$\{window\.location\.pathname\}\$\{window\.location\.search\}`/);
+  const processRefreshApplyStart = executionSource.indexOf('function applyCrossSessionProcessInstances');
+  const processRefreshApplyEnd = executionSource.indexOf('async function refreshProcessInstancesFromOtherSessions', processRefreshApplyStart);
+  assert.ok(processRefreshApplyStart >= 0 && processRefreshApplyEnd > processRefreshApplyStart);
+  const processRefreshApplySource = executionSource.slice(processRefreshApplyStart, processRefreshApplyEnd);
+  assert.match(processRefreshApplySource, /currentRuns: state\.runs\.filter/);
+  assert.match(processRefreshApplySource, /state\.runs = \[\.\.\.state\.runs\.filter/);
+  assert.match(processRefreshApplySource, /runLink\?\.querySelector\('\.run-link-status'\)/);
+  assert.doesNotMatch(processRefreshApplySource, /renderList\(\)/, 'refresh updates run-list status in place without replacing focused links');
+  assert.match(executionSource, /if \(event\.target\?\.closest\?\.\('#process-plans'\)\) setTimeout\(retryDeferredProcessInstances, 0\)/);
+  assert.match(executionSource, /item\.append\(el\('p', \{ className: 'provider-outcome-diagnostic', text: resultSummary\.diagnostic \}\)\)/,
+    'unknown delivery warning is visible outside collapsed saved-result details');
+  assert.match(executionSource, /el\('summary', \{ text: resultSummary\.summaryLabel \}\)/,
+    'the collapsed linked-result disclosure exposes the safe status and bounded artifact count');
+  assert.match(executionSource, /resultSummary\.failureGuidance && !resultSummary\.diagnostic[\s\S]*?resultSummary\.providerDiagnostic\?\.outcome !== 'outcome_unknown'/,
+    'the safe failure next step appears in expanded details without overriding uncertain-provider guidance');
+  assert.match(executionSource, /className: 'linked-task-failure-guidance', text: resultSummary\.failureGuidance\.nextStep/);
+  assert.match(executionSource, /uncertainDelivery: uncertainBlockedDependency/);
+  const processTaskRecoveryClient = await fetch(`${base}/process-task-recovery.mjs`);
+  assert.equal(processTaskRecoveryClient.status, 200);
+  const processTaskRecoverySource = await processTaskRecoveryClient.text();
+  assert.match(processTaskRecoverySource, /Reconcile the provider outcome before deciding whether to start a new process instance/);
+  assert.match(processTaskRecoverySource, /Start a new process instance from the first task to retry the workflow/);
+  assert.match(processTaskRecoverySource, /uncertainDelivery\) return \{ kind: 'reconcile' \}/);
+  assert.match(processTaskRecoverySource, /action\?\.kind !== 'select-new-instance'/);
+  assert.match(executionSource, /canStartNewInstance: canStartNewInstances && entries\.at\(-1\)\?\.revision === plan\.revision[\s\S]*?project\.latestBlueprint\?\.version === plan\.source\.blueprintVersion/,
+    'the fresh-instance action is hidden for historical plans and stale blueprint pins');
+  assert.match(executionSource, /if \(!selectFreshProcessTaskInstance\(state\.selectedPlanInstances, instanceKey, recoveryAction\)\) return;\s*syncExecutionRoute\(project\.id, null\);\s*renderProcessPlans\(container, plans, project\);/,
+    'the recovery action only switches the selected instance and rerenders, without starting work');
+  assert.match(executionSource, /planCard\?\.querySelector\('select\[aria-label\^="Process instance for"\]'\)\?\.focus\(\)/,
+    'focus returns to the selected plan instance control after the rerender');
+  assert.match(executionSource, /for \(const \[instanceId, runtimes\] of instances\)/,
+    'existing instance options remain available after selecting a fresh instance');
+  assert.match(executionSource, /data-run-link-id': run\.id/);
+  assert.match(executionSource, /selectedRunLink\?\.querySelector\('\.run-link-status'\)/);
+  const selectedRunApplyStart = executionSource.indexOf('function applySelectedRunSnapshot');
+  const selectedRunApplyEnd = executionSource.indexOf('async function refreshSelectedRunFromOtherSessions', selectedRunApplyStart);
+  assert.ok(selectedRunApplyStart >= 0 && selectedRunApplyEnd > selectedRunApplyStart);
+  assert.doesNotMatch(executionSource.slice(selectedRunApplyStart, selectedRunApplyEnd), /renderList\(\)/,
+    'background refresh updates the selected row in place and preserves run-list focus');
+  assert.match(executionSource, /if \(announcement\) executionAnnouncement\.textContent = announcement/);
+  const selectedRunRefreshClient = await fetch(`${base}/selected-run-refresh.mjs`);
+  assert.equal(selectedRunRefreshClient.status, 200);
+  const selectedRunRefreshSource = await selectedRunRefreshClient.text();
+  assert.match(selectedRunRefreshSource, /export function isCurrentSelectedRunRefresh/);
+  assert.match(selectedRunRefreshSource, /export function selectedRunRefreshDisposition/);
+  assert.match(selectedRunRefreshSource, /export function selectedRunStatusAnnouncement/);
+  assert.match(selectedRunRefreshSource, /export function selectedRunRefreshMessage/);
+  assert.match(executionSource, /processInstanceRefreshDisposition\(\{ currentInstances: state\.taskInstances,[\s\S]*?currentRuns: state\.runs\.filter\(\(run\) => run\.projectId === projectId\), nextRuns: projectRuns,[\s\S]*?currentProject: state\.planningProject, nextProject: projectSnapshot,[\s\S]*?container: plans, documentRef: document \}\)/);
+  assert.match(executionSource, /if \(disposition === 'unchanged'\) \{[\s\S]*?applySettledProcessInstanceCommands/);
+  const refreshClient = await fetch(`${base}/process-instance-refresh.mjs`);
+  assert.equal(refreshClient.status, 200);
+  const processRefreshSource = await refreshClient.text();
+  assert.match(processRefreshSource, /previousRuns = \[\], nextRuns = \[\]/);
+  assert.match(processRefreshSource, /function sameProjectSnapshot/);
+  assert.match(processRefreshSource, /currentProject = null, nextProject = null/);
+  assert.match(processRefreshSource, /snapshotProjectId === undefined \|\| snapshotProjectId === projectId/);
+  assert.match(processRefreshSource, /Outcome unknown\. An external request may have been received\. Delivery is unverified\. Reconcile with the provider before retrying\./);
+  assert.match(processRefreshSource, /if \(!previous\) continue/);
+  assert.match(executionSource, /processInstanceStatusAnnouncement\(state\.taskInstances, instances, processPlansFor\(projectSnapshot\),\s*currentProjectRuns, projectRuns\)/);
+  assert.match(executionSource, /skipBlockedAnnouncement: Boolean\(announcement\)/,
+    'the cross-session status/outcome message replaces the duplicate blocked-task live announcement');
+  const runTransitionFocusClient = await fetch(`${base}/run-transition-focus.mjs`);
+  assert.equal(runTransitionFocusClient.status, 200);
+  const runTransitionFocusSource = await runTransitionFocusClient.text();
+  assert.match(runTransitionFocusSource, /event\?\.isTrusted === true && event\.detail === 0/);
+  assert.match(executionSource, /isRunActionKeyboardActivation\(event, button, document\)/);
+  assert.match(executionSource, /restoreRunTransitionFocus\(\{/);
+  assert.match(executionSource, /data-run-status-focus-target/);
+  assert.match(executionSource, /executionRunRouteTarget\(window\.location\.href, state\.runs\)/);
+  assert.match(executionSource, /syncExecutionRunRoute\(state\.run\)/);
+  assert.match(executionSource, /action: 'open-run'/);
+  assert.match(executionSource, /Open linked run \$\{linkedRun\.id\.slice\(-8\)\}/);
+  assert.match(executionSource, /linkedRunActivityLabel\(linkedRun\)/,
+    'linked task rows render activity labels from the saved run lifecycle status');
+  const linkedRunActivityClient = await fetch(`${base}/linked-run-activity.mjs`);
+  assert.equal(linkedRunActivityClient.status, 200);
+  assert.match(await linkedRunActivityClient.text(), /Approval request \$\{run\.id\} · Awaiting approval/);
+  const sharedInteractions = await fetch(`${base}/shared-interactions.mjs`);
+  assert.equal(sharedInteractions.status, 200);
+  const sharedInteractionsSource = await sharedInteractions.text();
+  assert.match(sharedInteractionsSource, /export function executionRunRouteTarget/);
+  assert.match(sharedInteractionsSource, /process-plan-\[0-9a-f-\]\{36\}\|software-delivery-/);
+  assert.match(executionSource, /focusEvent\.target !== document\.body && focusEvent\.target !== button/);
+  const runFocusCss = await (await fetch(`${base}/execution.css`)).text();
+  assert.match(runFocusCss, /\.run-status:focus-visible\s*\{\s*outline: 3px solid var\(--exec\)/);
+  const taskAnnouncementClient = await fetch(`${base}/process-task-announcement.mjs`);
+  assert.equal(taskAnnouncementClient.status, 200);
+  assert.match(await taskAnnouncementClient.text(), /PROCESS_TASK_ANNOUNCEMENT_DELAY_MS = 500/);
+  const humanTaskFocusClient = await fetch(`${base}/human-task-status-focus.mjs`);
+  assert.equal(humanTaskFocusClient.status, 200);
+  assert.match(await humanTaskFocusClient.text(), /documentRef\.activeElement !== documentRef\.body/);
+  assert.ok(executionSource.includes('scheduleProcessTaskAnnouncement'), 'Execution uses its served delayed announcement helper');
+  assert.ok(executionSource.includes('restoreHumanTaskStatusFocusAfterAction'), 'successful human actions restore focus after refresh');
+  assert.match(executionSource, /linkedProcessTaskResult\(runtime, linkedRun, project\)/);
+  assert.match(executionSource, /el\('details', \{ className: 'linked-process-task-result', attrs:/);
+  assert.match(executionSource, /text: resultSummary\.summaryLabel/);
+  assert.match(executionSource, /captureExpandedSavedTaskResultKeys\([\s\S]*?container\.replaceChildren\(\)/,
+    'plan rerenders snapshot expanded saved-result disclosures before replacing their cards');
+  assert.match(executionSource, /restoreSavedTaskResultOpen\(disclosureKey, expandedSavedTaskResults\)/);
+  assert.match(executionSource, /'data-saved-task-result-key': disclosureKey/);
+  const savedTaskResultDisclosureClient = await fetch(`${base}/saved-task-result-disclosure.mjs`);
+  assert.equal(savedTaskResultDisclosureClient.status, 200);
+  const savedTaskResultDisclosureSource = await savedTaskResultDisclosureClient.text();
+  assert.match(savedTaskResultDisclosureSource, /JSON\.stringify\(\[projectId, runId\]\)/);
+  assert.match(savedTaskResultDisclosureSource, /detail\?\.open === true/);
+  assert.match(executionSource, /Saved output preview:/);
+  assert.match(executionSource, /resultSummary\.proposalPreview\?\.kind === 'proposal'/);
+  assert.match(executionSource, /if \(preview\.designLink\) disclosure\.append\(el\('a', \{[\s\S]*?text: preview\.designLink\.label, attrs: \{ href: preview\.designLink\.href \}/,
+    'the expanded saved task proposal disclosure renders its validated current-design link');
+  assert.match(executionSource, /text: `Proposed detail: \$\{preview\.proposedDetail\}`/);
+  assert.match(executionSource, /linked-task-artifacts/);
+  assert.match(executionSource, /These checks verify proposal structure and pinned references\. They do not assess factual accuracy, source grounding, or provider quality\./);
+  assert.match(executionSource, /evaluation\.status === 'passed' \? 'passed' : 'blocked'/);
+  assert.ok(executionSource.includes('/artifact?path=${encodeURIComponent(artifact.relativePath)}'));
+  assert.ok(executionSource.includes('Download ${artifact.displayName} · ${artifact.hashPrefix}…'));
+  const linkedTaskResultClient = await fetch(`${base}/linked-process-task-result.mjs`);
+  assert.equal(linkedTaskResultClient.status, 200);
+  const linkedTaskResultSource = await linkedTaskResultClient.text();
+  assert.match(linkedTaskResultSource, /Structured proposal unavailable\. Open the linked run for details\./);
+  assert.match(linkedTaskResultSource, /Review-only proposed update\. Applying it is a separate versioned owner action\./);
+  assert.match(linkedTaskResultSource, /project\?\.id === run\.projectId/);
+  assert.match(linkedTaskResultSource, /event\.data\?\.runId === run\.id && event\.data\?\.proposalHash === proposal\.proposalHash/);
+  assert.match(linkedTaskResultSource, /Number\.isSafeInteger\(event\.data\?\.appliedBlueprintVersion\)/);
+  assert.match(linkedTaskResultSource, /objectId: applyEvent\.data\.objectId === proposal\.target\.id \? proposal\.target\.id : null/);
+  assert.match(linkedTaskResultSource, /proposalDesignLink\(project, \{/);
+  assert.match(linkedTaskResultSource, /This created a proposed design version; it did not execute work/);
+  assert.match(linkedTaskResultSource, /runtime\.projectId !==/);
+  assert.match(linkedTaskResultSource, /run\.id !== runtime\.executionRunId/);
+  assert.match(linkedTaskResultSource, /deepSeekOutcomeDiagnosticCopy/);
+  assert.match(linkedTaskResultSource, /failureGuidanceByCategory/);
+  assert.match(linkedTaskResultSource, /typeof category === 'string' && Object\.hasOwn\(failureGuidanceByCategory, category\)/,
+    'unknown stored failure categories use the generic next step without inherited object properties');
+  assert.match(linkedTaskResultSource, /The run failed without a recognized failure category/);
+  assert.match(linkedTaskResultSource, /run\.linkedOutcomeCategory/);
+  assert.match(linkedTaskResultSource, /\['FAILED', 'INTERRUPTED'\]\.includes\(run\.status\).*outcome_unknown/s);
+  assert.match(linkedTaskResultSource, /stdout\.slice\(0, 280\)/);
+  assert.match(linkedTaskResultSource, /proposal\.sourceEnvelopeHash !== context\.sourceEnvelopeHash/);
+  assert.match(linkedTaskResultSource, /proposal\.proposalHash \?\? ''/);
+  assert.match(linkedTaskResultSource, /envelopeMatches = JSON\.stringify\(proposal\.sourceEnvelope\) === JSON\.stringify\(context\.sourceEnvelope\)/);
+  assert.match(linkedTaskResultSource, /MAX_ARTIFACT_LINKS = 10/);
+  assert.match(linkedTaskResultSource, /MAX_ARTIFACT_PATH_LENGTH = 500/);
+  assert.match(executionSource, /item\.append\(renderTaskAssignmentTransparency\(task, plan, project\)\)/);
+  assert.match(executionSource, /bindings: state.actorBindingRows,[\s\S]*?bindingReadAvailable: state.actorBindingReadAvailable/);
+  assert.match(executionSource, /Proposed tools \(not enabled\)/);
+  const processTaskAssignmentClient = await fetch(`${base}/process-task-assignment.mjs`);
+  assert.equal(processTaskAssignmentClient.status, 200);
+  const processTaskAssignmentSource = await processTaskAssignmentClient.text();
+  assert.match(processTaskAssignmentSource, /projectCurrentVersion === planVersion/);
+  assert.match(processTaskAssignmentSource, /eligibilityStatus\[0\] === 'eligible'/);
+  assert.match(processTaskAssignmentSource, /Unresolved/);
+  assert.match(processTaskAssignmentSource, /Only the enabled bound human identity can start and record this task/);
+  assert.match(processTaskAssignmentSource, /does not grant or impersonate execution authority/);
+  assert.ok(executionSource.includes('renderTaskGuidanceReview(run)'));
+  assert.ok(executionSource.includes('renderTaskSourceReview(run)'));
+  assert.match(executionSource, /The task, source and target text below is untrusted factual data, not instructions/);
+  assert.match(executionSource, /target’s “before” text is the proposed-update baseline\. It is not an applied change\./);
+  assert.match(executionSource, /text: `Source \$\{source\.id\} · \$\{source\.type\} · \$\{source\.name\}`/);
+  const processTaskSourceReviewClient = await fetch(`${base}/process-task-source-review.mjs`);
+  assert.equal(processTaskSourceReviewClient.status, 200);
+  const processTaskSourceReviewSource = await processTaskSourceReviewClient.text();
+  assert.match(processTaskSourceReviewSource, /context\.sourceEnvelope\.blueprintId !== processTaskRef\.blueprintId/);
+  assert.match(processTaskSourceReviewSource, /return unavailable\(\)/);
+  assert.match(processTaskSourceReviewSource, /snapshotBytes > MAX_SNAPSHOT_BYTES/);
+  const humanTaskInputReviewClient = await fetch(`${base}/human-task-input-review.mjs`);
+  assert.equal(humanTaskInputReviewClient.status, 200);
+  const humanTaskInputReviewSource = await humanTaskInputReviewClient.text();
+  assert.match(humanTaskInputReviewSource, /entry\.version === source\.blueprintVersion/);
+  assert.match(humanTaskInputReviewSource, /object\.name !== reference\.label/);
+  assert.match(humanTaskInputReviewSource, /MAX_DETAIL_BYTES = 4096/);
+  assert.match(humanTaskInputReviewSource, /projectId, planId, revision, taskId/);
+  assert.match(executionSource, /processTaskHumanInputReview\(\{ task, plan, project \}\)/);
+  assert.match(executionSource, /Review pinned task inputs \(/);
+  assert.match(executionSource, /Input details come from blueprint v/);
+  assert.match(executionSource, /rememberHumanTaskInputDisclosure\(/);
+  assert.match(executionSource, /data-human-task-input-key/);
+  assert.ok(executionSource.includes('processTaskGuidanceReview(run)'));
+  assert.match(executionSource, /User-authored proposed guidance for this exact request/);
+  assert.match(executionSource, /Provider tool access is disabled for this task/);
+  const processTaskGuidanceReviewClient = await fetch(`${base}/process-task-guidance-review.mjs`);
+  assert.equal(processTaskGuidanceReviewClient.status, 200);
+  const processTaskGuidanceReviewSource = await processTaskGuidanceReviewClient.text();
+  assert.match(processTaskGuidanceReviewSource, /snapshot.graphRevision !== ref.revision/);
+  assert.match(processTaskGuidanceReviewSource, /current editable role text is not added/);
+  assert.match(executionSource, /deepSeekOutcomeDiagnosticCopy\(execution\.providerDiagnostic\)/);
+  const providerDiagnosticClient = await fetch(`${base}/provider-outcome-diagnostic.mjs`);
+  assert.equal(providerDiagnosticClient.status, 200);
+  const providerDiagnosticSource = await providerDiagnosticClient.text();
+  assert.match(providerDiagnosticSource, /value\.httpStatus >= 100 && value\.httpStatus <= 599/);
+  assert.match(providerDiagnosticSource, /invalid_json.*body_too_large.*incomplete_response.*missing_output_text/s);
+  assert.match(providerDiagnosticSource, /Delivery remains unverified; this run cannot be retried/);
+  assert.match(providerDiagnosticSource, /Outcome unknown\. An external request may have been received\. Delivery is unverified\. Reconcile with the provider before retrying\./);
   assert.match(executionSource, /blueprint agent binding is recorded for traceability/);
   assert.match(executionSource, /does not execute as or impersonate the bound workload identity/);
   assert.match(executionSource, /Escalate to project owner/);
@@ -90,9 +392,25 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(executionSource, /process-task-instances\/\$\{action\}/);
   assert.match(executionSource, /Pause process instance/);
   assert.match(executionSource, /Resume process instance/);
+  assert.match(executionSource, /Cancel process instance/);
+  assert.match(executionSource, /instanceControl\.canCancel === true/);
+  assert.match(executionSource, /process instance is cancelled/i);
+  assert.match(executionSource, /The parent process instance was cancelled before this task started/i);
+  const taskRequestRenderingStart = executionSource.indexOf('const assignment = currentTaskAssignment');
+  const taskRequestRenderingEnd = executionSource.indexOf('if (!profileOptions.length)', taskRequestRenderingStart);
+  const taskRequestRendering = executionSource.slice(taskRequestRenderingStart, taskRequestRenderingEnd);
+  assert.ok(taskRequestRendering.indexOf("if (selectedInstance !== 'new' && blockedDependencyText)")
+    < taskRequestRendering.indexOf('if (!assignment.available)'),
+  'the terminal dependency recovery instruction stays visible even when task assignment is unavailable');
+  assert.match(executionSource, /ExecutionCancelledByProcessInstanceController/);
+  assert.match(executionSource, /completed outcomes and evidence remain/i);
+  assert.match(executionSource, /no further task work can start/i);
   assert.match(executionSource, /in-flight tasks settle/);
   assert.match(executionSource, /fresh independent approval/);
   assert.match(executionSource, /Instance control history/);
+  assert.match(executionSource, /OrgWard-local attempt reference/);
+  assert.match(executionSource, /not a provider request ID; proves neither receipt nor completion/);
+  assert.match(executionSource, /task\.attemptStatus === 'outcome_unknown'/);
   assert.match(executionSource, /instanceControl\.canControl === true/);
   assert.match(executionSource, /Only the instance initiator or a current project owner can control this process/);
   assert.match(executionSource, /instanceControl\.canRecover === true/);
@@ -102,15 +420,98 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(executionSource, /fresh independent approval/);
   assert.match(executionSource, /acknowledgeDuplicateCostWork/);
   assert.match(executionSource, /process-task-instances\/abandon-unverified/);
+  assert.match(executionSource, /submitInstanceControl\(/);
+  assert.match(executionSource, /refreshAfterProcessInstanceControl/);
+  assert.match(executionSource, /applySettledProcessInstanceCommands\(\{ disposition, pendingCommands: state\.pendingInstanceCommands/);
+  assert.match(executionSource, /processInstanceControlHistoryEntries\(instanceControl\.events\)/);
+  const instanceHistoryClient = await fetch(`${base}/process-instance-history.mjs`);
+  assert.equal(instanceHistoryClient.status, 200);
+  const instanceHistorySource = await instanceHistoryClient.text();
+  assert.match(instanceHistorySource, /authorized controller/);
+  assert.match(instanceHistorySource, /ProcessTaskInstanceCancelled/);
+  const instanceControlClient = await fetch(`${base}/process-instance-control.mjs`);
+  assert.equal(instanceControlClient.status, 200);
+  const instanceControlSource = await instanceControlClient.text();
+  assert.match(instanceControlSource, /submitProcessInstanceControl/);
+  assert.match(instanceControlSource, /current process state could not be refreshed/);
+  assert.match(instanceControlSource, /applySettledProcessInstanceCommands/);
   assert.match(executionSource, /instanceControl\.canAbandonUnverified === true/);
   assert.match(executionSource, /ABANDONED_UNVERIFIED/);
-  assert.match(executionSource, /HumanTaskEscalationResolved/);
+  assert.match(executionSource, /humanTaskHistoryEntries\(runtime\?\.events\)/);
+  assert.match(executionSource, /parseHumanTaskEvidence\(evidence\.value\)/);
+  assert.match(executionSource, /Evidence notes, one per line/);
+  const humanTaskEvidenceClient = await fetch(`${base}/human-task-evidence.mjs`);
+  assert.equal(humanTaskEvidenceClient.status, 200);
+  assert.match(await humanTaskEvidenceClient.text(), /MAX_NOTES = 20/);
+  assert.match(executionSource, /Human task history \(/);
+  assert.ok(executionSource.includes("if (runtime?.outcome?.result) {")
+    && executionSource.includes("text: `Human checkpoint result: ${runtime.outcome.result}. Evidence: ${runtime.evidence.join(' · ') || 'none recorded'}`"),
+    'the human task card renders the persisted result value and that runtime row’s evidence');
+  assert.match(executionSource, /submitHumanTaskCommand\(/);
+  assert.match(executionSource, /Reassign to an eligible project human/);
+  assert.match(executionSource, /humanReassignmentCandidates/);
+  assert.match(executionSource, /targetPrincipal: disposition\.value === 'reassign' \? targetPrincipal\.value : null/);
+  assert.match(executionSource, /expectedVersion: disposition\.value === 'reassign' \? runtime\.version : null/);
+  assert.match(executionSource, /the saved plan remains unchanged/);
+  assert.equal((executionSource.match(/submitHumanTaskCommand\(/g) ?? []).length, 2,
+    'completion and shared escalation/resolution handlers use the same safe retry control flow');
+  assert.equal((executionSource.match(/if \(!saved\) button\.disabled = false;/g) ?? []).length, 2,
+    'a saved completion or owner action stays disabled if the follow-up refresh fails');
+  assert.equal((executionSource.match(/saved = true;\s*await refresh\(\);/g) ?? []).length, 2,
+    'both wrappers mark a saved mutation before awaiting its follow-up refresh');
+  assert.match(executionSource, /role: 'status', 'aria-live': 'polite'/);
+  const humanTaskCommandUiClient = await fetch(`${base}/human-task-command-ui.mjs`);
+  assert.equal(humanTaskCommandUiClient.status, 200);
+  const humanTaskCommandUiSource = await humanTaskCommandUiClient.text();
+  assert.match(humanTaskCommandUiSource, /Form values are locked; retry sends the same saved action and evidence/);
+  assert.match(humanTaskCommandUiSource, /control\.disabled = mode !== 'normal'/);
+  assert.match(humanTaskCommandUiSource, /button\.disabled = mode === 'submitting' \|\| mode === 'saved'/);
+  assert.match(humanTaskCommandUiSource, /pendingCommands\.delete\(key\)/);
+  assert.match(executionSource, /if \(disposition === 'reconcile'\)/);
+  assert.match(executionSource, /reconcileHumanTaskConflict\(project, plan, task, selectedInstance\)/);
+  assert.match(executionSource, /className: 'process-task-status'[\s\S]*?tabindex: '-1'[\s\S]*?data-human-task-status-focus-target/);
+  assert.match(executionSource, /status\.focus\(\{ preventScroll: true \}\)/);
+  assert.equal((executionSource.match(/const priorFocus = document\.activeElement/g) ?? []).length, 3,
+    'human action handlers retain their initiating control before disabling it');
+  assert.equal((executionSource.match(/document\.activeElement === document\.body && priorFocus\?\.isConnected/g) ?? []).length, 3,
+    'validation and retry outcomes restore focus only when the original control remains connected and focus fell to body');
+  assert.match(executionSource, /focusHumanTaskStatus\(\{/);
+  const focusExecutionCss = await (await fetch(`${base}/execution.css`)).text();
+  assert.match(focusExecutionCss, /\.process-task-status:focus-visible\s*\{[^}]*outline: 3px solid var\(--exec\)/);
+  assert.match(executionSource, /human checkpoint changed before this action was saved/i);
+  assert.match(executionSource, /The exact command remains saved; retry it to recover the same task start/);
+  const humanTaskFailureClient = await fetch(`${base}/human-task-action-failure.mjs`);
+  assert.equal(humanTaskFailureClient.status, 200);
+  const humanTaskFailureSource = await humanTaskFailureClient.text();
+  assert.match(humanTaskFailureSource, /error\?\.status === 409/);
+  assert.match(humanTaskFailureSource, /INVALID_HUMAN_TASK_OUTCOME/);
+  assert.match(humanTaskFailureSource, /INVALID_HUMAN_TASK_ESCALATION/);
+  assert.match(executionSource, /submission\.kind === 'reconcile'[\s\S]*?reconcileHumanTaskConflict/);
+  assert.match(executionSource, /submission\.kind === 'retry'/);
+  assert.match(humanTaskFailureSource, /error\?\.retryable/);
+  const humanTaskHistoryClient = await fetch(`${base}/human-task-history.mjs`);
+  assert.equal(humanTaskHistoryClient.status, 200);
+  const humanTaskHistorySource = await humanTaskHistoryClient.text();
+  assert.match(humanTaskHistorySource, /project owner/);
+  assert.match(humanTaskHistorySource, /Owner reassigned task/);
+  const humanTaskAssigneeClient = await fetch(`${base}/human-task-effective-assignee.mjs`);
+  assert.equal(humanTaskAssigneeClient.status, 200);
+  const humanTaskAssigneeSource = await humanTaskAssigneeClient.text();
+  assert.match(humanTaskAssigneeSource, /Current assigned human: You/);
+  assert.match(humanTaskAssigneeSource, /pinned blueprint actor remains part of the saved plan/);
+  assert.match(executionSource, /humanTaskEffectiveAssigneePresentation\(runtime\)/);
+  assert.match(executionSource, /className: 'human-task-effective-assignee'/);
+  assert.match(executionSource, /Only the current assigned human can start this task/);
+  assert.match(executionSource, /current owner-reassigned human may start and complete this task/);
   assert.match(executionSource, /succeeded human checkpoint requires at least one brief evidence note/i);
   assert.match(executionSource, /evidence\.required = required/);
   assert.match(executionSource, /Withdraw request/);
   assert.match(executionSource, /Pause before dispatch/);
   assert.match(executionSource, /Resume for fresh approval/);
   assert.match(executionSource, /Save new instruction revision/);
+  assert.match(executionSource, /submitLinkedRunAmendment/);
+  assert.match(executionSource, /pending\.payload/);
+  assert.match(executionSource, /role: 'status', 'aria-live': 'polite'/);
   assert.match(executionSource, /ExecutionInstructionsAmended/);
   assert.match(executionSource, /Instruction revision \$\{revision\.revision\} · \$\{revision\.reason\}/);
   assert.match(executionSource, /Pausing now clears this approval/);
@@ -125,6 +526,11 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(executionSource, /proposalApplyFailureDisposition/);
   assert.match(executionSource, /proposalApplyFailureDisposition\(error\) === 'reconcile'/);
   assert.match(executionSource, /pendingProposalApplies\.delete\(run\.id\)/);
+  const linkedRunAmendmentClient = await fetch(`${base}/linked-run-amendment.mjs`);
+  assert.equal(linkedRunAmendmentClient.status, 200);
+  const linkedRunAmendmentSource = await linkedRunAmendmentClient.text();
+  assert.match(linkedRunAmendmentSource, /retry sends the same saved command and details/i);
+  assert.match(linkedRunAmendmentSource, /refreshLinkedRunAmendment/);
   assert.match(executionSource, /proposalApplication\?\.canApply/);
   assert.match(executionSource, /executionProjectContext/);
   assert.match(executionSource, /executionProcessTarget\(window\.location\.href, state\.projects\)/);
@@ -134,7 +540,7 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(executionSource, /planProjectSelect\.value = selectedProjectId/);
   assert.match(executionSource, /if \(projectContext\.projectId\) showNew\(\)/);
   assert.match(executionSource, /encodeStudioRoute\(\{ projectId \}\)/);
-  assert.match(executionSource, /linkedProcessPlanTarget\(run, state\.projects\)/);
+  assert.match(executionSource, /linkedProcessPlanTarget\(run, state\.projects, state\.runtimePlans\)/);
   assert.match(executionSource, /Open linked plan instance/);
   assert.match(executionSource, /runtimeState\.status/);
   assert.match(executionSource, /Dependencies must succeed in this instance before the assigned human can start this task/);
@@ -143,11 +549,27 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(executionSource, /task that must wait for this checkpoint/i);
   assert.match(executionSource, /inherits the selected task’s existing dependencies/);
   assert.match(executionSource, /payload\.humanCheckpoint =/);
-  assert.match(executionSource, /selectLinkedProcessPlanInstance\(run, state\.projects, state\.selectedPlanInstances\)/);
+  assert.match(executionSource, /selectLinkedProcessPlanInstance\(run, state\.projects, state\.selectedPlanInstances, state\.runtimePlans\)/);
   assert.match(executionSource, /linkedPlanInstanceRouteTarget\(window\.location\.href, state\.projects\)/);
   assert.match(executionSource, /syncExecutionRoute\(target\.projectId, target\)/);
   assert.match(executionSource, /syncExecutionRoute\(project\.id, instanceSelect\.value === 'new' \? null/);
   assert.match(executionSource, /sourceProcessDesignLink\(plan, project\)/);
+  assert.match(executionSource, /processPlanFreshness\(plan, project\)/);
+  assert.match(executionSource, /Historical plan · pinned to blueprint v/);
+  assert.match(executionSource, /const canStartNewInstances = !softwareDeliveryPlan && allowNewInstances && !freshness\.historical/);
+  assert.match(executionSource, /text: canStartNewInstances \? 'Start a new instance'/);
+  assert.match(executionSource, /Owner-promoted human checkpoint snapshot/);
+  assert.match(executionSource, /state\.runtimePlans = runtime\.plans \?\? \[\]/);
+  assert.match(executionSource, /planExists = processPlansFor\(project\)\.some/);
+  assert.match(executionSource, /\.\.\.\(!canStartNewInstances \? \{ disabled: 'disabled' \} : \{\}\)/);
+  assert.match(executionSource, /const canStartNew = canStartNewInstances && selectedInstance === 'new'/);
+  assert.match(executionSource, /focusProcessPlanCard\(currentProcessPlanFocusTarget\(result\.data, processId, result\.event\?\.data\?\.planId\)\)/);
+  assert.match(executionSource, /renderProcessPlans\(document\.querySelector\('#process-plans'\), processPlansFor\(result\.data\), result\.data\);\s*focusProcessPlanCard\(processPlanRevisionFocusTarget\(result\.event\)\);\s*notify\('Immutable graph revision saved\. Tasks remain planned; no work was dispatched\.'\)/);
+  assert.match(executionSource, /card\.scrollIntoView\?\.\(\{ block: 'nearest' \}\)/);
+  assert.match(executionSource, /card\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(executionSource, /tabindex: '-1'/);
+  assert.match(executionSource, /candidate\.dataset\.processPlanId === target\.processPlanId/);
+  assert.match(executionSource, /Planning graph saved\. No execution run was created and no work was dispatched\./);
   assert.match(executionSource, /className: 'process-plan-controls'/);
   assert.match(executionSource, /text: sourceLink\.label/);
   assert.match(executionSource, /encodeExecutionRoute\(projectId, target\)/);
@@ -156,22 +578,65 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(executionSource, /allowNewInstances: false, showHistory: false/);
   assert.match(executionSource, /Apply as new proposed blueprint version/);
   assert.match(executionSource, /BlueprintProposalApplied/);
+  assert.match(executionSource, /api\/execution\/local-repositories\?projectId=/);
+  assert.match(executionSource, /Server-configured local repository/);
+  assert.match(executionSource, /snapshotDigest = repository\.treeDigest/);
+  assert.match(executionSource, /repositoryRefId = repository\.refId/);
+  assert.match(executionSource, /repositoryCommitOid = repository\.commitOid/);
+  assert.match(executionSource, /repository\.refLabel.*repository\.commitOid\.slice\(0, 12\)/);
+  assert.match(executionSource, /function renderRepositoryCandidate\(candidate\)/);
+  assert.match(executionSource, /candidate\.source\.identity.*candidate\.source\.ref.*candidate\.source\.commitOid/);
+  assert.doesNotMatch(executionSource, /repository-push/);
+  assert.match(executionSource, /repository-source\?path=/);
+  assert.match(executionSource, /function renderRepositoryCandidate\(candidate\)/);
+  assert.match(executionSource, /change\.change !== 'mode_changed' && \(change\.beforeHash \|\| change\.afterHash\)/);
+  assert.match(executionSource, /readBoundedUtf8Response\(response, change\.(beforeHash|afterHash)\)/);
+  assert.match(executionSource, /repository-diff-\$\{line\.type\}.*text: line\.text/);
+  assert.match(executionSource, /Use the file download links for review/);
+  assert.doesNotMatch(executionSource, /innerHTML\s*=/);
+  const textDiffModule = await fetch(`${base}/repository-text-diff.mjs`);
+  assert.equal(textDiffModule.status, 200);
+  const textDiffSource = await textDiffModule.text();
+  assert.match(textDiffSource, /MAX_REPOSITORY_PREVIEW_BYTES = 128 \* 1024/);
+  assert.match(textDiffSource, /MAX_REPOSITORY_DIFF_CELLS = 40_000/);
+  assert.match(executionSource, /Local repository candidate · review only/);
+  assert.match(executionSource, /has not written changes back to the configured repository or pushed them/);
+  assert.match(executionSource, /Candidate path changes/);
+  assert.match(executionSource, /verification\.treeDigest/);
   const executionCss = await fetch(`${base}/execution.css`);
   assert.equal(executionCss.status, 200);
   const executionStyles = await executionCss.text();
+  assert.match(executionStyles, /\.execution-skip-link:focus\s*\{[^}]*transform:\s*translateY\(0\)[^}]*outline:\s*3px solid var\(--exec\)/);
+  assert.match(executionStyles, /\.execution-main:focus\s*\{[^}]*outline:\s*3px solid var\(--exec\)/);
   assert.match(executionStyles, /\.process-plan-controls\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap/);
   assert.match(executionStyles, /\.process-plan\s*>\s*label\s*\{[^}]*display:\s*grid/);
   assert.match(executionStyles, /\.process-plan\s*>\s*label\s+select\s*\{[^}]*width:\s*100%/);
+  assert.match(executionStyles, /\.task-assignment-transparency\s*\{[^}]*max-width:\s*100%[^}]*overflow-wrap:\s*anywhere/);
+  assert.match(executionStyles, /\.task-assignment-transparency\s*>\s*summary\s*\{[^}]*min-height:\s*44px/);
+  assert.match(executionStyles, /\.process-plan:focus\s*\{[^}]*outline:\s*3px solid var\(--exec\)/);
+  assert.match(executionStyles, /\.run-events\s*>\s*div\s*\{[^}]*flex-wrap:\s*wrap/);
+  assert.match(executionStyles, /\.run-events\s+span\s*\{[^}]*overflow-wrap:\s*anywhere/);
   assert.match(executionSource, /\/api\/execution\/runs\/\$\{run\.id\}\/cancel/);
   assert.match(executionSource, /\/api\/execution\/runs\/\$\{run\.id\}\/\$\{action\}/);
   const proposalReviewClient = await fetch(`${base}/proposal-review-state.mjs`);
   assert.equal(proposalReviewClient.status, 200);
   const proposalReviewSource = await proposalReviewClient.text();
+  assert.match(proposalReviewSource, /status: 'evaluation-blocked', canApply: false/);
+  assert.match(proposalReviewSource, /SUPPORTED_EVALUATOR_VERSION = 1/);
+  assert.match(proposalReviewSource, /Structural checks blocked this proposal/);
   assert.match(proposalReviewSource, /Open current design/);
   assert.match(proposalReviewSource, /Open updated design/);
+  assert.match(proposalReviewSource, /objectId: typeof appliedEvent\.data\?\.objectId === 'string'/);
+  assert.match(proposalReviewSource, /Array\.isArray\(project\.graph\?\.nodes\) && project\.graph\.nodes\.some\(\(node\) => node\?\.id === application\.objectId\)/);
+  assert.match(proposalReviewSource, /view: 'map', selectedId: objectId/);
   const processPlanNavigation = await fetch(`${base}/process-plan-navigation.mjs`);
   assert.equal(processPlanNavigation.status, 200);
-  assert.match(await processPlanNavigation.text(), /sourceProcessDesignLink/);
+  const processPlanNavigationSource = await processPlanNavigation.text();
+  assert.match(processPlanNavigationSource, /sourceProcessDesignLink/);
+  assert.match(processPlanNavigationSource, /processPlanFreshness/);
+  assert.match(processPlanNavigationSource, /currentProcessPlanFocusTarget/);
+  assert.match(processPlanNavigationSource, /processPlanRevisionFocusTarget/);
+  assert.match(processPlanNavigationSource, /Plan current \$\{source\.processName\} in Execution/);
   const enterpriseClient = await fetch(`${base}/app.js`);
   assert.equal(enterpriseClient.status, 200);
   const enterpriseSource = await enterpriseClient.text();

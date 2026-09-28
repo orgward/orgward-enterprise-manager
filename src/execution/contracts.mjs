@@ -12,7 +12,7 @@ function event(type, actor, data) {
   return { ...value, contentHash: digest(value) };
 }
 
-export function createExecutionRun({ tenantId, projectId = null, profile, requestedBy, title, objective, requirements = [], sourceRefs = [], processTaskRef = null, proposalContext = null }) {
+export function createExecutionRun({ tenantId, projectId = null, profile, requestedBy, title, objective, requirements = [], sourceRefs = [], processTaskRef = null, proposalContext = null, taskGuidance = null }) {
   if (!profile) throw new Error('A valid execution profile is required.');
   const cleanTitle = text(title, 160);
   const cleanObjective = text(objective, 4_000);
@@ -33,6 +33,8 @@ export function createExecutionRun({ tenantId, projectId = null, profile, reques
       ...(profile.credentialReference ? { credential: { reference: profile.credentialReference, version: profile.credentialVersion } } : {}),
       ...(profile.providerEndpoint ? { providerDestinationHash: digest(profile.providerEndpoint) } : {}),
       ...(profile.model ? { providerModel: profile.model } : {}),
+      ...(profile.kind === 'provider-deepseek' && profile.maxOutputTokens
+        ? { providerMaxOutputTokens: profile.maxOutputTokens } : {}),
     },
     workItem: {
       id: `work-item-${randomUUID()}`,
@@ -40,6 +42,7 @@ export function createExecutionRun({ tenantId, projectId = null, profile, reques
       requirements: [...new Set(requirements.map((entry) => text(entry, 500)).filter(Boolean))].slice(0, 50),
       sourceRefs: [...new Set(sourceRefs.map((entry) => text(entry, 240)).filter(Boolean))].slice(0, 50),
       ...(proposalContext && processTaskRef ? { proposalContext: structuredClone(proposalContext) } : {}),
+      ...(taskGuidance && processTaskRef ? { taskGuidance: structuredClone(taskGuidance) } : {}),
     },
     ...(processTaskRef ? { processTaskRef: structuredClone(processTaskRef) } : {}),
     approval: null,
@@ -57,6 +60,7 @@ export function createExecutionRun({ tenantId, projectId = null, profile, reques
         taskId: run.processTaskRef.taskId,
         blueprintId: run.processTaskRef.blueprintId,
         blueprintVersion: run.processTaskRef.blueprintVersion,
+        ...(run.processTaskRef.repository ? { repository: structuredClone(run.processTaskRef.repository) } : {}),
       },
     } : {}),
   }));
@@ -89,6 +93,7 @@ export function executionApprovalRequestHash(run) {
   if (run.profile?.credential) profile.credential = run.profile.credential;
   if (run.profile?.providerDestinationHash) profile.providerDestinationHash = run.profile.providerDestinationHash;
   if (run.profile?.providerModel) profile.providerModel = run.profile.providerModel;
+  if (run.profile?.providerMaxOutputTokens) profile.providerMaxOutputTokens = run.profile.providerMaxOutputTokens;
   return digest({
     workItem: run.workItem,
     ...(run.interventionRevisions?.length
@@ -200,6 +205,38 @@ export function cancelProcessTaskExecutionRun(run, { principal, commandId }) {
   return run;
 }
 
+export function cancelProcessTaskExecutionRunByInstance(run, { principal, commandId, planInstanceId }) {
+  const ref = run.processTaskRef;
+  if (!ref || ref.planInstanceId !== planInstanceId) {
+    throw new Error('Only a run linked to this process instance can be cancelled by its controller.');
+  }
+  if (!['AWAITING_APPROVAL', 'APPROVED', 'PAUSED'].includes(run.status)) {
+    throw new Error('Only undispatched linked runs can be cancelled with their process instance.');
+  }
+  const persistedVersion = run.version;
+  const priorStatus = run.status;
+  run.status = 'CANCELLED';
+  run.approval = null;
+  run.execution = null;
+  run.version += 1;
+  run.updatedAt = now();
+  const value = {
+    id: `execution-event-${randomUUID()}`,
+    type: 'ExecutionCancelledByProcessInstanceController',
+    actor: text(principal, 120) || 'authorized controller',
+    at: run.updatedAt,
+    causationId: commandId,
+    data: {
+      processTaskRef: structuredClone(ref),
+      planInstanceId,
+      priorStatus,
+      fromVersion: persistedVersion,
+    },
+  };
+  run.events.push({ ...value, contentHash: digest(value) });
+  return run;
+}
+
 export function pauseProcessTaskExecutionRun(run, { principal, commandId, instanceControl = false, actor = null }) {
   if (!run.processTaskRef) throw new Error('Only a saved process task run can be paused.');
   if (!instanceControl && run.requestedBy !== principal) throw new Error('Only the requester can pause this execution request.');
@@ -301,6 +338,7 @@ export function executionEvent(run, type, actor, data) {
 
 export function executionRunView(run) {
   const view = structuredClone(run);
+  delete view.repositorySnapshot;
   if (view.execution?.workspace) {
     delete view.execution.workspace;
     view.execution.workspaceRef = `workspace:${run.id}`;

@@ -153,6 +153,15 @@ export function parseInstallConfig(env = process.env, nodeVersion = process.vers
   if (openAiCredentialReference && !/^secret-[a-z0-9][a-z0-9._-]{0,79}$/.test(openAiCredentialReference)) add(issues, 'openai-reference', 'ORGWARD_OPENAI_CREDENTIAL_REFERENCE has an invalid format.', 'Use secret- followed by a lowercase identifier.');
   if (openAiModel && !/^[A-Za-z0-9._:-]{1,100}$/.test(openAiModel)) add(issues, 'openai-model', 'ORGWARD_OPENAI_MODEL has an invalid format.', 'Set it to the exact model ID from the provider configuration.');
 
+  const deepSeekCredentialReference = env.ORGWARD_DEEPSEEK_CREDENTIAL_REFERENCE || null;
+  const deepSeekModel = env.ORGWARD_DEEPSEEK_MODEL || null;
+  const deepSeekMaxOutputTokens = env.ORGWARD_DEEPSEEK_MAX_OUTPUT_TOKENS === undefined
+    ? 256 : Number(env.ORGWARD_DEEPSEEK_MAX_OUTPUT_TOKENS);
+  if (Boolean(deepSeekCredentialReference) !== Boolean(deepSeekModel)) add(issues, 'deepseek-profile', 'DeepSeek credential reference and model must be configured together.', 'Set both ORGWARD_DEEPSEEK_CREDENTIAL_REFERENCE and ORGWARD_DEEPSEEK_MODEL, or remove both to disable the profile.');
+  if (deepSeekCredentialReference && !/^secret-[a-z0-9][a-z0-9._-]{0,79}$/.test(deepSeekCredentialReference)) add(issues, 'deepseek-reference', 'ORGWARD_DEEPSEEK_CREDENTIAL_REFERENCE has an invalid format.', 'Use secret- followed by a lowercase identifier.');
+  if (deepSeekModel && !/^[A-Za-z0-9._:-]{1,100}$/.test(deepSeekModel)) add(issues, 'deepseek-model', 'ORGWARD_DEEPSEEK_MODEL has an invalid format.', 'Set it to the exact model ID from the provider configuration.');
+  if (!Number.isSafeInteger(deepSeekMaxOutputTokens) || deepSeekMaxOutputTokens < 64 || deepSeekMaxOutputTokens > 512) add(issues, 'deepseek-output-cap', 'ORGWARD_DEEPSEEK_MAX_OUTPUT_TOKENS must be an integer from 64 through 512.', 'Set a small positive output cap from 64 through 512 tokens.');
+
   const openAiAdminInlineConfigured = Object.hasOwn(env, 'ORGWARD_OPENAI_ADMIN_API_KEY') && env.ORGWARD_OPENAI_ADMIN_API_KEY !== undefined;
   const openAiAdminKeyInput = protectedFileValue(
     { ORGWARD_OPENAI_ADMIN_API_KEY_FILE: env.ORGWARD_OPENAI_ADMIN_API_KEY_FILE },
@@ -229,11 +238,13 @@ export function parseInstallConfig(env = process.env, nodeVersion = process.vers
     executionDirectory: path.resolve(env.ORGWARD_EXECUTION_DATA_DIR || path.join(ROOT, 'data', 'execution-runs')),
     executionWorkspaceDirectory: path.resolve(env.ORGWARD_EXECUTION_WORKSPACE_DIR || path.join(ROOT, 'data', 'execution-workspaces')),
     enableLocalExecution: env.ORGWARD_ENABLE_LOCAL_EXECUTION === 'true',
-    openAiCredentialReference, openAiModel, oidc, roleMap, tenantBindings, bootstrapPrincipals,
+    openAiCredentialReference, openAiModel, deepSeekCredentialReference, deepSeekModel, deepSeekMaxOutputTokens,
+    oidc, roleMap, tenantBindings, bootstrapPrincipals,
     openAiAdminApiKey, openAiOrganizationId, openAiTenantProjects,
     legacyReadOnlyMode: allowLegacyJson,
   };
   if (openAiCredentialReference && (!databaseUrl || !secretEncryptionKey)) add(issues, 'openai-prerequisites', 'The OpenAI profile needs PostgreSQL and the secret encryption key.', 'Configure PostgreSQL and the secret encryption key through the inline or protected-file settings before opting in.');
+  if (deepSeekCredentialReference && (!databaseUrl || !secretEncryptionKey)) add(issues, 'deepseek-prerequisites', 'The DeepSeek profile needs PostgreSQL and the secret encryption key.', 'Configure PostgreSQL and the secret encryption key through the inline or protected-file settings before opting in.');
   return { config, issues };
 }
 

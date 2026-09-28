@@ -552,6 +552,17 @@ export class PostgresSecretStore {
     return { reference, version: result.rows[0].version, model };
   }
 
+  async resolveGenericCredentialBinding({ tenantId, reference, client = null }) {
+    if (!this.encryptionKey) throw failure(503, 'SECRET_ENCRYPTION_UNAVAILABLE', 'Provider credentials are unavailable.');
+    const queryable = client ?? this.persistence;
+    const lock = client ? ' for share' : '';
+    const result = await queryable.query(`select version from orgward.secret_references
+      where tenant_id=$1 and reference=$2 and status='active' and active_provider is null
+        and expires_at > clock_timestamp()${lock}`, [tenantId, reference]);
+    if (!result.rowCount) throw failure(409, 'SECRET_CREDENTIAL_UNAVAILABLE', 'No current generic provider credential is available for this profile reference.');
+    return { reference, version: result.rows[0].version };
+  }
+
   #payloadHash(tenantId, actor, operation, payload) {
     const serialized = JSON.stringify({ tenantId, actor, operation, ...payload });
     return this.encryptionKey
@@ -1012,8 +1023,16 @@ export class PostgresSecretStore {
       if (Date.now() >= expiryMs) throw failure(409, 'SECRET_CREDENTIAL_EXPIRED', 'The approved credential expired during provider use.');
       if (['PROVIDER_OUTPUT_QUARANTINED', 'SECRET_CREDENTIAL_EXPIRED'].includes(error?.code)) throw error;
       if (['PROVIDER_ATTEMPT_CANCELLED', 'PROCESS_INSTANCE_PAUSED', 'WORKER_LEASE_INVALID', 'SECRET_REFERENCE_INACTIVE', 'SECRET_CREDENTIAL_EXPIRED', 'SECRET_GENERATION_STALE', 'SECRET_BINDING_STALE'].includes(error?.code)) throw error;
+      const upstreamHttpStatus = transportStarted && Number.isInteger(error?.upstreamHttpStatus)
+        && error.upstreamHttpStatus >= 100 && error.upstreamHttpStatus <= 599
+        ? error.upstreamHttpStatus : (transportStarted ? transport?.diagnostic?.()?.httpStatus ?? null : null);
+      const diagnosticClass = transportStarted ? transport?.diagnostic?.()?.parserFailureClass : null;
+      const parserFailureClass = ['invalid_json', 'body_too_large', 'incomplete_response', 'missing_output_text', 'output_too_large'].includes(diagnosticClass ?? error?.parserFailureClass)
+        ? (diagnosticClass ?? error.parserFailureClass) : null;
       throw Object.assign(new Error('The authorized provider operation failed.'), {
         statusCode: 502, code: 'PROVIDER_OUTCOME_UNKNOWN', retryable: false,
+        ...(upstreamHttpStatus ? { upstreamHttpStatus } : {}),
+        ...(parserFailureClass ? { parserFailureClass } : {}),
       });
     } finally {
       clearTimeout(expiryTimer);

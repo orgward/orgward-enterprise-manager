@@ -2,10 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { deriveBlueprintProposalReviewState, proposalApplyFailureDisposition, proposalDesignLink } from '../../public/proposal-review-state.mjs';
 
-const proposal = { blueprintId: 'blueprint-one', blueprintVersion: 4 };
+const proposal = {
+  blueprintId: 'blueprint-one', blueprintVersion: 4,
+  evaluation: { evaluatorVersion: 1, rubricVersion: 1, meaning: 'structural-checks-only', status: 'passed', checks: [] },
+};
 const project = {
   id: 'project-01234567-89ab-cdef-0123-456789abcdef',
   latestBlueprint: { id: proposal.blueprintId, version: proposal.blueprintVersion },
+  graph: { nodes: [{ id: 'capability-service' }] },
 };
 
 test('proposal review state allows only an owner to apply a current unapplied proposal', () => {
@@ -32,15 +36,35 @@ test('stale, applied, and unavailable proposals never expose the apply action', 
 
   const applied = deriveBlueprintProposalReviewState({
     proposal, project: { latestBlueprint: { id: proposal.blueprintId, version: 5 } },
-    membershipAccess: 'owner', appliedEvent: { eventId: 'event-apply', data: { appliedBlueprintVersion: 5 } },
+    membershipAccess: 'owner', appliedEvent: { eventId: 'event-apply', data: { appliedBlueprintVersion: 5, objectId: 'capability-service' } },
   });
   assert.equal(applied.status, 'applied');
   assert.equal(applied.canApply, false);
   assert.equal(applied.blueprintVersion, 5);
+  assert.equal(applied.objectId, 'capability-service');
 
   const unavailable = deriveBlueprintProposalReviewState({ proposal, project: null, membershipAccess: 'owner' });
   assert.equal(unavailable.status, 'project-unavailable');
   assert.equal(unavailable.canApply, false);
+});
+
+test('blocked, missing, and unknown evaluations remain review-only for owners', () => {
+  const blocked = deriveBlueprintProposalReviewState({
+    proposal: { ...proposal, evaluation: { ...proposal.evaluation, status: 'blocked', checks: [{ status: 'blocked', message: 'Proposed detail must change.' }] } },
+    project, membershipAccess: 'owner',
+  });
+  assert.equal(blocked.status, 'evaluation-blocked');
+  assert.equal(blocked.canApply, false);
+  assert.match(blocked.message, /Proposed detail must change/);
+
+  for (const evaluation of [null, { ...proposal.evaluation, evaluatorVersion: 999 }]) {
+    const unsupported = deriveBlueprintProposalReviewState({
+      proposal: { ...proposal, evaluation }, project, membershipAccess: 'owner',
+    });
+    assert.equal(unsupported.status, 'evaluation-blocked');
+    assert.equal(unsupported.canApply, false);
+    assert.match(unsupported.message, /no supported structural evaluation/i);
+  }
 });
 
 test('definitive apply denials reconcile state while uncertain outcomes retain the command for replay', () => {
@@ -61,8 +85,26 @@ test('proposal review links preserve the current project and label updated versu
     href, label: 'Open current design',
   });
   assert.deepEqual(proposalDesignLink(project, { status: 'applied' }), {
-    href, label: 'Open updated design',
+    href, label: 'Open current design',
   });
   assert.equal(proposalDesignLink(null, { status: 'applied' }), null);
   assert.equal(proposalDesignLink({ id: 'invalid-project-id' }, { status: 'proposed' }), null);
+});
+
+test('applied proposal links select the changed graph object and safely fall back when it is absent', () => {
+  const applied = deriveBlueprintProposalReviewState({
+    proposal,
+    project: { ...project, latestBlueprint: { id: proposal.blueprintId, version: 5 } },
+    appliedEvent: { eventId: 'event-apply', data: { appliedBlueprintVersion: 5, objectId: 'capability-service' } },
+  });
+  assert.deepEqual(proposalDesignLink({ ...project, latestBlueprint: { id: proposal.blueprintId, version: 5 } }, applied), {
+    href: '/?project=project-01234567-89ab-cdef-0123-456789abcdef&view=map&selected=capability-service',
+    label: 'Open updated design',
+  });
+  assert.deepEqual(proposalDesignLink({ ...project, graph: { nodes: [] } }, applied), {
+    href: '/?project=project-01234567-89ab-cdef-0123-456789abcdef', label: 'Open current design',
+  });
+  assert.deepEqual(proposalDesignLink(project, { status: 'applied', objectId: '../unsafe' }), {
+    href: '/?project=project-01234567-89ab-cdef-0123-456789abcdef', label: 'Open current design',
+  });
 });

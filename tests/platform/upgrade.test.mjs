@@ -109,7 +109,7 @@ test('upgrade from the 001–006 baseline preserves owner, project, audit and se
   await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
   t.after(async () => { if (app) await close(app); });
 
-  assert.equal(app.persistence.schemaVersion, '027-process-instance-unverified-abandonment');
+  assert.equal(app.persistence.schemaVersion, '035-human-task-effective-assignment');
   const retainedSession = await app.sessionStore.get(SESSION_ID);
   assert.equal(retainedSession.issuer, ISSUER);
   assert.equal(retainedSession.principal, PRINCIPAL);
@@ -135,12 +135,12 @@ test('upgrade from the 001–006 baseline preserves owner, project, audit and se
       (select count(*)::int from orgward.oidc_principal_events where tenant_id=$1 and principal=$3 and event_type='PrincipalAuthenticated') as auth_events,
       (select count(*)::int from orgward.schema_migrations) as migrations
   `, [TENANT, fixture.projectId, PRINCIPAL]);
-  assert.deepEqual(afterRestart.rows[0], { owners: 1, principals: 1, auth_events: 1, migrations: 27 });
+  assert.deepEqual(afterRestart.rows[0], { owners: 1, principals: 1, auth_events: 1, migrations: 35 });
 
   await close(app);
   app = appFor(database.databaseUrl);
   await app.init();
-  assert.equal(app.persistence.schemaVersion, '027-process-instance-unverified-abandonment');
+  assert.equal(app.persistence.schemaVersion, '035-human-task-effective-assignment');
   assert.equal((await database.query('select count(*)::int count from orgward.oidc_bootstrap_grants')).rows[0].count, 0);
   assert.equal((await database.query('select count(*)::int count from orgward.aggregates where tenant_id=$1', [TENANT])).rows[0].count, 1);
 });
@@ -189,7 +189,7 @@ test('migration 020 backfills linked agent task status without inventing an assi
   });
   assert.ok(migrated.rows[0].started_at instanceof Date);
   assert.ok(migrated.rows[0].completed_at instanceof Date);
-  assert.equal(app.persistence.schemaVersion, '027-process-instance-unverified-abandonment');
+  assert.equal(app.persistence.schemaVersion, '035-human-task-effective-assignment');
 });
 
 test('upgrade from 017 preserves an eligible OpenAI revocation obligation and initializes reconciler state', async (t) => {
@@ -226,7 +226,7 @@ test('upgrade from 017 preserves an eligible OpenAI revocation obligation and in
       target_provenance: 'orgward_created_exclusive_service_account', claim_token: null, claim_until: null,
       attempt_count: 0, last_attempt_at: null });
     assert.ok(nextAttemptAt instanceof Date);
-    assert.equal(app.persistence.schemaVersion, '027-process-instance-unverified-abandonment');
+    assert.equal(app.persistence.schemaVersion, '035-human-task-effective-assignment');
   } finally {
     await close(app);
   }
@@ -277,7 +277,7 @@ test('upgrade from 012 preserves legacy OpenAI credentials and leaves metadata-f
   let app = configuredApp();
   t.after(async () => { if (app) await close(app); });
   await app.init();
-  assert.equal(app.persistence.schemaVersion, '027-process-instance-unverified-abandonment');
+  assert.equal(app.persistence.schemaVersion, '035-human-task-effective-assignment');
   await waitForRevocationDrain(app);
 
   const active = await database.query(`select version, status, ciphertext, nonce, auth_tag, upstream_revocation_status,
@@ -296,7 +296,7 @@ test('upgrade from 012 preserves legacy OpenAI credentials and leaves metadata-f
   await close(app);
   app = configuredApp();
   await app.init();
-  assert.equal(app.persistence.schemaVersion, '027-process-instance-unverified-abandonment');
+  assert.equal(app.persistence.schemaVersion, '035-human-task-effective-assignment');
   await waitForRevocationDrain(app);
   const afterRestart = await database.query(`select ref.version, ref.status as reference_status, ref.ciphertext, ref.nonce, ref.auth_tag,
     ref.upstream_revocation_status, ref.active_provider, ref.active_model, obligation.provider, obligation.status as obligation_status,
@@ -326,7 +326,7 @@ test('upgrade from migration 023 installs the assigned-human success evidence gu
   const app = appFor(database.databaseUrl);
   t.after(async () => { await close(app); });
   await app.init();
-  assert.equal(app.persistence.schemaVersion, '027-process-instance-unverified-abandonment');
+  assert.equal(app.persistence.schemaVersion, '035-human-task-effective-assignment');
   const trigger = await database.query(`
     select tgname from pg_trigger
     where tgrelid='orgward.process_task_instances'::regclass and not tgisinternal

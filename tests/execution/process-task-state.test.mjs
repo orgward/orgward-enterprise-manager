@@ -10,11 +10,11 @@ const runtime = (taskId, status, instanceId = 'instance-a', actorType = 'workloa
 
 test('process task status and dependency readiness come from canonical mixed human and agent runtimes', () => {
   assert.deepEqual(deriveProcessTaskState(dependency, []), {
-    status: 'PLANNED', runtime: null, executionRunId: null, dependenciesSucceeded: true, canStart: true,
+    status: 'PLANNED', runtime: null, executionRunId: null, dependenciesSucceeded: true, blockedDependencies: [], canStart: true,
   });
   const requestedAgent = runtime('task-upstream', 'AWAITING_APPROVAL', 'instance-a', 'workload', 'run-agent');
   assert.deepEqual(deriveProcessTaskState(task, [requestedAgent]), {
-    status: 'WAITING', runtime: null, executionRunId: null, dependenciesSucceeded: false, canStart: false,
+    status: 'WAITING', runtime: null, executionRunId: null, dependenciesSucceeded: false, blockedDependencies: [], canStart: false,
   });
   assert.equal(deriveProcessTaskState(task, []).status, 'WAITING',
     'dependency-bearing tasks remain waiting in a new process instance');
@@ -46,4 +46,28 @@ test('process task status and dependency readiness come from canonical mixed hum
   assert.equal(waitingOnEscalation.dependenciesSucceeded, false);
   assert.equal(waitingOnEscalation.canStart, false,
     'an escalated human runtime remains nonterminal and keeps downstream work gated');
+
+  for (const terminalStatus of ['FAILED', 'INTERRUPTED', 'CANCELLED']) {
+    const blocked = deriveProcessTaskState(task, [runtime('task-upstream', terminalStatus)], 'instance-a');
+    assert.equal(blocked.status, 'BLOCKED');
+    assert.deepEqual(blocked.blockedDependencies, [{ taskId: 'task-upstream', status: terminalStatus }]);
+    assert.equal(blocked.dependenciesSucceeded, false);
+    assert.equal(blocked.canStart, false);
+  }
+  const anotherInstanceSucceeded = deriveProcessTaskState(task, [
+    runtime('task-upstream', 'FAILED', 'instance-a'), runtime('task-upstream', 'SUCCEEDED', 'instance-b'),
+  ], 'instance-a');
+  assert.equal(anotherInstanceSucceeded.status, 'BLOCKED',
+    'a dependency outcome from another process instance cannot unblock this one');
+  assert.deepEqual(anotherInstanceSucceeded.blockedDependencies, [{ taskId: 'task-upstream', status: 'FAILED' }]);
+
+  const taskChain = [
+    { id: 'task-a', dependencies: [] },
+    { id: 'task-b', dependencies: ['task-a'] },
+    { id: 'task-c', dependencies: ['task-b'] },
+  ];
+  const transitivelyBlocked = deriveProcessTaskState(taskChain[2], [runtime('task-a', 'FAILED')], 'instance-a', taskChain);
+  assert.equal(transitivelyBlocked.status, 'BLOCKED');
+  assert.deepEqual(transitivelyBlocked.blockedDependencies, [{ taskId: 'task-a', status: 'FAILED' }],
+    'an unstarted intermediate task carries its failed prerequisite to downstream tasks');
 });

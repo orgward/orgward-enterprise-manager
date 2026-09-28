@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { executionPlanInstanceRoute, linkedPlanInstanceRouteTarget, linkedProcessPlanTarget, selectLinkedProcessPlanInstance, sourceProcessDesignLink } from '../../public/process-plan-navigation.mjs';
-import { decodeStudioRoute, encodeExecutionRoute } from '../../public/shared-interactions.mjs';
+import { currentProcessPlanFocusTarget, executionPlanInstanceRoute, linkedPlanInstanceRouteTarget, linkedProcessPlanTarget, processPlanFreshness, processPlanRevisionFocusTarget, selectLinkedProcessPlanInstance, sourceProcessDesignLink } from '../../public/process-plan-navigation.mjs';
+import { decodeStudioRoute, encodeExecutionRoute, executionRunRouteTarget } from '../../public/shared-interactions.mjs';
 
 const projectId = 'project-01234567-89ab-cdef-0123-456789abcdef';
 const run = {
@@ -63,6 +63,41 @@ test('linked plan route round-trips exact visible project, revision, and instanc
   assert.equal(encodeExecutionRoute(projectId, { ...target, projectId: 'project-other' }), `/execution.html?project=${projectId}`);
 });
 
+test('software runtime deep links require exact software snapshot identity at the authenticated runtime load', () => {
+  const softwarePlanId = 'software-delivery-0123456789abcdef0123456789abcdef';
+  const target = { projectId, processPlanId: softwarePlanId, revision: 2,
+    planInstanceId: 'abcdefab-cdef-abcd-efab-cdefabcdefab', selectionKey: `${softwarePlanId}\n2` };
+  const href = encodeExecutionRoute(projectId, target);
+  assert.match(href, /plan=software-delivery-0123456789abcdef0123456789abcdef/);
+  assert.deepEqual(linkedPlanInstanceRouteTarget(`https://orgward.local${href}`, [{ id: projectId }]), {
+    requested: true, target,
+  });
+  const softwareRun = { projectId, processTaskRef: { ...run.processTaskRef, processPlanId: softwarePlanId, revision: 2 } };
+  assert.equal(linkedProcessPlanTarget(softwareRun, [{ id: projectId }]), null,
+    'a linked execution run cannot authorize a software snapshot by ID alone');
+  assert.deepEqual(linkedProcessPlanTarget(softwareRun, [{ id: projectId }], [
+    { id: softwarePlanId, revision: 2, kind: 'software_delivery_runtime_plan' },
+  ]), { ...target });
+  assert.equal(encodeExecutionRoute(projectId, { ...target, processPlanId: 'software-delivery-invalid' }),
+    `/execution.html?project=${projectId}`);
+});
+
+test('selected run route round-trips only an accessible saved run for exact keyboard re-entry', () => {
+  const selectedRun = { id: 'execution-run-01234567-89ab-cdef-0123-456789abcdef', projectId };
+  const route = encodeExecutionRoute(projectId, null, selectedRun.id);
+  assert.equal(route, `/execution.html?project=${projectId}&run=${selectedRun.id}`);
+  assert.deepEqual(executionRunRouteTarget(`https://orgward.local${route}`, [selectedRun]), {
+    requested: true, target: { runId: selectedRun.id, projectId },
+  });
+  assert.deepEqual(executionRunRouteTarget(`https://orgward.local${route}`, []), { requested: true, target: null });
+  assert.deepEqual(executionRunRouteTarget(`/execution.html?project=${projectId}&run=bad%20id`, [selectedRun]), {
+    requested: true, target: null,
+  });
+  assert.deepEqual(executionRunRouteTarget('/execution.html', [selectedRun]), { requested: false, target: null });
+  assert.equal(encodeExecutionRoute(projectId, { projectId, processId: 'process-customer-intake' }, selectedRun.id),
+    `/execution.html?project=${projectId}&process=process-customer-intake`);
+});
+
 test('saved plan card links to its available source process in the same project map', () => {
   const processId = 'process-customer-intake';
   const blueprint = {
@@ -85,4 +120,91 @@ test('saved plan card links to its available source process in the same project 
   assert.equal(sourceProcessDesignLink({ ...plan, source: { ...plan.source, processId: 'bad id' } }, project), null);
   assert.equal(sourceProcessDesignLink(plan, { ...project, graph: { nodes: [] } }), null);
   assert.equal(sourceProcessDesignLink(plan, { ...project, latestBlueprint: { areas: {} } }), null);
+});
+
+test('historical process plans link directly to the current saved process for replanning', () => {
+  const processId = 'process-customer-intake';
+  const process = { id: processId, type: 'process', name: 'Customer intake' };
+  const oldBlueprint = {
+    id: 'blueprint-01234567-89ab-cdef-0123-456789abcdef', version: 4,
+    areas: { capabilitiesProcesses: { items: [process] } },
+  };
+  const latestBlueprint = {
+    ...oldBlueprint, version: 5,
+    areas: { capabilitiesProcesses: { items: [{ ...process, name: 'Updated customer intake' }] } },
+  };
+  const project = {
+    id: projectId, blueprintVersions: [oldBlueprint, latestBlueprint], latestBlueprint,
+    graph: { nodes: [process] },
+  };
+  const plan = { source: { projectId, blueprintId: oldBlueprint.id, blueprintVersion: 4, processId, processName: 'Customer intake' } };
+  const freshness = processPlanFreshness(plan, project);
+  assert.equal(freshness.historical, true);
+  assert.equal(freshness.link.label, 'Plan current Customer intake in Execution');
+  assert.deepEqual(decodeStudioRoute(freshness.link.href), {
+    projectId, view: 'blueprint', area: null, selectedId: null, types: [],
+  });
+  const route = new URL(freshness.link.href, 'http://orgward.local');
+  assert.equal(route.pathname, '/execution.html');
+  assert.equal(route.searchParams.get('project'), projectId);
+  assert.equal(route.searchParams.get('process'), processId);
+  assert.deepEqual(processPlanFreshness({ ...plan, source: { ...plan.source, blueprintVersion: 5 } }, project), {
+    historical: false, link: null,
+  });
+  assert.deepEqual(processPlanFreshness(plan, { ...project, latestBlueprint: { ...latestBlueprint, areas: {} } }), {
+    historical: true, link: null,
+  });
+  assert.deepEqual(processPlanFreshness(plan, { ...project, id: 'project-invalid' }), {
+    historical: false, link: null,
+  });
+});
+
+test('new-plan focus target prefers the successful save event and ignores stale or invalid plans', () => {
+  const processId = 'process-customer-intake';
+  const latestBlueprint = {
+    id: 'blueprint-01234567-89ab-cdef-0123-456789abcdef', version: 5,
+    areas: { capabilitiesProcesses: { items: [{ id: processId, type: 'process' }] } },
+  };
+  const currentPlanId = 'process-plan-01234567-89ab-cdef-0123-456789abcdef';
+  const replayedPlanId = 'process-plan-11234567-89ab-cdef-0123-456789abcdef';
+  const oldPlanId = 'process-plan-21234567-89ab-cdef-0123-456789abcdef';
+  const plan = (id, version, revision = 1) => ({ id, revision, source: {
+    projectId, processId, blueprintId: latestBlueprint.id, blueprintVersion: version,
+  } });
+  const project = {
+    id: projectId, latestBlueprint,
+    processPlans: [plan(currentPlanId, 5, 1), plan(currentPlanId, 5, 2), plan(replayedPlanId, 5), plan(oldPlanId, 4)],
+  };
+  assert.deepEqual(currentProcessPlanFocusTarget(project, processId, replayedPlanId), {
+    processPlanId: replayedPlanId, revision: 1,
+  });
+  assert.deepEqual(currentProcessPlanFocusTarget(project, processId), {
+    processPlanId: replayedPlanId, revision: 1,
+  });
+  assert.deepEqual(currentProcessPlanFocusTarget({ ...project, processPlans: [plan(currentPlanId, 5, 1), plan(currentPlanId, 5, 2), plan(oldPlanId, 4)] }, processId), {
+    processPlanId: currentPlanId, revision: 2,
+  });
+  assert.equal(currentProcessPlanFocusTarget(project, 'missing-process'), null);
+  assert.equal(currentProcessPlanFocusTarget({ ...project, processPlans: [] }, processId), null);
+  assert.deepEqual(currentProcessPlanFocusTarget(project, processId, 'not-a-plan-id'), {
+    processPlanId: replayedPlanId, revision: 1,
+  });
+});
+
+test('revised-plan focus target uses only a valid saved-revision response event', () => {
+  const event = {
+    type: 'ProcessTaskGraphRevised',
+    data: { planId: 'process-plan-01234567-89ab-cdef-0123-456789abcdef', revision: 4 },
+  };
+  assert.deepEqual(processPlanRevisionFocusTarget(event), {
+    processPlanId: event.data.planId, revision: 4,
+  });
+  for (const invalidEvent of [
+    null,
+    { ...event, type: 'ProcessTaskGraphPlanned' },
+    { ...event, data: { ...event.data, planId: 'untrusted-plan' } },
+    { ...event, data: { ...event.data, revision: 0 } },
+    { ...event, data: { ...event.data, revision: 1.5 } },
+    { ...event, data: ['not-an-event-payload'] },
+  ]) assert.equal(processPlanRevisionFocusTarget(invalidEvent), null);
 });

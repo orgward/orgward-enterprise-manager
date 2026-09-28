@@ -102,10 +102,36 @@ function checkpointModel(changeCase, stages) {
   };
 }
 
-export function caseUiModel(changeCase, meta = {}) {
+export function createSourceSelectionGuard() {
+  let revision = 0;
+  return {
+    begin(projectId) { return { projectId, revision: ++revision }; },
+    isCurrent(ticket, selectedProjectId) { return ticket?.revision === revision && ticket.projectId === selectedProjectId; },
+  };
+}
+
+export function caseUiModel(changeCase, meta = {}, currentProject = null) {
   const attemptLimit = meta.proofActionAttemptLimit ?? 2;
   const revision = changeCase.intent.revision;
+  const sourceBinding = changeCase.sourceBinding ? (() => {
+    const blueprint = currentProject?.latestBlueprint ?? currentProject?.blueprintVersions?.at(-1);
+    const source = blueprint && Object.values(blueprint.areas ?? {}).flatMap((area) => area.items ?? [])
+      .find((item) => item.id === changeCase.sourceBinding.objectId);
+    const pinned = changeCase.sourceBinding.snapshot;
+    const hasBlueprintDetail = Boolean(currentProject?.latestBlueprint || Array.isArray(currentProject?.blueprintVersions));
+    const isCurrent = currentProject?.id === changeCase.sourceBinding.projectId && hasBlueprintDetail
+        && blueprint?.id === changeCase.sourceBinding.blueprintId
+        && blueprint?.version === changeCase.sourceBinding.blueprintVersion
+        && source?.type === pinned?.type && source?.name === pinned?.name && source?.detail === pinned?.detail
+      ? true
+      : hasBlueprintDetail && currentProject?.id === changeCase.sourceBinding.projectId ? false : null;
+    const state = !changeCase.sourceBindingIntegrity?.valid ? 'INTEGRITY_FAILED'
+      : isCurrent === false ? 'PINNED_OLDER_VERSION'
+        : isCurrent === true ? 'CURRENT' : 'PROJECT_UNAVAILABLE';
+    return { ...changeCase.sourceBinding, state };
+  })() : null;
   return {
+    sourceBinding,
     queue: {
       nextAction: { ...changeCase.workspace.nextAllowedAction },
       questions: changeCase.workspace.questions.map((entry) => ({ ...entry })),

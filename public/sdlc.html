@@ -45,13 +45,15 @@
           <p>Turn ambiguous business intent into an evaluated, authorized, observable enterprise change—without letting an agent invent authority or certainty.</p>
         </div>
         <form id="case-form" class="scenario-builder">
-          <div class="form-heading"><span>Reference scenario</span><strong>Digital beneficial-owner maintenance</strong></div>
+          <div class="form-heading"><span>Saved design change</span><strong>Describe a change to a current blueprint object</strong></div>
           <label>Project<select name="projectId" id="case-project" required></select></label>
-          <label>Business intent<textarea name="rawIntent" rows="3">Allow corporate customers to update beneficial-owner information digitally while preserving KYC/AML controls, data integrity, authorization, auditability, and downstream consistency.</textarea></label>
-          <label>Scenario condition<select name="mutation" id="mutation-select"></select></label>
+          <label>Saved design object<select name="sourceObjectId" id="case-source-object" required></select></label>
+          <div id="source-preview" class="mutation-expectation">Select a project to load its current saved design objects.</div>
+          <label>Change request<textarea name="rawIntent" rows="3">Allow corporate customers to update beneficial-owner information digitally while preserving KYC/AML controls, data integrity, authorization, auditability, and downstream consistency.</textarea></label>
+          <label>Synthetic reference condition<select name="mutation" id="mutation-select"></select></label>
           <div id="mutation-expectation" class="mutation-expectation"></div>
           <button class="button primary wide" type="submit">Create change case <span>→</span></button>
-          <small>The clean case can complete. Mutated cases prove the intended gate fails safely.</small>
+          <small>The selected object is pinned from the saved blueprint. Impact relationships and reference conditions remain synthetic.</small>
         </form>
         <div class="proof-strip">
           <div><strong>12</strong><span>Governed stages</span></div><div><strong>11</strong><span>Evidence gates</span></div><div><strong>12</strong><span>Assurance dimensions</span></div><div><strong>0</strong><span>Production effects</span></div>
