@@ -4282,6 +4282,18 @@ review fix to ignore non-array control history, focused tests passed 4/4
 provider, browser, or external action. No full check was run, as instructed;
 PR-06 remains active and cursor, task checkboxes and release gates are unchanged.
 
+PR-06 process-instance picker ordering follow-up (2026-09-28): existing instance
+options now render newest activity first, using the same ordered runtime rows to
+choose the default-selected latest instance. Task and control-event timestamps
+share one parser; missing/malformed times sort after valid activity, ties use a
+stable ID order, and any parseable timestamp beyond the 60-second clock-skew
+allowance makes that instance's activity unavailable rather than falling back to
+an older time. Ordering does not mutate source rows. Focused helper and served-
+client tests passed 6/6 (0.83s TAP), log
+`/tmp/orgward-pr06-instance-option-order-focused.log`; `node --check` for the
+client modules and `git diff --check` passed. No full check or provider/browser
+activity. PR-06 cursor, task checkboxes and release gates are unchanged.
+
 ## Governed software delivery
 
 - [ ] PR-07 — Intent-to-plan engineering workflow (T-25–T-28). Connect approved

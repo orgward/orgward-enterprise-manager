@@ -4,6 +4,47 @@ const TASK_STATUSES = new Set([
 const TERMINAL_STATUSES = new Set(['SUCCEEDED', 'FAILED', 'INTERRUPTED', 'CANCELLED']);
 const CONTROL_STATUSES = new Set(['ACTIVE', 'PAUSE_REQUESTED', 'PAUSED', 'CANCELLED', 'ABANDONED_UNVERIFIED']);
 
+export function processInstanceLatestActivityMs(runtimes, nowMs = Date.now()) {
+  if (!Array.isArray(runtimes) || !Number.isFinite(nowMs)) return null;
+  let latest = null;
+  for (const runtime of runtimes) {
+    if (!runtime || typeof runtime !== 'object') continue;
+    for (const value of [runtime.updatedAt, runtime.completedAt, runtime.startedAt, runtime.createdAt]) {
+      if (typeof value !== 'string') continue;
+      const parsed = Date.parse(value);
+      if (!Number.isFinite(parsed)) continue;
+      if (parsed > nowMs + 60_000) return null;
+      if (latest === null || parsed > latest) latest = parsed;
+    }
+    const controlEvents = runtime.instanceControl?.events;
+    for (const event of Array.isArray(controlEvents) ? controlEvents : []) {
+      if (typeof event?.at !== 'string') continue;
+      const parsed = Date.parse(event.at);
+      if (!Number.isFinite(parsed)) continue;
+      if (parsed > nowMs + 60_000) return null;
+      if (latest === null || parsed > latest) latest = parsed;
+    }
+  }
+  return latest;
+}
+
+export function orderProcessInstancesByLatestActivity(entries, nowMs = Date.now()) {
+  if (!Array.isArray(entries)) return [];
+  return entries.map((entry, index) => {
+    const instanceId = Array.isArray(entry) ? entry[0] : undefined;
+    const runtimes = Array.isArray(entry) ? entry[1] : undefined;
+    return { entry, index, instanceId: typeof instanceId === 'string' ? instanceId : '', activity: processInstanceLatestActivityMs(runtimes, nowMs) };
+  }).sort((left, right) => {
+    if (left.activity !== right.activity) {
+      if (left.activity === null) return 1;
+      if (right.activity === null) return -1;
+      return right.activity - left.activity;
+    }
+    if (left.instanceId !== right.instanceId) return left.instanceId < right.instanceId ? -1 : 1;
+    return left.index - right.index;
+  }).map(({ entry }) => entry);
+}
+
 function taskStatusSummary(runtimes) {
   const statuses = runtimes.map((runtime) => runtime.status);
   if (!statuses.length || statuses.some((status) => !TASK_STATUSES.has(status))) return 'Status unavailable';
@@ -22,24 +63,9 @@ function taskStatusSummary(runtimes) {
 }
 
 function activityLabel(runtimes, nowMs) {
-  const timestamps = [];
-  for (const runtime of runtimes) {
-    for (const value of [runtime.updatedAt, runtime.completedAt, runtime.startedAt, runtime.createdAt]) {
-      if (typeof value !== 'string') continue;
-      const parsed = Date.parse(value);
-      if (Number.isFinite(parsed)) timestamps.push(parsed);
-    }
-    const controlEvents = runtime.instanceControl?.events;
-    for (const event of Array.isArray(controlEvents) ? controlEvents : []) {
-      if (typeof event?.at !== 'string') continue;
-      const parsed = Date.parse(event.at);
-      if (Number.isFinite(parsed)) timestamps.push(parsed);
-    }
-  }
-  if (!timestamps.length || !Number.isFinite(nowMs)) return 'activity time unavailable';
-  const latest = Math.max(...timestamps);
+  const latest = processInstanceLatestActivityMs(runtimes, nowMs);
+  if (latest === null) return 'activity time unavailable';
   const difference = nowMs - latest;
-  if (difference < -60_000) return 'activity time unavailable';
   const minutes = Math.floor(Math.max(0, difference) / 60_000);
   if (minutes < 1) return 'updated just now';
   if (minutes < 60) return `updated ${minutes}m ago`;

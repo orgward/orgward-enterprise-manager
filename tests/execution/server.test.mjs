@@ -97,9 +97,15 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   const executionSource = await executionClient.text();
   const instanceOptionLabelClient = await fetch(`${base}/process-instance-option-label.mjs`);
   assert.equal(instanceOptionLabelClient.status, 200);
-  assert.match(await instanceOptionLabelClient.text(), /export function processInstanceOptionLabel/);
+  const instanceOptionLabelSource = await instanceOptionLabelClient.text();
+  assert.match(instanceOptionLabelSource, /export function processInstanceOptionLabel/);
+  assert.match(instanceOptionLabelSource, /export function orderProcessInstancesByLatestActivity/);
   assert.match(executionSource, /processInstanceOptionLabel\(instanceId, runtimes\)/,
     'saved instance selector labels use the served lifecycle and activity summary helper');
+  assert.match(executionSource, /const orderedInstances = orderProcessInstancesByLatestActivity\(\[\.\.\.instances\.entries\(\)\]\)/,
+    'the served selector orders instances from the same authorized runtime rows used for its default');
+  assert.match(executionSource, /const latestInstance = orderedInstances\[0\]\?\.\[0\] \?\? 'new'/,
+    'the latest activity option is the default-selected instance');
   const taskRequestHelper = await fetch(`${base}/process-task-request.mjs`);
   assert.equal(taskRequestHelper.status, 200);
   const taskRequestHelperSource = await taskRequestHelper.text();
@@ -229,8 +235,8 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
     'the recovery action only switches the selected instance and rerenders, without starting work');
   assert.match(executionSource, /planCard\?\.querySelector\('select\[aria-label\^="Process instance for"\]'\)\?\.focus\(\)/,
     'focus returns to the selected plan instance control after the rerender');
-  assert.match(executionSource, /for \(const \[instanceId, runtimes\] of instances\)/,
-    'existing instance options remain available after selecting a fresh instance');
+  assert.match(executionSource, /for \(const \[instanceId, runtimes\] of orderedInstances\)/,
+    'existing instance options render newest activity first and remain available after selecting a fresh instance');
   assert.match(executionSource, /data-run-link-id': run\.id/);
   assert.match(executionSource, /selectedRunLink\?\.querySelector\('\.run-link-status'\)/);
   const selectedRunApplyStart = executionSource.indexOf('function applySelectedRunSnapshot');

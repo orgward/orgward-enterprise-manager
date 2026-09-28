@@ -11,7 +11,7 @@ import { parseHumanTaskEvidence } from './human-task-evidence.mjs';
 import { submitHumanTaskCommand } from './human-task-command-ui.mjs';
 import { humanTaskActionFailureDisposition } from './human-task-action-failure.mjs';
 import { processInstanceControlHistoryEntries } from './process-instance-history.mjs';
-import { processInstanceOptionLabel } from './process-instance-option-label.mjs';
+import { orderProcessInstancesByLatestActivity, processInstanceOptionLabel } from './process-instance-option-label.mjs';
 import { applySettledProcessInstanceCommands, clearSettledProcessInstanceCommands, processInstanceCommandKey, refreshAfterProcessInstanceControl, restoreProcessInstanceControlPresentation, submitProcessInstanceControl } from './process-instance-control.mjs';
 import { clearSettledLinkedRunAmendment, refreshLinkedRunAmendment, restoreLinkedRunAmendment, submitLinkedRunAmendment } from './linked-run-amendment.mjs';
 import { restoreHumanTaskStatusFocus } from './human-task-status-focus.mjs';
@@ -699,11 +699,8 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
       }]);
     }
     const instanceKey = `${plan.id}\n${plan.revision}`;
-    const latestInstance = [...instances.entries()].sort((left, right) => {
-      const leftAt = Math.max(...left[1].map((runtime) => Date.parse(runtime.updatedAt ?? runtime.createdAt) || 0));
-      const rightAt = Math.max(...right[1].map((runtime) => Date.parse(runtime.updatedAt ?? runtime.createdAt) || 0));
-      return rightAt - leftAt;
-    })[0]?.[0] ?? 'new';
+    const orderedInstances = orderProcessInstancesByLatestActivity([...instances.entries()]);
+    const latestInstance = orderedInstances[0]?.[0] ?? 'new';
     let selectedInstance = state.selectedPlanInstances.get(instanceKey) ?? latestInstance;
     if (selectedInstance !== 'new' && !instances.has(selectedInstance)) {
       selectedInstance = latestInstance;
@@ -711,7 +708,7 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
     }
     const instanceSelect = el('select', { attrs: { 'aria-label': `Process instance for ${plan.source.processName}` } });
     instanceSelect.append(el('option', { text: canStartNewInstances ? 'Start a new instance' : 'Earlier revision · existing instances only', attrs: { value: 'new', ...(selectedInstance === 'new' ? { selected: 'selected' } : {}), ...(!canStartNewInstances ? { disabled: 'disabled' } : {}) } }));
-    for (const [instanceId, runtimes] of instances) {
+    for (const [instanceId, runtimes] of orderedInstances) {
       instanceSelect.append(el('option', {
         text: processInstanceOptionLabel(instanceId, runtimes),
         attrs: { value: instanceId, ...(selectedInstance === instanceId ? { selected: 'selected' } : {}) },
