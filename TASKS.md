@@ -50,6 +50,21 @@ record gaps or skipped checks explicitly. Advance the cursor and checkbox togeth
 only when the whole PR outcome passes its required behavior checks and review.
 Keep P/E release-gate status and evidence in their separate ledgers.
 
+PR-06 cross-session Orca announcement proof attempts (2026-09-28): one
+provider-free fixture/browser attempt rendered the synthetic Bob task as
+`IN_PROGRESS`, but its second-session escalation stopped before the request
+because nested shell quoting made `node -e` receive no script. Orca emitted only
+generic startup/teardown speech; there was no task-specific announcement. A
+single corrected attempt reached the same synthetic `IN_PROGRESS` state, then
+stopped before Xvfb/Chrome/Orca because the evidence directory was missing when
+shell redirection opened `xvfb.log`. No transition or speech was observed. Both
+fixtures and processes were cleaned; no product/test/provider/credential changes
+occurred. Sanitized records:
+`/tmp/orgward-pr06-cross-session-announcement-proof/attempt-summary.txt` and
+`/tmp/orgward-pr06-cross-session-announcement-proof-2/attempt-summary.txt`.
+Cross-session spoken status remains unverified; PR-06 remains first open, with
+cursor and release gates unchanged.
+
 PR-06 task profile empty-state copy (2026-09-28): saved task cards now distinguish
 an empty server execution-profile list, directing users to an OrgWard administrator,
 from existing profiles that cannot serve the task because model profiles require
