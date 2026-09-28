@@ -73,9 +73,15 @@ single corrected attempt reached the same synthetic `IN_PROGRESS` state, then
 stopped before Xvfb/Chrome/Orca because the evidence directory was missing when
 shell redirection opened `xvfb.log`. No transition or speech was observed. Both
 fixtures and processes were cleaned; no product/test/provider/credential changes
+occurred. A further module-based attempt used a pre-created evidence directory
+but stopped before task creation/browser startup because the actor-binding API
+correctly returned HTTP 200 while the temporary harness expected 201. No browser
+page or Orca session started, and no task transition or speech was observed. The
+disposable app/database were closed; no source/test/provider/credential changes
 occurred. Sanitized records:
-`/tmp/orgward-pr06-cross-session-announcement-proof/attempt-summary.txt` and
-`/tmp/orgward-pr06-cross-session-announcement-proof-2/attempt-summary.txt`.
+`/tmp/orgward-pr06-cross-session-announcement-proof/attempt-summary.txt`,
+`/tmp/orgward-pr06-cross-session-announcement-proof-2/attempt-summary.txt`, and
+`/tmp/orgward-pr06-cross-session-announcement-proof-3/attempt-summary.txt`.
 Cross-session spoken status remains unverified; PR-06 remains first open, with
 cursor and release gates unchanged.
 
