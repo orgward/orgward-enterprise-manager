@@ -229,6 +229,69 @@ retry or product source/test change occurred. Sanitized record:
 saved-result keyboard interaction remains unverified; PR-06 remains first open,
 with cursor and release gates unchanged.
 
+Keyboard-proof follow-up (2026-09-28): the authorized saved-result disclosure
+keyboard proof stopped before launch because no reusable app/PostgreSQL/two-subject
+OIDC/browser fixture was ready. No temporary root, services, browser, provider call,
+or source/test change was created for this attempt. Saved-result keyboard
+interaction remains unverified; PR-06 cursor and release gates are unchanged.
+
+PR-06 saved-result keyboard and restart proof (2026-09-28): a synthetic,
+provider-free local journey completed the deterministic agent task with durable
+run status `SUCCEEDED` and artifact `review.txt`; the human checkpoint and linked
+instance/task references remained successful after restarting only the app
+against the same disposable database. Chrome keyboard proof reached the disclosure
+by Tab in 26 desktop and 39 narrow keypresses before restart, and 26 desktop and 38
+narrow keypresses after restart. Space opened and closed it with focus retained in
+all four viewport checks, and the artifact appeared while open. At 1280x900 and
+390x844, before and after restart, there was no horizontal overflow. The proof
+recorded zero provider calls and zero external requests. Evidence, screenshots
+and accessibility trees:
+`/tmp/orgward-pr06-saved-disclosure-keyboard-20260928-1/attempt-summary.txt`.
+This closes only the local saved-result keyboard, narrow-layout and app-restart
+evidence. Real managed-provider output/restart and Orca/screen-reader evidence
+remain outstanding; PR-06 remains first open, with cursor and release gates
+unchanged. No product source or test files changed.
+
+PR-06 Orca announcement proof follow-up (2026-09-28): one synthetic local
+attempt reached the rendered Alice Execution page and started Orca, but stopped
+at the pre-transition keyboard guard: after focusing the visible Chrome window,
+one X11 Tab left `document.activeElement` on `BODY` instead of the skip-to-
+execution link. Orca's log contained startup/shutdown speech only; it did not
+announce the link or any status transition. Bob's escalation was not sent, and
+no provider call, credential use, or external request occurred. The fixture and
+services were cleaned; no retry or source/test change was made. Evidence:
+`/tmp/orgward-pr06-cross-session-announcement-proof-7/attempt-summary.txt` and
+`run.log`. This is a harness/input attempt only and does not demonstrate a product
+defect. Orca announcement evidence and real managed-provider output/restart remain
+outstanding; PR-06 remains first open, with cursor and release gates unchanged.
+
+PR-06 Orca input diagnostic follow-up (2026-09-28): a second synthetic attempt
+added a page-side keydown trace and waited up to one second after a single X11
+Tab. The focused Chrome window was confirmed, but the page observed no keydown
+event and remained on `BODY`; Orca's baseline link speech was not confirmed. No
+Bob escalation or provider/external request occurred. The fixture was cleaned,
+with no retry or product source/test change. Diagnostic evidence:
+`/tmp/orgward-pr06-cross-session-announcement-proof-8/baseline-tab-diagnostic.json`
+and `run.log`. Together with the preceding attempt, this isolates the outstanding
+screen-reader proof to the current X11 input/Orca harness; it does not demonstrate
+a product defect. Orca announcement and real managed-provider output/restart
+remain outstanding; PR-06 remains first open, with cursor and release gates
+unchanged.
+
+PR-06 Orca focus-path diagnostic follow-up (2026-09-28): one alternate
+synthetic attempt delivered a single Tab through Chrome DevTools Protocol; the
+page recorded `keydown` (`Tab`, not default-prevented) and moved focus from
+`BODY` to `#execution-skip-link`. Orca did not speak the skip-link label within
+five seconds. Its trace showed focus on Chrome's “Address and search bar” UI,
+not the web document, so no Bob escalation, status transition, or readback was
+attempted. This verifies the browser-side focus change only, not Orca or native
+keyboard behavior. The fixture was cleaned; no provider/external request, retry,
+or product source/test change occurred. Evidence:
+`/tmp/orgward-pr06-cross-session-announcement-proof-9/baseline-tab-diagnostic.json`,
+`orca-debug.log`, and `attempt-summary.txt`. The current blocker is the test
+window's native focus staying in browser chrome; PR-06 remains first open, with
+cursor and release gates unchanged.
+
 PR-06 task profile empty-state copy (2026-09-28): saved task cards now distinguish
 an empty server execution-profile list, directing users to an OrgWard administrator,
 from existing profiles that cannot serve the task because model profiles require
