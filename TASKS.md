@@ -112,6 +112,17 @@ unverified. Sanitized record:
 `/tmp/orgward-pr06-keyboard-current-proof/attempt-summary.txt`. PR-06 remains
 first open; cursor and release gates are unchanged.
 
+Follow-up attempt (2026-09-28): a new provider-free synthetic fixture enabled
+only the local deterministic `scaffold-node-service` executor and used the
+authorized process-task API path. Setup stopped before browser launch because
+the project-member API returned HTTP 200 while the adapted harness expected
+201. The app, synthetic issuer, disposable database and PostgreSQL cluster were
+closed; the temporary fixture script was removed. No browser, provider,
+credentials, Orca, product source or test behavior was involved. The saved-result
+keyboard interaction remains unverified. Sanitized record:
+`/tmp/orgward-pr06-saved-result-keyboard-proof-4/attempt-summary.txt`. PR-06
+remains first open; cursor and release gates are unchanged.
+
 PR-06 task profile empty-state copy (2026-09-28): saved task cards now distinguish
 an empty server execution-profile list, directing users to an OrgWard administrator,
 from existing profiles that cannot serve the task because model profiles require
