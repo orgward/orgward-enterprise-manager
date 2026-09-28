@@ -4065,6 +4065,88 @@ backup/restore test skipped because PostgreSQL client tools were unavailable;
 external effects. PR-06 remains active; cursor, task checkboxes and release gates
 are unchanged.
 
+PR-06 task-row rendered proof retry (2026-09-28): a fresh disposable PostgreSQL
+and app fixture created synthetic owner, assignee and reader sessions, a saved
+plan and pinned human task, and started the task as its assigned human. Chromium
+154 launched using the installed setuid sandbox helper with host AppArmor policy
+unchanged and no `--no-sandbox`; Orca's AT-SPI registry also initialized in the
+private Xvfb/D-Bus session. The first authenticated local page open exceeded the
+proof harness's 30-second `spawnSync` timeout (`ETIMEDOUT`) after Chrome launch.
+No rendered page, screenshot, accessibility snapshot, overflow measurement,
+keyboard result or spoken output was captured. The harness closed the browser
+session and app, dropped the disposable database, and stopped Orca, PulseAudio and
+Xvfb. Logs: `/tmp/orgward-pr06-proof-run.log`,
+`/tmp/orgward-pr06-proof-orca.stdout.log`, and
+`/tmp/orgward-pr06-proof-orca-debug.log`; fixture metadata:
+`/tmp/orgward-pr06-effective-assignee-human-input-proof-sandboxed-retry-2/`.
+No source code, tests or full check were run because no product view rendered.
+PR-06 remains active; cursor, task checkboxes and release gates are unchanged.
+
+PR-06 task-row rendered proof bounded retry (2026-09-28): in a second fresh
+disposable fixture, headed Chrome successfully opened `about:blank` with the
+installed sandbox helper; after setting the synthetic owner session cookie, the
+authenticated loopback navigation returned `CDP command timed out: Page.navigate`.
+The one allowed responsiveness probe also timed out at `Runtime.evaluate`, so no
+HTTP response/status, page-script or API completion could be inspected and no
+snapshot or screenshot was captured. Orca's AT-SPI registry initialized, but no
+page reached it for speech evidence. The app, browser and Orca/Xvfb/D-Bus/PulseAudio
+processes were closed. A final process check found the disposable PostgreSQL
+server orphaned by direct-script fixture shutdown; it was stopped with its own
+`pg_ctl`, and a second check found no fixture processes. Evidence:
+`/tmp/orgward-pr06-proof-retry3-run.log`,
+`/tmp/orgward-pr06-effective-assignee-human-input-proof-sandboxed-retry-3/alice-navigation-timeout.txt`,
+and fixture metadata in the same directory. No source code, tests or full check
+were run; no provider or external effects. PR-06 remains active; cursor, task
+checkboxes and release gates are unchanged.
+
+PR-06 task-row headless rendered proof attempt (2026-09-28): the independent
+local request for `execution.html` returned HTTP 200 (`text/html; charset=utf-8`,
+4,289 bytes). A fresh disposable PostgreSQL/app fixture created the synthetic
+owner, assignee and reader identities, saved plan and assigned task. Headless
+Chrome 154 opened `about:blank` with the installed executable and no sandbox
+bypass; authenticated local navigation then failed with `CDP command timed out:
+Page.navigate`, and the single `get url` responsiveness probe failed with
+`CDP command timed out: Runtime.evaluate`. No browser HTTP response, page-script
+or API completion evidence, snapshot, screenshot, overflow or keyboard result was
+available. The owned PostgreSQL cluster was explicitly stopped; process checks
+found no fixture/app/browser processes. Logs and HTTP result:
+`/tmp/orgward-pr06-proof-headless-1-run.log` and
+`/tmp/orgward-pr06-effective-assignee-human-input-proof-headless-1/`.
+No source code, tests or full check were run because no product view rendered; no
+provider or external effects. PR-06 remains active; cursor, task checkboxes and
+release gates are unchanged.
+
+PR-06 authenticated bootstrap API diagnostic (2026-09-28): on a fresh disposable
+PostgreSQL/app fixture, the initial metadata, project list, session and run-list
+requests all completed with HTTP 200 in 4–11 ms. The subsequent project detail,
+actor-binding proposals, process-task runtime and local-repository requests also
+completed with HTTP 200 in 9–29 ms; the project detail payload was 81,424 bytes.
+The app's request-finish trace confirms all eight requests completed. This rules
+out a slow or unresolved bootstrap API response in this fixture, but does not
+establish browser module completion or a rendered page. Fixture database, app and
+PostgreSQL cluster were closed by the harness; no product code, tests or full
+check changed. Evidence: `/tmp/orgward-pr06-api-bootstrap-diagnosis/api-trace.json`
+and `/tmp/orgward-pr06-api-bootstrap-diagnosis/fixture.json`. PR-06 remains
+active; cursor, task checkboxes and release gates are unchanged.
+
+PR-06 direct-CDP rendered task-row proof (2026-09-28): sandboxed headless Chrome
+154 navigated to the authenticated Execution page using a synthetic session cookie;
+DOMContentLoaded and load fired, and the page reached `readyState=complete`. The
+saved-process UI rendered one task row with the enabled active instance, pinned
+input disclosure and “Current assigned human: Bob Reviewer”; document/body width
+was 1,265px at a 1,280×900 viewport. The eight startup/project/process API reads
+and CSS/JS/module imports returned HTTP 200. No runtime exception, console event
+or network failure occurred; the static `/favicon.ico` request alone returned 404.
+The screenshot and sanitized event/DOM metrics are in
+`/tmp/orgward-pr06-direct-cdp-proof/page.png`, `cdp-report.json`, and
+`dom-snapshot-summary.json`. App, disposable PostgreSQL and browser processes were
+closed; the browser profile was removed. This establishes the page renderer is
+responsive and points to the `agent-browser` wrapper/session-control path behind
+the earlier timeouts. The screenshot is the initial 1280×900 viewport; it does
+not establish narrow layout, keyboard interaction, Orca speech or provider result
+disclosure. No product source, tests or full check changed. PR-06 remains active;
+cursor, task checkboxes and release gates are unchanged.
+
 ## Governed software delivery
 
 - [ ] PR-07 — Intent-to-plan engineering workflow (T-25–T-28). Connect approved
