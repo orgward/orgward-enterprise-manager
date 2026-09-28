@@ -3,15 +3,44 @@ export function processTaskStatusAnnouncement(previousStatus, nextStatus) {
 }
 
 export const PROCESS_TASK_ANNOUNCEMENT_DELAY_MS = 500;
-let processTaskAnnouncementRevision = 0;
+const liveRegionAnnouncementState = new WeakMap();
 
-export function scheduleProcessTaskAnnouncement(liveRegion, announcement, { schedule = setTimeout, isCurrent = () => true } = {}) {
+export function scheduleLiveRegionAnnouncement(liveRegion, announcement, { schedule = setTimeout, isCurrent = () => true } = {}) {
   if (!liveRegion || typeof announcement !== 'string' || !announcement) return null;
-  const revision = ++processTaskAnnouncementRevision;
+  const previous = liveRegionAnnouncementState.get(liveRegion);
+  if (previous?.announcement === announcement && previous.state === 'pending') return null;
+  if (previous?.announcement === announcement && previous.state === 'announced'
+    && liveRegion.textContent === announcement) return null;
+  const revision = (previous?.revision ?? 0) + 1;
   liveRegion.textContent = '';
-  return schedule(() => {
-    if (revision === processTaskAnnouncementRevision && isCurrent()) liveRegion.textContent = announcement;
+  const next = { revision, announcement, state: 'pending', timer: null };
+  liveRegionAnnouncementState.set(liveRegion, next);
+  next.timer = schedule(() => {
+    const current = liveRegionAnnouncementState.get(liveRegion);
+    if (current?.revision !== revision || current.announcement !== announcement || current.state !== 'pending') return;
+    if (!isCurrent()) {
+      liveRegionAnnouncementState.set(liveRegion, { revision, announcement: null, state: 'stale', timer: null });
+      return;
+    }
+    liveRegion.textContent = announcement;
+    liveRegionAnnouncementState.set(liveRegion, { revision, announcement, state: 'announced', timer: null });
   }, PROCESS_TASK_ANNOUNCEMENT_DELAY_MS);
+  return next.timer;
+}
+
+export function cancelLiveRegionAnnouncement(liveRegion) {
+  if (!liveRegion) return false;
+  const previous = liveRegionAnnouncementState.get(liveRegion);
+  const changed = previous?.state === 'pending' || liveRegion.textContent !== '';
+  liveRegionAnnouncementState.set(liveRegion, {
+    revision: (previous?.revision ?? 0) + 1, announcement: null, state: 'cancelled', timer: null,
+  });
+  if (liveRegion.textContent !== '') liveRegion.textContent = '';
+  return Boolean(changed);
+}
+
+export function scheduleProcessTaskAnnouncement(liveRegion, announcement, options = {}) {
+  return scheduleLiveRegionAnnouncement(liveRegion, announcement, options);
 }
 
 export function summarizeBlockedTaskTransitions(transitions) {

@@ -79,13 +79,26 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.equal(ui.status, 200);
   const executionHtml = await ui.text();
   assert.match(executionHtml, /Real executables and files/);
-  assert.match(executionHtml, /id="process-instance-refresh-status"[^>]*role="status"[^>]*aria-live="polite"/);
+  assert.match(executionHtml, /id="process-instance-refresh-status"[^>]*aria-live="off"/);
+  assert.doesNotMatch(executionHtml, /id="process-instance-refresh-status"[^>]*role="status"/,
+    'the visible message does not create a second live announcement inside the aria-live=off main region');
+  assert.match(executionHtml, /id="process-instance-announcement"[^>]*aria-live="polite"[^>]*aria-atomic="true"/,
+    'process refresh statuses have a dedicated polite atomic live region outside the aria-live=off main');
+  assert.doesNotMatch(executionHtml, /id="process-instance-announcement"[^>]*role=/,
+    'the generic process live region avoids the status role that Orca classifies as a status bar');
+  assert.match(executionHtml, /id="execution-announcement"[^>]*role="status"[^>]*aria-live="polite"/,
+    'selected-run announcements retain their own separate polite live region');
   assert.match(executionHtml, /id="enterprise-design-nav" href="\/"/);
   const skipLinkStart = executionHtml.indexOf('<a id="execution-skip-link" class="execution-skip-link" href="#execution-main">');
   const headerStart = executionHtml.indexOf('<header class="topbar">');
   const executionMain = executionHtml.indexOf('<section id="execution-main" class="execution-main" tabindex="-1" aria-label="Execution content"');
   assert.ok(skipLinkStart >= 0 && skipLinkStart < headerStart, 'the first Execution focus stop is a skip link before product navigation');
   assert.ok(executionMain > headerStart, 'the skip link target is a programmatically focusable Execution content region');
+  const executionMainClose = executionHtml.indexOf('</section>', executionMain);
+  const processAnnouncement = executionHtml.indexOf('<div id="process-instance-announcement"');
+  const detachedAnnouncement = executionHtml.indexOf('<div id="execution-announcement"');
+  assert.ok(executionMainClose >= 0 && processAnnouncement > executionMainClose && detachedAnnouncement > processAnnouncement,
+    'both process and selected-run live regions are outside the aria-live=off Execution main');
   assert.match(executionHtml, /id="execution-skip-link"[^>]*href="#execution-main"/);
   const savedTaskPanel = executionHtml.indexOf('<div id="process-plans" aria-live="off"></div>');
   const graphCreationForm = executionHtml.indexOf('<form id="process-plan-form"');
@@ -257,6 +270,9 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   const refreshClient = await fetch(`${base}/process-instance-refresh.mjs`);
   assert.equal(refreshClient.status, 200);
   const processRefreshSource = await refreshClient.text();
+  assert.match(processRefreshSource, /scheduleLiveRegionAnnouncement/);
+  assert.match(processRefreshSource, /cancelLiveRegionAnnouncement/);
+  assert.match(processRefreshSource, /export function updateProcessInstanceRefreshStatus/);
   assert.match(processRefreshSource, /previousRuns = \[\], nextRuns = \[\]/);
   assert.match(processRefreshSource, /function sameProjectSnapshot/);
   assert.match(processRefreshSource, /currentProject = null, nextProject = null/);
@@ -264,6 +280,8 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(processRefreshSource, /Outcome unknown\. An external request may have been received\. Delivery is unverified\. Reconcile with the provider before retrying\./);
   assert.match(processRefreshSource, /if \(!previous\) continue/);
   assert.match(executionSource, /processInstanceStatusAnnouncement\(state\.taskInstances, instances, processPlansFor\(projectSnapshot\),\s*currentProjectRuns, projectRuns\)/);
+  assert.match(executionSource, /function setProcessRefreshStatus\(message\) \{[\s\S]*?updateProcessInstanceRefreshStatus\(\{ visibleRegion: document\.querySelector\('#process-instance-refresh-status'\),\s*liveRegion: processInstanceAnnouncement \}, message, \{\s*isCurrent:/,
+    'process refresh copy stays visible and is sent to its dedicated detached polite region');
   assert.match(executionSource, /skipBlockedAnnouncement: Boolean\(announcement\)/,
     'the cross-session status/outcome message replaces the duplicate blocked-task live announcement');
   const runTransitionFocusClient = await fetch(`${base}/run-transition-focus.mjs`);
@@ -292,11 +310,16 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(runFocusCss, /\.run-status:focus-visible\s*\{\s*outline: 3px solid var\(--exec\)/);
   const taskAnnouncementClient = await fetch(`${base}/process-task-announcement.mjs`);
   assert.equal(taskAnnouncementClient.status, 200);
-  assert.match(await taskAnnouncementClient.text(), /PROCESS_TASK_ANNOUNCEMENT_DELAY_MS = 500/);
+  const taskAnnouncementSource = await taskAnnouncementClient.text();
+  assert.match(taskAnnouncementSource, /PROCESS_TASK_ANNOUNCEMENT_DELAY_MS = 500/);
+  assert.match(taskAnnouncementSource, /export function scheduleLiveRegionAnnouncement/);
+  assert.match(taskAnnouncementSource, /export function cancelLiveRegionAnnouncement/);
   const humanTaskFocusClient = await fetch(`${base}/human-task-status-focus.mjs`);
   assert.equal(humanTaskFocusClient.status, 200);
   assert.match(await humanTaskFocusClient.text(), /documentRef\.activeElement !== documentRef\.body/);
-  assert.ok(executionSource.includes('scheduleProcessTaskAnnouncement'), 'Execution uses its served delayed announcement helper');
+  assert.ok(executionSource.includes('scheduleProcessTaskAnnouncement'), 'blocked-task updates retain their delayed announcer');
+  assert.match(executionSource, /function setProcessRefreshStatus\(message\) \{[\s\S]*?updateProcessInstanceRefreshStatus\(\{ visibleRegion: document\.querySelector\('#process-instance-refresh-status'\),\s*liveRegion: processInstanceAnnouncement \}, message, \{[\s\S]*?isCurrent:/,
+    'process refresh messages use the independent delayed live region with a current project/route guard');
   assert.ok(executionSource.includes('restoreHumanTaskStatusFocusAfterAction'), 'successful human actions restore focus after refresh');
   assert.match(executionSource, /linkedProcessTaskResult\(runtime, linkedRun, project\)/);
   assert.match(executionSource, /el\('details', \{ className: 'linked-process-task-result', attrs:/);
@@ -402,7 +425,8 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(providerDiagnosticSource, /value\.httpStatus >= 100 && value\.httpStatus <= 599/);
   assert.match(providerDiagnosticSource, /invalid_json.*body_too_large.*incomplete_response.*missing_output_text/s);
   assert.match(providerDiagnosticSource, /Delivery remains unverified; this run cannot be retried/);
-  assert.match(providerDiagnosticSource, /Outcome unknown\. An external request may have been received\. Delivery is unverified\. Reconcile with the provider before retrying\./);
+  assert.ok(providerDiagnosticSource.includes("return `Outcome unknown.${safeDetails ? ` ${safeDetails}.` : ''} An external request may have been received. Delivery is unverified. Reconcile with the provider before retrying.`;"),
+    'allowlisted optional diagnostic details preserve the fixed unknown-outcome reconciliation guidance');
   assert.match(executionSource, /blueprint agent binding is recorded for traceability/);
   assert.match(executionSource, /does not execute as or impersonate the bound workload identity/);
   assert.match(executionSource, /Escalate to project owner/);

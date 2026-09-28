@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isCurrentProcessInstanceRefresh, processInstanceRefreshDisposition, processInstanceRefreshMessage, processInstanceStatusAnnouncement } from '../../public/process-instance-refresh.mjs';
+import { isCurrentProcessInstanceRefresh, processInstanceRefreshDisposition, processInstanceRefreshMessage,
+  processInstanceStatusAnnouncement, updateProcessInstanceRefreshStatus } from '../../public/process-instance-refresh.mjs';
 
 function taskInstance(taskId, status, planInstanceId = 'instance-1', processPlanId = 'plan-1', revision = 1) {
   return { projectId: 'project-1', processPlanId, revision, planInstanceId, taskId, status };
@@ -84,6 +85,45 @@ test('cross-session task status announcements ignore first snapshots and unchang
   const next = [taskInstance('task-a', 'IN_PROGRESS')];
   assert.equal(processInstanceStatusAnnouncement([], next), '');
   assert.equal(processInstanceStatusAnnouncement(next, next), '');
+});
+
+test('process status and warning messages update a dedicated live region once and clear for reuse', () => {
+  const message = 'Discover and qualify demand changed from in progress to escalated.';
+  const warning = 'New saved project updates are available. Save or discard your current edit to show them.';
+  const visibleStatus = { textContent: '' };
+  const liveRegion = { textContent: '' };
+  const scheduled = [];
+  const schedule = (callback, milliseconds) => { scheduled.push({ callback, milliseconds }); return scheduled.length; };
+  const options = { schedule };
+  assert.equal(updateProcessInstanceRefreshStatus({ visibleRegion: visibleStatus, liveRegion }, message, options), true);
+  assert.equal(visibleStatus.textContent, message, 'visible status copy remains available');
+  assert.equal(liveRegion.textContent, '', 'the dedicated live region waits for the task DOM refresh');
+  assert.equal(scheduled[0].milliseconds, 500);
+  assert.equal(updateProcessInstanceRefreshStatus({ visibleRegion: visibleStatus, liveRegion }, message, options), false,
+    'an unchanged poll does not schedule duplicate speech');
+  assert.equal(scheduled.length, 1);
+  assert.equal(updateProcessInstanceRefreshStatus({ visibleRegion: visibleStatus, liveRegion }, '', options), true,
+    'clearing visible process status cancels pending speech and clears the dedicated region');
+  assert.equal(visibleStatus.textContent, '');
+  assert.equal(liveRegion.textContent, '');
+  scheduled[0].callback();
+  assert.equal(liveRegion.textContent, '', 'a cleared pending status cannot be announced later');
+  assert.equal(updateProcessInstanceRefreshStatus({ visibleRegion: visibleStatus, liveRegion }, warning, options), true,
+    'defer/retry messages use the same dedicated live region');
+  assert.equal(visibleStatus.textContent, warning);
+  assert.equal(liveRegion.textContent, '');
+  assert.equal(scheduled.length, 2, 'the replacement warning has its own delayed announcement');
+  scheduled[1].callback();
+  assert.equal(liveRegion.textContent, warning);
+  assert.equal(updateProcessInstanceRefreshStatus({ visibleRegion: visibleStatus, liveRegion }, warning, options), false,
+    'repeated warning polls do not duplicate speech after the initial announcement');
+  assert.equal(scheduled.length, 2);
+  assert.equal(updateProcessInstanceRefreshStatus({ visibleRegion: visibleStatus, liveRegion }, '', options), true);
+  assert.equal(updateProcessInstanceRefreshStatus({ visibleRegion: visibleStatus, liveRegion }, warning, options), true,
+    'clearing then restoring the same warning permits it to be announced again');
+  assert.equal(scheduled.length, 3);
+  scheduled[2].callback();
+  assert.equal(liveRegion.textContent, warning);
 });
 
 function linkedInstance(status) {

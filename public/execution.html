@@ -26,6 +26,7 @@
         </aside>
         <section id="execution-main" class="execution-main" tabindex="-1" aria-label="Execution content" aria-live="off"></section>
       </main>
+      <div id="process-instance-announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
       <div id="execution-announcement" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
     </div>
     <template id="new-run-template">
@@ -36,7 +37,7 @@
         <section class="run-section" aria-labelledby="process-plan-heading">
           <h3 id="process-plan-heading">Plan from a saved process</h3>
           <p>This saves a proposed task graph with planned tasks only. It does not create an execution run or dispatch work.</p>
-          <p id="process-instance-refresh-status" class="process-instance-refresh-status" role="status" aria-live="polite" aria-atomic="true"></p>
+          <p id="process-instance-refresh-status" class="process-instance-refresh-status" aria-live="off"></p>
           <div id="process-plans" aria-live="off"></div>
           <form id="process-plan-form" class="execution-form">
             <label>Project<select id="plan-project" required></select></label>

@@ -3,7 +3,9 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   PROCESS_TASK_ANNOUNCEMENT_DELAY_MS,
+  cancelLiveRegionAnnouncement,
   processTaskStatusAnnouncement,
+  scheduleLiveRegionAnnouncement,
   scheduleProcessTaskAnnouncement,
   summarizeBlockedTaskTransitions,
 } from '../../public/process-task-announcement.mjs';
@@ -68,8 +70,43 @@ test('drops stale or superseded blocked summaries before they reach the live reg
   scheduled[1]();
   assert.equal(liveRegion.textContent, '', 'a changed project or instance context suppresses its pending summary');
   currentInstance = 'instance-b';
-  scheduled[1]();
+  scheduleProcessTaskAnnouncement(liveRegion, 'Current instance became blocked.', {
+    schedule, isCurrent: () => currentInstance === 'instance-b',
+  });
+  scheduled[2]();
   assert.equal(liveRegion.textContent, 'Current instance became blocked.');
+});
+
+test('per-region scheduling isolates process status from blocked task announcements', () => {
+  const blockedRegion = { textContent: '' };
+  const processRegion = { textContent: '' };
+  const scheduled = [];
+  const schedule = (callback, milliseconds) => { scheduled.push({ callback, milliseconds }); return scheduled.length; };
+  scheduleProcessTaskAnnouncement(blockedRegion, 'A task became blocked.', { schedule });
+  scheduleLiveRegionAnnouncement(processRegion, 'A process status changed.', { schedule });
+  scheduleLiveRegionAnnouncement(processRegion, 'A newer process status changed.', { schedule });
+
+  assert.equal(scheduled.length, 3);
+  scheduled[0].callback();
+  assert.equal(blockedRegion.textContent, 'A task became blocked.', 'process status does not cancel the blocked-task announcement');
+  scheduled[1].callback();
+  assert.equal(processRegion.textContent, '', 'superseded process status does not speak');
+  scheduled[2].callback();
+  assert.equal(processRegion.textContent, 'A newer process status changed.');
+});
+
+test('clearing a live region cancels pending speech and permits the same message later', () => {
+  const liveRegion = { textContent: '' };
+  const scheduled = [];
+  const schedule = (callback, milliseconds) => { scheduled.push({ callback, milliseconds }); return scheduled.length; };
+  scheduleLiveRegionAnnouncement(liveRegion, 'Status changed.', { schedule });
+  assert.equal(cancelLiveRegionAnnouncement(liveRegion), true);
+  scheduled[0].callback();
+  assert.equal(liveRegion.textContent, '', 'cleared stale speech is suppressed');
+
+  scheduleLiveRegionAnnouncement(liveRegion, 'Status changed.', { schedule });
+  scheduled[1].callback();
+  assert.equal(liveRegion.textContent, 'Status changed.', 'a later identical message can be announced after clearing');
 });
 
 test('wires the transition announcer outside the repeatedly rendered plan region', async () => {

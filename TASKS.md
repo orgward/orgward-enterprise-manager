@@ -309,6 +309,100 @@ These attempts do not demonstrate a product defect or establish the required
 cross-session Orca announcement. PR-06 remains first open; cursor and release
 gates are unchanged.
 
+PR-06 cross-session Orca status proof (2026-09-28): in one synthetic local
+fixture, a native X11 click on the inert “Execution runs” heading left focus on
+`BODY`, and one native Tab reached `#new-run`; Orca spoke “New controlled run.”
+One Bob escalation then produced Alice's live-region text “Discover and qualify
+demand changed from in progress to escalated”, and Alice's authorized runtime
+readback was `ESCALATED`. The attempt failed only the assertion that Orca's
+`SPEECH OUTPUT` contained the exact transition phrase. The AT-SPI debug log
+exposed the exact text in a polite `role=status` node but contained no matching
+spoken output. No provider, credential, retry or external effects occurred;
+fixture processes were cleaned. Evidence:
+`/tmp/orgward-pr06-cross-session-announcement-proof-13/run.log`,
+`/tmp/orgward-pr06-cross-session-announcement-proof-13/orca-debug.log`,
+`/tmp/orgward-pr06-cross-session-announcement-proof-13/alice-after.dom.txt`,
+and `/tmp/orgward-pr06-cross-session-announcement-proof-13/attempt-summary.txt`.
+PR-06 remains first open; cursor and release gates are unchanged.
+
+PR-06 cross-session status announcement repair (2026-09-28): process refresh
+status, transition, defer and retry messages retain immediate visible copy and
+schedule a 500ms-delayed update to a dedicated, always-mounted polite live region
+outside the Execution main's `aria-live="off"` subtree. The visible paragraph is
+non-live; selected-run announcements retain their separate region. Pending
+announcements are isolated per region, superseded or cleared messages cannot be
+spoken later, identical status polls are deduplicated, and clearing then restoring
+a message permits a fresh announcement. Focused helper, announcer and served-client
+tests passed 25/25 (0 failures/skips; 0.99s command wall), log
+`/tmp/orgward-pr06-orca-region-focused-final4.tap.log`. Stale process-context
+callbacks are dropped; a later current-context update can schedule a fresh
+announcement. Proof-15 used an assertion that required both task title and exact
+transition phrase in Orca `SPEECH OUTPUT` lines only; its result is recorded
+below. The earlier served-source assertion for bounded optional provider details
+now checks the current fixed guidance with its optional allowlisted details.
+`node --check` and `git diff --check` passed. No browser, Orca, provider or
+credential activity occurred during this code change. PR-06 remains first open;
+cursor and release gates are unchanged.
+
+PR-06 post-fix Orca status proof (2026-09-28): one synthetic proof-14 run
+confirmed native click/Tab, Orca baseline speech for “New controlled run”, Bob's
+successful escalation, Alice's live-region transition and authorized
+`ESCALATED` readback. It did not capture the exact transition in Orca `SPEECH
+OUTPUT`; the runner exited 0 because its final phrase check searched the broader
+debug segment rather than speech lines. This result does not pass spoken-transition
+acceptance. The correction note records the assertion defect, and raw output was
+left intact. Evidence:
+`/tmp/orgward-pr06-cross-session-announcement-proof-14/proof-result-summary.txt`,
+`orca-debug.log`, `alice-after.dom.txt`, `run.log`, and `proof-result-correction.txt`.
+No provider, credential or external call occurred, and fixture processes were
+cleaned. PR-06 remains first open; cursor and release gates are unchanged.
+
+PR-06 proof-15 cross-session Orca speech result (2026-09-28): the synthetic
+journey reached the rendered Alice page; native X11 click/Tab focused the “New
+controlled run” button and Orca spoke its label. One Bob escalation succeeded;
+Alice's live-region text changed to “Discover and qualify demand changed from
+in progress to escalated”, and Alice's authorized runtime readback was
+`ESCALATED`. The corrected assertion restricted to Orca `SPEECH OUTPUT` lines
+failed: neither the task title nor the exact transition appeared in spoken
+output. No retry, provider/credential/external effects occurred, and app, DB,
+browser, Orca, audio and display fixture processes were cleaned. Evidence:
+`/tmp/orgward-pr06-cross-session-announcement-proof-15/run.log`,
+`/tmp/orgward-pr06-cross-session-announcement-proof-15/orca-debug.log`,
+`/tmp/orgward-pr06-cross-session-announcement-proof-15/alice-after.dom.txt`,
+and `/tmp/orgward-pr06-cross-session-announcement-proof-15/attempt-summary.txt`.
+Cross-session screen-reader speech remains unverified; PR-06 remains first open,
+and cursor/release gates are unchanged.
+
+PR-06 generic live-region role adjustment (2026-09-28): proof-15 showed Orca
+received the dedicated process announcement node as a `status bar` and did not
+emit the transition as speech. Removed its explicit `role="status"`, retaining
+the detached `aria-live="polite"` and `aria-atomic="true"` semantics so it is
+exposed as a generic live region; selected-run status role is unchanged. Focused
+helper, announcer and served-client tests passed 25/25 (0 failures/skips; 0.93s
+command wall), log `/tmp/orgward-pr06-orca-role-focused-final.tap.log`. `git diff
+--check` and proof-16 script syntax passed. Proof-16's subsequent result is
+recorded below; proof-15 evidence remains preserved. No provider or credential
+activity occurred. PR-06 remains first open; cursor and release gates are
+unchanged.
+
+PR-06 proof-16 cross-session Orca speech result (2026-09-28): one synthetic run
+passed native click/Tab and baseline “New controlled run” speech, performed one
+Bob escalation, displayed the transition in Alice's before/after page evidence,
+and returned authorized runtime status `ESCALATED`. The five-second in-run
+speech-only assertion exited 1 before seeing the transition line. The retained
+Orca log later in that same run contains
+`SPEECH OUTPUT: 'Discover and qualify demand changed from in progress to escalated.'`;
+the capture window/timing assertion failed even though the spoken transition was
+recorded. This is not a passing harness command. No retry, provider/credential/
+external effects occurred; app, database, Chrome, Orca, audio and display
+processes were cleaned. Evidence:
+`/tmp/orgward-pr06-cross-session-announcement-proof-16/run.log`,
+`/tmp/orgward-pr06-cross-session-announcement-proof-16/orca-debug.log`,
+`/tmp/orgward-pr06-cross-session-announcement-proof-16/alice-before.dom.txt`,
+`/tmp/orgward-pr06-cross-session-announcement-proof-16/alice-after.dom.txt`, and
+`/tmp/orgward-pr06-cross-session-announcement-proof-16/attempt-summary.txt`.
+PR-06 remains first open; cursor and release gates are unchanged.
+
 PR-06 task profile empty-state copy (2026-09-28): saved task cards now distinguish
 an empty server execution-profile list, directing users to an OrgWard administrator,
 from existing profiles that cannot serve the task because model profiles require

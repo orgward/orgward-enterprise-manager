@@ -17,7 +17,8 @@ import { clearSettledLinkedRunAmendment, refreshLinkedRunAmendment, restoreLinke
 import { restoreHumanTaskStatusFocus } from './human-task-status-focus.mjs';
 import { isRunActionKeyboardActivation, restoreRunTransitionFocus } from './run-transition-focus.mjs';
 import { deepSeekOutcomeDiagnosticCopy } from './provider-outcome-diagnostic.mjs';
-import { isCurrentProcessInstanceRefresh, processInstanceRefreshDisposition, processInstanceRefreshMessage, processInstanceStatusAnnouncement } from './process-instance-refresh.mjs';
+import { isCurrentProcessInstanceRefresh, processInstanceRefreshDisposition, processInstanceRefreshMessage,
+  processInstanceStatusAnnouncement, updateProcessInstanceRefreshStatus } from './process-instance-refresh.mjs';
 import { isCurrentSelectedRunRefresh, selectedRunRefreshDisposition, selectedRunRefreshMessage, selectedRunStatusAnnouncement } from './selected-run-refresh.mjs';
 import { linkedProcessTaskResult } from './linked-process-task-result.mjs';
 import { linkedRunActivityLabel } from './linked-run-activity.mjs';
@@ -59,6 +60,7 @@ state.pendingProposalApplies = new Map();
 const main = document.querySelector('#execution-main');
 const list = document.querySelector('#run-list');
 const toast = document.querySelector('#execution-toast');
+const processInstanceAnnouncement = document.querySelector('#process-instance-announcement');
 const executionAnnouncement = document.querySelector('#execution-announcement');
 let processRefreshRequestId = 0;
 let deferredProcessInstances = null;
@@ -74,8 +76,13 @@ function processPlansFor(project = state.planningProject) {
 }
 
 function setProcessRefreshStatus(message) {
-  const processRefreshStatus = document.querySelector('#process-instance-refresh-status');
-  if (processRefreshStatus && processRefreshStatus.textContent !== message) processRefreshStatus.textContent = message;
+  const projectId = state.planningProject?.id ?? null;
+  const routeKey = `${window.location.pathname}${window.location.search}`;
+  updateProcessInstanceRefreshStatus({ visibleRegion: document.querySelector('#process-instance-refresh-status'),
+    liveRegion: processInstanceAnnouncement }, message, {
+    isCurrent: () => state.planningProject?.id === projectId
+      && `${window.location.pathname}${window.location.search}` === routeKey,
+  });
 }
 
 function noteProjectRefreshUnavailable() {

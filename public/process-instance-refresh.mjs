@@ -1,4 +1,5 @@
 import { deepSeekOutcomeDiagnosticCopy } from './provider-outcome-diagnostic.mjs';
+import { cancelLiveRegionAnnouncement, scheduleLiveRegionAnnouncement } from './process-task-announcement.mjs';
 
 function sameProjectSnapshot(currentProject, nextProject) {
   if (!currentProject && !nextProject) return true;
@@ -29,6 +30,24 @@ export function processInstanceRefreshMessage(disposition) {
   if (disposition === 'defer-dirty') return 'New saved project updates are available. Save or discard your current edit to show them.';
   if (disposition === 'defer-focus') return 'New saved project updates are available. Move focus outside the plan to show them.';
   return '';
+}
+
+export function updateProcessInstanceRefreshStatus({ visibleRegion, liveRegion } = {}, message,
+  { schedule, isCurrent = () => true } = {}) {
+  if (typeof message !== 'string') return false;
+  let changed = false;
+  if (visibleRegion && visibleRegion.textContent !== message) {
+    visibleRegion.textContent = message;
+    changed = true;
+  }
+  if (liveRegion) {
+    if (message) {
+      const alreadyAnnounced = liveRegion.textContent === message;
+      const timer = scheduleLiveRegionAnnouncement(liveRegion, message, { schedule, isCurrent });
+      if (!alreadyAnnounced && timer !== null) changed = true;
+    } else if (cancelLiveRegionAnnouncement(liveRegion)) changed = true;
+  }
+  return changed;
 }
 
 function processTaskInstanceKey(instance) {
