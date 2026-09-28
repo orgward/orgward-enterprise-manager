@@ -145,6 +145,19 @@ was no retry or source/test change. Sanitized record:
 `/tmp/orgward-pr06-saved-result-keyboard-proof-4/attempt-summary.txt`. PR-06
 remains first open; cursor and release gates are unchanged.
 
+Dependency-corrected follow-up attempt (2026-09-28): static inspection matched
+the tested root-human → human-checkpoint → dependent-agent sequence, but the
+single disposable fixture launch stopped before browser startup because the
+temporary harness referenced undefined `randomBytes` while creating synthetic
+sessions. Its catch path closed the app and issuer, dropped the disposable
+database, stopped PostgreSQL, and removed the temporary execution workspace;
+process inspection found no fixture, PostgreSQL test cluster, Chrome, or
+agent-browser process. No browser or product behavior was observed, and no
+retry or product source/test change occurred. Sanitized record:
+`/tmp/orgward-pr06-saved-result-keyboard-proof-5/attempt-summary.txt`. The
+saved-result keyboard interaction remains unverified; PR-06 remains first open,
+with cursor and release gates unchanged.
+
 PR-06 task profile empty-state copy (2026-09-28): saved task cards now distinguish
 an empty server execution-profile list, directing users to an OrgWard administrator,
 from existing profiles that cannot serve the task because model profiles require
