@@ -112,6 +112,16 @@ duration; log `/tmp/orgward-pr06-provider-outcome-projection-focused.log`). No
 database, browser or provider was used. `git diff --check` passed. PR-06 remains
 first open; cursor, checkboxes and release gates are unchanged.
 
+PR-06 cross-session outcome detail announcement (2026-09-28): when a matching
+linked run newly gains `outcome_unknown`, the status announcement now reuses the
+fixed allowlisted DeepSeek diagnostic copy, prefixed by the task title. Marker-only,
+invalid and non-DeepSeek diagnostics retain generic reconciliation guidance;
+first snapshots, repeated polls, prioritization and announcement bounds are
+unchanged. Restart-shaped helper tests passed 16/16 (0 failures/skips; 169 ms TAP
+duration; log `/tmp/orgward-pr06-outcome-announcement-focused.log`). No database,
+browser or provider was used. PR-06 remains first open; cursor, checkboxes and
+release gates are unchanged.
+
 PR-06 human escalation resolution pause-state UX (2026-09-28): the owner
 resolution form now matches the server's pause fences. While `PAUSE_REQUESTED`,
 resume/reassignment are disabled and the required select starts on a blank prompt;

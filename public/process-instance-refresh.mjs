@@ -1,3 +1,5 @@
+import { deepSeekOutcomeDiagnosticCopy } from './provider-outcome-diagnostic.mjs';
+
 function sameProjectSnapshot(currentProject, nextProject) {
   if (!currentProject && !nextProject) return true;
   if (!currentProject || !nextProject) return false;
@@ -72,7 +74,7 @@ export function processInstanceStatusAnnouncement(previousInstances = [], nextIn
     if (!outcomeBecameUnknown && (previous.status === next.status || !next.status)) continue;
     const title = processTaskTitle(next, processPlans);
     transitions.push(outcomeBecameUnknown
-      ? { title, unknownOutcome: true }
+      ? { title, unknownOutcome: true, outcomeCopy: deepSeekOutcomeDiagnosticCopy(nextLinkedRun.execution?.providerDiagnostic) }
       : { title, from: displayProcessTaskStatus(previous.status), to: displayProcessTaskStatus(next.status) });
   }
   if (!transitions.length) return '';
@@ -85,10 +87,11 @@ export function processInstanceStatusAnnouncement(previousInstances = [], nextIn
     return `${title} changed from ${from} to ${to}.`;
   }
   if (prioritizedTransitions.length === 1) {
-    return `${prioritizedTransitions[0].title}: Outcome unknown. An external request may have been received. Delivery is unverified. Reconcile with the provider before retrying.`;
+    const { title, outcomeCopy } = prioritizedTransitions[0];
+    return `${title}: ${outcomeCopy || 'Outcome unknown. An external request may have been received. Delivery is unverified. Reconcile with the provider before retrying.'}`;
   }
-  const visible = prioritizedTransitions.slice(0, limit).map(({ title, from, to, unknownOutcome }) => unknownOutcome
-    ? `${title}: Outcome unknown. An external request may have been received. Delivery is unverified. Reconcile with the provider before retrying.`
+  const visible = prioritizedTransitions.slice(0, limit).map(({ title, from, to, unknownOutcome, outcomeCopy }) => unknownOutcome
+    ? `${title}: ${outcomeCopy || 'Outcome unknown. An external request may have been received. Delivery is unverified. Reconcile with the provider before retrying.'}`
     : `${title} changed from ${from} to ${to}`);
   const remaining = prioritizedTransitions.length - visible.length;
   const label = prioritizedTransitions.some((transition) => transition.unknownOutcome)

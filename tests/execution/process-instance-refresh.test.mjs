@@ -107,6 +107,32 @@ test('new unknown delivery announces safe reconciliation copy with task title', 
   assert.doesNotMatch(announcement, /private-id|private-body/);
 });
 
+test('restart-shaped unknown delivery announcement includes only allowlisted DeepSeek detail copy', () => {
+  const previous = [linkedInstance('FAILED')];
+  const next = [linkedInstance('FAILED')];
+  const plans = [{ id: 'plan-1', revision: 1, tasks: [{ id: 'task-a', title: 'Send proposal' }] }];
+  const canary = 'private-body-request-id-message-code';
+  const restoredUnknownRun = JSON.parse(JSON.stringify(linkedRun('FAILED', {
+    outcome: 'outcome_unknown', provider: 'deepseek', httpStatus: 503,
+    parserFailureClass: 'invalid_json', transportFailureClass: 'connection_reset',
+    body: canary, requestId: canary, message: canary, code: canary,
+  })));
+  const announcement = processInstanceStatusAnnouncement(previous, next, plans,
+    [linkedRun('FAILED')], [restoredUnknownRun]);
+  assert.equal(announcement,
+    'Send proposal: Outcome unknown. DeepSeek returned HTTP 503; response parsing failed (invalid JSON); DeepSeek connection was reset. An external request may have been received. Delivery is unverified. Reconcile with the provider before retrying.');
+  assert.equal(announcement.includes(canary), false);
+  const invalidDetails = JSON.parse(JSON.stringify(linkedRun('FAILED', {
+    outcome: 'outcome_unknown', provider: 'other', httpStatus: 700,
+    parserFailureClass: canary, body: canary,
+  })));
+  const fallback = processInstanceStatusAnnouncement(previous, next, plans,
+    [linkedRun('FAILED')], [invalidDetails]);
+  assert.equal(fallback,
+    'Send proposal: Outcome unknown. An external request may have been received. Delivery is unverified. Reconcile with the provider before retrying.');
+  assert.equal(fallback.includes(canary), false);
+});
+
 test('marker-only unknown transition is announced once while first-seen and repeated snapshots stay silent', () => {
   const sameStatus = [linkedInstance('FAILED')];
   const ordinary = [linkedRun('FAILED')];
