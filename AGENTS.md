@@ -8,9 +8,12 @@ results.
 ## Active workflow
 
 `TASKS.md` is the implementation queue. Pick the first unblocked task, write or
-update focused behavior tests, implement the behavior across state/API/UI as needed,
-review the implementation diff, then run `npm run check` before marking the task
-complete. Keep task status honest.
+update focused behavior tests, and implement the behavior across state/API/UI as
+needed. Run the relevant focused tests for each bounded slice, then review the
+implementation diff. When the parent PR/task is ready to complete, freeze the
+source tree and run `npm run check` once before marking it complete. Do not run
+parallel or duplicate full checks. Rerun a full check only to repair a failed run;
+review the repair before rerunning. Keep task status honest.
 
 Follow the priority phases in `TASKS.md`: finish the saved/editable business
 design and the founder-to-operating end-to-end journey before standalone broad
@@ -48,11 +51,17 @@ findings in code and tests. Do not create review loops around metadata.
   actually implemented and tested.
 
 Use Luna for implementation, routine investigation and every test run. One Luna
-owner runs affected tests when a task slice is ready, reviews the diff, then runs
-`npm run check` once; rerun only to repair failures. A long check may run in the
-background while the source tree stays fixed, but the task remains open until its
-result is reviewed. Keep logs on disk; report counts, time and relevant failures.
-Legacy specification validators are optional historical diagnostics.
+owner runs affected focused tests for each bounded slice and reviews the source
+diff before the final check. Run one full `npm run check` per parent PR/task, only
+after its source tree is frozen and before that parent is marked complete. Never
+run duplicate or parallel full checks. If a full check fails, repair the cause,
+review the repair and rerun the full check. A long check may run in the background
+while the source tree stays fixed, but the task remains open until its result is
+reviewed. Keep logs on disk; report counts, elapsed time, skips and relevant
+failures accurately. The runner's shared PostgreSQL cluster per invocation,
+per-fixture database isolation and `--test-concurrency=2` remain unchanged: this
+VPS has 2 CPUs and limited `/tmp` tmpfs headroom. Legacy specification validators
+are optional historical diagnostics.
 
 Consult Sol only for a rare material design or security boundary. Send the exact
 question and minimum code slice; request a short finding and recommendation, with

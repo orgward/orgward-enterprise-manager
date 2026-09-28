@@ -9,12 +9,16 @@ vectors and packet instructions under `docs/production/` remain reference materi
 for requirements and dependencies. Their old "next" directions and unrun-status
 claims do not supersede the active checkbox, cursor, order or passing receipts here.
 
-Work the first unchecked, dependency-ready item. A task is complete only when its
-real state/API/UI behavior exists, focused behavior and recovery tests pass,
-`npm run check` passes, and the implementation diff has been reviewed. Do not count
-specification validators, manifests or generated vectors as product acceptance.
-Never perform live effects, deployments, purchases or external communications
-without explicit user authorization.
+Work the first unchecked, dependency-ready item. For each bounded implementation
+slice, run its relevant focused behavior and recovery tests and review the source
+diff. When the parent PR/task is ready for completion, freeze its source tree and
+run `npm run check` once; mark it complete only after that result and the review
+pass. Do not run parallel or duplicate full checks. Rerun a full check only to
+repair a failure, reviewing the repair first. Report counts and skips accurately;
+a skipped optional check is not passing coverage. Do not count specification
+validators, manifests or generated vectors as product acceptance. Never perform
+live effects, deployments, purchases or external communications without explicit
+user authorization.
 
 Work order (PR numbers are stable IDs, not numeric sequence):
 
@@ -49,6 +53,13 @@ increment, add its actual behavior and test/demo receipt under its PR item and
 record gaps or skipped checks explicitly. Advance the cursor and checkbox together
 only when the whole PR outcome passes its required behavior checks and review.
 Keep P/E release-gate status and evidence in their separate ledgers.
+Focused tests remain per-slice. Run the single full check at parent PR/task
+completion, after source freeze and diff review; do not run it concurrently with
+another full check. Keep the current test-runner isolation and resource settings:
+one shared PostgreSQL cluster per invocation, a separate database per fixture,
+and concurrency 2. The current VPS has 2 CPUs and low `/tmp` tmpfs headroom, so
+these settings are unchanged. Preserve skip and failure details in receipts; this
+workflow change does not mark any task, test or release gate complete.
 
 PR-06 human escalation resolution pause-state UX (2026-09-28): the owner
 resolution form now matches the server's pause fences. While `PAUSE_REQUESTED`,
