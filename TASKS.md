@@ -4868,6 +4868,34 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   or push. PR-06 remains the active cursor; PR-07/release gates remain open and
   unchanged.
 
+  T-28 rendered owner-review setup attempt (2026-09-28): in one preflighted
+  synthetic OIDC/PostgreSQL fixture, the owner and assigned human both signed in;
+  the worker identity was enrolled before the owner granted project membership.
+  The owner then created the saved-source case, accepted G4/G5, generated G6 and
+  compiled the eight-task draft. The rendered Delivery form showed all eight
+  selectors with no enabled actor binding and displayed the human-enrollment
+  guidance/link. A follow-up harness diagnostic failed after reload because its
+  page-local `window.__t28Proof` value was cleared; no assignment review,
+  promotion/start, checkpoint completion, restart or result readback was
+  performed. No retry occurred. Sanitized screenshot, AX snapshot and preflight:
+  `/tmp/orgward-t28-final-proof/owner-delivery-review.png`,
+  `/tmp/orgward-t28-final-proof/owner-delivery-review.ax.txt`, and
+  `/tmp/orgward-t28-final-proof/preflight.txt`. Browser, app, disposable DB and
+  PostgreSQL were cleaned. No provider or product source/test changes. PR-06
+  remains the active cursor; PR-07 and release gates remain open and unchanged.
+
+  PR-07 T-28 project-map enrollment navigation (2026-09-28): when no eligible
+  human actor binding exists, the assignment guidance now links to the current
+  project’s Enterprise design map using the existing project/view route, while
+  retaining the Administration link for identity and project membership. The
+  map link selects no actor and makes no state change; copy asks the owner to
+  choose the correct human actor and role and enable its binding. Focused tests
+  passed 26/26 (0 failures/skips; 1.92s TAP, 1.98s wall), log
+  `/tmp/orgward-pr07-human-map-guidance-focused.tap.log`; `node --check
+  public/sdlc.js` and `git diff --check` passed. No browser, provider, database
+  fixture, full check, commit or push. PR-06 remains the active cursor; PR-07
+  and release gates remain open and unchanged.
+
 - [ ] PR-08 — SCM, agent changes and immutable assurance (T-29–T-32; E-06, E-09).
   Let a user onboard a repository, request a bounded agent change, review its diff,
   and inspect reproducible build/test results. Keep credentials scoped and publish

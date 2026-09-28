@@ -314,6 +314,10 @@ test('shared interaction helpers retain drafts and round-trip linkable workspace
   const encoded = encodeStudioRoute({ projectId, view: 'map', selectedId: 'cap-delivery', types: ['process', 'capability'], area: 'capabilitiesProcesses' });
   assert.equal(encoded, `/?project=${projectId}&view=map&area=capabilitiesProcesses&selected=cap-delivery&types=capability%2Cprocess`);
   assert.deepEqual(decodeStudioRoute(encoded), { projectId, view: 'map', area: 'capabilitiesProcesses', selectedId: 'cap-delivery', types: ['capability', 'process'] });
+  const projectMap = encodeStudioRoute({ projectId, view: 'map' });
+  assert.equal(projectMap, `/?project=${projectId}&view=map`);
+  assert.deepEqual(decodeStudioRoute(projectMap), { projectId, view: 'map', area: null, selectedId: null, types: [] },
+    'the owner can open the project map without arbitrarily preselecting an actor');
   const coverageRoute = encodeStudioRoute({ projectId, view: 'coverage' });
   assert.deepEqual(decodeStudioRoute(coverageRoute), { projectId, view: 'coverage', area: null, selectedId: null, types: [] });
   assert.deepEqual(decodeStudioRoute('/?project=bad&view=unknown&selected=%20&area=arbitrary'), { projectId: null, view: 'blueprint', area: null, selectedId: null, types: [] });

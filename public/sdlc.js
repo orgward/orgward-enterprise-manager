@@ -1,5 +1,5 @@
 import { caseUiModel, createSourceSelectionGuard } from './sdlc-view.mjs';
-import { encodeExecutionRoute } from './shared-interactions.mjs';
+import { encodeExecutionRoute, encodeStudioRoute } from './shared-interactions.mjs';
 import { clearPendingSoftwareStart, createSoftwareStartFlightGuard, pendingSoftwareStartKey } from './software-runtime-start.mjs';
 
 const state = { meta: null, projects: [], sourceProject: null, activeSourceProject: null, sourceSelectionGuard: createSourceSelectionGuard(), cases: [], changeCase: null, softwareDeliveryPlans: [], actorBindings: [], tab: 'overview', authenticated: false, principal: null, tenantId: '', sessionId: '' };
@@ -790,7 +790,8 @@ function renderDelivery(content) {
         form.append(submit);
         form.addEventListener('submit', (event) => { event.preventDefault(); saveSoftwarePlanAssignments(form, currentDraft, draftEntry); });
         if (!hasHumanBinding) form.append(el('p', { className: 'muted assignment-enrollment-guidance' }, [
-          el('span', { text: 'No eligible human actor binding is enabled for this blueprint. Have the colleague sign in once, add their verified identity to this project’s membership, then return to Enterprise design and enable a human actor binding for this blueprint.' }),
+          el('span', { text: 'No eligible human actor binding is enabled for this blueprint. Have the colleague sign in once and add their verified identity to this project’s membership. Then choose the correct human actor and role, and propose and enable its binding for this blueprint.' }),
+          el('a', { text: 'Open this project’s Enterprise design map', attrs: { href: encodeStudioRoute({ projectId: changeCase.projectId, view: 'map' }) } }),
           el('a', { text: 'Open Administration: Identity access and Project access', attrs: { href: '/platform.html#administration' } }),
         ]));
         return form;

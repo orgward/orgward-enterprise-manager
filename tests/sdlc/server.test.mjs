@@ -426,8 +426,12 @@ test('served SDLC product surface and meta contract expose stages and mutation l
   assert.match(script, /bindings\.proposals\.filter/);
   assert.match(script, /state\.actorBindings\.some\(\(binding\) => binding\.targetType === 'human'\)/,
     'assignment guidance appears when eligible bindings do not include a human');
-  assert.match(script, /No eligible human actor binding is enabled for this blueprint[\s\S]*?sign in once[\s\S]*?verified identity to this project’s membership[\s\S]*?enable a human actor binding/,
+  assert.match(script, /No eligible human actor binding is enabled for this blueprint[\s\S]*?sign in once[\s\S]*?verified identity to this project’s membership[\s\S]*?correct human actor and role[\s\S]*?propose and enable its binding/,
     'owner copy explains identity sign-in, project membership, and blueprint binding prerequisites');
+  assert.match(script, /encodeStudioRoute\(\{ projectId: changeCase\.projectId, view: 'map' \}\)/,
+    'the contextual project map link selects no actor and only navigates to the existing map route');
+  assert.match(script, /Open this project’s Enterprise design map/,
+    'the owner is told the map link requires choosing the correct actor and role there');
   assert.match(script, /href: '\/platform\.html#administration'/,
     'the enrollment guidance links to the existing Administration view');
   assert.match(script, /Save revised owner review snapshot/);
