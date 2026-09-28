@@ -50,6 +50,20 @@ record gaps or skipped checks explicitly. Advance the cursor and checkbox togeth
 only when the whole PR outcome passes its required behavior checks and review.
 Keep P/E release-gate status and evidence in their separate ledgers.
 
+PR-06 human escalation resolution pause-state UX (2026-09-28): the owner
+resolution form now matches the server's pause fences. While `PAUSE_REQUESTED`,
+resume/reassignment are disabled and the required select starts on a blank prompt;
+succeeded/failed remain available to settle the pause boundary. While `PAUSED`,
+all dispositions are disabled with resume-first guidance; the task card continues
+to omit the form. Active instances retain eligible choices, and server enforcement
+is unchanged. Focused helper and served-client tests passed 4/4. The final frozen
+`npm run check` passed 393/394 (393 passed, 0 failed, 1 optional PostgreSQL
+backup/restore skip because client tools are unavailable; 76.40s test phase),
+TAP `/tmp/orgward-tests-KBVst5/node-test.tap.log`, wrapper
+`/tmp/orgward-pr06-human-escalation-paused-check.log`. `git diff --check` passed.
+No provider/browser activity or external effects. PR-06 remains first open; cursor,
+checkboxes and release gates are unchanged.
+
 PR-06 cross-session Orca announcement proof attempts (2026-09-28): one
 provider-free fixture/browser attempt rendered the synthetic Bob task as
 `IN_PROGRESS`, but its second-session escalation stopped before the request

@@ -455,7 +455,27 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
     && executionSource.includes("text: `Human checkpoint result: ${runtime.outcome.result}. Evidence: ${runtime.evidence.join(' · ') || 'none recorded'}`"),
     'the human task card renders the persisted result value and that runtime row’s evidence');
   assert.match(executionSource, /submitHumanTaskCommand\(/);
-  assert.match(executionSource, /Reassign to an eligible project human/);
+  assert.match(executionSource, /humanTaskEscalationResolutionOptions\(/);
+  assert.match(executionSource, /instanceControlStatus: runtime\.instanceControl\?\.status/);
+  assert.match(executionSource, /resolutionOptions\.resume\.disabled/);
+  assert.match(executionSource, /resolutionOptions\.reassign\.disabled/);
+  assert.match(executionSource, /resolutionOptions\.initialChoiceRequired/);
+  assert.match(executionSource, /resolutionOptions\.succeeded\.disabled/);
+  assert.match(executionSource, /resolutionOptions\.failed\.disabled/);
+  assert.match(executionSource, /Choose an available owner resolution/);
+  assert.match(executionSource, /value: '', disabled: 'disabled', selected: 'selected'/);
+  assert.match(executionSource, /This process instance is paused\. Resume it before a project owner resolves the escalated checkpoint\./);
+  const escalationResolutionClient = await fetch(`${base}/human-task-escalation-resolution.mjs`);
+  assert.equal(escalationResolutionClient.status, 200);
+  const escalationResolutionSource = await escalationResolutionClient.text();
+  assert.match(escalationResolutionSource, /instanceControlStatus === 'PAUSE_REQUESTED'/);
+  assert.match(escalationResolutionSource, /Resume unavailable · instance pause is pending/);
+  assert.match(escalationResolutionSource, /Reassignment unavailable · instance pause is pending/);
+  assert.match(escalationResolutionSource, /instanceControlStatus === 'PAUSED'/);
+  assert.match(escalationResolutionSource, /Resume unavailable · instance is paused/);
+  assert.match(escalationResolutionSource, /Reassignment unavailable · instance is paused/);
+  assert.match(escalationResolutionSource, /This process instance is paused\. Resume the process instance before a project owner resolves this escalated checkpoint\./);
+  assert.match(escalationResolutionSource, /Resolve this checkpoint as succeeded or failed/);
   assert.match(executionSource, /humanReassignmentCandidates/);
   assert.match(executionSource, /targetPrincipal: disposition\.value === 'reassign' \? targetPrincipal\.value : null/);
   assert.match(executionSource, /expectedVersion: disposition\.value === 'reassign' \? runtime\.version : null/);

@@ -3,6 +3,7 @@ import { deriveProcessTaskState } from './process-task-state.mjs';
 import { processTaskStatusAnnouncement, scheduleProcessTaskAnnouncement, summarizeBlockedTaskTransitions } from './process-task-announcement.mjs';
 import { humanTaskHistoryEntries } from './human-task-history.mjs';
 import { humanTaskEffectiveAssigneePresentation } from './human-task-effective-assignee.mjs';
+import { humanTaskEscalationResolutionOptions } from './human-task-escalation-resolution.mjs';
 import { humanTaskInputDisclosureKey, humanTaskInputDisclosureOpen, processTaskHumanInputReview,
   rememberHumanTaskInputDisclosure } from './human-task-input-review.mjs';
 import { humanTaskOutputApplicationState, humanTaskOutputCommand } from './human-task-output-application.mjs';
@@ -1498,13 +1499,19 @@ function renderHumanTaskEscalation({ project, plan, task, selectedInstance }) {
 function renderHumanTaskEscalationResolution({ project, plan, task, selectedInstance, runtime }) {
   const form = el('form', { className: 'execution-form human-task-escalation-resolution', attrs: { 'aria-label': `Resolve escalated human task ${task.title}` } });
   const reassignmentCandidates = Array.isArray(runtime.humanReassignmentCandidates) ? runtime.humanReassignmentCandidates : [];
+  const resolutionOptions = humanTaskEscalationResolutionOptions({
+    instanceControlStatus: runtime.instanceControl?.status,
+    reassignmentAvailable: reassignmentCandidates.length > 0,
+  });
   const disposition = el('select', { attrs: { name: 'disposition', required: 'required', 'aria-label': `Owner resolution for ${task.title}` } }, [
-    el('option', { text: 'Resume assigned human task', attrs: { value: 'resume' } }),
-    el('option', { text: reassignmentCandidates.length
-      ? 'Reassign to an eligible project human' : 'Reassignment unavailable · no eligible human members',
-    attrs: { value: 'reassign', ...(reassignmentCandidates.length ? {} : { disabled: 'disabled' }) } }),
-    el('option', { text: 'Mark succeeded', attrs: { value: 'succeeded' } }),
-    el('option', { text: 'Mark failed', attrs: { value: 'failed' } }),
+    ...(resolutionOptions.initialChoiceRequired ? [el('option', {
+      text: 'Choose an available owner resolution', attrs: { value: '', disabled: 'disabled', selected: 'selected' },
+    })] : []),
+    el('option', { text: resolutionOptions.resume.label, attrs: { value: 'resume', ...(resolutionOptions.resume.disabled ? { disabled: 'disabled' } : {}) } }),
+    el('option', { text: resolutionOptions.reassign.label,
+      attrs: { value: 'reassign', ...(resolutionOptions.reassign.disabled ? { disabled: 'disabled' } : {}) } }),
+    el('option', { text: 'Mark succeeded', attrs: { value: 'succeeded', ...(resolutionOptions.succeeded.disabled ? { disabled: 'disabled' } : {}) } }),
+    el('option', { text: 'Mark failed', attrs: { value: 'failed', ...(resolutionOptions.failed.disabled ? { disabled: 'disabled' } : {}) } }),
   ]);
   const targetPrincipal = el('select', { attrs: { name: 'targetPrincipal', 'aria-label': `New human assignee for ${task.title}`, disabled: 'disabled' } }, [
     el('option', { text: 'Choose an active human project member', attrs: { value: '' } }),
@@ -1529,6 +1536,7 @@ function renderHumanTaskEscalationResolution({ project, plan, task, selectedInst
   const status = el('p', { className: 'muted human-task-command-status', attrs: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' } });
   form.append(
     el('p', { className: 'muted', text: 'Only a project owner with workspace write access can resolve this escalation. Reassignment is an explicit owner override to another active human project member with workspace write access; it keeps the pinned plan unchanged. Reassignment and marking succeeded require evidence.' }),
+    ...(resolutionOptions.pauseMessage ? [el('p', { className: 'muted', text: resolutionOptions.pauseMessage })] : []),
     el('label', { text: 'Resolution' }, disposition),
     targetLabel,
     el('label', { text: 'Owner reason (required)' }, reason),
