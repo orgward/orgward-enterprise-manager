@@ -64,6 +64,22 @@ TAP `/tmp/orgward-tests-KBVst5/node-test.tap.log`, wrapper
 No provider/browser activity or external effects. PR-06 remains first open; cursor,
 checkboxes and release gates are unchanged.
 
+PR-06 human escalation pause-boundary PostgreSQL regression (2026-09-28): the
+existing mixed-human journey now covers a second assigned root instance across
+`PAUSE_REQUESTED` and `PAUSED`. Owner resume and reassignment are denied while
+the pause is draining; an owner failure resolution is accepted and settles the
+pause; another resolution is denied after the instance is paused. Restart
+readback verifies task status/evidence, the escalation-resolution event and both
+pause-control events, and a post-restart resolution remains denied. The first
+focused run exposed an incorrect expected HTTP status in the new test (pause
+returns 200); after correcting it, the focused PostgreSQL journey passed 1/1
+(16.32s runner), log `/tmp/orgward-pr06-human-pause-resolution-focused-final.log`.
+The single frozen-tree `npm run check` passed 393/394 (393 passed, 0 failed, 1
+skipped; 77.27s TAP), TAP `/tmp/orgward-tests-3ylV8I/node-test.tap.log`, wrapper
+`/tmp/orgward-pr06-human-pause-resolution-check.log`. `git diff --check` passed.
+No source/API changes, provider/browser activity, or external effects. PR-06
+remains first open; cursor, checkboxes and release gates are unchanged.
+
 PR-06 cross-session Orca announcement proof attempts (2026-09-28): one
 provider-free fixture/browser attempt rendered the synthetic Bob task as
 `IN_PROGRESS`, but its second-session escalation stopped before the request

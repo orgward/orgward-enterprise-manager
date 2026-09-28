@@ -8659,6 +8659,68 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     }),
   }, 201);
   assert.equal(mixedEscalated.status, 'ESCALATED');
+
+  const pauseBoundaryStart = await request(app.base, '/api/execution/process-task-instances/start', {
+    ...as('bob'), method: 'POST', body: command('process-task-mixed-pause-boundary-start', mixedRootPayload),
+  }, 201);
+  const pauseBoundaryRefs = { ...mixedRootPayload, planInstanceId: pauseBoundaryStart.planInstanceId };
+  const pauseBoundaryEscalated = await request(app.base, '/api/execution/process-task-instances/escalate', {
+    ...as('bob'), method: 'POST', body: command('process-task-mixed-pause-boundary-escalate', {
+      ...pauseBoundaryRefs, reason: 'The owner must review before this checkpoint can continue.', evidence: ['Pause boundary regression setup.'],
+    }),
+  }, 201);
+  assert.equal(pauseBoundaryEscalated.status, 'ESCALATED');
+  const pauseBoundaryRuntime = (await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances
+    .find((runtime) => runtime.planInstanceId === pauseBoundaryStart.planInstanceId && runtime.taskId === mixedHumanRootTask.id);
+  const pendingPause = await request(app.base, '/api/execution/process-task-instances/pause', {
+    ...as('alice'), method: 'POST', body: command('process-task-mixed-pause-boundary-pause', {
+      projectId: project.id, planInstanceId: pauseBoundaryStart.planInstanceId,
+      version: pauseBoundaryRuntime.instanceControl.version, reason: 'Drain the escalated human checkpoint before pausing.',
+    }),
+  }, 200);
+  assert.equal(pendingPause.status, 'PAUSE_REQUESTED');
+  const pausedEscalationRuntime = (await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances
+    .find((runtime) => runtime.planInstanceId === pauseBoundaryStart.planInstanceId && runtime.taskId === mixedHumanRootTask.id);
+  assert.equal(pausedEscalationRuntime.status, 'ESCALATED');
+  assert.equal(pausedEscalationRuntime.instanceControl.status, 'PAUSE_REQUESTED');
+  const resumeDuringPause = await request(app.base, '/api/execution/process-task-instances/resolve', {
+    ...as('alice'), method: 'POST', body: command('process-task-mixed-resume-during-pause', {
+      ...pauseBoundaryRefs, disposition: 'resume', reason: 'Attempt resume across pending pause.', evidence: [],
+    }),
+  }, 409);
+  assert.equal(resumeDuringPause.error.code, 'PROCESS_INSTANCE_PAUSED');
+  const reassignDuringPause = await request(app.base, '/api/execution/process-task-instances/resolve', {
+    ...as('alice'), method: 'POST', body: command('process-task-mixed-reassign-during-pause', {
+      ...pauseBoundaryRefs, disposition: 'reassign', targetPrincipal: principal('carol'),
+      expectedVersion: pausedEscalationRuntime.version, reason: 'Attempt reassignment across pending pause.',
+      evidence: ['Reassignment must wait until the instance is active.'],
+    }),
+  }, 409);
+  assert.equal(reassignDuringPause.error.code, 'PROCESS_INSTANCE_PAUSED');
+  const pauseBoundaryFailed = await request(app.base, '/api/execution/process-task-instances/resolve', {
+    ...as('alice'), method: 'POST', body: command('process-task-mixed-terminal-during-pause', {
+      ...pauseBoundaryRefs, disposition: 'failed', reason: 'The owner closes this escalated checkpoint as failed.',
+      evidence: ['The saved checkpoint could not be verified.'],
+    }),
+  }, 201);
+  assert.equal(pauseBoundaryFailed.status, 'FAILED');
+  const drainedPauseRuntime = (await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances
+    .find((runtime) => runtime.planInstanceId === pauseBoundaryStart.planInstanceId && runtime.taskId === mixedHumanRootTask.id);
+  assert.equal(drainedPauseRuntime.status, 'FAILED');
+  assert.equal(drainedPauseRuntime.instanceControl.status, 'PAUSED',
+    'a terminal owner resolution drains the pending pause boundary');
+  assert.ok(drainedPauseRuntime.instanceControl.events.some((event) => event.type === 'ProcessTaskInstancePauseRequested'));
+  assert.ok(drainedPauseRuntime.instanceControl.events.some((event) => event.type === 'ProcessTaskInstancePaused'));
+  const resolutionWhilePaused = await request(app.base, '/api/execution/process-task-instances/resolve', {
+    ...as('alice'), method: 'POST', body: command('process-task-mixed-resolve-while-paused', {
+      ...pauseBoundaryRefs, disposition: 'failed', reason: 'A second resolution must not cross the paused boundary.', evidence: [],
+    }),
+  }, 409);
+  assert.equal(resolutionWhilePaused.error.code, 'PROCESS_INSTANCE_PAUSED');
+
   const mixedDependentWhileEscalated = await taskRequest('process-task-mixed-agent-while-escalated',
     mixedDependentPayload(mixedHumanStart.planInstanceId), 'alice', 409);
   assert.equal(mixedDependentWhileEscalated.error.code, 'PROCESS_TASK_DEPENDENCY_UNSATISFIED');
@@ -9387,6 +9449,23 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(restoredProject.processPlans.filter((savedPlan) => savedPlan.id === plan.id).at(-1).revision, 3);
   const restoredTaskInstances = (await request(app.base,
     `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('bob'))).instances;
+  const restoredPauseBoundaryHuman = restoredTaskInstances.find((runtime) =>
+    runtime.taskId === mixedHumanRootTask.id && runtime.planInstanceId === pauseBoundaryStart.planInstanceId);
+  assert.equal(restoredPauseBoundaryHuman.status, 'FAILED');
+  assert.deepEqual(restoredPauseBoundaryHuman.evidence, ['The saved checkpoint could not be verified.']);
+  assert.equal(restoredPauseBoundaryHuman.instanceControl.status, 'PAUSED');
+  assert.ok(restoredPauseBoundaryHuman.instanceControl.events.some((event) => event.type === 'ProcessTaskInstancePauseRequested'));
+  assert.ok(restoredPauseBoundaryHuman.instanceControl.events.some((event) => event.type === 'ProcessTaskInstancePaused'));
+  const restoredPauseResolution = restoredPauseBoundaryHuman.events.find((event) => event.type === 'HumanTaskEscalationResolved');
+  assert.equal(restoredPauseResolution.data.disposition, 'failed');
+  assert.equal(restoredPauseResolution.data.reason, 'The owner closes this escalated checkpoint as failed.');
+  assert.deepEqual(restoredPauseResolution.data.evidence, ['The saved checkpoint could not be verified.']);
+  const restoredPausedResolutionDenied = await request(app.base, '/api/execution/process-task-instances/resolve', {
+    ...as('alice'), method: 'POST', body: command('process-task-mixed-restart-resolve-while-paused', {
+      ...pauseBoundaryRefs, disposition: 'failed', reason: 'Restarted paused control still fences resolution.', evidence: [],
+    }),
+  }, 409);
+  assert.equal(restoredPausedResolutionDenied.error.code, 'PROCESS_INSTANCE_PAUSED');
   const restoredReassignedHuman = restoredTaskInstances.find((runtime) => runtime.taskId === 'task-process-review'
     && runtime.planInstanceId === secondRoot.processTaskRef.planInstanceId);
   assert.equal(restoredReassignedHuman.status, 'SUCCEEDED');
