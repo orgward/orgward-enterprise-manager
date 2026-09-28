@@ -4855,6 +4855,19 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   Rendered end-to-end journey remains unverified; PR-06 remains the active cursor,
   and PR-07/release gates remain open and unchanged.
 
+  PR-07 T-28 human enrollment guidance (2026-09-28): the owner assignment form
+  now explains that a colleague must sign in once, receive project membership,
+  and have an enabled human actor binding for the blueprint before they can be
+  assigned to human work. Guidance appears when no eligible human binding exists,
+  including when other enabled agent bindings are available, and links to the
+  existing Administration view for Identity access and Project access. No API or
+  authorization behavior changed. Focused served-client tests passed 18/18
+  (0 failures/skips; 2.01s TAP, 2.12s wall), log
+  `/tmp/orgward-pr07-human-enrollment-guidance-focused.tap.log`;
+  `git diff --check` passed. No full check, browser, provider, DB fixture, commit
+  or push. PR-06 remains the active cursor; PR-07/release gates remain open and
+  unchanged.
+
 - [ ] PR-08 — SCM, agent changes and immutable assurance (T-29–T-32; E-06, E-09).
   Let a user onboard a repository, request a bounded agent change, review its diff,
   and inspect reproducible build/test results. Keep credentials scoped and publish

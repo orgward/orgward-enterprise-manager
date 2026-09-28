@@ -221,6 +221,12 @@ test('serves truthful product-status assets and declared capability boundaries',
   assert.match(script, /Actual local records/);
   assert.match(script, /Development headers are not a security boundary/);
   assert.match(script, /The colleague must sign in once first/);
+  assert.match(script, /<h2>Project access<\/h2>/,
+    'Administration has the existing project membership controls linked by owner guidance');
+  assert.match(script, /<h2>Identity access<\/h2>/,
+    'Administration has the existing verified identity controls linked by owner guidance');
+  assert.match(script, /window\.location\.hash\.slice\(1\)/,
+    'the Administration hash link selects its existing routed view');
   assert.match(script, /View specification/);
   assert.doesNotMatch(script, /Northstar Bank|238 checks|42m|18m waiting/);
   assert.match(styles, /@media \(max-width: 780px\)/);

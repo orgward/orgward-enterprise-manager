@@ -424,6 +424,12 @@ test('served SDLC product surface and meta contract expose stages and mutation l
   assert.match(script, /Save owner review snapshot/);
   assert.match(script, /assignment-review/);
   assert.match(script, /bindings\.proposals\.filter/);
+  assert.match(script, /state\.actorBindings\.some\(\(binding\) => binding\.targetType === 'human'\)/,
+    'assignment guidance appears when eligible bindings do not include a human');
+  assert.match(script, /No eligible human actor binding is enabled for this blueprint[\s\S]*?sign in once[\s\S]*?verified identity to this project’s membership[\s\S]*?enable a human actor binding/,
+    'owner copy explains identity sign-in, project membership, and blueprint binding prerequisites');
+  assert.match(script, /href: '\/platform\.html#administration'/,
+    'the enrollment guidance links to the existing Administration view');
   assert.match(script, /Save revised owner review snapshot/);
   assert.match(script, /expectedReviewRevision/);
   assert.match(script, /not executable/);

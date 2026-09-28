@@ -764,6 +764,7 @@ function renderDelivery(content) {
       el('p', { text: `Plan ${currentDraft.id} · compiler ${currentDraft.compilerVersion} · source ${currentDraft.binding.sourceHash} · G4 ${currentDraft.binding.requirementsBaselineHash} · G5 ${currentDraft.binding.architectureBaselineHash} · G6 ${currentDraft.binding.g6PlanHash}` }),
       ...[(() => {
         const form = el('form', { className: 'assignment-review-form' });
+        const hasHumanBinding = state.actorBindings.some((binding) => binding.targetType === 'human');
         form.append(el('p', { text: draftEntry.assignmentReview
           ? 'Revise the proposed assignment snapshot. Previous owner review revisions remain saved; this review does not start work.'
           : 'Assign every proposed task to an existing enabled human or agent binding. Saving records an owner review snapshot only.' }));
@@ -788,7 +789,10 @@ function renderDelivery(content) {
         const submit = el('button', { className: 'button primary', text: draftEntry.assignmentReview ? 'Save revised owner review snapshot' : 'Save owner review snapshot', attrs: submitAttrs });
         form.append(submit);
         form.addEventListener('submit', (event) => { event.preventDefault(); saveSoftwarePlanAssignments(form, currentDraft, draftEntry); });
-        if (!state.actorBindings.length) form.append(el('p', { text: 'No current enabled actor bindings are available for this saved blueprint.' }));
+        if (!hasHumanBinding) form.append(el('p', { className: 'muted assignment-enrollment-guidance' }, [
+          el('span', { text: 'No eligible human actor binding is enabled for this blueprint. Have the colleague sign in once, add their verified identity to this project’s membership, then return to Enterprise design and enable a human actor binding for this blueprint.' }),
+          el('a', { text: 'Open Administration: Identity access and Project access', attrs: { href: '/platform.html#administration' } }),
+        ]));
         return form;
       })()],
       ...(review && !humanAssignments ? [el('p', { className: 'muted', text: 'Promotion is unavailable: every task must have an exact, current human assignee. Agent tasks need the separate PR-08 software output contract.' })] : []),
