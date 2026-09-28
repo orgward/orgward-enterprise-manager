@@ -139,6 +139,20 @@ The single frozen-tree `npm run check` passed 334/335 (334 passed, 0 failed,
 passed before and after. No live provider call or browser test. PR-06, cursor and
 release gates remain unchanged.
 
+PR-06 saved-result disclosure focus recovery (2026-09-28): expanded disclosures
+already retained their open state across task-card rerenders, and changed
+cross-session snapshots defer while focus remains in the plan. A same-snapshot
+reconciliation can still rerender cards; it now captures focused result summaries
+and links by exact project/run key and restores the matching element without
+scrolling. Closed disclosures remain closed and can be reopened normally. Focused
+helper, served-client and refresh tests passed 20/20 (0.85s), TAP
+`/tmp/orgward-tests-AQePyd/node-test.tap.log`. The single frozen-source
+`npm run check` passed 390/391 (390 passed, 0 failed, 1 optional PostgreSQL
+backup/restore skip because client tools are unavailable; 79.15s TAP), TAP
+`/tmp/orgward-tests-HnyXku/node-test.tap.log`. `node --check` on edited client and
+tests plus `git diff --check` passed. No browser/provider activity. PR-06 cursor,
+checkboxes and release gates remain unchanged.
+
 The default `npm test` runner uses Node's process-isolated test-file workers with
 concurrency 2. When selected tests need PostgreSQL, the runner creates one
 runner-owned disposable loopback cluster per invocation and passes its internally

@@ -292,13 +292,20 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(executionSource, /text: resultSummary\.summaryLabel/);
   assert.match(executionSource, /captureExpandedSavedTaskResultKeys\([\s\S]*?container\.replaceChildren\(\)/,
     'plan rerenders snapshot expanded saved-result disclosures before replacing their cards');
+  assert.match(executionSource, /captureFocusedSavedTaskResult\(savedTaskResultDetails, document\.activeElement\)/,
+    'plan rerenders capture focus inside the saved-result disclosure before replacing cards');
   assert.match(executionSource, /restoreSavedTaskResultOpen\(disclosureKey, expandedSavedTaskResults\)/);
+  assert.match(executionSource, /restoreFocusedSavedTaskResult\(focusedSavedTaskResult,[\s\S]*?container\.querySelectorAll\('details\[data-saved-task-result-key\]'\)\)/,
+    'plan rerenders restore the same saved-result summary or action link after building replacement cards');
   assert.match(executionSource, /'data-saved-task-result-key': disclosureKey/);
   const savedTaskResultDisclosureClient = await fetch(`${base}/saved-task-result-disclosure.mjs`);
   assert.equal(savedTaskResultDisclosureClient.status, 200);
   const savedTaskResultDisclosureSource = await savedTaskResultDisclosureClient.text();
   assert.match(savedTaskResultDisclosureSource, /JSON\.stringify\(\[projectId, runId\]\)/);
   assert.match(savedTaskResultDisclosureSource, /detail\?\.open === true/);
+  assert.match(savedTaskResultDisclosureSource, /activeElement\.tagName === 'SUMMARY'/);
+  assert.match(savedTaskResultDisclosureSource, /activeElement\.tagName === 'A'/);
+  assert.match(savedTaskResultDisclosureSource, /target\.focus\(\{ preventScroll: true \}\)/);
   assert.match(executionSource, /Saved output preview:/);
   assert.match(executionSource, /resultSummary\.proposalPreview\?\.kind === 'proposal'/);
   assert.match(executionSource, /if \(preview\.designLink\) disclosure\.append\(el\('a', \{[\s\S]*?text: preview\.designLink\.label, attrs: \{ href: preview\.designLink\.href \}/,

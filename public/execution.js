@@ -19,7 +19,8 @@ import { isCurrentProcessInstanceRefresh, processInstanceRefreshDisposition, pro
 import { isCurrentSelectedRunRefresh, selectedRunRefreshDisposition, selectedRunRefreshMessage, selectedRunStatusAnnouncement } from './selected-run-refresh.mjs';
 import { linkedProcessTaskResult } from './linked-process-task-result.mjs';
 import { linkedRunActivityLabel } from './linked-run-activity.mjs';
-import { captureExpandedSavedTaskResultKeys, restoreSavedTaskResultOpen, savedTaskResultDisclosureKey } from './saved-task-result-disclosure.mjs';
+import { captureExpandedSavedTaskResultKeys, captureFocusedSavedTaskResult, restoreFocusedSavedTaskResult,
+  restoreSavedTaskResultOpen, savedTaskResultDisclosureKey } from './saved-task-result-disclosure.mjs';
 import { blockedProcessTaskRecoveryCopy, processTaskRecoveryAction, selectFreshProcessTaskInstance } from './process-task-recovery.mjs';
 import { processTaskAssignmentTransparency } from './process-task-assignment.mjs';
 import { processTaskGuidanceReview } from './process-task-guidance-review.mjs';
@@ -633,8 +634,9 @@ function updatePlanButtonLabel() {
 }
 
 function renderProcessPlans(container, plans, project, { allowNewInstances = true, showHistory = true, skipBlockedAnnouncement = false } = {}) {
-  const expandedSavedTaskResults = captureExpandedSavedTaskResultKeys(
-    container.querySelectorAll('details[data-saved-task-result-key]'));
+  const savedTaskResultDetails = container.querySelectorAll('details[data-saved-task-result-key]');
+  const expandedSavedTaskResults = captureExpandedSavedTaskResultKeys(savedTaskResultDetails);
+  const focusedSavedTaskResult = captureFocusedSavedTaskResult(savedTaskResultDetails, document.activeElement);
   container.replaceChildren();
   if (!plans.length) return container.append(el('p', { className: 'muted', text: 'No planning graphs saved for this project.' }));
   const blockedAnnouncements = [];
@@ -1228,6 +1230,8 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
       }),
     });
   }
+  restoreFocusedSavedTaskResult(focusedSavedTaskResult,
+    container.querySelectorAll('details[data-saved-task-result-key]'));
 }
 
 async function submitInstanceControl({ project, instanceId, control, action, form, button, status, payload, endpoint, successMessage }) {
