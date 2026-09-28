@@ -5101,3 +5101,22 @@ work here; do not create metadata-only completion loops.
   database. No host permissions or provider settings changed. This is an
   unsuccessful PR-06 proof; task checkboxes, cursor and release gates remain
   unchanged.
+
+  PR-06 single fresh DeepSeek provider diagnostic attempt (2026-09-28): a fresh
+  disposable fixture created a synthetic saved project/design and `process-review`
+  plan, loaded the authorized OpenClaw credential directly into the encrypted
+  tenant secret store, requested linked `task-process-learn` execution against the
+  installation-supplied `deepseek-current` profile (512-token cap), and recorded
+  independent approval. Exactly one local execute request was sent for run
+  `execution-run-632b9a95-e908-4e95-8be4-ddd07484f4be`; the local API returned
+  HTTP 200, while the run ended `FAILED` with one durable `outcome_unknown`
+  provider attempt and allowlisted upstream diagnostic DeepSeek HTTP 401. The
+  credential non-leak check passed; no raw provider response was retained. Per the
+  stop rule there was no retry, restart, or post-failure readback, and no proposal
+  was returned. This diagnostic fixture did not complete the human checkpoint and
+  does not verify the tenant-managed profile path or close the full PR-06 journey.
+  The disposable app/database/PostgreSQL cluster and temporary workspace were
+  cleaned. Sanitized evidence:
+  `/tmp/orgward-pr06-managed-profile-proof-20260928-prepared/attempt-summary-1790633379644b62ea665a1b.json`.
+  PR-06 remains first open; task checkboxes, cursor and release gates are
+  unchanged.
