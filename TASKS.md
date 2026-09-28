@@ -4526,6 +4526,14 @@ cursor, task checkboxes and release gates are unchanged.
   Captured startup error: `/tmp/orgward-pr07-agent-browser-start.log`. PR-06 stays
   the active cursor; PR-07 and release gates remain open.
 
+  T-28 rendered journey follow-up (2026-09-28): static source/test preflight
+  identified the saved-source → G4/G5/G6 → compile/review → promote/start →
+  human completion sequence, but the bounded direct-CDP proof stopped before
+  launch because its temporary interaction harness was incomplete. The script
+  was removed; no app, PostgreSQL fixture, or browser started, and no rendered,
+  keyboard, or restart behavior was observed. Evidence:
+  `/tmp/orgward-pr07-t28-render-proof-20260928-1/attempt-summary.txt`.
+
   T-28 human checkpoint saved-result readback regression (2026-09-28): the
   PostgreSQL persistence journey now asserts after app restart that the completed
   human task retains outcome `succeeded` and exact evidence. Its single matching
