@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { createApp } from '../../server.mjs';
 import { addConversationTurn, createProject, editBlueprintObject, latestBlueprint } from '../../src/model.mjs';
+import { eligibleActorBindings } from '../../public/sdlc-view.mjs';
 
 async function start(root) {
   const app = createApp({ dataDirectory: path.join(root, 'blueprints'), sdlcDirectory: path.join(root, 'sdlc') });
@@ -20,6 +21,18 @@ async function request(base, route, options = {}, expected = 200) {
   assert.equal(response.status, expected, JSON.stringify(body));
   return body;
 }
+
+test('SDLC client selects and renders eligible actor bindings from the API data envelope', () => {
+  const response = { schemaVersion: '1.0', data: { proposals: [
+    { id: 'human-current', targetType: 'human', status: 'enabled', eligibilityStatus: 'eligible', blueprintVersion: 7 },
+    { id: 'agent-current', targetType: 'agent', status: 'enabled', eligibilityStatus: 'eligible', blueprintVersion: 7 },
+    { id: 'human-pending', targetType: 'human', status: 'proposed', eligibilityStatus: 'eligible', blueprintVersion: 7 },
+    { id: 'human-stale', targetType: 'human', status: 'enabled', eligibilityStatus: 'eligible', blueprintVersion: 6 },
+    { id: 'human-ineligible', targetType: 'human', status: 'enabled', eligibilityStatus: 'membership-missing', blueprintVersion: 7 },
+  ] }, meta: { correlationId: 'test' } };
+  const renderedBindings = eligibleActorBindings(response, 7);
+  assert.deepEqual(renderedBindings.map((binding) => binding.id), ['human-current', 'agent-current']);
+});
 
 test('SDLC API persists and resumes a golden case across process restart', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'orgward-sdlc-api-'));
@@ -423,15 +436,16 @@ test('served SDLC product surface and meta contract expose stages and mutation l
   assert.match(script, /OWNER REVIEWED · Revision/);
   assert.match(script, /Save owner review snapshot/);
   assert.match(script, /assignment-review/);
-  assert.match(script, /bindings\.proposals\.filter/);
+  assert.match(script, /eligibleActorBindings\(bindings, changeCase\.sourceBinding\.blueprintVersion\)/,
+    'the client parses enabled, eligible bindings from the API response envelope');
   assert.match(script, /state\.actorBindings\.some\(\(binding\) => binding\.targetType === 'human'\)/,
     'assignment guidance appears when eligible bindings do not include a human');
-  assert.match(script, /No eligible human actor binding is enabled for this blueprint[\s\S]*?sign in once[\s\S]*?verified identity to this project’s membership[\s\S]*?correct human actor and role[\s\S]*?propose and enable its binding/,
-    'owner copy explains identity sign-in, project membership, and blueprint binding prerequisites');
+  assert.match(script, /No eligible human actor binding is enabled for this blueprint[\s\S]*?sign in if needed[\s\S]*?verified identity to this project’s membership[\s\S]*?In the map, choose the correct human actor and role[\s\S]*?propose and enable its binding[\s\S]*?changes the project revision[\s\S]*?create a new governed change case from the updated design before compiling/,
+    'owner copy explains enrollment, map binding selection, and the new-case requirement after the source revision changes');
   assert.match(script, /encodeStudioRoute\(\{ projectId: changeCase\.projectId, view: 'map' \}\)/,
     'the contextual project map link selects no actor and only navigates to the existing map route');
   assert.match(script, /Open this project’s Enterprise design map/,
-    'the owner is told the map link requires choosing the correct actor and role there');
+    'the owner is told to choose the correct actor and role in the linked project map');
   assert.match(script, /href: '\/platform\.html#administration'/,
     'the enrollment guidance links to the existing Administration view');
   assert.match(script, /Save revised owner review snapshot/);

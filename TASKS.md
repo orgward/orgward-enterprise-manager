@@ -4896,6 +4896,41 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   fixture, full check, commit or push. PR-06 remains the active cursor; PR-07
   and release gates remain open and unchanged.
 
+  PR-07 T-28 revision-pinned enrollment guidance (2026-09-28): the no-human
+  binding guidance now explains that enabling or revising a binding changes the
+  project revision, so the owner must create a new governed change case from the
+  updated design before compiling. It retains the map and Administration links
+  and requires the owner to select the human actor and role; no state or
+  authorization behavior changed. Focused served-client tests passed 13/13
+  (0 failures/skips; 1.47s TAP, 1.54s wall), log
+  `/tmp/orgward-pr07-t28-revision-pinned-guidance-focused.tap.log`;
+  `node --check public/sdlc.js` and `git diff --check` passed. No browser,
+  provider, database fixture, full check, commit or push. PR-06 remains the
+  active cursor; PR-07 and release gates remain open and unchanged.
+
+  PR-06 T-28 binding setup and response parsing (2026-09-28): a single
+  synthetic proof setup enrolled the worker, granted project membership, enabled
+  the human actor binding before case creation, and refreshed the project
+  revision. It stopped before case creation because the temporary harness read
+  `proposals` from the API envelope root; the response is
+  `{data: {currentBlueprintVersion, proposals}}`. No case, compiled plan,
+  rendered owner review, task completion, or restart readback was reached. No
+  screenshots or AX snapshot were captured. The app, browser, disposable DB and
+  PostgreSQL cluster were cleaned; no provider was called and no retry occurred.
+  Sanitized evidence: `/tmp/orgward-t28-proof-final/attempt-summary.txt` and
+  `/tmp/orgward-t28-proof-final/preflight.txt`.
+
+  The same envelope mismatch existed in `public/sdlc.js`, which read bindings
+  from the wrong response level and silently fell back to an empty list. It now
+  selects enabled, eligible bindings for the case's source blueprint from
+  `response.data.proposals`. The focused helper and served-client tests passed
+  2/2 (0 failures/skips; 0.431s TAP), log
+  `/tmp/orgward-pr06-t28-envelope-focused.tap.log`; syntax checks for changed
+  source/test files and `git diff --check` passed. No browser journey, provider,
+  full check, commit or push for this fix. Rendered T-28 remains unverified;
+  PR-06 remains first open and task checkboxes, cursor and release gates are
+  unchanged.
+
 - [ ] PR-08 — SCM, agent changes and immutable assurance (T-29–T-32; E-06, E-09).
   Let a user onboard a repository, request a bounded agent change, review its diff,
   and inspect reproducible build/test results. Keep credentials scoped and publish

@@ -1,4 +1,4 @@
-import { caseUiModel, createSourceSelectionGuard } from './sdlc-view.mjs';
+import { caseUiModel, createSourceSelectionGuard, eligibleActorBindings } from './sdlc-view.mjs';
 import { encodeExecutionRoute, encodeStudioRoute } from './shared-interactions.mjs';
 import { clearPendingSoftwareStart, createSoftwareStartFlightGuard, pendingSoftwareStartKey } from './software-runtime-start.mjs';
 
@@ -157,7 +157,7 @@ async function loadCase(id) {
       catch { state.softwareDeliveryPlans = []; }
       try {
         const bindings = await api(`/api/v1/projects/${encodeURIComponent(changeCase.projectId)}/actor-bindings/proposals`);
-        state.actorBindings = bindings.proposals.filter((entry) => entry.status === 'enabled' && entry.eligibilityStatus.includes('eligible') && entry.blueprintVersion === changeCase.sourceBinding.blueprintVersion);
+        state.actorBindings = eligibleActorBindings(bindings, changeCase.sourceBinding.blueprintVersion);
       } catch { state.actorBindings = []; }
     }
     renderCase(); renderCaseList();
@@ -790,7 +790,7 @@ function renderDelivery(content) {
         form.append(submit);
         form.addEventListener('submit', (event) => { event.preventDefault(); saveSoftwarePlanAssignments(form, currentDraft, draftEntry); });
         if (!hasHumanBinding) form.append(el('p', { className: 'muted assignment-enrollment-guidance' }, [
-          el('span', { text: 'No eligible human actor binding is enabled for this blueprint. Have the colleague sign in once and add their verified identity to this project’s membership. Then choose the correct human actor and role, and propose and enable its binding for this blueprint.' }),
+          el('span', { text: 'No eligible human actor binding is enabled for this blueprint. Have the colleague sign in if needed and add their verified identity to this project’s membership. In the map, choose the correct human actor and role, then propose and enable its binding. Enabling or revising a binding changes the project revision; create a new governed change case from the updated design before compiling.' }),
           el('a', { text: 'Open this project’s Enterprise design map', attrs: { href: encodeStudioRoute({ projectId: changeCase.projectId, view: 'map' }) } }),
           el('a', { text: 'Open Administration: Identity access and Project access', attrs: { href: '/platform.html#administration' } }),
         ]));

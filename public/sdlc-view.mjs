@@ -1,3 +1,8 @@
+export function eligibleActorBindings(response, blueprintVersion) {
+  return (response.data?.proposals ?? []).filter((entry) => entry.status === 'enabled'
+    && entry.eligibilityStatus.includes('eligible') && entry.blueprintVersion === blueprintVersion);
+}
+
 function clarificationModel(entry, currentRevision) {
   const isCurrent = entry.intentRevision === currentRevision;
   const control = isCurrent && entry.status === 'OPEN' ? 'ANSWER'
