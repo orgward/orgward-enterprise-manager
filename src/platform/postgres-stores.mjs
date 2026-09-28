@@ -13,6 +13,7 @@ import { pinProjectSourceObject, releaseApprovalCandidate, verifyAcceptedG6Plan,
 import { digest } from '../sdlc/contracts.mjs';
 import { latestBlueprint } from '../model.mjs';
 import { SOFTWARE_PLAN_COMPILER_VERSION, verifySoftwareDeliveryDraft } from '../sdlc/software-plan-compiler.mjs';
+import { providerOutcomeDiagnosticForAttempt } from '../execution/provider-transport-diagnostic.mjs';
 import { softwareRuntimePlanSnapshot, verifySoftwareRuntimePlanSnapshot } from '../sdlc/software-runtime-plan.mjs';
 import { buildBlueprintProposalPrompt, buildLegacyBlueprintProposalPrompt } from '../execution/proposals.mjs';
 import {
@@ -1205,14 +1206,14 @@ class PostgresDocumentStore {
         || nextRun.execution?.changedArtifacts?.length !== 0)) {
         throw persistenceIntegrity('A revoked or expired worker cannot persist successful artifact metadata.');
       }
-      // The dispatch ledger is the authority for delivery uncertainty. Keep this
-      // closed marker in the existing allowlisted execution JSON; never derive it
-      // from error text or transport/parser diagnostics.
+      // The dispatch ledger remains the sole authority for the unknown outcome
+      // marker. Copy only a closed transport class from the failure event.
       const uncertainAttempt = await client.query(`select 1 from orgward.provider_dispatch_attempts
         where tenant_id=$1 and run_id=$2 and status='outcome_unknown' limit 1`, [tenantId, runId]);
       if (uncertainAttempt.rowCount && ['FAILED', 'INTERRUPTED'].includes(nextRun.status)) {
         nextRun.execution ??= {};
-        nextRun.execution.providerDiagnostic = { outcome: 'outcome_unknown' };
+        const failureDiagnostic = nextRun.events?.findLast((event) => event.type === 'ExecutionFailed' || event.type === 'ExecutionInterrupted')?.data?.providerDiagnostic;
+        nextRun.execution.providerDiagnostic = providerOutcomeDiagnosticForAttempt('outcome_unknown', failureDiagnostic);
       }
       await this.saveInTransaction(client, nextRun, { expectedVersion, workerFinalization: true });
       return { run: nextRun, status: nextRun.status, interrupted: Boolean(interruptionReason), reason: interruptionReason };

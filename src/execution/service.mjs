@@ -9,6 +9,7 @@ import { captureLocalRepositorySnapshot, localRepositoryDiff, materializeLocalRe
 import { captureGitRepositorySnapshot } from './git-repository-snapshot.mjs';
 import { readWorkspaceArtifact } from './artifact-file.mjs';
 import { linkedRunOutcomeCategory } from './linked-run-outcome-category.mjs';
+import { allowlistedProviderTransportFailureClass, classifyProviderTransportFailure } from './provider-transport-diagnostic.mjs';
 import { buildProcessTaskProposalPromptForRun, createGeneratedBlueprintProposal, createProcessTaskGuidanceSnapshot,
   createProcessTaskProposalContext } from './proposals.mjs';
 import {
@@ -92,7 +93,13 @@ function providerTransport(endpoint, { headers, body, signal, parseResponse }) {
         reject(error);
       }
     });
-    request.once('error', reject);
+    request.once('error', (error) => {
+      if (!diagnostic) {
+        const transportFailureClass = classifyProviderTransportFailure(error);
+        if (transportFailureClass) diagnostic = { transportFailureClass };
+      }
+      reject(error);
+    });
   });
   const onAbort = () => request.destroy(new Error('provider request aborted'));
   if (signal?.aborted) onAbort();
@@ -1276,7 +1283,8 @@ export class ExecutionService {
 
   async #executeProvider(profile, run, active) {
     const controller = active.controller;
-    const timeout = setTimeout(() => controller.abort(), Math.min(profile.timeoutMs ?? 20_000, 20_000));
+    let timedOut = false;
+    const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, Math.min(profile.timeoutMs ?? 20_000, 20_000));
     timeout.unref?.();
     try {
       return await this.useProviderCredential(run.id, { operation: ({ credential, signal }) => {
@@ -1308,10 +1316,12 @@ export class ExecutionService {
       if (['PROCESS_INSTANCE_PAUSED', 'PROVIDER_ATTEMPT_CANCELLED'].includes(error?.code)) throw error;
       if (error?.code === 'PROVIDER_OUTCOME_UNKNOWN') {
         const upstreamHttpStatus = error.upstreamHttpStatus;
+        const transportFailureClass = allowlistedProviderTransportFailureClass(
+          classifyProviderTransportFailure(error, { timedOut }) ?? error.transportFailureClass);
         const parserFailureClass = ['invalid_json', 'body_too_large', 'incomplete_response', 'missing_output_text', 'output_too_large'].includes(error.parserFailureClass)
           ? error.parserFailureClass : null;
-        const providerDiagnostic = profile.dynamicDeepSeek && (Number.isInteger(upstreamHttpStatus) || parserFailureClass)
-          ? { provider: 'deepseek', ...(Number.isInteger(upstreamHttpStatus) ? { httpStatus: upstreamHttpStatus } : {}), ...(parserFailureClass ? { parserFailureClass } : {}) } : null;
+        const providerDiagnostic = profile.dynamicDeepSeek && (Number.isInteger(upstreamHttpStatus) || parserFailureClass || transportFailureClass)
+          ? { provider: 'deepseek', ...(Number.isInteger(upstreamHttpStatus) ? { httpStatus: upstreamHttpStatus } : {}), ...(parserFailureClass ? { parserFailureClass } : {}), ...(transportFailureClass ? { transportFailureClass } : {}) } : null;
         throw Object.assign(new Error('The provider may have received this request. This run will not send it again; check provider state before creating a new run.'), {
           code: 'PROVIDER_OUTCOME_UNKNOWN',
           ...(providerDiagnostic ? { providerDiagnostic } : {}),
@@ -1329,8 +1339,9 @@ export class ExecutionService {
     const diagnostic = run.profile?.kind === 'provider-deepseek' && failure?.code === 'PROVIDER_OUTCOME_UNKNOWN'
       && failure.providerDiagnostic?.provider === 'deepseek'
       && ((Number.isInteger(failure.providerDiagnostic?.httpStatus) && failure.providerDiagnostic.httpStatus >= 100 && failure.providerDiagnostic.httpStatus <= 599)
-        || ['invalid_json', 'body_too_large', 'incomplete_response', 'missing_output_text', 'output_too_large'].includes(failure.providerDiagnostic?.parserFailureClass))
-      ? { provider: 'deepseek', ...(Number.isInteger(failure.providerDiagnostic.httpStatus) ? { httpStatus: failure.providerDiagnostic.httpStatus } : {}), ...(failure.providerDiagnostic.parserFailureClass ? { parserFailureClass: failure.providerDiagnostic.parserFailureClass } : {}) } : null;
+        || ['invalid_json', 'body_too_large', 'incomplete_response', 'missing_output_text', 'output_too_large'].includes(failure.providerDiagnostic?.parserFailureClass)
+        || allowlistedProviderTransportFailureClass(failure.providerDiagnostic?.transportFailureClass))
+      ? { provider: 'deepseek', ...(Number.isInteger(failure.providerDiagnostic.httpStatus) ? { httpStatus: failure.providerDiagnostic.httpStatus } : {}), ...(failure.providerDiagnostic.parserFailureClass ? { parserFailureClass: failure.providerDiagnostic.parserFailureClass } : {}), ...(allowlistedProviderTransportFailureClass(failure.providerDiagnostic.transportFailureClass) ? { transportFailureClass: failure.providerDiagnostic.transportFailureClass } : {}) } : null;
     const build = (terminalStatus, execution, eventType, details) => {
       const candidate = structuredClone(run);
       candidate.status = terminalStatus;

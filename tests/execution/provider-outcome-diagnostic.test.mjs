@@ -32,3 +32,21 @@ test('DeepSeek outcome diagnostics project only allowlisted status and parser cl
     assert.equal(deepSeekOutcomeDiagnosticCopy(value), null);
   }
 });
+
+test('DeepSeek transport diagnostics expose only fixed safe copy, including unknown outcomes', () => {
+  const canary = 'private-transport-message-canary';
+  assert.deepEqual(deepSeekOutcomeDiagnostic({ provider: 'deepseek', transportFailureClass: 'dns_resolution_failed', message: canary }), {
+    provider: 'deepseek', transportFailureClass: 'dns_resolution_failed',
+  });
+  const unknown = deepSeekOutcomeDiagnosticCopy({ outcome: 'outcome_unknown', provider: 'deepseek',
+    transportFailureClass: 'connection_refused', message: canary, code: 'ECONNREFUSED' });
+  assert.equal(unknown, 'Outcome unknown. DeepSeek connection was refused. An external request may have been received. Delivery is unverified. Reconcile with the provider before retrying.');
+  assert.equal(unknown.includes(canary), false);
+  assert.equal(unknown.includes('ECONNREFUSED'), false);
+  const timeout = deepSeekOutcomeDiagnosticCopy({ provider: 'deepseek', transportFailureClass: 'transport_timeout', message: canary });
+  assert.equal(timeout, 'DeepSeek request timed out. Delivery remains unverified; this run cannot be retried.');
+  assert.equal(timeout.includes(canary), false);
+  assert.equal(deepSeekOutcomeDiagnosticCopy({ provider: 'deepseek', transportFailureClass: canary }), null);
+  assert.match(deepSeekOutcomeDiagnosticCopy({ outcome: 'outcome_unknown', transportFailureClass: canary }), /Outcome unknown/);
+  assert.equal(deepSeekOutcomeDiagnostic({ provider: 'deepseek', transportFailureClass: canary, message: canary }), null);
+});

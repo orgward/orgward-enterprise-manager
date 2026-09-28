@@ -61,6 +61,46 @@ and concurrency 2. The current VPS has 2 CPUs and low `/tmp` tmpfs headroom, so
 these settings are unchanged. Preserve skip and failure details in receipts; this
 workflow change does not mark any task, test or release gate complete.
 
+PR-06 fresh managed-profile provider attempt (2026-09-28): a disposable
+PostgreSQL/app fixture created a synthetic `process-review` plan, bound its
+human checkpoint to Bob and `task-process-learn` to the existing design-assistant
+actor, completed the checkpoint as Bob, saved a tenant-managed
+`deepseek-flash` profile with a 192-token cap, requested the linked task as Alice,
+and independently approved it as Bob. Exactly one execute request was made for
+new run `execution-run-05616995-8e10-4e87-870f-218021bba558`; the local API
+returned HTTP 200, but the run ended `FAILED` with one provider attempt marked
+`outcome_unknown`. No proposal or artifact was returned, no restart readback was
+attempted, and the run was not retried. The sanitized response check found no
+credential match. The upstream cause is unknown; no provider status or response
+body was available in the sanitized evidence. A preceding fixture-only setup
+attempt stopped on an incorrect assumption about the process root with zero
+provider calls, before reading the credential or dispatching; the corrected
+attempt used the declared human checkpoint. App, database,
+PostgreSQL cluster and temporary workspace were cleaned, and no fixture process
+remained. Evidence: `/tmp/orgward-pr06-managed-profile-proof-20260928/attempt-summary-2.txt`.
+The provider result remains unverified and PR-06 stays first open; cursor,
+checkboxes and release gates are unchanged.
+
+PR-06 read-only DeepSeek model catalog check (2026-09-28): one authorized GET to
+`https://api.deepseek.com/models` returned HTTP 200 with `application/json`, and
+the `deepseek-flash` model ID was present. The response body was discarded after
+the boolean check, and no other response headers were read or retained. No
+generation, retry or application change occurred. The one-shot reader script was
+removed. This only confirms catalog visibility; it does not establish quota or
+generation success.
+
+PR-06 allowlisted provider transport diagnosis (2026-09-28): Node request errors
+now map only known DNS (`ENOTFOUND`, `EAI_AGAIN`), connection
+(`ECONNREFUSED`, `ECONNRESET`) and timeout codes to fixed classes. The approved
+lease wrapper forwards only that enum; the attempt ledger remains the authority
+for `outcome_unknown`. The closed class is persisted with the failure diagnostic
+and shown as fixed copy that retains delivery-unverified guidance. Raw codes,
+messages, request options and credentials are not persisted or rendered. Focused
+pure tests passed 4/4 (0 failures/skips; 0.285s TAP duration, 0.24s command wall),
+log `/tmp/orgward-pr06-provider-transport-focused.tap.log`; `git diff --check`
+passed. No provider request or database fixture was used for this slice. PR-06
+remains first open; cursor, checkboxes and release gates are unchanged.
+
 PR-06 human escalation resolution pause-state UX (2026-09-28): the owner
 resolution form now matches the server's pause fences. While `PAUSE_REQUESTED`,
 resume/reassignment are disabled and the required select starts on a blank prompt;

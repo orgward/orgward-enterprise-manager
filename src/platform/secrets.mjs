@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { contentHash, verifyAggregateRow, verifyCommandRow } from './postgres.mjs';
 import { executionApprovalRequestHash } from '../execution/contracts.mjs';
+import { allowlistedProviderTransportFailureClass } from '../execution/provider-transport-diagnostic.mjs';
 import { OpenAiManagedProvisioner } from './openai-managed-provisioning.mjs';
 import { revokeOrgwardCreatedOpenAiServiceAccount } from './openai-admin-revocation.mjs';
 
@@ -1029,10 +1030,13 @@ export class PostgresSecretStore {
       const diagnosticClass = transportStarted ? transport?.diagnostic?.()?.parserFailureClass : null;
       const parserFailureClass = ['invalid_json', 'body_too_large', 'incomplete_response', 'missing_output_text', 'output_too_large'].includes(diagnosticClass ?? error?.parserFailureClass)
         ? (diagnosticClass ?? error.parserFailureClass) : null;
+      const transportFailureClass = transportStarted
+        ? allowlistedProviderTransportFailureClass(transport?.diagnostic?.()?.transportFailureClass) : null;
       throw Object.assign(new Error('The authorized provider operation failed.'), {
         statusCode: 502, code: 'PROVIDER_OUTCOME_UNKNOWN', retryable: false,
         ...(upstreamHttpStatus ? { upstreamHttpStatus } : {}),
         ...(parserFailureClass ? { parserFailureClass } : {}),
+        ...(transportFailureClass ? { transportFailureClass } : {}),
       });
     } finally {
       clearTimeout(expiryTimer);
