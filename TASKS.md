@@ -134,6 +134,17 @@ keyboard interaction remains unverified. Sanitized record:
 `/tmp/orgward-pr06-saved-result-keyboard-proof-4/attempt-summary.txt`. PR-06
 remains first open; cursor and release gates are unchanged.
 
+Corrected follow-up attempt (2026-09-28): static route/status preflight corrected
+the member API expectation to HTTP 200. The single provider-free local-executor
+fixture then stopped before browser launch when starting `task-process-review`
+returned HTTP 409 `PROCESS_TASK_DEPENDENCY_UNSATISFIED`; the harness incorrectly
+treated a dependent task as a root. The app, synthetic issuer, disposable
+database and PostgreSQL cluster were cleaned, and process inspection found no
+services or browser remaining. No saved-result UI behavior was observed; there
+was no retry or source/test change. Sanitized record:
+`/tmp/orgward-pr06-saved-result-keyboard-proof-4/attempt-summary.txt`. PR-06
+remains first open; cursor and release gates are unchanged.
+
 PR-06 task profile empty-state copy (2026-09-28): saved task cards now distinguish
 an empty server execution-profile list, directing users to an OrgWard administrator,
 from existing profiles that cannot serve the task because model profiles require
