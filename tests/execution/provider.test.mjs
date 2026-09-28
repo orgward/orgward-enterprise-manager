@@ -658,7 +658,8 @@ test('DeepSeek outcome-unknown HTTP responses persist only a safe status and nev
   assert.equal(failed.status, 200, JSON.stringify(failed.body));
   assert.equal(failed.body.status, 'FAILED');
   assert.match(failed.body.execution.error, /may have received this request/i);
-  assert.deepEqual(failed.body.execution.providerDiagnostic, { outcome: 'outcome_unknown' });
+  const diagnostic = { outcome: 'outcome_unknown', provider: 'deepseek', httpStatus: 503 };
+  assert.deepEqual(failed.body.execution.providerDiagnostic, diagnostic);
   const failureEvent = failed.body.events.findLast((event) => event.type === 'ExecutionFailed');
   assert.deepEqual(failureEvent.data.providerDiagnostic, { provider: 'deepseek', httpStatus: 503 });
   assert.equal(JSON.stringify(failed.body).includes(bodyCanary), false);
@@ -675,7 +676,9 @@ test('DeepSeek outcome-unknown HTTP responses persist only a safe status and nev
   const restarted = await restart();
   const recovered = await api(restarted, `/api/execution/runs/${created.body.id}`, 'worker');
   assert.equal(recovered.status, 200);
-  assert.deepEqual(recovered.body.execution.providerDiagnostic, { outcome: 'outcome_unknown' });
+  assert.deepEqual(recovered.body.execution.providerDiagnostic, diagnostic);
+  assert.deepEqual(recovered.body.events.findLast((event) => event.type === 'ExecutionFailed').data.providerDiagnostic,
+    { provider: 'deepseek', httpStatus: 503 });
   const retry = await api(restarted, `/api/execution/runs/${created.body.id}/execute`, 'worker', {
     method: 'POST', body: { version: recovered.body.version },
   });
@@ -683,7 +686,7 @@ test('DeepSeek outcome-unknown HTTP responses persist only a safe status and nev
   assert.equal(getFixtureRequestCount(), 1);
 });
 
-test('DeepSeek outcome-unknown transport failures expose only the durable marker and never redispatch', async (t) => {
+test('DeepSeek outcome-unknown transport failures expose only allowlisted detail and never redispatch', async (t) => {
   const fixtureResult = await setup(t, async ({ response }) => { response.destroy(); }, { deepSeek: true });
   const { app, projectId, restart, getFixtureRequestCount } = fixtureResult;
   const created = await api(app, '/api/execution/runs', 'worker', { method: 'POST', body: {
@@ -699,7 +702,10 @@ test('DeepSeek outcome-unknown transport failures expose only the durable marker
   });
   assert.equal(failed.status, 200, JSON.stringify(failed.body));
   assert.equal(failed.body.status, 'FAILED');
-  assert.deepEqual(failed.body.execution.providerDiagnostic, { outcome: 'outcome_unknown' });
+  const eventDiagnostic = failed.body.events.findLast((event) => event.type === 'ExecutionFailed').data.providerDiagnostic;
+  assert.deepEqual(eventDiagnostic, { provider: 'deepseek', transportFailureClass: 'connection_reset' });
+  const diagnostic = { outcome: 'outcome_unknown', ...eventDiagnostic };
+  assert.deepEqual(failed.body.execution.providerDiagnostic, diagnostic);
   assert.equal(JSON.stringify(failed.body).includes(fixtureResult.canary), false);
   assert.equal(getFixtureRequestCount(), 1);
   const processSnapshot = await api(app,
@@ -707,7 +713,7 @@ test('DeepSeek outcome-unknown transport failures expose only the durable marker
   assert.equal(processSnapshot.status, 200, JSON.stringify(processSnapshot.body));
   assert.ok(processSnapshot.body.runs.every((candidate) => candidate.projectId === projectId));
   assert.ok(processSnapshot.body.runs.some((candidate) => candidate.id === created.body.id
-    && candidate.execution.providerDiagnostic?.outcome === 'outcome_unknown'));
+    && JSON.stringify(candidate.execution.providerDiagnostic) === JSON.stringify(diagnostic)));
 
   await new Promise((resolve) => app.server.close(resolve));
   await app.close();
@@ -715,7 +721,9 @@ test('DeepSeek outcome-unknown transport failures expose only the durable marker
   const restarted = await restart();
   const recovered = await api(restarted, `/api/execution/runs/${created.body.id}`, 'worker');
   assert.equal(recovered.status, 200);
-  assert.deepEqual(recovered.body.execution.providerDiagnostic, { outcome: 'outcome_unknown' });
+  assert.deepEqual(recovered.body.execution.providerDiagnostic, diagnostic);
+  assert.deepEqual(recovered.body.events.findLast((event) => event.type === 'ExecutionFailed').data.providerDiagnostic,
+    eventDiagnostic);
   const retry = await api(restarted, `/api/execution/runs/${created.body.id}/execute`, 'worker', {
     method: 'POST', body: { version: recovered.body.version },
   });
@@ -745,7 +753,8 @@ test('DeepSeek 2xx parser failures persist only allowlisted diagnostics across r
     assert.equal(failed.status, 200, JSON.stringify(failed.body));
     assert.equal(failed.body.status, 'FAILED');
     const diagnostic = { provider: 'deepseek', httpStatus: 200, parserFailureClass: scenario.parserFailureClass };
-    assert.deepEqual(failed.body.execution.providerDiagnostic, { outcome: 'outcome_unknown' }, failed.body.execution.error);
+    const projectedDiagnostic = { outcome: 'outcome_unknown', ...diagnostic };
+    assert.deepEqual(failed.body.execution.providerDiagnostic, projectedDiagnostic, failed.body.execution.error);
     const failureEvent = failed.body.events.findLast((event) => event.type === 'ExecutionFailed');
     assert.deepEqual(failureEvent.data.providerDiagnostic, diagnostic);
     assert.equal(JSON.stringify(failed.body).includes(bodyCanary), false);
@@ -758,7 +767,9 @@ test('DeepSeek 2xx parser failures persist only allowlisted diagnostics across r
     const restarted = await restart();
     const recovered = await api(restarted, `/api/execution/runs/${approved.id}`, 'worker');
     assert.equal(recovered.status, 200);
-    assert.deepEqual(recovered.body.execution.providerDiagnostic, { outcome: 'outcome_unknown' });
+    assert.deepEqual(recovered.body.execution.providerDiagnostic, projectedDiagnostic);
+    assert.deepEqual(recovered.body.events.findLast((event) => event.type === 'ExecutionFailed').data.providerDiagnostic,
+      diagnostic);
     const retry = await api(restarted, `/api/execution/runs/${approved.id}/execute`, 'worker', {
       method: 'POST', body: { version: recovered.body.version },
     });

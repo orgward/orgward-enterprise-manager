@@ -122,6 +122,16 @@ duration; log `/tmp/orgward-pr06-outcome-announcement-focused.log`). No database
 browser or provider was used. PR-06 remains first open; cursor, checkboxes and
 release gates are unchanged.
 
+PR-06 persisted DeepSeek outcome projection integration regression (2026-09-28):
+the filtered PostgreSQL provider tests now assert that HTTP 503, transport
+`connection_reset`, and each supported 2xx parser status/class survive into the
+returned run and remain present in event/restart readback. Existing raw body,
+header, credential canary and no-redispatch assertions remain. The exact filtered
+command passed 3/3 tests (0 failures/skips; parser test covered four response
+classes; 4.886s TAP, 5.1s command wall), log
+`/tmp/orgward-pr06-provider-projection-integration.log`. `git diff --check`
+passed. No live provider, browser or Orca was used.
+
 PR-06 human escalation resolution pause-state UX (2026-09-28): the owner
 resolution form now matches the server's pause fences. While `PAUSE_REQUESTED`,
 resume/reassignment are disabled and the required select starts on a blank prompt;
