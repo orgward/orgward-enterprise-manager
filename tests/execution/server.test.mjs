@@ -95,6 +95,11 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   const executionClient = await fetch(`${base}/execution.js`);
   assert.equal(executionClient.status, 200);
   const executionSource = await executionClient.text();
+  const instanceOptionLabelClient = await fetch(`${base}/process-instance-option-label.mjs`);
+  assert.equal(instanceOptionLabelClient.status, 200);
+  assert.match(await instanceOptionLabelClient.text(), /export function processInstanceOptionLabel/);
+  assert.match(executionSource, /processInstanceOptionLabel\(instanceId, runtimes\)/,
+    'saved instance selector labels use the served lifecycle and activity summary helper');
   const taskRequestHelper = await fetch(`${base}/process-task-request.mjs`);
   assert.equal(taskRequestHelper.status, 200);
   const taskRequestHelperSource = await taskRequestHelper.text();

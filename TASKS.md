@@ -4269,6 +4269,19 @@ not establish narrow layout, keyboard interaction, Orca speech or provider resul
 disclosure. No product source, tests or full check changed. PR-06 remains active;
 cursor, task checkboxes and release gates are unchanged.
 
+PR-06 process-instance selector activity labels (2026-09-28): saved instance
+options now retain the short stable ID while showing lifecycle status, terminal
+task count and latest human-readable activity time from the authorized runtime
+snapshot. Timestamped control events are included; unknown statuses receive
+unavailable copy and malformed control-event collections are ignored. Missing
+times and future timestamps outside clock-skew tolerance receive unavailable
+copy. Added helper and served-client regressions. After a
+review fix to ignore non-array control history, focused tests passed 4/4
+(0.83s TAP), log `/tmp/orgward-pr06-instance-option-label-review-fix-focused.log`;
+`node --check` for both client modules and `git diff --check` passed. No API,
+provider, browser, or external action. No full check was run, as instructed;
+PR-06 remains active and cursor, task checkboxes and release gates are unchanged.
+
 ## Governed software delivery
 
 - [ ] PR-07 — Intent-to-plan engineering workflow (T-25–T-28). Connect approved

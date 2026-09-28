@@ -11,6 +11,7 @@ import { parseHumanTaskEvidence } from './human-task-evidence.mjs';
 import { submitHumanTaskCommand } from './human-task-command-ui.mjs';
 import { humanTaskActionFailureDisposition } from './human-task-action-failure.mjs';
 import { processInstanceControlHistoryEntries } from './process-instance-history.mjs';
+import { processInstanceOptionLabel } from './process-instance-option-label.mjs';
 import { applySettledProcessInstanceCommands, clearSettledProcessInstanceCommands, processInstanceCommandKey, refreshAfterProcessInstanceControl, restoreProcessInstanceControlPresentation, submitProcessInstanceControl } from './process-instance-control.mjs';
 import { clearSettledLinkedRunAmendment, refreshLinkedRunAmendment, restoreLinkedRunAmendment, submitLinkedRunAmendment } from './linked-run-amendment.mjs';
 import { restoreHumanTaskStatusFocus } from './human-task-status-focus.mjs';
@@ -711,9 +712,8 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
     const instanceSelect = el('select', { attrs: { 'aria-label': `Process instance for ${plan.source.processName}` } });
     instanceSelect.append(el('option', { text: canStartNewInstances ? 'Start a new instance' : 'Earlier revision · existing instances only', attrs: { value: 'new', ...(selectedInstance === 'new' ? { selected: 'selected' } : {}), ...(!canStartNewInstances ? { disabled: 'disabled' } : {}) } }));
     for (const [instanceId, runtimes] of instances) {
-      const finished = runtimes.filter((runtime) => ['SUCCEEDED', 'FAILED', 'INTERRUPTED', 'CANCELLED'].includes(runtime.status)).length;
       instanceSelect.append(el('option', {
-        text: `Instance ${instanceId.slice(0, 8)} · ${runtimes.length} task${runtimes.length === 1 ? '' : 's'} · ${finished} terminal`,
+        text: processInstanceOptionLabel(instanceId, runtimes),
         attrs: { value: instanceId, ...(selectedInstance === instanceId ? { selected: 'selected' } : {}) },
       }));
     }
