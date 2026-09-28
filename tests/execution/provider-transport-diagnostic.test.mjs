@@ -22,18 +22,29 @@ test('Node provider transport codes map to a closed diagnostic class list', () =
   ]) assert.equal(classifyProviderTransportFailure(error), null);
 });
 
-test('only an unknown durable dispatch attempt exposes an allowlisted transport class', () => {
-  const canary = 'private transport message';
+test('only an unknown durable dispatch attempt exposes bounded allowlisted DeepSeek details', () => {
+  const canary = 'private transport message request-id raw-body';
   assert.equal(providerOutcomeDiagnosticForAttempt('handed_off', {
-    provider: 'deepseek', transportFailureClass: 'connection_reset', message: canary,
+    provider: 'deepseek', httpStatus: 503, parserFailureClass: 'invalid_json', transportFailureClass: 'connection_reset', message: canary,
   }), null);
   assert.deepEqual(providerOutcomeDiagnosticForAttempt('outcome_unknown', {
-    provider: 'deepseek', transportFailureClass: 'connection_reset', message: canary, code: 'ECONNRESET',
-  }), { outcome: 'outcome_unknown', provider: 'deepseek', transportFailureClass: 'connection_reset' });
+    provider: 'deepseek', httpStatus: 503, parserFailureClass: 'invalid_json', transportFailureClass: 'connection_reset',
+    message: canary, code: 'ECONNRESET', body: canary, requestId: canary,
+  }), { outcome: 'outcome_unknown', provider: 'deepseek', httpStatus: 503,
+    parserFailureClass: 'invalid_json', transportFailureClass: 'connection_reset' });
   assert.deepEqual(providerOutcomeDiagnosticForAttempt('outcome_unknown', {
-    provider: 'deepseek', transportFailureClass: canary, message: canary, code: 'PRIVATE-CODE',
+    provider: 'deepseek', httpStatus: 99, parserFailureClass: canary, transportFailureClass: canary,
+    message: canary, code: 'PRIVATE-CODE', body: canary, requestId: canary,
   }), { outcome: 'outcome_unknown' });
   assert.deepEqual(providerOutcomeDiagnosticForAttempt('outcome_unknown', {
-    provider: 'openai', transportFailureClass: 'connection_reset', message: canary,
+    provider: 'openai', httpStatus: 503, parserFailureClass: 'invalid_json', transportFailureClass: 'connection_reset', message: canary,
+  }), { outcome: 'outcome_unknown' });
+  assert.deepEqual(providerOutcomeDiagnosticForAttempt('outcome_unknown', {
+    provider: 'deepseek', httpStatus: 599, parserFailureClass: 'incomplete_response',
+    transportFailureClass: 'dns_resolution_failed',
+  }), { outcome: 'outcome_unknown', provider: 'deepseek', httpStatus: 599,
+    parserFailureClass: 'incomplete_response', transportFailureClass: 'dns_resolution_failed' });
+  assert.deepEqual(providerOutcomeDiagnosticForAttempt('outcome_unknown', {
+    provider: 'deepseek', httpStatus: 600, message: canary, body: canary,
   }), { outcome: 'outcome_unknown' });
 });

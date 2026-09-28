@@ -50,3 +50,22 @@ test('DeepSeek transport diagnostics expose only fixed safe copy, including unkn
   assert.match(deepSeekOutcomeDiagnosticCopy({ outcome: 'outcome_unknown', transportFailureClass: canary }), /Outcome unknown/);
   assert.equal(deepSeekOutcomeDiagnostic({ provider: 'deepseek', transportFailureClass: canary, message: canary }), null);
 });
+
+test('unknown-outcome copy includes allowlisted restart-persisted HTTP and parser details only', () => {
+  const canary = 'raw-body-request-id-error-message-canary';
+  const restored = JSON.parse(JSON.stringify({ outcome: 'outcome_unknown', provider: 'deepseek',
+    httpStatus: 502, parserFailureClass: 'invalid_json', transportFailureClass: 'connection_reset',
+    body: canary, requestId: canary, message: canary, code: canary }));
+  const copy = deepSeekOutcomeDiagnosticCopy(restored);
+  assert.equal(copy, 'Outcome unknown. DeepSeek returned HTTP 502; response parsing failed (invalid JSON); DeepSeek connection was reset. An external request may have been received. Delivery is unverified. Reconcile with the provider before retrying.');
+  assert.equal(copy.includes(canary), false);
+  assert.deepEqual(deepSeekOutcomeDiagnostic(restored), {
+    provider: 'deepseek', httpStatus: 502, parserFailureClass: 'invalid_json', transportFailureClass: 'connection_reset',
+  });
+  assert.equal(deepSeekOutcomeDiagnosticCopy({ outcome: 'outcome_unknown', provider: 'deepseek',
+    httpStatus: 700, parserFailureClass: canary, transportFailureClass: canary, body: canary }),
+  'Outcome unknown. An external request may have been received. Delivery is unverified. Reconcile with the provider before retrying.');
+  assert.equal(deepSeekOutcomeDiagnosticCopy({ outcome: 'outcome_unknown', provider: 'other',
+    httpStatus: 502, parserFailureClass: 'invalid_json', body: canary }),
+  'Outcome unknown. An external request may have been received. Delivery is unverified. Reconcile with the provider before retrying.');
+});

@@ -25,11 +25,19 @@ export function classifyProviderTransportFailure(error, { timedOut = false } = {
 export function providerOutcomeDiagnosticForAttempt(attemptStatus, failureDiagnostic) {
   if (attemptStatus !== 'outcome_unknown') return null;
   const result = { outcome: 'outcome_unknown' };
-  const transportFailureClass = failureDiagnostic?.provider === 'deepseek'
-    ? allowlistedProviderTransportFailureClass(failureDiagnostic.transportFailureClass) : null;
-  if (transportFailureClass) {
+  if (failureDiagnostic?.provider !== 'deepseek') return result;
+  const httpStatus = Number.isInteger(failureDiagnostic.httpStatus)
+    && failureDiagnostic.httpStatus >= 100 && failureDiagnostic.httpStatus <= 599
+    ? failureDiagnostic.httpStatus : null;
+  const parserFailureClass = [
+    'invalid_json', 'body_too_large', 'incomplete_response', 'missing_output_text', 'output_too_large',
+  ].includes(failureDiagnostic.parserFailureClass) ? failureDiagnostic.parserFailureClass : null;
+  const transportFailureClass = allowlistedProviderTransportFailureClass(failureDiagnostic.transportFailureClass);
+  if (httpStatus !== null || parserFailureClass || transportFailureClass) {
     result.provider = 'deepseek';
-    result.transportFailureClass = transportFailureClass;
+    if (httpStatus !== null) result.httpStatus = httpStatus;
+    if (parserFailureClass) result.parserFailureClass = parserFailureClass;
+    if (transportFailureClass) result.transportFailureClass = transportFailureClass;
   }
   return result;
 }

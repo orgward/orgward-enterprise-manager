@@ -1,4 +1,4 @@
-import { deepSeekOutcomeDiagnosticCopy } from './provider-outcome-diagnostic.mjs';
+import { deepSeekOutcomeDiagnostic, deepSeekOutcomeDiagnosticCopy } from './provider-outcome-diagnostic.mjs';
 import { proposalDesignLink } from './proposal-review-state.mjs';
 
 const terminalStatuses = Object.freeze({
@@ -195,6 +195,9 @@ export function linkedProcessTaskResult(runtime, run, project = null) {
   const artifactCount = Math.min(changedArtifacts.length, MAX_ARTIFACTS);
   const artifactCountLabel = changedArtifacts.length > MAX_ARTIFACTS ? '100+' : String(artifactCount);
   const summaryLabel = `Saved result: ${terminalStatuses[run.status]} · ${artifactCountLabel} artifact${artifactCount === 1 ? '' : 's'}`;
+  const providerOutcomeUnknown = ['FAILED', 'INTERRUPTED'].includes(run.status)
+    && execution.providerDiagnostic?.outcome === 'outcome_unknown';
+  const safeProviderDetails = providerOutcomeUnknown ? deepSeekOutcomeDiagnostic(execution.providerDiagnostic) : null;
 
   return {
     status: run.status,
@@ -208,8 +211,8 @@ export function linkedProcessTaskResult(runtime, run, project = null) {
     artifacts,
     artifactLinksCapped: validArtifactCount > MAX_ARTIFACT_LINKS || changedArtifacts.length > MAX_ARTIFACTS,
     evidenceHash,
-    providerDiagnostic: ['FAILED', 'INTERRUPTED'].includes(run.status) && execution.providerDiagnostic?.outcome === 'outcome_unknown'
-      ? { outcome: 'outcome_unknown' } : null,
+    providerDiagnostic: providerOutcomeUnknown
+      ? { outcome: 'outcome_unknown', ...(safeProviderDetails ?? {}) } : null,
     diagnostic: ['FAILED', 'INTERRUPTED'].includes(run.status) ? deepSeekOutcomeDiagnosticCopy(execution.providerDiagnostic) : null,
     failureGuidance: guidance,
   };

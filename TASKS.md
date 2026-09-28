@@ -101,6 +101,17 @@ log `/tmp/orgward-pr06-provider-transport-focused.tap.log`; `git diff --check`
 passed. No provider request or database fixture was used for this slice. PR-06
 remains first open; cursor, checkboxes and release gates are unchanged.
 
+PR-06 restart-safe provider outcome detail projection (2026-09-28): the
+attempt-gated saved-result projection now retains only DeepSeek HTTP status
+100–599 and the existing parser/transport enums alongside `outcome_unknown`.
+The saved-result copy shows those bounded details while preserving the
+reconciliation/no-retry guidance. Invalid statuses/classes, non-DeepSeek data,
+ordinary attempts, raw bodies, request IDs, messages and error codes remain
+omitted. Focused pure/helper tests passed 18/18 (0 failures/skips; 371 ms TAP
+duration; log `/tmp/orgward-pr06-provider-outcome-projection-focused.log`). No
+database, browser or provider was used. `git diff --check` passed. PR-06 remains
+first open; cursor, checkboxes and release gates are unchanged.
+
 PR-06 human escalation resolution pause-state UX (2026-09-28): the owner
 resolution form now matches the server's pause fences. While `PAUSE_REQUESTED`,
 resume/reassignment are disabled and the required select starts on a blank prompt;

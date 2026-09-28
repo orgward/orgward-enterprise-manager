@@ -344,3 +344,25 @@ test('outcome-unknown provider diagnostic keeps precedence over generic next-ste
   assert.equal(result.failureGuidance.category, 'outcome_unverified');
   assert.equal(JSON.stringify(result).includes('private canary'), false);
 });
+
+test('restart-loaded linked result retains only safe persisted DeepSeek outcome details', () => {
+  const canary = 'raw-body-request-id-message-canary';
+  const restoredRun = JSON.parse(JSON.stringify(linkedRun({ status: 'FAILED', execution: {
+    providerDiagnostic: { outcome: 'outcome_unknown', provider: 'deepseek', httpStatus: 503,
+      parserFailureClass: 'invalid_json', transportFailureClass: 'transport_timeout',
+      body: canary, requestId: canary, message: canary, code: canary },
+  } })));
+  const result = linkedProcessTaskResult(JSON.parse(JSON.stringify(runtime)), restoredRun);
+  assert.deepEqual(result.providerDiagnostic, { outcome: 'outcome_unknown', provider: 'deepseek',
+    httpStatus: 503, parserFailureClass: 'invalid_json', transportFailureClass: 'transport_timeout' });
+  assert.equal(result.diagnostic, 'Outcome unknown. DeepSeek returned HTTP 503; response parsing failed (invalid JSON); DeepSeek request timed out. An external request may have been received. Delivery is unverified. Reconcile with the provider before retrying.');
+  assert.equal(JSON.stringify(result).includes(canary), false);
+
+  const invalid = linkedProcessTaskResult(runtime, linkedRun({ status: 'FAILED', execution: {
+    providerDiagnostic: { outcome: 'outcome_unknown', provider: 'openai', httpStatus: 503,
+      parserFailureClass: 'invalid_json', body: canary, requestId: canary },
+  } }));
+  assert.deepEqual(invalid.providerDiagnostic, { outcome: 'outcome_unknown' });
+  assert.equal(invalid.diagnostic, 'Outcome unknown. An external request may have been received. Delivery is unverified. Reconcile with the provider before retrying.');
+  assert.equal(JSON.stringify(invalid).includes(canary), false);
+});

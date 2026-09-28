@@ -14,13 +14,26 @@ export function deepSeekOutcomeDiagnostic(value) {
 export function deepSeekOutcomeDiagnosticCopy(value) {
   if (value && typeof value === 'object' && !Array.isArray(value)
     && value.outcome === 'outcome_unknown') {
-    const transportLabel = deepSeekOutcomeDiagnostic(value) && ({
-      dns_resolution_failed: 'DeepSeek hostname lookup failed',
-      connection_refused: 'DeepSeek connection was refused',
-      connection_reset: 'DeepSeek connection was reset',
-      transport_timeout: 'DeepSeek request timed out',
-    }[value.transportFailureClass]);
-    return `Outcome unknown.${transportLabel ? ` ${transportLabel}.` : ''} An external request may have been received. Delivery is unverified. Reconcile with the provider before retrying.`;
+    const diagnostic = deepSeekOutcomeDiagnostic(value);
+    const parserLabel = diagnostic && ({
+      invalid_json: 'response parsing failed (invalid JSON)',
+      body_too_large: 'response body exceeded the size limit',
+      incomplete_response: 'response was incomplete',
+      missing_output_text: 'response was missing output text',
+      output_too_large: 'output exceeded the size limit',
+    }[diagnostic.parserFailureClass]);
+    const transportLabel = diagnostic && ({
+      dns_resolution_failed: 'hostname lookup failed',
+      connection_refused: 'connection was refused',
+      connection_reset: 'connection was reset',
+      transport_timeout: 'request timed out',
+    }[diagnostic.transportFailureClass]);
+    const safeDetails = diagnostic ? [
+      diagnostic.httpStatus === undefined ? null : `DeepSeek returned HTTP ${diagnostic.httpStatus}`,
+      parserLabel,
+      transportLabel === undefined ? null : `DeepSeek ${transportLabel}`,
+    ].filter(Boolean).join('; ') : '';
+    return `Outcome unknown.${safeDetails ? ` ${safeDetails}.` : ''} An external request may have been received. Delivery is unverified. Reconcile with the provider before retrying.`;
   }
   const diagnostic = deepSeekOutcomeDiagnostic(value);
   if (!diagnostic) return null;
