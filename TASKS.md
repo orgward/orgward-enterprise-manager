@@ -2405,6 +2405,18 @@ repair check superseded it.
   Syntax and `git diff --check` passed. No provider request was made; PR-06,
   cursor, and release gates remain open.
 
+  PR-06 owner proposal-apply browser attempt (2026-09-29; revision `6823d08`):
+  one fresh disposable synthetic fixture stopped at its first action. The seeded
+  checkpoint was assigned to Bob, while the attempted start used Alice; the
+  server returned HTTP 403 `ACTION_FORBIDDEN`. A read-only query confirmed no
+  process runtime was created. The loopback provider count remained 0, so no
+  proposal, restart, owner review/apply, or responsive-browser evidence was
+  reached. The action was not retried. The disposable app, PostgreSQL data,
+  profile temp directory and synthetic session file were cleaned. Sanitized
+  receipt: `/tmp/orgward-pr06-proposal-apply-browser-attempt.json`. This leaves
+  the post-restart owner proposal-apply browser proof open; PR-06, cursor and
+  release gates remain open.
+
   PR-06 managed DeepSeek checkpoint composition (2026-09-29): extended the
   existing saved-process PostgreSQL journey so a tenant-managed DeepSeek task
   is denied before its mandatory human checkpoint, then receives independent
