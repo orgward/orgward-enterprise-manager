@@ -5587,3 +5587,22 @@ PostgreSQL exited through the fixture cleanup path; a process scan found no
 attributable app/PostgreSQL process or profile temp directory, and no browser
 session was opened. No retry, tests, or source change occurred. PR-06, cursor,
 and release gates remain open.
+
+PR-06 full-check migration expectation repair (source/test tree committed as
+`61f1545`): the first frozen-tree `npm run check` at `3eaa818` exposed seven
+stale current-schema-version assertions expecting migration 035 although the
+runtime applies migration 037. `tests/helpers/migration-registry.mjs` now derives
+the latest numbered SQL migration and registry count using the same filter and
+lexicographic sort as the runtime. Persistence and upgrade assertions use that
+registry-derived current version/count; historical-prefix counts, checksums,
+rollback, row-count and restart assertions remain explicit. Focused tests passed
+7/7 (0 failures, cancellations or skips; TAP 6.03s, wall 6.10s), log
+`/tmp/orgward-migration-current-version-focused-final.log`. The single full
+check after repair passed 421/422 (0 failures/cancellations; 1 optional skip for
+the PostgreSQL backup/restore journey because client tools are unavailable;
+TAP 78.50s, runner 79.64s, outer wall 82.30s). Full log
+`/tmp/orgward-pr06-final-full-check-repaired-3eaa818.log`; TAP
+`/tmp/orgward-tests-vqGqCi/node-test.tap.log`. The failed initial full-check
+log remains `/tmp/orgward-pr06-final-full-check-3eaa818.log`. This repair changes
+tests only, not product behavior; `git diff --check` passed. PR-06 remains open;
+task checkbox, cursor and release gates are unchanged.
