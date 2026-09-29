@@ -2412,6 +2412,22 @@ repair check superseded it.
   or tests occurred in this attempt; the browser session was closed and the
   disposable PostgreSQL cluster was stopped. PR-06 remains open.
 
+  PR-06 fresh synthetic single-lifetime checkpoint and model follow-up
+  (2026-09-29, revision `8c71d84`): a temporary fixture correction read the
+  pinned source ID from the canonical task/source envelope; no product source
+  changed. A fresh disposable instance completed the human root, escalated the
+  mandatory checkpoint, resumed it by owner decision and completed it. The
+  linked `task-process-deliver` request moved from AWAITING_APPROVAL to an
+  independent APPROVED decision, then made exactly one local loopback provider
+  dispatch and completed SUCCEEDED. After app restart, run/agent/checkpoint
+  readback remained SUCCEEDED and the saved proposal was proposed with one
+  citation; the synthetic credential was absent from serialized run output.
+  Sanitized receipt: `/tmp/orgward-pr06-single-lifetime-success.json`. The
+  disposable app and PostgreSQL data were stopped and removed; no task was
+  replayed. This API/runtime fixture did not capture the rendered founder
+  journey, test a live provider, or run the full PR-06 check. PR-06 and release
+  gates remain open.
+
   PR-06 tenant-managed DeepSeek profile setup (2026-09-28): tenant administrators
   can create, revise and disable per-tenant DeepSeek profiles in PostgreSQL. The
   server fixes the provider and endpoint; the UI exposes only profile ID, label,
