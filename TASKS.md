@@ -2343,6 +2343,31 @@ repair check superseded it.
   persistent customer instance, screen-reader pass, complete founder journey or
   full PR-06 check is claimed; PR-06, its cursor and release gates remain open.
 
+  PR-06 model prompt and usage evidence slice (2026-09-29): model prompts are
+  now capped at 16 KiB UTF-8 during approved-run preflight, before dispatch
+  authorization and credential brokering. Completed Responses usage is persisted
+  only as validated numeric input/output/total token counts; missing or malformed
+  usage remains `unreported`, and uncertain dispatch remains `reserved` with no
+  replay. The existing output cap, timeout, disabled tools and single-attempt
+  behavior are unchanged. Run evidence hashes and proposal integrity hashes bind
+  the usage summary, and the saved-result projection accepts only this bounded
+  usage shape. Focused provider, proposal, result-projection and linked-process
+  restart tests passed 7/7 (0 failures, 0 skips; 20.12s TAP); log
+  `/tmp/orgward-pr06-model-usage-focused.log`. `npm run task:next` selected PR-06
+  and `git diff --check` passed. Loopback fixtures only; no live provider or
+  credential was used. Existing prompt-cap coverage uses the same 16 KiB constant;
+  this slice did not add tenant-specific dollar quotas or claim model quality
+  evaluation. PR-06 and release gates remain open.
+
+  PR-06 proposal usage-state validator follow-up (2026-09-29): generated
+  proposals now accept only `reported` or `unreported` usage from completed
+  Responses; `reserved` and `dispatch_not_started` remain execution-failure
+  metadata only. Server integrity and saved-result projection tests reject both
+  invalid proposal states. Focused proposal/projection tests passed 25/25 (0
+  failures, 0 skips; 0.31s TAP); log
+  `/tmp/orgward-pr06-model-usage-validator-focused.log`. Syntax and
+  `git diff --check` passed; PR-06 and release gates remain open.
+
   PR-06 managed DeepSeek checkpoint composition (2026-09-29): extended the
   existing saved-process PostgreSQL journey so a tenant-managed DeepSeek task
   is denied before its mandatory human checkpoint, then receives independent

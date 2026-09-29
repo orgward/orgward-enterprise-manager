@@ -11,6 +11,7 @@ import { readWorkspaceArtifact } from './artifact-file.mjs';
 import { linkedRunOutcomeCategory } from './linked-run-outcome-category.mjs';
 import { allowlistedProviderTransportFailureClass, classifyProviderTransportFailure } from './provider-transport-diagnostic.mjs';
 import { buildProcessTaskProposalPromptForRun, createGeneratedBlueprintProposal, createProcessTaskGuidanceSnapshot,
+  MAX_BLUEPRINT_PROPOSAL_PROMPT_BYTES,
   createProcessTaskProposalContext } from './proposals.mjs';
 import {
   approveExecutionRun,
@@ -27,6 +28,23 @@ const isModelProvider = (profile) => Boolean(profile?.dynamicOpenAi || profile?.
 const resolveModelCredentialBinding = (secretStore, profile, options) => profile.dynamicOpenAi
   ? secretStore.resolveOpenAiBinding({ ...options, reference: profile.credentialReference, model: profile.model })
   : secretStore.resolveGenericCredentialBinding({ ...options, reference: profile.credentialReference });
+function buildModelPrompt(run) {
+  const instructions = run.interventionRevisions?.at(-1) ?? run.workItem;
+  const task = { id: run.processTaskRef?.taskId, title: run.title, detail: instructions.objective };
+  const prompt = run.workItem.proposalContext
+    ? buildProcessTaskProposalPromptForRun({ run, task, amendedRequirements: instructions.requirements })
+    : `${instructions.objective}\n\nRequirements:\n${instructions.requirements.join('\n')}`;
+  // This shared 16 KiB ceiling covers the complete UTF-8 prompt string before
+  // approval dispatch and credential brokering; Responses settings add only a
+  // small fixed envelope around it.
+  const bytes = Buffer.byteLength(prompt, 'utf8');
+  if (bytes > MAX_BLUEPRINT_PROPOSAL_PROMPT_BYTES) {
+    throw Object.assign(new Error(`The complete serialized model prompt is ${bytes} UTF-8 bytes; the server limit is ${MAX_BLUEPRINT_PROPOSAL_PROMPT_BYTES}.`), {
+      statusCode: 413, code: 'PROCESS_TASK_PROPOSAL_CONTEXT_TOO_LARGE', retryable: false,
+    });
+  }
+  return prompt;
+}
 const WORKER_HEARTBEAT_MS = 1_000;
 const PROVIDER_LEASE_RENEWAL_MS = 15_000;
 const DISPATCH_ACK_WATCHDOG_MS = WORKER_LEASE_MS - WORKER_HEARTBEAT_MS;
@@ -70,19 +88,20 @@ function providerTransport(endpoint, { headers, body, signal, parseResponse }) {
         let parsed;
         try { parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
         catch { throw Object.assign(new Error('invalid provider JSON'), { parserFailureClass: 'invalid_json' }); }
-        let output;
-        try { output = parseResponse(parsed); }
+        let parsedOutput;
+        try { parsedOutput = parseResponse(parsed); }
         catch (error) {
           if (error?.parserFailureClass) throw error;
           throw Object.assign(new Error('invalid provider response shape'), { parserFailureClass: 'incomplete_response' });
         }
+        const output = typeof parsedOutput === 'string' ? parsedOutput : parsedOutput?.output;
         if (typeof output !== 'string' || !output.trim()) {
           throw Object.assign(new Error('missing provider output text'), { parserFailureClass: 'missing_output_text' });
         }
         if (Buffer.byteLength(output) > 8_000) {
           throw Object.assign(new Error('provider result too large'), { parserFailureClass: 'output_too_large' });
         }
-        resolve(output);
+        resolve(typeof parsedOutput === 'string' ? output : { output, modelUsage: parsedOutput.modelUsage });
       } catch (error) {
         if (Number.isInteger(response.statusCode) && response.statusCode >= 100 && response.statusCode <= 599) {
           error.upstreamHttpStatus = response.statusCode;
@@ -951,6 +970,7 @@ export class ExecutionService {
       || (profile.dynamicDeepSeek && run.profile.providerMaxOutputTokens !== profile.maxOutputTokens))) {
       throw Object.assign(new Error('The approved model provider settings differ from the configured profile. Create a new execution run and approve the current settings.'), { statusCode: 409, code: 'EXECUTION_PROFILE_STALE', retryable: false });
     }
+    const modelPrompt = isModelProvider(profile) ? buildModelPrompt(run) : null;
     const configuredCredential = profile.credentialReference
       ? { reference: profile.credentialReference, version: profile.credentialVersion } : null;
     const approvedCredential = run.profile.credential ?? null;
@@ -997,6 +1017,7 @@ export class ExecutionService {
       approvalPrincipal: run.approval?.principal ?? null,
       authzGeneration: command.authorityGeneration ?? null,
       workerId: randomUUID(), controller: new AbortController(), cancelReason: null, handle: null,
+      modelPrompt,
       dispatchAuthorizationPending: true,
       done: new Promise((resolve) => { settleActive = resolve; }),
     };
@@ -1131,8 +1152,10 @@ export class ExecutionService {
       }
       if (providerProfile) {
         const providerController = active.controller;
-        const result = this.#executeProvider(profile, run, active).then((text) => ({
-          status: 'COMPLETED', exitCode: 0, stdout: text, stderr: '', changedArtifacts: [], evidenceHash: digest(text),
+        const result = this.#executeProvider(profile, run, active).then(({ output, modelUsage }) => ({
+          status: 'COMPLETED', exitCode: 0, stdout: output, stderr: '', changedArtifacts: [],
+          evidenceHash: modelUsage ? digest({ output, modelUsage }) : digest(output),
+          modelUsage,
         }));
         handle = { result, terminate: () => providerController.abort() };
         active.handle = handle;
@@ -1188,10 +1211,11 @@ export class ExecutionService {
         } };
       }
       const generatedProposal = result.status === 'COMPLETED' && run.workItem?.proposalContext
-        ? createGeneratedBlueprintProposal(run, result.stdout) : null;
+        ? createGeneratedBlueprintProposal(run, result.stdout, result.modelUsage) : null;
       terminalAttempted = true;
       const execution = {
         ...result, stdout: redact(result.stdout), stderr: redact(result.stderr),
+        ...(result.modelUsage ? { modelUsage: result.modelUsage } : {}),
         ...(workspace ? { workspace } : {}), ...(generatedProposal ? { generatedProposal } : {}),
       };
       terminalRun = await this.#finalizeTerminal(run, {
@@ -1231,7 +1255,7 @@ export class ExecutionService {
           terminalRun = await this.#finalizeTerminal(run, {
             tenantId, principal: command.scopePrincipal, workerId: active.workerId,
             dispatchStarted: false, commandPrincipal: command.principal ?? 'execution-worker',
-            failure: error, reason: 'dispatch_commit_unknown',
+            failure: error, modelUsage: active.modelUsage, reason: 'dispatch_commit_unknown',
           });
         } catch (finalizeError) {
           preserveLeaseForRecovery = true;
@@ -1245,7 +1269,7 @@ export class ExecutionService {
           terminalRun = await this.#finalizeTerminal(run, {
             tenantId, principal: command.scopePrincipal ?? null, workerId: active.workerId,
             dispatchStarted, commandPrincipal: command.principal ?? 'execution-worker',
-            failure: error, reason: active.cancelReason ?? (error.code === 'EXECUTION_APPROVAL_STALE'
+            failure: error, modelUsage: active.modelUsage, reason: active.cancelReason ?? (error.code === 'EXECUTION_APPROVAL_STALE'
               ? 'execution_approval_stale' : interrupted ? 'authorization_revoked' : undefined),
           });
         } catch (finalizeError) {
@@ -1283,24 +1307,23 @@ export class ExecutionService {
 
   async #executeProvider(profile, run, active) {
     const controller = active.controller;
+    const instructions = run.interventionRevisions?.at(-1) ?? run.workItem;
+    const proposalInput = isModelProvider(profile) ? (active.modelPrompt ?? buildModelPrompt(run)) : null;
+    const requestBody = isModelProvider(profile)
+      ? { model: profile.model, input: proposalInput,
+        store: false, max_output_tokens: profile.maxOutputTokens, tools: [],
+        ...(profile.dynamicDeepSeek ? { reasoning: { effort: 'none' } } : {}) }
+      : { objective: instructions.objective, requirements: instructions.requirements };
+    const serializedBody = JSON.stringify(requestBody);
+    active.modelUsage = isModelProvider(profile) ? { status: 'unreported', reason: 'dispatch_not_started' } : null;
     let timedOut = false;
     const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, Math.min(profile.timeoutMs ?? 20_000, 20_000));
     timeout.unref?.();
     try {
-      return await this.useProviderCredential(run.id, { operation: ({ credential, signal }) => {
-        const instructions = run.interventionRevisions?.at(-1) ?? run.workItem;
-        const proposalTask = { id: run.processTaskRef?.taskId, title: run.title, detail: instructions.objective };
-        const proposalInput = run.workItem.proposalContext
-          ? buildProcessTaskProposalPromptForRun({ run, task: proposalTask, amendedRequirements: instructions.requirements })
-          : `${instructions.objective}\n\nRequirements:\n${instructions.requirements.join('\n')}`;
-        const requestBody = isModelProvider(profile)
-          ? { model: profile.model, input: proposalInput,
-          store: false, max_output_tokens: profile.maxOutputTokens, tools: [],
-          ...(profile.dynamicDeepSeek ? { reasoning: { effort: 'none' } } : {}) }
-          : { objective: instructions.objective, requirements: instructions.requirements };
-        return providerTransport(profile.providerEndpoint, {
+      const response = await this.useProviderCredential(run.id, { operation: ({ credential, signal }) => {
+        const transport = providerTransport(profile.providerEndpoint, {
           headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json', accept: 'application/json' },
-          body: JSON.stringify(requestBody), signal,
+          body: serializedBody, signal,
           parseResponse: (parsed) => {
             if (isModelProvider(profile) && parsed?.status !== 'completed') throw Object.assign(new Error('incomplete model provider response'), { parserFailureClass: 'incomplete_response' });
             const output = isModelProvider(profile) && Array.isArray(parsed?.output)
@@ -1308,10 +1331,27 @@ export class ExecutionService {
                 ? item.content.filter((part) => part?.type === 'output_text' && typeof part.text === 'string').map((part) => part.text) : []).join('\n')
               : parsed?.result;
             if (isModelProvider(profile) && (typeof output !== 'string' || !output.trim())) throw Object.assign(new Error('missing model output text'), { parserFailureClass: 'missing_output_text' });
-            return output;
+            if (!isModelProvider(profile)) return output;
+            const usage = parsed?.usage;
+            const valid = usage && Number.isSafeInteger(usage.input_tokens) && usage.input_tokens >= 0
+              && Number.isSafeInteger(usage.output_tokens) && usage.output_tokens >= 0
+              && Number.isSafeInteger(usage.total_tokens) && usage.total_tokens >= 0
+              && usage.total_tokens === usage.input_tokens + usage.output_tokens
+              && usage.input_tokens <= MAX_BLUEPRINT_PROPOSAL_PROMPT_BYTES
+              && usage.output_tokens <= profile.maxOutputTokens;
+            const modelUsage = valid
+              ? { status: 'reported', inputTokens: usage.input_tokens, outputTokens: usage.output_tokens, totalTokens: usage.total_tokens }
+              : { status: 'unreported', reason: usage == null ? 'usage_missing' : 'usage_invalid' };
+            active.modelUsage = modelUsage;
+            return { output, modelUsage };
           },
         });
+        return { ...transport, send: () => {
+          if (isModelProvider(profile)) active.modelUsage = { status: 'reserved' };
+          transport.send();
+        } };
       } });
+      return typeof response === 'string' ? { output: response, modelUsage: null } : response;
     } catch (error) {
       if (error?.code === 'PROVIDER_OUTPUT_QUARANTINED') throw error;
       if (['PROCESS_INSTANCE_PAUSED', 'PROVIDER_ATTEMPT_CANCELLED'].includes(error?.code)) throw error;
@@ -1336,7 +1376,7 @@ export class ExecutionService {
     } finally { clearTimeout(timeout); }
   }
 
-  async #finalizeTerminal(run, { tenantId, principal, workerId, dispatchStarted, commandPrincipal, complete, failure, reason }) {
+  async #finalizeTerminal(run, { tenantId, principal, workerId, dispatchStarted, commandPrincipal, complete, failure, modelUsage, reason }) {
     const diagnostic = run.profile?.kind === 'provider-deepseek' && failure?.code === 'PROVIDER_OUTCOME_UNKNOWN'
       && failure.providerDiagnostic?.provider === 'deepseek'
       && ((Number.isInteger(failure.providerDiagnostic?.httpStatus) && failure.providerDiagnostic.httpStatus >= 100 && failure.providerDiagnostic.httpStatus <= 599)
@@ -1354,6 +1394,7 @@ export class ExecutionService {
     const failed = () => build('FAILED', {
       status: 'FAILED', error: redact(failure?.message ?? 'Execution failed.'),
       completedAt: new Date().toISOString(), changedArtifacts: [],
+      ...(modelUsage ? { modelUsage } : {}),
       ...(diagnostic ? { providerDiagnostic: diagnostic } : {}),
     }, 'ExecutionFailed', {
       error: redact(failure?.message ?? 'Execution failed.'),

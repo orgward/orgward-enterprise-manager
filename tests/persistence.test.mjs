@@ -6340,7 +6340,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
       ?? 'Recurring repair signals are grouped into service needs for founder review.';
     nextProposalDetailOverride = null;
     response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({
+    response.end(JSON.stringify({ status: 'completed', usage: { input_tokens: 100, output_tokens: 60, total_tokens: 160 }, output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({
       proposedDetail,
       rationale: 'The saved customer signal describes recurring repair history.',
       citations: [citedSourceId],
@@ -8913,6 +8913,11 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(mixedDeepSeekDependentRun.processTaskRef.taskId, mixedAgentTask.id);
   assert.match(mixedDeepSeekDependentRun.execution.evidenceHash, /^[a-f0-9]{64}$/);
   assert.equal(mixedDeepSeekDependentRun.execution.generatedProposal.status, 'proposed');
+  assert.deepEqual(mixedDeepSeekDependentRun.execution.modelUsage,
+    { status: 'reported', inputTokens: 100, outputTokens: 60, totalTokens: 160 });
+  assert.deepEqual(mixedDeepSeekDependentRun.execution.generatedProposal.modelUsage,
+    mixedDeepSeekDependentRun.execution.modelUsage,
+    'validated usage is bound into the saved proposal evidence');
   assert.deepEqual(mixedDeepSeekDependentRun.execution.generatedProposal.citations.map(({ id }) => id), [
     mixedDeepSeekDependentRun.workItem.proposalContext.sourceEnvelope.sources[0].id,
   ]);
@@ -9459,6 +9464,8 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.deepEqual(restoredMixedDeepSeekRun.processTaskRef, mixedDeepSeekDependentRun.processTaskRef);
   assert.equal(restoredMixedDeepSeekRun.execution.evidenceHash, mixedDeepSeekDependentRun.execution.evidenceHash,
     'the checkpoint-dependent agent result retains its evidence hash after application restart');
+  assert.deepEqual(restoredMixedDeepSeekRun.execution.modelUsage, mixedDeepSeekDependentRun.execution.modelUsage,
+    'validated model usage remains available after application restart');
   assert.equal(restoredMixedDeepSeekRun.profile.providerModel, 'deepseek-next-fixture');
   assert.deepEqual(restoredMixedDeepSeekRun.execution.generatedProposal, mixedDeepSeekDependentRun.execution.generatedProposal,
     'the dependent model output and citations remain inspectable after application restart');

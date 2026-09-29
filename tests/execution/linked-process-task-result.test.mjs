@@ -111,6 +111,21 @@ test('saved model proposal is projected only when its pinned context and structu
     target: 'Prioritised need · detail', proposedDetail: 'After', rationale: 'é'.repeat(200),
     citations: [{ name: 'Customer signal', type: 'information' }], evaluation: 'passed',
   });
+  const withUsage = modelProposalRun();
+  withUsage.execution.generatedProposal.modelUsage = {
+    status: 'reported', inputTokens: 100, outputTokens: 40, totalTokens: 140,
+  };
+  assert.equal(linkedProcessTaskResult(runtime, withUsage, proposalProject()).proposalPreview.kind, 'proposal');
+  withUsage.execution.generatedProposal.modelUsage.totalTokens = 141;
+  assert.equal(linkedProcessTaskResult(runtime, withUsage, proposalProject()).proposalPreview.kind, 'unavailable',
+    'malformed usage does not make an invalid persisted proposal look reviewable');
+  for (const invalidUsage of [
+    { status: 'reserved' },
+    { status: 'unreported', reason: 'dispatch_not_started' },
+  ]) {
+    withUsage.execution.generatedProposal.modelUsage = invalidUsage;
+    assert.equal(linkedProcessTaskResult(runtime, withUsage, proposalProject()).proposalPreview.kind, 'unavailable');
+  }
   const blocked = modelProposalRun();
   blocked.execution.generatedProposal.evaluation.status = 'blocked';
   blocked.execution.generatedProposal.evaluation.checks[0].status = 'blocked';

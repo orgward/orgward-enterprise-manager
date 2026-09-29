@@ -157,6 +157,27 @@ test('structured proposal validates citations and preserves its pinned hashable 
   }), (error) => error.code === 'BLUEPRINT_PROPOSAL_UNAVAILABLE');
 });
 
+test('proposal usage is limited to validated numeric summary and included in the integrity hash', () => {
+  const value = run();
+  const source = value.workItem.proposalContext.sourceEnvelope.sources[0];
+  const modelUsage = { status: 'reported', inputTokens: 100, outputTokens: 40, totalTokens: 140 };
+  const proposal = createGeneratedBlueprintProposal(value, JSON.stringify({
+    proposedDetail: 'A concise proposed change.', rationale: 'The saved input supports this change.', citations: [source.id],
+  }), modelUsage);
+  assert.deepEqual(proposal.modelUsage, modelUsage);
+  assert.equal(verifyGeneratedBlueprintProposal(value, proposal), true);
+  const tampered = { ...proposal, modelUsage: { ...modelUsage, inputTokens: 99, outputTokens: 41 } };
+  assert.throws(() => verifyGeneratedBlueprintProposal(value, tampered),
+    (error) => error.code === 'BLUEPRINT_PROPOSAL_EVALUATION_INTEGRITY_FAILED');
+  for (const invalidUsage of [
+    { status: 'reserved' },
+    { status: 'unreported', reason: 'dispatch_not_started' },
+  ]) {
+    assert.throws(() => verifyGeneratedBlueprintProposal(value, { ...proposal, modelUsage: invalidUsage }),
+      (error) => error.code === 'BLUEPRINT_PROPOSAL_UNAVAILABLE');
+  }
+});
+
 test('unchanged trimmed target remains visible as a blocked, verifiable proposal', () => {
   const value = run();
   const source = value.workItem.proposalContext.sourceEnvelope.sources[0];

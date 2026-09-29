@@ -38,6 +38,12 @@ const isBoundedText = (value, limit = MAX_PROPOSAL_TEXT, required = false) => ty
   && new TextEncoder().encode(value).byteLength <= limit && (!required || Boolean(value.trim()));
 const hasKeys = (value, keys) => isRecord(value)
   && Object.keys(value).sort().join(',') === [...keys].sort().join(',');
+const validModelUsage = (usage) => usage?.status === 'reported'
+  ? Number.isSafeInteger(usage.inputTokens) && usage.inputTokens >= 0
+    && Number.isSafeInteger(usage.outputTokens) && usage.outputTokens >= 0
+    && Number.isSafeInteger(usage.totalTokens) && usage.totalTokens === usage.inputTokens + usage.outputTokens
+  : usage?.status === 'unreported'
+    && ['usage_missing', 'usage_invalid'].includes(usage.reason);
 
 function proposalReview(run, project) {
   if (!['provider-openai', 'provider-deepseek'].includes(run.profile?.kind)) return null;
@@ -48,8 +54,11 @@ function proposalReview(run, project) {
   if (!isRecord(context) || !isRecord(context.sourceEnvelope) || !isRecord(context.target) || !isRecord(proposal)) return unavailable;
   const ref = run.processTaskRef;
   const expectedRefKeys = Object.keys(ref).sort().join(',');
-  if (!hasKeys(proposal, ['id', 'runId', 'projectId', 'blueprintId', 'blueprintVersion', 'processTaskRef', 'target',
-    'proposedDetail', 'rationale', 'citations', 'sourceEnvelope', 'sourceEnvelopeHash', 'provider', 'evaluation', 'proposalHash', 'status'])
+  const proposalKeys = ['id', 'runId', 'projectId', 'blueprintId', 'blueprintVersion', 'processTaskRef', 'target',
+    'proposedDetail', 'rationale', 'citations', 'sourceEnvelope', 'sourceEnvelopeHash', 'provider', 'evaluation', 'proposalHash', 'status',
+    ...(Object.hasOwn(proposal, 'modelUsage') ? ['modelUsage'] : [])];
+  if (!hasKeys(proposal, proposalKeys)
+    || (Object.hasOwn(proposal, 'modelUsage') && !validModelUsage(proposal.modelUsage))
     || proposal.status !== 'proposed' || proposal.runId !== run.id || proposal.projectId !== run.projectId
     || proposal.blueprintId !== ref.blueprintId || proposal.blueprintVersion !== ref.blueprintVersion
     || !Number.isSafeInteger(proposal.blueprintVersion) || proposal.blueprintVersion < 1

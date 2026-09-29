@@ -591,9 +591,9 @@ test('DeepSeek uses its fixed Responses endpoint with a pinned generic credentia
   const fixtureResult = await setup(t, async ({ request, response, credential, body }) => {
     providerCalls.push({ path: request.url, credential, body });
     response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'Bounded DeepSeek result' }] }] }));
+    response.end(JSON.stringify({ status: 'completed', usage: { input_tokens: 18, output_tokens: 7, total_tokens: 25 }, output: [{ type: 'message', content: [{ type: 'output_text', text: 'Bounded DeepSeek result' }] }] }));
   }, { deepSeek: true });
-  const { app, projectId } = fixtureResult;
+  const { app, projectId, restart } = fixtureResult;
   const created = await api(app, '/api/execution/runs', 'worker', { method: 'POST', body: {
     projectId, profileId: 'deepseek-current', title: 'DeepSeek task', objective: 'Summarize the local test input',
   } });
@@ -626,6 +626,7 @@ test('DeepSeek uses its fixed Responses endpoint with a pinned generic credentia
   assert.equal(executed.status, 200, JSON.stringify(executed.body));
   assert.equal(executed.body.status, 'SUCCEEDED');
   assert.equal(executed.body.execution.stdout, 'Bounded DeepSeek result');
+  assert.deepEqual(executed.body.execution.modelUsage, { status: 'reported', inputTokens: 18, outputTokens: 7, totalTokens: 25 });
   assert.equal(providerCalls.length, 1);
   assert.equal(providerCalls[0].path, '/responses');
   assert.equal(providerCalls[0].credential, 'Bearer fixture-deepseek-rotated-credential');
@@ -634,6 +635,71 @@ test('DeepSeek uses its fixed Responses endpoint with a pinned generic credentia
     store: false, max_output_tokens: 128, tools: [], reasoning: { effort: 'none' },
   });
   assert.equal(JSON.stringify(executed.body).includes('fixture-deepseek-rotated-credential'), false);
+
+  await new Promise((resolve) => app.server.close(resolve));
+  await app.close();
+  fixtureResult.apps.splice(fixtureResult.apps.indexOf(app), 1);
+  const restarted = await restart();
+  const restored = await api(restarted, `/api/execution/runs/${next.body.id}`, 'worker');
+  assert.equal(restored.status, 200);
+  assert.deepEqual(restored.body.execution.modelUsage, executed.body.execution.modelUsage);
+  assert.equal(fixtureResult.getFixtureRequestCount(), 1);
+});
+
+test('DeepSeek denies oversized complete prompts before credential reservation or provider dispatch', async (t) => {
+  let providerCalls = 0;
+  const { app, projectId } = await setup(t, async ({ response }) => {
+    providerCalls += 1;
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'unexpected' }] }] }));
+  }, { deepSeek: true });
+  const created = await api(app, '/api/execution/runs', 'worker', { method: 'POST', body: {
+    projectId, profileId: 'deepseek-current', title: 'Oversized prompt', objective: 'x'.repeat(4_000),
+    requirements: Array.from({ length: 40 }, (_, index) => `${index}-${'r'.repeat(490)}`),
+  } });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const approved = await api(app, `/api/execution/runs/${created.body.id}/approve`, 'admin', {
+    method: 'POST', body: { version: created.body.version },
+  });
+  assert.equal(approved.status, 200, JSON.stringify(approved.body));
+  const denied = await api(app, `/api/execution/runs/${created.body.id}/execute`, 'worker', {
+    method: 'POST', body: { version: approved.body.version },
+  });
+  assert.equal(denied.status, 413, JSON.stringify(denied.body));
+  assert.match(denied.body.error, /complete serialized model prompt/i);
+  assert.equal(providerCalls, 0);
+  const attempt = await app.persistence.query(`select count(*)::int as count from orgward.provider_dispatch_attempts
+    where tenant_id='tenant-a' and run_id=$1`, [created.body.id]);
+  assert.equal(attempt.rows[0].count, 0, 'prompt cap runs before broker reservation');
+  const persisted = await api(app, `/api/execution/runs/${created.body.id}`, 'worker');
+  assert.equal(persisted.body.status, 'APPROVED', 'prompt rejection leaves the approved run undispatched');
+});
+
+test('DeepSeek missing or malformed token usage is recorded as unreported', async (t) => {
+  let providerCalls = 0;
+  const { app, projectId } = await setup(t, async ({ response, body }) => {
+    providerCalls += 1;
+    const usage = body.input.includes('malformed usage')
+      ? { input_tokens: 8, output_tokens: 129, total_tokens: 137 } : undefined;
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ status: 'completed', ...(usage ? { usage } : {}), output: [{ type: 'message', content: [{ type: 'output_text', text: 'Completed without reliable usage' }] }] }));
+  }, { deepSeek: true });
+  for (const [objective, reason] of [['missing usage', 'usage_missing'], ['malformed usage', 'usage_invalid']]) {
+    const created = await api(app, '/api/execution/runs', 'worker', { method: 'POST', body: {
+      projectId, profileId: 'deepseek-current', title: objective, objective,
+    } });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const approved = await api(app, `/api/execution/runs/${created.body.id}/approve`, 'admin', {
+      method: 'POST', body: { version: created.body.version },
+    });
+    assert.equal(approved.status, 200, JSON.stringify(approved.body));
+    const executed = await api(app, `/api/execution/runs/${created.body.id}/execute`, 'worker', {
+      method: 'POST', body: { version: approved.body.version },
+    });
+    assert.equal(executed.body.status, 'SUCCEEDED');
+    assert.deepEqual(executed.body.execution.modelUsage, { status: 'unreported', reason });
+  }
+  assert.equal(providerCalls, 2);
 });
 
 test('DeepSeek outcome-unknown HTTP responses persist only a safe status and never redispatch', async (t) => {
@@ -660,6 +726,7 @@ test('DeepSeek outcome-unknown HTTP responses persist only a safe status and nev
   assert.match(failed.body.execution.error, /may have received this request/i);
   const diagnostic = { outcome: 'outcome_unknown', provider: 'deepseek', httpStatus: 503 };
   assert.deepEqual(failed.body.execution.providerDiagnostic, diagnostic);
+  assert.deepEqual(failed.body.execution.modelUsage, { status: 'reserved' });
   const failureEvent = failed.body.events.findLast((event) => event.type === 'ExecutionFailed');
   assert.deepEqual(failureEvent.data.providerDiagnostic, { provider: 'deepseek', httpStatus: 503 });
   assert.equal(JSON.stringify(failed.body).includes(bodyCanary), false);
@@ -677,6 +744,7 @@ test('DeepSeek outcome-unknown HTTP responses persist only a safe status and nev
   const recovered = await api(restarted, `/api/execution/runs/${created.body.id}`, 'worker');
   assert.equal(recovered.status, 200);
   assert.deepEqual(recovered.body.execution.providerDiagnostic, diagnostic);
+  assert.deepEqual(recovered.body.execution.modelUsage, { status: 'reserved' });
   assert.deepEqual(recovered.body.events.findLast((event) => event.type === 'ExecutionFailed').data.providerDiagnostic,
     { provider: 'deepseek', httpStatus: 503 });
   const retry = await api(restarted, `/api/execution/runs/${created.body.id}/execute`, 'worker', {

@@ -306,7 +306,7 @@ export function buildProcessTaskProposalPromptForRun({ run, task, amendedRequire
     : buildLegacyBlueprintProposalPrompt({ task, proposalContext: run.workItem.proposalContext, amendedRequirements });
 }
 
-export function createGeneratedBlueprintProposal(run, providerText) {
+export function createGeneratedBlueprintProposal(run, providerText, modelUsage = null) {
   const context = run.workItem?.proposalContext;
   if (!context?.sourceEnvelope || !context?.target || !run.processTaskRef) return null;
   let parsed;
@@ -340,6 +340,7 @@ export function createGeneratedBlueprintProposal(run, providerText) {
       model: run.profile?.providerModel ?? 'unknown',
       profileId: run.profile?.id ?? null, profileVersion: run.profile?.version ?? null,
     },
+    ...(modelUsage ? { modelUsage: structuredClone(modelUsage) } : {}),
   };
   const evaluation = proposalStructuralEvaluation(core);
   return { ...core, evaluation, proposalHash: digest({ ...core, evaluation }), status: 'proposed' };
@@ -358,6 +359,7 @@ export function verifyGeneratedBlueprintProposal(run, proposal) {
     || digest(proposal.sourceEnvelope) !== digest(run.workItem?.proposalContext?.sourceEnvelope)
     || digest(proposal.target) !== digest(run.workItem?.proposalContext?.target)
     || proposal.provider?.provider !== expectedProvider
+    || (proposal.modelUsage !== undefined && !isValidPersistedModelUsage(proposal.modelUsage))
     || !Array.isArray(proposal.citations) || !proposal.citations.length) {
     invalid('The saved proposal is unavailable or does not match its successful linked run.', 'BLUEPRINT_PROPOSAL_UNAVAILABLE');
   }
@@ -371,6 +373,13 @@ export function verifyGeneratedBlueprintProposal(run, proposal) {
     invalid('The saved proposal citations do not match the preserved source envelope.', 'BLUEPRINT_PROPOSAL_INTEGRITY_FAILED');
   }
   return true;
+}
+
+function isValidPersistedModelUsage(usage) {
+  if (usage?.status === 'reported') return Number.isSafeInteger(usage.inputTokens) && usage.inputTokens >= 0
+    && Number.isSafeInteger(usage.outputTokens) && usage.outputTokens >= 0
+    && Number.isSafeInteger(usage.totalTokens) && usage.totalTokens === usage.inputTokens + usage.outputTokens;
+  return usage?.status === 'unreported' && ['usage_missing', 'usage_invalid'].includes(usage.reason);
 }
 
 export function blueprintProposalEvaluationFailure(proposal) {
