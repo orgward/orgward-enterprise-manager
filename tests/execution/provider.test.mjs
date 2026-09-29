@@ -631,7 +631,7 @@ test('DeepSeek uses its fixed Responses endpoint with a pinned generic credentia
   assert.equal(providerCalls[0].credential, 'Bearer fixture-deepseek-rotated-credential');
   assert.deepEqual(providerCalls[0].body, {
     model: 'deepseek-fixture', input: 'Summarize the current local test input\n\nRequirements:\n',
-    store: false, max_output_tokens: 128, tools: [],
+    store: false, max_output_tokens: 128, tools: [], reasoning: { effort: 'none' },
   });
   assert.equal(JSON.stringify(executed.body).includes('fixture-deepseek-rotated-credential'), false);
 });

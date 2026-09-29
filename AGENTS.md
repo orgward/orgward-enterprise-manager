@@ -22,10 +22,17 @@ tenant isolation, secret, effect-boundary, intervention and audit controls insid
 each customer flow; defer no release gate. PR numbers are stable identifiers, and
 the order of active queue sections determines the next task. Mark implementation
 tasks separately from production gates, whose evidence and status remain in their
-own ledger. Follow the active cursor in `TASKS.md`: PR-01–PR-05 are complete,
-PR-06 is first open, and PR-07 follows. Older increment narratives and archived
-backlogs cannot reset that cursor; change it only when the task checkbox is
-supported by passing behavior checks and the implementation review.
+own ledger. At the start of a continuation, run `npm run task:next`; its read-only
+check derives the first open PR from the active checkboxes in `TASKS.md` and fails
+if the written cursor disagrees. Read the queue header and the active PR outcome
+at the printed line; search its receipts only for a concrete decision.
+Current checkboxes and passing receipts override older goal snapshots, increment
+narratives and archived backlogs. If a required resource blocks that PR, keep it
+open and check later queue sections for work whose
+dependencies are ready. Do not block the whole goal while such work remains.
+Change a PR checkbox and the cursor together only after its complete behavior,
+checks and implementation review pass. After the last PR, set the cursor to
+`COMPLETE` and keep release-gate qualification separate.
 
 Do not require change records, manifests, generated vectors, packet digests or
 review receipts before ordinary implementation. The files under `contracts/`,

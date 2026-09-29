@@ -398,6 +398,15 @@ test('served tenant DeepSeek setup encrypts the key before binding and supports 
   const app = await start(root); t.after(() => close(app.server));
   const script = await fetch(`${app.base}/platform.js`).then((response) => response.text());
   const workflow = script.slice(script.indexOf('async function createDeepSeekProfileWithKey'), script.indexOf('async function retryDeepSeekProfileBinding'));
+  assert.match(script, /document\.addEventListener\('submit', \(event\) => \{/);
+  for (const name of ['saveProjectMember', 'revokeIdentity', 'replaceIdentityRoles', 'storeSecretReference',
+    'stageOpenAiCandidate', 'revokeSecretReference', 'saveDeepSeekProfile', 'createDeepSeekProfileWithKey']) {
+    const start = script.indexOf(`async function ${name}(event)`);
+    assert.notEqual(start, -1, `${name} is served`);
+    const end = script.indexOf('\nasync function ', start + 1);
+    const handler = script.slice(start, end === -1 ? undefined : end);
+    assert.match(handler, /const form = event\.target;/, `${name} uses the submitted form in the delegated listener`);
+  }
   assert.match(script, /id="deepseek-key-profile-create"[\s\S]*name="value" type="password"/);
   assert.ok(workflow.indexOf('/api/v1/secrets/') < workflow.indexOf('/api/execution/deepseek-profiles/'), 'secret storage precedes profile binding');
   assert.match(workflow, /const secretBody = JSON\.stringify\([\s\S]*payload: \{ value, reason, expiresAt:/);

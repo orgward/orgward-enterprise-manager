@@ -162,7 +162,7 @@ async function loadProjectMembers(projectId = state.sharing.projectId) {
 async function saveProjectMember(event) {
   event.preventDefault();
   if (state.sharing.busy || !state.sharing.projectId) return;
-  const form = event.currentTarget;
+  const form = event.target;
   const principal = form.elements.principal.value.trim();
   const access = form.elements.access.value;
   state.sharing.busy = true; state.sharing.message = ''; render();
@@ -423,7 +423,7 @@ async function runImport(mode) {
 
 async function revokeIdentity(event) {
   event.preventDefault();
-  const form = event.currentTarget;
+  const form = event.target;
   const principal = form.elements.principal.value;
   const reason = form.elements.reason.value.trim();
   const expectedAuthzGeneration = Number(form.elements.principal.selectedOptions[0]?.dataset.generation);
@@ -444,7 +444,7 @@ async function revokeIdentity(event) {
 
 async function replaceIdentityRoles(event) {
   event.preventDefault();
-  const form = event.currentTarget;
+  const form = event.target;
   const principal = form.dataset.identityPrincipal;
   const roles = new FormData(form).getAll('roles');
   const expectedAuthzGeneration = Number(form.elements.expectedAuthzGeneration.value);
@@ -466,7 +466,7 @@ async function replaceIdentityRoles(event) {
 
 async function storeSecretReference(event) {
   event.preventDefault();
-  const form = event.currentTarget;
+  const form = event.target;
   const reference = form.elements.reference.value.trim();
   const value = form.elements.value.value;
   const reason = form.elements.reason.value.trim();
@@ -494,7 +494,7 @@ async function storeSecretReference(event) {
 
 async function stageOpenAiCandidate(event) {
   event.preventDefault();
-  const form = event.currentTarget;
+  const form = event.target;
   const reference = form.elements.reference.value.trim();
   const existing = state.secretAdmin?.records?.find((entry) => entry.reference === reference);
   const value = form.elements.value.value;
@@ -538,7 +538,7 @@ async function openAiCandidateAction(button) {
 
 async function revokeSecretReference(event) {
   event.preventDefault();
-  const form = event.currentTarget;
+  const form = event.target;
   const reference = form.dataset.secretReference;
   const expectedVersion = Number(form.elements.expectedVersion.value);
   const reason = form.elements.reason.value.trim();
@@ -563,7 +563,7 @@ async function revokeSecretReference(event) {
 
 async function saveDeepSeekProfile(event) {
   event.preventDefault();
-  const form = event.currentTarget;
+  const form = event.target;
   if (state.deepSeekAction?.busy) return;
   const creating = form.id === 'deepseek-profile-create';
   const profileId = creating ? form.elements.profileId.value.trim().toLowerCase() : form.dataset.profileId;
@@ -594,7 +594,7 @@ async function saveDeepSeekProfile(event) {
 
 async function createDeepSeekProfileWithKey(event) {
   event.preventDefault();
-  const form = event.currentTarget;
+  const form = event.target;
   if (state.deepSeekAction?.busy) return;
   const profileId = form.elements.profileId.value.trim().toLowerCase();
   const reference = form.elements.reference.value.trim();

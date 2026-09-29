@@ -45,14 +45,20 @@ the earlier PR; PR-11 closes their remaining standalone scope and qualification.
 Broader qualification remains mandatory before release; this ordering does not
 mark any P/E gate complete. Active section order below follows this list.
 
-Active cursor: PR-01 through PR-05 are complete implementation tasks; PR-06 is
-the first open task, and PR-07 follows it. Continue PR-06's saved-design-to-result
-journey. The active checkboxes and passing implementation receipts determine
-status; dated increment notes describe their own point in time. After a bounded
-increment, add its actual behavior and test/demo receipt under its PR item and
+Active cursor: PR-06. The active checkboxes below are the source of truth;
+`npm run task:next` checks that this cursor matches their first open PR in section
+order. PR-01 through PR-05 are complete, and PR-07 follows PR-06. A stale PR
+number in a saved goal, dated receipt or older document does not reset the queue.
+Read this header and the active PR outcome at the line printed by
+`npm run task:next`; search receipts only for a concrete dependency.
+If an external dependency blocks the current PR, keep it open and inspect later
+sections in priority order for independently ready work before treating the whole
+goal as blocked. After a bounded increment, add its actual behavior and test/demo
+receipt under its PR item and
 record gaps or skipped checks explicitly. Advance the cursor and checkbox together
 only when the whole PR outcome passes its required behavior checks and review.
-Keep P/E release-gate status and evidence in their separate ledgers.
+After the final PR, set the cursor to `COMPLETE`. Keep P/E release-gate status
+and evidence in their separate ledgers.
 Focused tests remain per-slice. Run the single full check at parent PR/task
 completion, after source freeze and diff review; do not run it concurrently with
 another full check. Keep the current test-runner isolation and resource settings:
@@ -2303,6 +2309,39 @@ repair check superseded it.
   and evidence after restart. Complete this customer path before broad standalone
   resilience and operations qualification, while keeping authorization, tenant
   isolation, safe tool bounds and auditable state transitions in the path.
+
+  Development provider authorization (2026-09-29): the user explicitly permits
+  use of the exposed low-budget DeepSeek test key on this private VPS for bounded
+  synthetic OrgWard verification and a fresh model task, and does not intend to
+  rotate it. Its existing source is the owner-only OpenClaw `.env` file; parse its
+  quoted value without printing, logging, committing or putting it in command
+  arguments or the environment. Never replay a prior `outcome_unknown` request.
+  This authorization does not permit unrelated live business effects or public
+  deployment.
+
+  PR-06 authorized DeepSeek and guided setup proof (2026-09-29): one direct
+  synthetic Responses request with the parsed test key returned HTTP 200, and
+  OrgWard's encrypted tenant-profile verification returned `verified`. A fresh
+  disposable saved process task then made exactly one DeepSeek dispatch: the
+  run SUCCEEDED with JSON output and a saved proposal. App restart readback
+  retained the result; another tenant's run read returned 404. An attempted
+  standalone run returned local HTTP 400 before dispatch because tenant-managed
+  profiles belong to saved process tasks; no failed or unknown run was replayed.
+  DeepSeek generation now disables reasoning within the bounded output cap. The
+  fixed request-shape test passed 1/1 (0 failures/skips; TAP
+  `/tmp/orgward-tests-AYVHAx/node-test.tap.log`).
+
+  The delegated Administration submit handler now passes the actual form to all
+  eight form handlers, including encrypted key and DeepSeek profile setup. A
+  focused served-client test passed 1/1 (0 failures/skips; 0.39s harness; TAP
+  `/tmp/orgward-tests-GYqB1W/node-test.tap.log`). A disposable browser check
+  with a synthetic key showed secret PUT 200 before profile PUT 201, a listed
+  profile, cleared password, no key in rendered body, and no page or console
+  errors; it did not call the provider. The active-task drift test passed 1/1,
+  `npm run task:next` selected PR-06, and the orchestrate skill validator passed.
+  Sanitized live receipt: `/tmp/orgward-deepseek-live-proof-receipt.json`. No
+  persistent customer instance, screen-reader pass, complete founder journey or
+  full PR-06 check is claimed; PR-06, its cursor and release gates remain open.
 
   PR-06 tenant-managed DeepSeek profile setup (2026-09-28): tenant administrators
   can create, revise and disable per-tenant DeepSeek profiles in PostgreSQL. The

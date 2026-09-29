@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
+    "task:next": "node ops/active-task.mjs",
     "preflight": "node ops/preflight.mjs",
     "check:legacy-spec": "node ops/check-spec.mjs --self-test",
     "check:legacy-engineering": "node ops/check-engineering-workflow.mjs",

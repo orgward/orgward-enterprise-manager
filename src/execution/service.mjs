@@ -1295,7 +1295,8 @@ export class ExecutionService {
           : `${instructions.objective}\n\nRequirements:\n${instructions.requirements.join('\n')}`;
         const requestBody = isModelProvider(profile)
           ? { model: profile.model, input: proposalInput,
-          store: false, max_output_tokens: profile.maxOutputTokens, tools: [] }
+          store: false, max_output_tokens: profile.maxOutputTokens, tools: [],
+          ...(profile.dynamicDeepSeek ? { reasoning: { effort: 'none' } } : {}) }
           : { objective: instructions.objective, requirements: instructions.requirements };
         return providerTransport(profile.providerEndpoint, {
           headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json', accept: 'application/json' },

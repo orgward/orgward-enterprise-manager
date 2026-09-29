@@ -3,10 +3,17 @@ name: orgward-orchestrate
 description: Order OrgWard implementation tasks and coordinate explicitly authorized parallel work using the concise TASKS.md backlog.
 ---
 
-Read `AGENTS.md` and `TASKS.md`. Use the numbered work order, active section
-order, checkboxes and cursor in `TASKS.md` to choose a bounded user outcome within
-the first unchecked, dependency-ready PR. PR IDs do not set sequence. Read current
-completion from `TASKS.md` every time; the skill is not a second status ledger.
+Read `AGENTS.md` and the `TASKS.md` queue header, then run `npm run task:next` to
+check the active cursor against the PR checkboxes. Read the active PR outcome at
+the printed line; search receipts only for a concrete dependency. Use the
+numbered work order and active section order to choose the first unchecked,
+dependency-ready PR. PR IDs do not set sequence.
+The current checkboxes and passing receipts override stale goal text, dated notes
+and archived backlogs. If an external resource blocks the current PR, keep it
+open and scan later sections for independently ready work before treating the
+whole goal as blocked. This skill is not a second status ledger.
+After the final PR is checked, set the cursor to `COMPLETE` and review release
+gates in their own ledgers.
 Finish the saved-design-to-result customer journey before standalone broad
 security, resilience and operations qualification. Within later PRs, deliver each
 customer-visible end-to-end journey first, including the authority, tenant,
