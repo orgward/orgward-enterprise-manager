@@ -28,6 +28,7 @@ import {
   verifySoftwareDeliveryDraft,
 } from '../src/sdlc/software-plan-compiler.mjs';
 import { startPostgres } from './helpers/postgres.mjs';
+import { currentMigrationVersion } from './helpers/migration-registry.mjs';
 
 const tenantHeaders = { 'content-type': 'application/json', authorization: 'Bearer alice' };
 
@@ -299,7 +300,7 @@ test('PostgreSQL commits state, command result, audit and outbox atomically unde
   assert.deepEqual((await request(app.base, '/api/v1/projects', { headers: { authorization: 'Bearer tenant-b-admin' } })).data, []);
   const foundation = await request(app.base, '/api/v1/foundation');
   assert.equal(foundation.data.persistence.status, 'postgresql_transactional');
-  assert.equal(foundation.data.persistence.schemaVersion, '035-human-task-effective-assignment');
+  assert.equal(foundation.data.persistence.schemaVersion, await currentMigrationVersion());
 });
 
 test('retry after a post-commit response failure returns the original result without another event', async (t) => {
@@ -5326,7 +5327,7 @@ test('tenant-scoped principal migration preserves existing identity and audit re
   }, 201);
   assert.equal(projectA.data.createdBy, alicePrincipal);
   assert.equal(projectB.data.createdBy, alicePrincipal);
-  assert.equal((await app.persistence.status()).schemaVersion, '035-human-task-effective-assignment');
+  assert.equal((await app.persistence.status()).schemaVersion, await currentMigrationVersion());
   assert.deepEqual((await postgres.query(`
     select tenant_id, status from orgward.oidc_principals where principal = $1 order by tenant_id
   `, [alicePrincipal])).rows, [
