@@ -2428,6 +2428,30 @@ repair check superseded it.
   journey, test a live provider, or run the full PR-06 check. PR-06 and release
   gates remain open.
 
+  PR-06 connected rendered founder-to-result follow-up (2026-09-29, revision
+  `142f9e1`): one fresh disposable PostgreSQL/app instance used synthetic OIDC
+  identities and one exact HTTPS redirect for the synthetic Responses endpoint
+  to a `127.0.0.1` loopback stub. The founder created a workspace in the browser,
+  answered four discovery prompts, edited and saved blueprint v2, and inspected
+  the interactive map. In the same project/database, API fixture actions then
+  enabled actor bindings, created plan revision 3 and its checkpoint, completed
+  the human root, escalated and owner-resolved the checkpoint, independently
+  approved `task-process-deliver`, and executed it with exactly one local
+  provider call. After app-only restart, rendered browser views showed the
+  succeeded linked plan, run, agent task and checkpoint, saved proposal, one
+  pinned-source citation and run evidence. No real DeepSeek credential or
+  external provider request occurred; page and console errors were zero, and
+  390x844 result/plan views had 390px document width. Screenshots and AX
+  snapshots: `/tmp/orgward-pr06-connected-rendered-proof.json` (which lists each
+  path). Binding, plan, checkpoint, human transitions, approval and execution
+  were API-driven, and a post-enable binding panel was not captured; this is
+  connected UI/API/state evidence, not a fully rendered interaction for every
+  action. One supplemental browser reopen failed before a page loaded because
+  its command omitted `--no-sandbox`; it was not retried and did not affect the
+  primary post-restart captures. The disposable app/database/browser were
+  stopped and cleaned. No product source or tests changed; no full PR-06 check
+  or release gate was completed. PR-06 remains open.
+
   PR-06 tenant-managed DeepSeek profile setup (2026-09-28): tenant administrators
   can create, revise and disable per-tenant DeepSeek profiles in PostgreSQL. The
   server fixes the provider and endpoint; the UI exposes only profile ID, label,
