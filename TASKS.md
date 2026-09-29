@@ -2394,6 +2394,24 @@ repair check superseded it.
   These follow-ups did not reproduce the 500. No provider or live external call,
   full PR-06 check or release-gate qualification occurred; PR-06 remains open.
 
+  PR-06 rendered design-to-checkpoint attempt (2026-09-29): the disposable
+  synthetic fixture rendered blueprint v2 and its interactive map at desktop
+  and 390px, then an Execution plan with a completed founder root and a required
+  checkpoint in ESCALATED state. The owner-resolution form was visible, but this
+  run ended before submitting it; no dependent model approval, provider dispatch,
+  result or restart readback is claimed. An initial fixture graph incorrectly
+  made the checkpoint the no-dependency root and received 403 before creating
+  an instance; a fresh plan with the founder root and checkpoint before the
+  dependent agent task reached the rendered state above. Local provider calls:
+  0. Screenshots: `/tmp/orgward-pr06-integrated-design-desktop.png`,
+  `/tmp/orgward-pr06-integrated-map-desktop.png`,
+  `/tmp/orgward-pr06-integrated-map-mobile.png`,
+  `/tmp/orgward-pr06-integrated-execution-start.png`,
+  `/tmp/orgward-pr06-integrated-escalated-desktop.png`, and
+  `/tmp/orgward-pr06-integrated-owner-escalated-desktop.png`. No source changes
+  or tests occurred in this attempt; the browser session was closed and the
+  disposable PostgreSQL cluster was stopped. PR-06 remains open.
+
   PR-06 tenant-managed DeepSeek profile setup (2026-09-28): tenant administrators
   can create, revise and disable per-tenant DeepSeek profiles in PostgreSQL. The
   server fixes the provider and endpoint; the UI exposes only profile ID, label,
