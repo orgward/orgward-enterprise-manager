@@ -2343,6 +2343,19 @@ repair check superseded it.
   persistent customer instance, screen-reader pass, complete founder journey or
   full PR-06 check is claimed; PR-06, its cursor and release gates remain open.
 
+  PR-06 managed DeepSeek checkpoint composition (2026-09-29): extended the
+  existing saved-process PostgreSQL journey so a tenant-managed DeepSeek task
+  is denied before its mandatory human checkpoint, then receives independent
+  approval and runs only after the checkpoint completes with evidence. One
+  deterministic loopback Responses call yielded a saved proposal; restart
+  readback retained the run, task runtime, proposal and evidence hash without
+  exposing the fixture credential. The focused journey passed 1/1 (0 failures
+  or skips; 16.68s TAP, 17.91s harness; log
+  `/tmp/orgward-tests-3dRPEc/node-test.tap.log`); `git diff --check` passed.
+  This used no live provider request or rendered browser. The combined
+  founder-to-result browser journey and remaining model evaluation/budget
+  criteria are open; PR-06 and release gates remain unchanged.
+
   PR-06 tenant-managed DeepSeek profile setup (2026-09-28): tenant administrators
   can create, revise and disable per-tenant DeepSeek profiles in PostgreSQL. The
   server fixes the provider and endpoint; the UI exposes only profile ID, label,

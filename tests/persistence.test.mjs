@@ -3,6 +3,8 @@ import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, watch, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import http from 'node:http';
+import https from 'node:https';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import test from 'node:test';
@@ -8687,6 +8689,11 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   const mixedDependentWhileIncomplete = await taskRequest('process-task-mixed-agent-before-human-completion',
     mixedDependentPayload(mixedHumanStart.planInstanceId), 'alice', 409);
   assert.equal(mixedDependentWhileIncomplete.error.code, 'PROCESS_TASK_DEPENDENCY_UNSATISFIED');
+  const managedDeepSeekBeforeCheckpoint = await taskRequest('process-task-mixed-deepseek-before-checkpoint', {
+    ...mixedDependentPayload(mixedHumanStart.planInstanceId), profileId: 'tenant-deepseek-saved', profileRevision: 2,
+  }, 'alice', 409);
+  assert.equal(managedDeepSeekBeforeCheckpoint.error.code, 'PROCESS_TASK_DEPENDENCY_UNSATISFIED',
+    'a tenant-managed DeepSeek task stays behind the same mandatory human checkpoint');
 
   const mixedEmptySuccess = await request(app.base, '/api/execution/process-task-instances/complete', {
     ...as('bob'), method: 'POST', body: command('process-task-mixed-human-empty-success', {
@@ -8870,26 +8877,44 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.deepEqual(mixedCheckpointCompleted.evidence, ['The original review result was checked.', 'Supporting notes were verified against the saved design.']);
 
   const providerCallsBeforeCheckpointDependent = providerCallCount;
-  const mixedOpenAiDependentRequest = await taskRequest('process-task-mixed-checkpoint-openai-request', {
-    ...mixedDependentPayload(mixedHumanStart.planInstanceId), profileId: 'process-task-openai',
+  const mixedDeepSeekDependentRequest = await taskRequest('process-task-mixed-checkpoint-deepseek-request', {
+    ...mixedDependentPayload(mixedHumanStart.planInstanceId), profileId: 'tenant-deepseek-saved', profileRevision: 2,
   });
-  assert.equal(mixedOpenAiDependentRequest.status, 'AWAITING_APPROVAL');
-  const mixedOpenAiDependentApproval = await request(app.base, `/api/execution/runs/${mixedOpenAiDependentRequest.id}/approve`, {
-    ...as('bob'), method: 'POST', body: JSON.stringify({ version: mixedOpenAiDependentRequest.version }),
+  assert.equal(mixedDeepSeekDependentRequest.status, 'AWAITING_APPROVAL');
+  assert.equal(mixedDeepSeekDependentRequest.profile.version, 'tenant-deepseek-r2');
+  const mixedDeepSeekDependentApproval = await request(app.base, `/api/execution/runs/${mixedDeepSeekDependentRequest.id}/approve`, {
+    ...as('bob'), method: 'POST', body: JSON.stringify({ version: mixedDeepSeekDependentRequest.version }),
   });
-  assert.equal(mixedOpenAiDependentApproval.status, 'APPROVED');
-  const mixedOpenAiDependentRun = await request(app.base, `/api/execution/runs/${mixedOpenAiDependentRequest.id}/execute`, {
-    ...as('alice'), method: 'POST', body: JSON.stringify({ version: mixedOpenAiDependentApproval.version }),
-  });
-  assert.equal(mixedOpenAiDependentRun.status, 'SUCCEEDED');
+  assert.equal(mixedDeepSeekDependentApproval.status, 'APPROVED');
+  const originalHttpsRequest = https.request;
+  https.request = (target, options, callback) => {
+    const url = target instanceof URL ? target : new URL(String(target));
+    if (url.origin !== 'https://api.deepseek.com' || url.pathname !== '/responses' || options?.method !== 'POST') {
+      return originalHttpsRequest.call(https, target, options, callback);
+    }
+    return http.request(new URL(`${url.pathname}${url.search}`, providerOrigin), options, callback);
+  };
+  let mixedDeepSeekDependentRun;
+  try {
+    mixedDeepSeekDependentRun = await request(app.base, `/api/execution/runs/${mixedDeepSeekDependentRequest.id}/execute`, {
+      ...as('alice'), method: 'POST', body: JSON.stringify({ version: mixedDeepSeekDependentApproval.version }),
+    });
+  } finally {
+    https.request = originalHttpsRequest;
+  }
+  assert.equal(mixedDeepSeekDependentRun.status, 'SUCCEEDED');
   assert.equal(providerCallCount, providerCallsBeforeCheckpointDependent + 1,
-    'the dependent model task reaches the loopback provider only after its inserted human checkpoint succeeded');
-  assert.equal(mixedOpenAiDependentRun.processTaskRef.planInstanceId, mixedHumanStart.planInstanceId);
-  assert.equal(mixedOpenAiDependentRun.processTaskRef.taskId, mixedAgentTask.id);
-  assert.match(mixedOpenAiDependentRun.execution.evidenceHash, /^[a-f0-9]{64}$/);
-  assert.equal(mixedOpenAiDependentRun.execution.generatedProposal.status, 'proposed');
-  assert.deepEqual(mixedOpenAiDependentRun.execution.generatedProposal.citations.map(({ id }) => id), [
-    mixedOpenAiDependentRun.workItem.proposalContext.sourceEnvelope.sources[0].id,
+    'the tenant-managed DeepSeek task reaches the loopback Responses fixture only after its inserted human checkpoint succeeded');
+  assert.equal(providerRequest.url, '/responses');
+  assert.equal(providerRequest.body.model, 'deepseek-next-fixture');
+  assert.deepEqual(providerRequest.body.reasoning, { effort: 'none' });
+  assert.deepEqual(providerRequest.body.tools, []);
+  assert.equal(mixedDeepSeekDependentRun.processTaskRef.planInstanceId, mixedHumanStart.planInstanceId);
+  assert.equal(mixedDeepSeekDependentRun.processTaskRef.taskId, mixedAgentTask.id);
+  assert.match(mixedDeepSeekDependentRun.execution.evidenceHash, /^[a-f0-9]{64}$/);
+  assert.equal(mixedDeepSeekDependentRun.execution.generatedProposal.status, 'proposed');
+  assert.deepEqual(mixedDeepSeekDependentRun.execution.generatedProposal.citations.map(({ id }) => id), [
+    mixedDeepSeekDependentRun.workItem.proposalContext.sourceEnvelope.sources[0].id,
   ]);
 
   const mixedOverrideStart = await request(app.base, '/api/execution/process-task-instances/start', {
@@ -9081,7 +9106,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     return { requested, completed };
   };
   const mixedAgentAfterAssignedCompletion = {
-    requested: mixedOpenAiDependentRequest, completed: mixedOpenAiDependentRun,
+    requested: mixedDeepSeekDependentRequest, completed: mixedDeepSeekDependentRun,
   };
   const mixedAgentAfterOwnerOverride = await executeMixedDependentAfterHumanTerminal(
     'owner-override-after-revocation', mixedOverrideStart.planInstanceId);
@@ -9429,13 +9454,16 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     'applied state is not written back into the immutable run result');
   assert.equal(JSON.stringify(restoredOpenAiRun).includes(openAiFixtureSecret), false,
     'reloaded execution history does not expose credential material');
-  const restoredMixedOpenAiRun = restoredRuns.find((run) => run.id === mixedOpenAiDependentRun.id);
-  assert.equal(restoredMixedOpenAiRun.status, 'SUCCEEDED');
-  assert.deepEqual(restoredMixedOpenAiRun.processTaskRef, mixedOpenAiDependentRun.processTaskRef);
-  assert.equal(restoredMixedOpenAiRun.execution.evidenceHash, mixedOpenAiDependentRun.execution.evidenceHash,
+  const restoredMixedDeepSeekRun = restoredRuns.find((run) => run.id === mixedDeepSeekDependentRun.id);
+  assert.equal(restoredMixedDeepSeekRun.status, 'SUCCEEDED');
+  assert.deepEqual(restoredMixedDeepSeekRun.processTaskRef, mixedDeepSeekDependentRun.processTaskRef);
+  assert.equal(restoredMixedDeepSeekRun.execution.evidenceHash, mixedDeepSeekDependentRun.execution.evidenceHash,
     'the checkpoint-dependent agent result retains its evidence hash after application restart');
-  assert.deepEqual(restoredMixedOpenAiRun.execution.generatedProposal, mixedOpenAiDependentRun.execution.generatedProposal,
+  assert.equal(restoredMixedDeepSeekRun.profile.providerModel, 'deepseek-next-fixture');
+  assert.deepEqual(restoredMixedDeepSeekRun.execution.generatedProposal, mixedDeepSeekDependentRun.execution.generatedProposal,
     'the dependent model output and citations remain inspectable after application restart');
+  assert.equal(JSON.stringify(restoredMixedDeepSeekRun).includes('fixture-deepseek-credential-rotated'), false,
+    'the restarted tenant-managed DeepSeek run does not expose credential material');
   for (const run of restoredRuns.filter((candidate) => [firstRoot.id, secondRoot.id, dependent.id].includes(candidate.id))) {
     assert.deepEqual(run.processTaskRef, [firstRoot, secondRoot, dependent].find((candidate) => candidate.id === run.id).processTaskRef);
   }
@@ -9662,12 +9690,12 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     result: 'succeeded',
     evidence: ['The original review result was checked.', 'Supporting notes were verified against the saved design.'],
   }, 'the completion event carries the exact result, evidence, and checkpoint identity after restart');
-  const restoredMixedOpenAiRuntime = restoredMixedRuntime(mixedHumanStart.planInstanceId, mixedAgentTask.id);
-  assert.equal(restoredMixedOpenAiRuntime.status, 'SUCCEEDED');
-  assert.equal(restoredMixedOpenAiRuntime.executionRunId, mixedOpenAiDependentRun.id);
-  assert.ok(restoredMixedOpenAiRuntime.events.some((event) => event.type === 'ProcessTaskRunStatusChanged'
+  const restoredMixedDeepSeekRuntime = restoredMixedRuntime(mixedHumanStart.planInstanceId, mixedAgentTask.id);
+  assert.equal(restoredMixedDeepSeekRuntime.status, 'SUCCEEDED');
+  assert.equal(restoredMixedDeepSeekRuntime.executionRunId, mixedDeepSeekDependentRun.id);
+  assert.ok(restoredMixedDeepSeekRuntime.events.some((event) => event.type === 'ProcessTaskRunStatusChanged'
     && event.data.status === 'SUCCEEDED'), 'the same-instance task runtime records dependent-agent success after restart');
-  const restoredLinkedRunSummary = linkedProcessTaskResult(restoredMixedOpenAiRuntime, restoredMixedOpenAiRun, restoredProject);
+  const restoredLinkedRunSummary = linkedProcessTaskResult(restoredMixedDeepSeekRuntime, restoredMixedDeepSeekRun, restoredProject);
   assert.equal(restoredLinkedRunSummary.status, 'SUCCEEDED');
   assert.equal(restoredLinkedRunSummary.outputPreview, null, 'raw model JSON stays hidden after restart');
   assert.equal(restoredLinkedRunSummary.proposalPreview?.kind, 'proposal',
@@ -9675,7 +9703,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.ok(restoredLinkedRunSummary.proposalPreview.proposedDetail);
   assert.equal(restoredLinkedRunSummary.proposalPreview.applicationStatus, 'review-only',
     'a persisted proposal without a matching apply event remains review-only after restart');
-  assert.equal(restoredLinkedRunSummary.evidenceHash, restoredMixedOpenAiRun.execution.evidenceHash.slice(0, 18));
+  assert.equal(restoredLinkedRunSummary.evidenceHash, restoredMixedDeepSeekRun.execution.evidenceHash.slice(0, 18));
   const restoredFreshDependentSummary = linkedProcessTaskResult(
     restoredRuntime(freshDependentRun), restoredFreshDependentRun, restoredProject);
   assert.equal(restoredFreshDependentSummary.proposalPreview.applicationStatus, 'applied');
