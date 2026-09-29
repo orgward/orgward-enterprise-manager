@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { linkedProcessTaskResult } from '../../public/linked-process-task-result.mjs';
+import { linkedProcessTaskResult, modelUsagePresentation } from '../../public/linked-process-task-result.mjs';
 
 const projectId = 'project-01234567-89ab-cdef-0123-456789abcdef';
 const runtime = {
@@ -77,6 +77,33 @@ test('saved result disclosure label reports the validated status and bounded art
   assert.equal(summary(1), 'Saved result: Succeeded · 1 artifact');
   assert.equal(summary(3), 'Saved result: Succeeded · 3 artifacts');
   assert.equal(summary(101), 'Saved result: Succeeded · 100+ artifacts');
+});
+
+test('model usage presentation shows validated counts and truthful missing, invalid, and reserved states', () => {
+  assert.deepEqual(modelUsagePresentation({
+    status: 'reported', inputTokens: 128, outputTokens: 64, totalTokens: 192,
+  }), {
+    status: 'reported',
+    label: 'Reported model usage: 128 input tokens, 64 output tokens, 192 total tokens.',
+  });
+  assert.equal(modelUsagePresentation({ status: 'unreported', reason: 'usage_missing' }).label,
+    'The provider did not report token usage; input, output, and total counts are unavailable.');
+  assert.equal(modelUsagePresentation({ status: 'unreported', reason: 'usage_invalid' }).label,
+    'The provider returned invalid usage metadata; token counts are unavailable.');
+  assert.equal(modelUsagePresentation({ status: 'unreported', reason: 'dispatch_not_started' }).label,
+    'Provider dispatch did not start; no model usage was reported.');
+  assert.equal(modelUsagePresentation({ status: 'reserved' }).label,
+    'Provider dispatch outcome is uncertain; token usage remains unreported. Reconcile this run before requesting more work.');
+  for (const invalid of [
+    { status: 'reported', inputTokens: 128, outputTokens: 64, totalTokens: 193 },
+    { status: 'reported', inputTokens: -1, outputTokens: 64, totalTokens: 63 },
+    { status: 'reported', inputTokens: Number.MAX_SAFE_INTEGER, outputTokens: 1, totalTokens: Number.MAX_SAFE_INTEGER },
+    { status: 'unreported', reason: 'provider-secret-detail' },
+  ]) {
+    assert.equal(modelUsagePresentation(invalid).status, 'unavailable');
+    assert.doesNotMatch(modelUsagePresentation(invalid).label, /provider-secret-detail/);
+  }
+  assert.equal(modelUsagePresentation(null), null);
 });
 
 test('successful saved outputs are previewed within a bound and expose only artifact/evidence metadata', () => {

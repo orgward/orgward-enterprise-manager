@@ -50,6 +50,7 @@
 .inline-action { display: flex; gap: 8px; max-width: 570px; }.inline-action input { min-width: 0; }.inline-action .button { flex: 0 0 auto; }
 .evidence-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 8px; }
 .evidence-grid > div { border: 1px solid var(--exec-line); border-radius: 7px; padding: 11px; }.evidence-grid b, .evidence-grid span { display: block; }
+.evidence-grid > .model-usage { grid-column: 1 / -1; margin: 0; }
 .evidence-grid b { color: var(--exec-faint); font-size: 8px; text-transform: uppercase; }.evidence-grid span { margin-top: 5px; font-size: 11px; }
 .artifact-list { grid-column: 1/-1; color: var(--muted); font: 10px/1.7 ui-monospace, monospace; }
 .run-section p, .run-section li { overflow-wrap: anywhere; }

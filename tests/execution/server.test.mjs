@@ -347,6 +347,11 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(executionSource, /if \(preview\.designLink\) disclosure\.append\(el\('a', \{[\s\S]*?text: preview\.designLink\.label, attrs: \{ href: preview\.designLink\.href \}/,
     'the expanded saved task proposal disclosure renders its validated current-design link');
   assert.match(executionSource, /text: `Proposed detail: \$\{preview\.proposedDetail\}`/);
+  assert.match(executionSource, /modelUsagePresentation\(proposal\.modelUsage\)/);
+  assert.match(executionSource, /modelUsagePresentation\(execution\.modelUsage\)/);
+  assert.match(executionSource, /className: 'muted model-usage'/);
+  const modelUsageCss = await (await fetch(`${base}/execution.css`)).text();
+  assert.match(modelUsageCss, /\.evidence-grid > \.model-usage \{ grid-column: 1 \/ -1; margin: 0; \}/);
   assert.match(executionSource, /linked-task-artifacts/);
   assert.match(executionSource, /These checks verify proposal structure and pinned references\. They do not assess factual accuracy, source grounding, or provider quality\./);
   assert.match(executionSource, /evaluation\.status === 'passed' \? 'passed' : 'blocked'/);
@@ -355,6 +360,9 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   const linkedTaskResultClient = await fetch(`${base}/linked-process-task-result.mjs`);
   assert.equal(linkedTaskResultClient.status, 200);
   const linkedTaskResultSource = await linkedTaskResultClient.text();
+  assert.match(linkedTaskResultSource, /export function modelUsagePresentation\(usage\)/);
+  assert.match(linkedTaskResultSource, /Reported model usage:/);
+  assert.match(linkedTaskResultSource, /Provider dispatch outcome is uncertain; token usage remains unreported/);
   assert.match(linkedTaskResultSource, /Structured proposal unavailable\. Open the linked run for details\./);
   assert.match(linkedTaskResultSource, /Review-only proposed update\. Applying it is a separate versioned owner action\./);
   assert.match(linkedTaskResultSource, /project\?\.id === run\.projectId/);

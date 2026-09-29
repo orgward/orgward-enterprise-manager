@@ -9,6 +9,8 @@ const terminalStatuses = Object.freeze({
 });
 
 const isRecord = (value) => Boolean(value && typeof value === 'object' && !Array.isArray(value));
+const hasExactKeys = (value, keys) => isRecord(value)
+  && Object.keys(value).sort().join(',') === [...keys].sort().join(',');
 const MAX_ARTIFACTS = 100;
 const MAX_ARTIFACT_LINKS = 10;
 const MAX_ARTIFACT_PATH_LENGTH = 500;
@@ -44,6 +46,36 @@ const validModelUsage = (usage) => usage?.status === 'reported'
     && Number.isSafeInteger(usage.totalTokens) && usage.totalTokens === usage.inputTokens + usage.outputTokens
   : usage?.status === 'unreported'
     && ['usage_missing', 'usage_invalid'].includes(usage.reason);
+
+export function modelUsagePresentation(usage) {
+  if (usage == null) return null;
+  if (hasExactKeys(usage, ['status', 'inputTokens', 'outputTokens', 'totalTokens'])
+    && usage.status === 'reported'
+    && Number.isSafeInteger(usage.inputTokens) && usage.inputTokens >= 0
+    && Number.isSafeInteger(usage.outputTokens) && usage.outputTokens >= 0
+    && Number.isSafeInteger(usage.totalTokens)
+    && usage.totalTokens === usage.inputTokens + usage.outputTokens) {
+    return {
+      status: 'reported',
+      label: `Reported model usage: ${usage.inputTokens} input tokens, ${usage.outputTokens} output tokens, ${usage.totalTokens} total tokens.`,
+    };
+  }
+  if (hasExactKeys(usage, ['status', 'reason']) && usage.status === 'unreported') {
+    const messages = {
+      usage_missing: 'The provider did not report token usage; input, output, and total counts are unavailable.',
+      usage_invalid: 'The provider returned invalid usage metadata; token counts are unavailable.',
+      dispatch_not_started: 'Provider dispatch did not start; no model usage was reported.',
+    };
+    if (Object.hasOwn(messages, usage.reason)) return { status: 'unreported', label: messages[usage.reason] };
+  }
+  if (hasExactKeys(usage, ['status']) && usage.status === 'reserved') {
+    return {
+      status: 'reserved',
+      label: 'Provider dispatch outcome is uncertain; token usage remains unreported. Reconcile this run before requesting more work.',
+    };
+  }
+  return { status: 'unavailable', label: 'Saved model usage metadata could not be validated; token counts are unavailable.' };
+}
 
 function proposalReview(run, project) {
   if (!['provider-openai', 'provider-deepseek'].includes(run.profile?.kind)) return null;

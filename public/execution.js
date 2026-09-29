@@ -20,7 +20,7 @@ import { deepSeekOutcomeDiagnosticCopy } from './provider-outcome-diagnostic.mjs
 import { isCurrentProcessInstanceRefresh, processInstanceRefreshDisposition, processInstanceRefreshMessage,
   processInstanceStatusAnnouncement, updateProcessInstanceRefreshStatus } from './process-instance-refresh.mjs';
 import { isCurrentSelectedRunRefresh, selectedRunRefreshDisposition, selectedRunRefreshMessage, selectedRunStatusAnnouncement } from './selected-run-refresh.mjs';
-import { linkedProcessTaskResult } from './linked-process-task-result.mjs';
+import { linkedProcessTaskResult, modelUsagePresentation } from './linked-process-task-result.mjs';
 import { linkedRunActivityLabel } from './linked-run-activity.mjs';
 import { captureExpandedSavedTaskResultKeys, captureFocusedSavedTaskResult, restoreFocusedSavedTaskResult,
   restoreSavedTaskResultOpen, savedTaskResultDisclosureKey } from './saved-task-result-disclosure.mjs';
@@ -2414,6 +2414,8 @@ function renderGeneratedProposal(proposal, application) {
     el('p', { text: `Rationale: ${proposal.rationale}` }),
     el('p', { className: 'muted', text: `Pinned blueprint v${proposal.blueprintVersion} · ${proposal.provider.provider} / ${proposal.provider.model} · proposal hash ${proposal.proposalHash}` }),
   ];
+  const usage = modelUsagePresentation(proposal.modelUsage);
+  if (usage) content.push(el('p', { className: 'muted model-usage', text: usage.label }));
   const evaluation = proposal.evaluation;
   content.push(el('h4', { text: 'Structural checks only' }));
   content.push(el('p', { className: 'muted', text: 'These checks verify proposal structure and pinned references. They do not assess factual accuracy, source grounding, or provider quality.' }));
@@ -2713,6 +2715,8 @@ function executionEvidence(execution, runId) {
     el('div', {}, [el('b', { text: 'Artifacts' }), el('span', { text: String(execution.changedArtifacts?.length ?? 0) })]),
     el('div', {}, [el('b', { text: 'Evidence hash' }), el('span', { text: execution.evidenceHash?.slice(0, 18) ?? 'n/a' })]),
   ]);
+  const usage = modelUsagePresentation(execution.modelUsage);
+  if (usage) wrap.append(el('p', { className: 'muted model-usage', text: usage.label }));
   if (providerDiagnostic) wrap.append(el('p', { className: 'muted provider-outcome-diagnostic', text: providerDiagnostic }));
   if (execution.stdoutTruncated === true || execution.stderrTruncated === true) {
     const streams = [execution.stdoutTruncated ? 'stdout' : null, execution.stderrTruncated ? 'stderr' : null].filter(Boolean).join(' and ');

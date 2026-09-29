@@ -2392,6 +2392,19 @@ repair check superseded it.
   semantic evaluation and tenant-wide budget policy remain open; PR-06 and
   release gates remain open.
 
+  PR-06 model usage presentation (2026-09-29): Execution run evidence and
+  generated proposals now show validated provider input/output/total token counts
+  when reported. Fixed copy explains missing, invalid, and not-started usage, and
+  identifies reserved usage as an uncertain dispatch that must be reconciled;
+  no estimates, price conversion, credentials, or source text are shown. The
+  focused command `node --test --test-name-pattern='model usage presentation|execution HTTP surface enforces approval and exposes generated artifacts' tests/execution/linked-process-task-result.test.mjs tests/execution/server.test.mjs`
+  passed 2/2 (0 failures, 0 skips; 0.76s; log
+  `/tmp/orgward-pr06-model-usage-ux-focused.log`). An initial filtered
+  invocation stopped during module parsing because a test-local binding reused
+  an existing name; the binding was corrected before the passing invocation.
+  Syntax and `git diff --check` passed. No provider request was made; PR-06,
+  cursor, and release gates remain open.
+
   PR-06 managed DeepSeek checkpoint composition (2026-09-29): extended the
   existing saved-process PostgreSQL journey so a tenant-managed DeepSeek task
   is denied before its mandatory human checkpoint, then receives independent
