@@ -4,3 +4,8 @@ export function humanTaskActionFailureDisposition(error) {
   if (error?.status === 409) return 'reconcile';
   return 'notify';
 }
+
+export function definitiveHumanTaskStartRejection(error) {
+  return Number.isInteger(error?.status) && error.status >= 400 && error.status < 500
+    && error.status !== 409 && error.retryable === false;
+}

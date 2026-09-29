@@ -9,7 +9,7 @@ import { humanTaskInputDisclosureKey, humanTaskInputDisclosureOpen, processTaskH
 import { humanTaskOutputApplicationState, humanTaskOutputCommand } from './human-task-output-application.mjs';
 import { parseHumanTaskEvidence } from './human-task-evidence.mjs';
 import { submitHumanTaskCommand } from './human-task-command-ui.mjs';
-import { humanTaskActionFailureDisposition } from './human-task-action-failure.mjs';
+import { definitiveHumanTaskStartRejection, humanTaskActionFailureDisposition } from './human-task-action-failure.mjs';
 import { processInstanceControlHistoryEntries } from './process-instance-history.mjs';
 import { orderProcessInstancesByLatestActivity, processInstanceOptionLabel } from './process-instance-option-label.mjs';
 import { applySettledProcessInstanceCommands, clearSettledProcessInstanceCommands, processInstanceCommandKey, refreshAfterProcessInstanceControl, restoreProcessInstanceControlPresentation, submitProcessInstanceControl } from './process-instance-control.mjs';
@@ -35,6 +35,7 @@ import { acceptProcessTaskRequest, clearPendingProcessTaskRequest, findPendingPr
 import { acceptHumanTaskStart, clearHumanTaskStart, humanTaskStartCommandKey, humanTaskStartPresentation,
   humanTaskStartReconciled, humanTaskStartStorageKey, readHumanTaskStart, restoreHumanTaskStarts,
   saveHumanTaskStart } from './human-task-start-recovery.mjs';
+import { setDomAttributes } from './dom-attributes.mjs';
 import { boundedLineDiff, readBoundedUtf8Response } from './repository-text-diff.mjs';
 import { encodeExecutionRoute, encodeStudioRoute, executionProcessTarget, executionProjectContext, executionRunRouteTarget } from './shared-interactions.mjs';
 import { currentProcessPlanFocusTarget, linkedPlanInstanceRouteTarget, linkedProcessPlanTarget, processPlanFreshness, processPlanRevisionFocusTarget, selectLinkedProcessPlanInstance, sourceProcessDesignLink } from './process-plan-navigation.mjs';
@@ -333,7 +334,7 @@ function el(tag, options = {}, children = []) {
   const node = document.createElement(tag);
   if (options.className) node.className = options.className;
   if (options.text !== undefined) node.textContent = options.text;
-  for (const [name, value] of Object.entries(options.attrs ?? {})) node.setAttribute(name, value);
+  setDomAttributes(node, options.attrs);
   for (const child of Array.isArray(children) ? children : [children]) if (child) node.append(child);
   return node;
 }
@@ -1652,6 +1653,11 @@ async function startHumanTask({ project, plan, task, selectedInstance, button, s
       if (reconciled) notify('The human checkpoint changed before this action was saved. Current history and available actions were refreshed.');
       else notify('The start could not be reconciled. Its exact command remains saved; review the current task state before trying again.');
     } else {
+      if (definitiveHumanTaskStartRejection(error)) {
+        state.pendingHumanTaskCommands.delete(key);
+        clearHumanTaskStart(processTaskIntentStorage(), storageKeyFor(pending));
+        pending = null;
+      }
       notify(disposition === 'retry' ? 'The start result is uncertain. The exact command remains saved; retry it to recover the same task start.' : error.message);
     }
   } finally {

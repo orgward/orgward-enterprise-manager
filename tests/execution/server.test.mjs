@@ -174,8 +174,10 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   const humanStartHandler = executionSource.slice(executionSource.indexOf('async function startHumanTask'), executionSource.indexOf('async function completeHumanTask'));
   assert.match(humanStartHandler, /saveHumanTaskStart[\s\S]*?const runtime = await api\('\/api\/execution\/process-task-instances\/start'[\s\S]*?pending\.commandId, payload: pending\.payload[\s\S]*?acceptHumanTaskStart[\s\S]*?saveHumanTaskStart[\s\S]*?await refresh\(\)/,
     'start stores and replays the exact command, then retains its accepted receipt through refresh');
-  assert.doesNotMatch(humanStartHandler, /state\.pendingHumanTaskCommands\.delete\(key\)/,
-    'the start handler leaves cleanup to exact authorized snapshot reconciliation');
+  assert.match(humanStartHandler, /if \(definitiveHumanTaskStartRejection\(error\)\)[\s\S]*?state\.pendingHumanTaskCommands\.delete\(key\)[\s\S]*?clearHumanTaskStart\(processTaskIntentStorage\(\), storageKeyFor\(pending\)\)/,
+    'a definitive non-retryable 4xx rejection clears only its rejected start command and storage receipt');
+  assert.match(humanStartHandler, /if \(state\.pendingHumanTaskCommands\.get\(key\)\?\.status === 'accepted'\)[\s\S]*?retry it to reconcile/,
+    'an accepted receipt remains available through refresh failure until snapshot reconciliation');
   assert.match(executionSource, /role: 'status', 'aria-live': 'polite'/,
     'saved and uncertain request state is announced accessibly');
   const taskRequestHandler = executionSource.slice(executionSource.indexOf('async function requestTaskApproval'), executionSource.indexOf('function openPlanEditor'));
@@ -425,8 +427,14 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(providerDiagnosticSource, /value\.httpStatus >= 100 && value\.httpStatus <= 599/);
   assert.match(providerDiagnosticSource, /invalid_json.*body_too_large.*incomplete_response.*missing_output_text/s);
   assert.match(providerDiagnosticSource, /Delivery remains unverified; this run cannot be retried/);
-  assert.ok(providerDiagnosticSource.includes("return `Outcome unknown.${safeDetails ? ` ${safeDetails}.` : ''} An external request may have been received. Delivery is unverified. Reconcile with the provider before retrying.`;"),
-    'allowlisted optional diagnostic details preserve the fixed unknown-outcome reconciliation guidance');
+  assert.match(providerDiagnosticSource, /const credentialGuidance = diagnostic\?\.httpStatus === 401[\s\S]*administrator should check and verify the saved provider credential/,
+    '401 guidance asks an administrator to check the saved credential without asserting its cause');
+  const diagnosticDetailsIndex = providerDiagnosticSource.indexOf('${safeDetails ?');
+  const credentialGuidanceIndex = providerDiagnosticSource.indexOf('${credentialGuidance}', diagnosticDetailsIndex);
+  const reconciliationCopyIndex = providerDiagnosticSource.indexOf('An external request may have been received.', credentialGuidanceIndex);
+  assert.ok(diagnosticDetailsIndex >= 0 && credentialGuidanceIndex > diagnosticDetailsIndex
+    && reconciliationCopyIndex > credentialGuidanceIndex,
+  'safe diagnostic details and optional 401 credential guidance precede fixed reconciliation copy');
   assert.match(executionSource, /blueprint agent binding is recorded for traceability/);
   assert.match(executionSource, /does not execute as or impersonate the bound workload identity/);
   assert.match(executionSource, /Escalate to project owner/);

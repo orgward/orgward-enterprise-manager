@@ -44,6 +44,8 @@ test('Execution faint labels meet WCAG AA on their dark surfaces', () => {
   assert.match(declarationsFor('.run-events > div'), /min-width:\s*0/);
   assert.match(declarationsFor('.run-events span'), /min-width:\s*0/);
   assert.match(declarationsFor('.run-events span'), /overflow-wrap:\s*anywhere/);
+  assert.match(declarationsFor('.run-section p, .run-section li'), /overflow-wrap:\s*anywhere/,
+    'long evidence hashes and citation identifiers wrap within the mobile run panel');
 });
 
 test('Execution accent, status, and focus colors remain separately defined', () => {

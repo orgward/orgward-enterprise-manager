@@ -2356,6 +2356,26 @@ repair check superseded it.
   founder-to-result browser journey and remaining model evaluation/budget
   criteria are open; PR-06 and release gates remain unchanged.
 
+  PR-06 rendered managed DeepSeek journey and UI repair (2026-09-29): a
+  disposable browser fixture with synthetic Alice/Bob OIDC sessions and a
+  loopback Responses endpoint started the assigned human task, escalated it,
+  resumed it by owner decision, and completed it with evidence. The dependent
+  tenant-managed DeepSeek task was requested, independently approved, and
+  dispatched exactly once; after app restart, both task runtimes were SUCCEEDED
+  and the proposal and citations rendered. The local provider count stayed 1;
+  no live provider was contacted. The first fixture lacked its configured OIDC
+  origin and correctly received 403 before creating an instance. That exposed
+  two UI defects: false HTML boolean attributes kept action buttons disabled,
+  and a definitive start rejection left a misleading saved retry. Both are
+  fixed while uncertain and accepted receipts remain recoverable. Long evidence
+  IDs now wrap; document width was 390px at a 390px viewport after restart,
+  with no page or console errors. Focused DOM/rejection/accessibility tests
+  passed 5/5 (0 failed/skipped, 0.335s); the affected served-client test passed
+  1/1 (0 failed/skipped, 0.682s) after correcting a stale assertion about
+  existing optional 401 guidance. Syntax and diff checks passed. Sanitized
+  browser receipt and screenshots: `/tmp/orgward-pr06-deepseek-browser-proof/`.
+  No full PR-06 check or release-gate qualification was run; PR-06 remains open.
+
   PR-06 tenant-managed DeepSeek profile setup (2026-09-28): tenant administrators
   can create, revise and disable per-tenant DeepSeek profiles in PostgreSQL. The
   server fixes the provider and endpoint; the UI exposes only profile ID, label,
