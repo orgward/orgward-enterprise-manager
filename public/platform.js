@@ -272,7 +272,7 @@ function renderAdministration() {
     <section class="panel"><header class="panel-head"><h2>First-release status · ${gateSummary}</h2><span>${statusChip(productGates.status)} ${escapeHtml(productGates.source)}</span></header><div class="panel-body"><div class="health-row">${statusChip(identity.status)}<div><b>Identity</b><small>${escapeHtml(identity.description)}</small></div><button class="platform-button" type="button" data-capability="enterpriseIdentity">View specification</button></div><div class="health-row">${statusChip(persistence.status)}<div><b>Persistence</b><small>${escapeHtml(persistence.description)}${persistence.schemaVersion ? ` Schema ${escapeHtml(persistence.schemaVersion)}.` : ''}</small></div><button class="platform-button" type="button" data-capability="persistence">View details</button></div>${Object.entries(sources).map(([name, source]) => `<div class="health-row">${statusChip(source.status)}<div><b>${escapeHtml(name)}</b><small>${freshness(source)}</small></div><span>${source.count ?? '—'}</span></div>`).join('')}</div></section>
     <section class="panel panel-spaced"><header class="panel-head"><h2>Identity access</h2><span>${state.identityAdmin?.records ? `${state.identityAdmin.records.length} verified` : 'Tenant admin'}</span></header><div class="panel-body"><p class="muted-copy">Local persisted roles are authoritative. Signed provider groups do not grant or remove OrgWard roles; a tenant administrator must replace a user's exact role set here. Provider group-only changes take effect in OrgWard only after this local update until a trusted provider-sync adapter exists. New identities receive no roles by default. The only automatic enrollment is a one-time minimal grant to an operator-configured exact issuer, subject, and mapped tenant.</p>${identityAdminContent}${state.identityAdmin?.records?.some((entry) => entry.status === 'active' && entry.principal !== state.session?.principal) ? `<form id="identity-revoke-form"><label for="identity-revoke-select">Identity to revoke</label><select id="identity-revoke-select" name="principal" required><option value="">Choose another active identity…</option>${state.identityAdmin.records.filter((entry) => entry.status === 'active' && entry.principal !== state.session?.principal).map((entry) => `<option value="${escapeHtml(entry.principal)}" data-generation="${entry.authzGeneration}">${escapeHtml(entry.displayName)} · ${escapeHtml(entry.actorType)} · generation ${entry.authzGeneration}</option>`).join('')}</select><label for="identity-revoke-reason">Revocation reason</label><input id="identity-revoke-reason" name="reason" maxlength="500" required aria-describedby="identity-revoke-help"><small id="identity-revoke-help">Revocation is transactional, cancels sessions and active worker leases, and cannot remove the last tenant administrator.</small><button class="platform-button primary" type="submit" ${state.identityAction?.busy ? 'disabled' : ''}>${state.identityAction?.busy ? 'Revoking…' : 'Revoke identity'}</button></form>` : ''}<p class="muted-copy" role="status" aria-live="polite">${state.identityAction?.message ? escapeHtml(state.identityAction.message) : ''}</p></div></section>
     <section class="panel panel-spaced"><header class="panel-head"><h2>Provider credentials</h2><span>${state.secretAdmin?.records ? `${state.secretAdmin.records.length} references` : 'Tenant admin'}</span></header><div class="panel-body"><p class="muted-copy">Values are encrypted in PostgreSQL and are never returned by the API or shown in reference details. A server-configured <code>ORGWARD_SECRET_ENCRYPTION_KEY</code> is required for encrypted credential storage and use. Generic encrypted references can serve a tenant-managed DeepSeek profile or an installation-supplied operator profile, as well as supported fixed-version providers. For your own DeepSeek setup, store the credential here, then create or update a profile in <a href="#tenant-deepseek-profiles">Tenant DeepSeek profiles</a> using the same reference and selected model. Installation-supplied profiles are configured separately by the installation operator. The generic form does not validate the credential or model access. OpenAI credentials use staged validation against the fixed OpenAI model endpoint; activation invalidates old leases. Replacing a prior credential records its upstream revocation as unconfirmed; first activation has no predecessor.</p>${secretAdminContent}${state.secretAdmin?.records ? `<form id="openai-candidate-form"><h3>Stage OpenAI credential</h3><label>Reference ID<input name="reference" required pattern="secret-[a-z0-9][a-z0-9._-]{0,79}" maxlength="87" placeholder="secret-openai"></label><label>OpenAI model ID<input name="model" required maxlength="100" placeholder="gpt-…"></label><label>Credential value<input name="value" type="password" minlength="8" maxlength="65536" autocomplete="new-password" required></label><label>Credential expiry<input name="expiresAt" type="datetime-local" required></label><label>Reason<input name="reason" maxlength="500" required></label><button class="platform-button primary" type="submit" ${state.secretAction?.busy ? 'disabled' : ''}>Stage encrypted candidate</button></form><form id="secret-reference-form"><details><summary>Generic encrypted credential · DeepSeek profile or fixed-version provider</summary><p class="muted-copy">This form stores a generic encrypted reference; it cannot confirm provider or model access. Tenant administrators can use it with a profile they create or update in <a href="#tenant-deepseek-profiles">Tenant DeepSeek profiles</a>. Installation-supplied operator profiles are a separate option and are configured by the installation operator. The server encryption key must be configured for the stored credential to be usable.</p><label for="secret-reference-id">Reference ID</label><input id="secret-reference-id" name="reference" required pattern="secret-[a-z0-9][a-z0-9._-]{0,79}" maxlength="87" placeholder="secret-provider"><label for="secret-reference-value">Credential value</label><input id="secret-reference-value" name="value" type="password" minlength="8" maxlength="65536" autocomplete="new-password" required><label for="secret-reference-expiry">Credential expiry</label><input id="secret-reference-expiry" name="expiresAt" type="datetime-local" required><label for="secret-reference-reason">Reason</label><input id="secret-reference-reason" name="reason" maxlength="500" required><button class="platform-button" type="submit">Store generic encrypted credential</button></details></form>` : ''}<p class="muted-copy" role="status" aria-live="polite">${state.secretAction?.message ? escapeHtml(state.secretAction.message) : ''}</p></div></section>
-    <section class="panel panel-spaced" id="tenant-deepseek-profiles"><header class="panel-head"><h2>Tenant DeepSeek profiles</h2><span>${state.deepSeekAdmin?.profiles ? `${state.deepSeekAdmin.profiles.length} profiles` : 'Tenant admin'}</span></header><div class="panel-body"><p class="muted-copy">Tenant administrators can create and manage profiles here using an existing encrypted generic credential reference. Installation-supplied operator profiles are configured separately by the installation operator. The provider and official <code>https://api.deepseek.com/responses</code> endpoint are fixed by the server. Saving does not test credential or model access. Verify sends one fixed, tiny request without project or customer data; it may use provider quota or incur cost. OrgWard sends no automatic retries and applies a per-profile cooldown. Each profile change advances its revision; pending approvals pinned to an older revision become stale.</p>${deepSeekAdminContent}${state.deepSeekAdmin?.profiles ? `<form id="deepseek-profile-create"><h3>Add DeepSeek profile</h3><label>Profile ID<input name="profileId" required pattern="[a-z0-9][a-z0-9_-]{1,79}" maxlength="80"></label><label>Display name<input name="label" maxlength="120" required></label><label>DeepSeek model ID<input name="model" maxlength="100" required pattern="[A-Za-z0-9._:-]+"></label><label>Existing generic credential reference<input name="credentialReference" maxlength="87" required pattern="secret-[a-z0-9][a-z0-9._-]{0,79}"></label><label>Maximum output tokens<input name="maxOutputTokens" type="number" min="64" max="512" step="1" value="256" required></label><label><input type="checkbox" name="enabled" checked> Enabled</label><label>Reason<input name="reason" maxlength="500" required></label><button class="platform-button primary" type="submit" ${state.deepSeekAction?.busy ? 'disabled' : ''}>Add profile</button></form>` : ''}<p class="muted-copy" role="status" aria-live="polite">${state.deepSeekAction?.message ? escapeHtml(state.deepSeekAction.message) : ''}</p></div></section>
+    <section class="panel panel-spaced" id="tenant-deepseek-profiles"><header class="panel-head"><h2>Tenant DeepSeek profiles</h2><span>${state.deepSeekAdmin?.profiles ? `${state.deepSeekAdmin.profiles.length} profiles` : 'Tenant admin'}</span></header><div class="panel-body"><p class="muted-copy">Tenant administrators can create and manage profiles here using an existing encrypted generic credential reference. Installation-supplied operator profiles are configured separately by the installation operator. The provider and official <code>https://api.deepseek.com/responses</code> endpoint are fixed by the server. Saving does not test credential or model access. Verify sends one fixed, tiny request without project or customer data; it may use provider quota or incur cost. OrgWard sends no automatic retries and applies a per-profile cooldown. Each profile change advances its revision; pending approvals pinned to an older revision become stale.</p>${deepSeekAdminContent}${state.deepSeekAdmin?.profiles ? `<form id="deepseek-key-profile-create"><h3>Add profile and encrypted key</h3><p class="muted-copy">The key is sent only to encrypted secret storage. Saving a profile does not verify provider access.</p><label>Profile ID<input name="profileId" required pattern="[a-z0-9][a-z0-9_-]{1,79}" maxlength="80"></label><label>Display name<input name="label" maxlength="120" required></label><label>DeepSeek model ID<input name="model" maxlength="100" required pattern="[A-Za-z0-9._:-]+"></label><label>Credential reference<input name="reference" maxlength="87" required pattern="secret-[a-z0-9][a-z0-9._-]{0,79}" placeholder="secret-deepseek"></label><label>DeepSeek API key<input name="value" type="password" minlength="8" maxlength="65536" autocomplete="new-password" required></label><label>Credential expiry<input name="expiresAt" type="datetime-local" required></label><label>Maximum output tokens<input name="maxOutputTokens" type="number" min="64" max="512" step="1" value="256" required></label><label><input type="checkbox" name="enabled" checked> Enabled</label><label>Reason<input name="reason" maxlength="500" required></label><button class="platform-button primary" type="submit" ${state.deepSeekAction?.busy ? 'disabled' : ''}>Encrypt key and add profile</button></form>${state.deepSeekPendingBinding ? `<div class="notice" role="status"><div><b>Encrypted key saved as ${escapeHtml(state.deepSeekPendingBinding.reference)}.</b><p>Profile binding did not finish. Retry binding without entering or sending the key again.</p></div><button class="platform-button" type="button" data-deepseek-bind-retry>Retry profile binding</button></div>` : ''}<form id="deepseek-profile-create"><h3>Add DeepSeek profile</h3><label>Profile ID<input name="profileId" required pattern="[a-z0-9][a-z0-9_-]{1,79}" maxlength="80"></label><label>Display name<input name="label" maxlength="120" required></label><label>DeepSeek model ID<input name="model" maxlength="100" required pattern="[A-Za-z0-9._:-]+"></label><label>Existing generic credential reference<input name="credentialReference" maxlength="87" required pattern="secret-[a-z0-9][a-z0-9._-]{0,79}"></label><label>Maximum output tokens<input name="maxOutputTokens" type="number" min="64" max="512" step="1" value="256" required></label><label><input type="checkbox" name="enabled" checked> Enabled</label><label>Reason<input name="reason" maxlength="500" required></label><button class="platform-button primary" type="submit" ${state.deepSeekAction?.busy ? 'disabled' : ''}>Add profile</button></form>` : ''}<p class="muted-copy" role="status" aria-live="polite">${state.deepSeekAction?.message ? escapeHtml(state.deepSeekAction.message) : ''}</p></div></section>
     <section class="panel panel-spaced"><header class="panel-head"><h2>Legacy JSON import</h2><span>${canImport ? 'Transactional and restart-safe' : 'Unavailable in this mode'}</span></header><div class="panel-body"><p class="muted-copy">Preview configured legacy project, change-case, and execution-run directories before importing. Apply preserves valid IDs and source hashes, skips unchanged records, and quarantines invalid or conflicting records without overwriting PostgreSQL state.</p>${importSummary}<div class="page-actions import-actions"><button class="platform-button" type="button" data-import-mode="dry-run" ${canImport && !state.importBusy ? '' : 'disabled'}>${state.importBusy ? 'Working…' : 'Preview import'}</button><button class="platform-button primary" type="button" data-import-mode="apply" ${canImport && !state.importBusy ? '' : 'disabled'}>Import valid records</button></div><p class="muted-copy" role="status" aria-live="polite">${state.importBusy ? 'Checking configured legacy records…' : canImport ? 'No files are changed or deleted by this import.' : 'Start the server with PostgreSQL to use legacy import.'}</p></div></section>`;
 }
 
@@ -592,6 +592,95 @@ async function saveDeepSeekProfile(event) {
   }
 }
 
+async function createDeepSeekProfileWithKey(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  if (state.deepSeekAction?.busy) return;
+  const profileId = form.elements.profileId.value.trim().toLowerCase();
+  const reference = form.elements.reference.value.trim();
+  const keyInput = form.elements.value;
+  const value = keyInput.value;
+  const reason = form.elements.reason.value.trim();
+  const profile = {
+    label: form.elements.label.value.trim(), model: form.elements.model.value.trim(),
+    credentialReference: reference, maxOutputTokens: Number(form.elements.maxOutputTokens.value),
+    enabled: form.elements.enabled.checked, reason,
+  };
+  if (!profileId || !reference || !value || !reason) { keyInput.value = ''; return; }
+  state.deepSeekAction = { busy: true, message: 'Encrypting key and saving tenant profile…' };
+  const profileCommandId = `deepseek-profile-${crypto.randomUUID()}`;
+  let secretRequest;
+  let setupError;
+  try {
+    const secretBody = JSON.stringify({ schemaVersion: '1.0', commandId: `deepseek-secret-${crypto.randomUUID()}`,
+      expectedVersion: state.secretAdmin?.records?.find((entry) => entry.reference === reference)?.version ?? 0,
+      payload: { value, reason, expiresAt: new Date(form.elements.expiresAt.value).toISOString() } });
+    secretRequest = api(`/api/v1/secrets/${encodeURIComponent(reference)}`, { method: 'PUT', body: secretBody });
+  } catch (error) {
+    setupError = error;
+  } finally {
+    keyInput.value = '';
+  }
+  if (setupError) {
+    state.deepSeekAction = { busy: false, message: `Encrypted key storage could not start: ${setupError.message}. The key was cleared; enter it again to retry.` };
+    render();
+    return;
+  }
+  render();
+  try {
+    await secretRequest;
+  } catch (error) {
+    state.deepSeekAction = { busy: false, message: `Encrypted key storage failed: ${error.message}. The key was cleared; enter it again to retry.` };
+    render();
+    return;
+  }
+  try {
+    try {
+      await api(`/api/execution/deepseek-profiles/${encodeURIComponent(profileId)}`, {
+        method: 'PUT', body: JSON.stringify({ schemaVersion: '1.0', commandId: profileCommandId,
+          expectedRevision: 0, payload: profile }),
+      });
+    } catch (error) {
+      state.deepSeekPendingBinding = { profileId, reference, profile, profileCommandId };
+      state.deepSeekAction = { busy: false, message: `Encrypted key saved as ${reference}, but profile binding failed: ${error.message}. Retry binding below; the key will not be sent again.` };
+      render();
+      return;
+    }
+    state.deepSeekPendingBinding = null;
+    state.deepSeekAction = { busy: false, message: 'Encrypted key saved and tenant profile created. Provider access was not tested.' };
+    try {
+      await loadFoundation();
+    } catch (error) {
+      state.deepSeekAction = { busy: false, message: `Encrypted key and tenant profile were saved, but status refresh failed: ${error.message}. Refresh status to reload.` };
+      render();
+    }
+  } catch (error) {
+    state.deepSeekAction = { busy: false, message: `Encrypted key saved, but profile setup failed: ${error.message}. Retry binding below; the key will not be sent again.` };
+    render();
+  } finally {
+    keyInput.value = '';
+  }
+}
+
+async function retryDeepSeekProfileBinding() {
+  const pending = state.deepSeekPendingBinding;
+  if (!pending || state.deepSeekAction?.busy) return;
+  state.deepSeekAction = { busy: true, message: 'Retrying profile binding; no key is being sent.' };
+  render();
+  try {
+    await api(`/api/execution/deepseek-profiles/${encodeURIComponent(pending.profileId)}`, {
+      method: 'PUT', body: JSON.stringify({ schemaVersion: '1.0', commandId: pending.profileCommandId,
+        expectedRevision: 0, payload: pending.profile }),
+    });
+    state.deepSeekPendingBinding = null;
+    state.deepSeekAction = { busy: false, message: 'Tenant profile bound to the saved encrypted key. Provider access was not tested.' };
+    await loadFoundation();
+  } catch (error) {
+    state.deepSeekAction = { busy: false, message: `Profile binding retry failed: ${error.message}. Retry again below; the saved key will not be reposted.` };
+    render();
+  }
+}
+
 async function verifyDeepSeekProfile(button) {
   if (state.deepSeekAction?.busy) return;
   const profileId = button.dataset.deepseekVerify;
@@ -634,6 +723,8 @@ document.addEventListener('click', (event) => {
   if (candidateAction) { void openAiCandidateAction(candidateAction); }
   const verifyProfile = event.target.closest('[data-deepseek-verify]');
   if (verifyProfile) { void verifyDeepSeekProfile(verifyProfile); }
+  const bindRetry = event.target.closest('[data-deepseek-bind-retry]');
+  if (bindRetry) { void retryDeepSeekProfileBinding(); }
 });
 document.querySelector('#close-inspector').addEventListener('click', closeInspector);
 document.querySelector('#open-search').addEventListener('click', openSearch);
@@ -643,6 +734,7 @@ document.addEventListener('submit', (event) => {
   if (event.target.id === 'project-member-form') saveProjectMember(event);
   if (event.target.id === 'secret-reference-form') storeSecretReference(event);
   if (event.target.id === 'deepseek-profile-create' || event.target.matches('.deepseek-profile-form')) saveDeepSeekProfile(event);
+  if (event.target.id === 'deepseek-key-profile-create') createDeepSeekProfileWithKey(event);
   if (event.target.id === 'openai-candidate-form') stageOpenAiCandidate(event);
   if (event.target.matches('.secret-revoke-form')) revokeSecretReference(event);
 });
