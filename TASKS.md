@@ -2376,6 +2376,24 @@ repair check superseded it.
   browser receipt and screenshots: `/tmp/orgward-pr06-deepseek-browser-proof/`.
   No full PR-06 check or release-gate qualification was run; PR-06 remains open.
 
+  PR-06 connected founder-to-checkpoint follow-up (2026-09-29): a fresh
+  authenticated browser session created a project through four discovery
+  answers, edited its saved strategy to blueprint v2, enabled human and agent
+  bindings, created and assigned a saved plan, inserted a mandatory checkpoint,
+  completed the human root and escalated the checkpoint. Owner resolution then
+  returned HTTP 500; read-only state remained ESCALATED with no resolution event.
+  The uncertain command was not retried and no model task was dispatched. The
+  disposable fixture was removed before a server error stack was retained, so
+  this failure has no confirmed cause or repair. A fresh focused PostgreSQL/API
+  regression now covers founder-created v2, owner-as-assignee, completed root,
+  checkpoint escalation, same-origin OIDC session-cookie resolution and restart
+  readback. It passed 1/1 (0 failures/skips, 2.402s; log
+  `/tmp/orgward-pr06-owner-self-resolution-cleanup.log`). A separate fresh
+  rendered owner form returned HTTP 201 and showed IN_PROGRESS with no browser
+  errors; no screenshot or separate after-submit API snapshot was retained.
+  These follow-ups did not reproduce the 500. No provider or live external call,
+  full PR-06 check or release-gate qualification occurred; PR-06 remains open.
+
   PR-06 tenant-managed DeepSeek profile setup (2026-09-28): tenant administrators
   can create, revise and disable per-tenant DeepSeek profiles in PostgreSQL. The
   server fixes the provider and endpoint; the UI exposes only profile ID, label,
