@@ -5517,3 +5517,18 @@ task checkboxes, cursor and release gates are unchanged.
   T-28 single corrected rendered attempt (2026-09-29): corrected only the retained sanitized `/tmp/orgward-t28-rendered-proof-20260928-route-audit/fixture.mjs` runtime selector/readback logic. `node --check` passed; 8/8 static predicates passed for the retained direct G6 `/run`, pinned `expectedProjectVersion`, `processPlanId` selector, flat-row readback, absence of old row `.planId`/nested `.tasks` assumptions, removed unused runtime-action helper, and exact outcome/evidence/event checks. Dynamic OIDC used an ephemeral port; owner/worker principal derivation assertions passed 2/2. A TTY-controlled fixture started and reached G6 compile. It made 22 successful setup API calls (19 HTTP 200, 3 HTTP 201), with no runtime task-list or dependent-conflict request. The first browser command failed before opening a page: system Chrome exited because its default sandbox was unavailable (`No usable sandbox`). Per the sandbox requirement, no `--no-sandbox` flag or host policy change was used; the single attempt stopped and was cleaned. Owner assignment/start UI, dependent-before 409, worker root/dependent start and completion, app-only restart, and persisted outcome/evidence/event readback were not reached. Evidence in the route-audit directory: retained sanitized fixture, updated `final-api-receipts.jsonl`, `final-fixture-state.json`, `final-preflight.txt`, and this attempt summary; zero screenshots, zero AX snapshots, zero worker transitions, zero tests. Provider and credential calls: 0. No product source changed. The fixture, disposable PostgreSQL/app state and browser session were closed; process inspection found no remaining app/PostgreSQL/Chrome/agent-browser process. Exact wall duration was not instrumented. Prior attempts and receipts above remain preserved; no retry was made. Task checkboxes, cursor, and release ledger are unchanged.
 
 PR-06 guided tenant DeepSeek key setup (2026-09-29): request construction/dispatch are guarded with password clearing in `finally`; after dispatch and clear, busy status renders before awaiting. Initial profile PUT and key-free retry reuse one nonsecret command ID to replay idempotently. Storage-start, storage, binding and post-save refresh failures have distinct messages. Final focused test: `node --test --test-reporter=tap --test-name-pattern='served tenant DeepSeek setup encrypts the key before binding and supports key-free retry' tests/foundation.test.mjs` passed 1/1 (0 failures/skips; 0.382s); TAP: `/tmp/orgward-deepseek-guided-setup-final.log`. No provider call. Task checkbox/cursor and release gates unchanged.
+
+
+PR-06 bounded live DeepSeek saved-task evaluation startup stop (2026-09-29):
+The one-off synthetic fixture was invoked with root privileges so the key could
+be parsed in-process from its owner-only source. Disposable PostgreSQL startup
+failed before app initialization, project/plan creation, task request, or
+provider dispatch. No evaluation score, proposal, token usage, or restart
+readback is claimed; no test ran. The exact initdb message was not captured
+because stderr was discarded to avoid sensitive output. Root-mode initdb refusal
+is the likely setup cause, but is not confirmed. No retry/task execution was
+made. No app, PostgreSQL, profile, or session state remained. Cleanup inspection
+saw one `agent-browser-l` process owned by `ubuntu`; it was left untouched
+because its relation to this fixture or other shared work was unknown. Sanitized
+receipt: `/tmp/orgward-pr06-live-task-evaluation-stop.json`. PR-06 remains open;
+no task checkbox, cursor, or release gate changed.
