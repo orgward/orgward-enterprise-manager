@@ -80,6 +80,8 @@ function validateExpiry(expiresAt) {
 
 export class PostgresSecretStore {
   constructor(persistence, { encryptionKey = null, openAiValidationEndpoint = 'https://api.openai.com/v1/models',
+    deepSeekValidationEndpoint = 'https://api.deepseek.com/responses', deepSeekValidationFetchImpl = fetch,
+    deepSeekValidationCooldownMs = 60_000,
     openAiAdminApiKey = null, openAiOrganizationId = null, openAiTenantProjects = null, openAiAdminEndpoint = 'https://api.openai.com' } = {}) {
     if (encryptionKey !== null && (!Buffer.isBuffer(encryptionKey) || encryptionKey.length !== 32)) {
       throw new Error('The secret encryption key must contain exactly 32 bytes.');
@@ -94,6 +96,18 @@ export class PostgresSecretStore {
       throw new Error('The OpenAI validation endpoint must use HTTPS (loopback HTTP is test-only).');
     }
     this.openAiValidationEndpoint = validationUrl.href.replace(/\/$/, '');
+    const deepSeekUrl = new URL(deepSeekValidationEndpoint);
+    const deepSeekLoopback = ['localhost', '127.0.0.1', '[::1]'].includes(deepSeekUrl.hostname);
+    if ((deepSeekUrl.protocol !== 'https:' && !(deepSeekUrl.protocol === 'http:' && deepSeekLoopback))
+      || deepSeekUrl.username || deepSeekUrl.password || deepSeekUrl.search || deepSeekUrl.hash
+      || deepSeekUrl.pathname !== '/responses' || (!deepSeekLoopback && deepSeekUrl.hostname !== 'api.deepseek.com')
+      || typeof deepSeekValidationFetchImpl !== 'function'
+      || !Number.isSafeInteger(deepSeekValidationCooldownMs) || deepSeekValidationCooldownMs < 1_000 || deepSeekValidationCooldownMs > 15 * 60_000) {
+      throw new Error('The DeepSeek validation endpoint must use the fixed HTTPS Responses endpoint (loopback HTTP is test-only).');
+    }
+    this.deepSeekValidationEndpoint = deepSeekUrl.href;
+    this.deepSeekValidationFetchImpl = deepSeekValidationFetchImpl;
+    this.deepSeekValidationCooldownMs = deepSeekValidationCooldownMs;
     this.encryptionKey = encryptionKey ? Buffer.from(encryptionKey) : null;
     this.openAiOrganizationId = openAiOrganizationId;
     this.openAiTenantProjects = openAiTenantProjects && Object.freeze({ ...openAiTenantProjects });
@@ -485,6 +499,184 @@ export class PostgresSecretStore {
       if (!result.rowCount) throw failure(409, 'CANDIDATE_STALE', 'The staged credential candidate changed during validation.');
       return { reference, candidateVersion, candidateStatus: result.rows[0].candidate_status, model: row.model };
     });
+  }
+
+  #deepSeekVerificationView(row) {
+    if (!row) return null;
+    return {
+      profileId: row.profile_id,
+      status: row.status,
+      requestedAt: row.requested_at instanceof Date ? row.requested_at.toISOString() : String(row.requested_at),
+      checkedAt: row.checked_at instanceof Date ? row.checked_at.toISOString() : row.checked_at ? String(row.checked_at) : null,
+      cooldownUntil: row.cooldown_until instanceof Date ? row.cooldown_until.toISOString() : String(row.cooldown_until),
+      profileRevision: Number(row.profile_revision),
+      credentialVersion: Number(row.credential_version),
+    };
+  }
+
+  async #readDeepSeekVerificationResponse(response) {
+    if (!response.body) return null;
+    const reader = response.body.getReader();
+    const chunks = [];
+    let totalBytes = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        totalBytes += value.byteLength;
+        if (totalBytes > 16 * 1024) {
+          await reader.cancel().catch(() => {});
+          return null;
+        }
+        chunks.push(Buffer.from(value));
+      }
+      const text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks, totalBytes));
+      const parsed = JSON.parse(text);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+    } catch {
+      await reader.cancel().catch(() => {});
+      return null;
+    } finally {
+      try { reader.releaseLock(); } catch { /* The response stream has already closed. */ }
+    }
+  }
+
+  async verifyTenantDeepSeekProfile({ tenantId, actor, actorAuthzGeneration, profileId, expectedRevision }) {
+    this.#requireEncryptionKey();
+    if (typeof tenantId !== 'string' || !tenantId || typeof actor !== 'string' || !actor
+      || !Number.isSafeInteger(actorAuthzGeneration) || !/^[a-z0-9][a-z0-9_-]{1,79}$/i.test(profileId ?? '')
+      || !Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
+      throw failure(400, 'INVALID_DEEPSEEK_VERIFICATION', 'Provide the current DeepSeek profile revision to verify.');
+    }
+
+    const reserve = await this.persistence.transaction(async (client) => {
+      await requireTenantAdmin(client, { tenantId, actor, actorAuthzGeneration });
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${tenantId}:deepseek-profile-verification:${profileId}`]);
+      const profileResult = await client.query(`select revision,model_id,credential_reference,enabled
+        from orgward.tenant_deepseek_profiles where tenant_id=$1 and profile_id=$2 for share`, [tenantId, profileId]);
+      const profile = profileResult.rows[0];
+      if (!profile || profile.revision !== expectedRevision) throw failure(409, 'DEEPSEEK_PROFILE_STALE', 'The DeepSeek profile changed. Reload it before verification.');
+      if (!profile.enabled) throw failure(409, 'DEEPSEEK_PROFILE_DISABLED', 'Enable the DeepSeek profile before verification.');
+      const secretResult = await client.query(`select version,status,expires_at from orgward.secret_references
+        where tenant_id=$1 and reference=$2 for share`, [tenantId, profile.credential_reference]);
+      const secret = secretResult.rows[0];
+      if (!secret || secret.status !== 'active' || secret.version < 1 || !secret.expires_at || secret.expires_at <= new Date()) {
+        throw failure(409, 'SECRET_CREDENTIAL_UNAVAILABLE', 'The profile credential is unavailable or expired.');
+      }
+      const priorResult = await client.query(`select * from orgward.tenant_deepseek_profile_verifications
+        where tenant_id=$1 and profile_id=$2 for update`, [tenantId, profileId]);
+      let prior = priorResult.rows[0];
+      const current = prior && prior.profile_revision === profile.revision && prior.credential_version === secret.version;
+      const now = Date.now();
+      if (prior && prior.status === 'checking'
+        && new Date(prior.requested_at).getTime() < now - 15_000) {
+        const stale = await client.query(`update orgward.tenant_deepseek_profile_verifications
+          set status=$4,checked_at=clock_timestamp()
+          where tenant_id=$1 and profile_id=$2 and attempt_id=$3 returning *`,
+        [tenantId, profileId, prior.attempt_id, current ? 'unknown' : 'stale']);
+        prior = stale.rows[0];
+      }
+      if (prior && new Date(prior.cooldown_until).getTime() > now) {
+        const result = this.#deepSeekVerificationView(prior);
+        if (!current) result.status = 'stale';
+        return { result, dispatch: null };
+      }
+      const attemptId = randomUUID();
+      const started = await client.query(`insert into orgward.tenant_deepseek_profile_verifications
+        (tenant_id,profile_id,attempt_id,profile_revision,credential_version,status,requested_at,checked_at,cooldown_until)
+        values ($1,$2,$3,$4,$5,'checking',clock_timestamp(),null,clock_timestamp()+($6::bigint * interval '1 millisecond'))
+        on conflict (tenant_id,profile_id) do update set attempt_id=excluded.attempt_id,
+          profile_revision=excluded.profile_revision,credential_version=excluded.credential_version,
+          status='checking',requested_at=excluded.requested_at,checked_at=null,cooldown_until=excluded.cooldown_until
+        returning *`, [tenantId, profileId, attemptId, profile.revision, secret.version, this.deepSeekValidationCooldownMs]);
+      return { result: this.#deepSeekVerificationView(started.rows[0]), dispatch: { attemptId,
+        profileRevision: profile.revision, credentialVersion: secret.version } };
+    });
+    if (!reserve.dispatch) return reserve.result;
+
+    let requestPromise;
+    try {
+      requestPromise = await this.persistence.transaction(async (client) => {
+        await requireTenantAdmin(client, { tenantId, actor, actorAuthzGeneration });
+        const profileResult = await client.query(`select revision,model_id,credential_reference,enabled
+          from orgward.tenant_deepseek_profiles where tenant_id=$1 and profile_id=$2 for share`, [tenantId, profileId]);
+        const profile = profileResult.rows[0];
+        if (!profile || !profile.enabled || profile.revision !== reserve.dispatch.profileRevision) {
+          throw failure(409, 'DEEPSEEK_PROFILE_STALE', 'The profile changed before verification was sent.');
+        }
+        const secretResult = await client.query(`select version,status,expires_at,ciphertext,nonce,auth_tag
+          from orgward.secret_references where tenant_id=$1 and reference=$2 for share`, [tenantId, profile.credential_reference]);
+        const secret = secretResult.rows[0];
+        if (!secret || secret.status !== 'active' || secret.version !== reserve.dispatch.credentialVersion
+          || !secret.expires_at || secret.expires_at <= new Date()) {
+          throw failure(409, 'SECRET_BINDING_STALE', 'The profile credential changed before verification was sent.');
+        }
+        const reservation = await client.query(`select attempt_id,status from orgward.tenant_deepseek_profile_verifications
+          where tenant_id=$1 and profile_id=$2 for update`, [tenantId, profileId]);
+        if (!reservation.rowCount || reservation.rows[0].attempt_id !== reserve.dispatch.attemptId
+          || reservation.rows[0].status !== 'checking') {
+          throw failure(409, 'DEEPSEEK_VERIFICATION_STALE', 'The verification request is no longer current.');
+        }
+        const decipher = createDecipheriv('aes-256-gcm', this.encryptionKey, secret.nonce);
+        decipher.setAAD(associatedData(tenantId, profile.credential_reference, secret.version));
+        decipher.setAuthTag(secret.auth_tag);
+        const credential = Buffer.concat([decipher.update(secret.ciphertext), decipher.final()]).toString('utf8');
+        // Invoking fetch under the profile/secret share locks is the dispatch boundary. The fixed
+        // prompt contains no tenant or project data; no response body is retained or exposed.
+        const requestPromise = this.deepSeekValidationFetchImpl(this.deepSeekValidationEndpoint, {
+          method: 'POST', redirect: 'error', signal: AbortSignal.timeout(8_000),
+          headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json', accept: 'application/json' },
+          body: JSON.stringify({ model: profile.model_id, input: 'Reply with exactly OK.', max_output_tokens: 8,
+            reasoning: { effort: 'none' }, store: false }),
+        });
+        return { requestPromise };
+      });
+      requestPromise = requestPromise.requestPromise;
+    } catch (error) {
+      const staleStatus = ['DEEPSEEK_PROFILE_STALE', 'SECRET_BINDING_STALE', 'DEEPSEEK_VERIFICATION_STALE'].includes(error?.code) ? 'stale' : null;
+      if (staleStatus) await this.persistence.query(`update orgward.tenant_deepseek_profile_verifications
+        set status='stale',checked_at=clock_timestamp() where tenant_id=$1 and profile_id=$2 and attempt_id=$3`,
+      [tenantId, profileId, reserve.dispatch.attemptId]).catch(() => {});
+      else await this.#finishDeepSeekVerification({ tenantId, profileId, attemptId: reserve.dispatch.attemptId, status: 'unknown' });
+      if (error?.code && ['DEEPSEEK_PROFILE_STALE', 'SECRET_BINDING_STALE', 'DEEPSEEK_VERIFICATION_STALE'].includes(error.code)) throw error;
+      return this.#readDeepSeekVerification({ tenantId, profileId, expectedRevision, credentialVersion: reserve.dispatch.credentialVersion });
+    }
+
+    let status = 'unknown';
+    try {
+      const response = await requestPromise;
+      if (response.status >= 200 && response.status < 300) {
+        const result = await this.#readDeepSeekVerificationResponse(response);
+        if (result?.object === 'response' && ['completed', 'incomplete'].includes(result.status)) status = 'verified';
+      } else {
+        if (response.status === 401 || response.status === 403) status = 'auth_failed';
+        await response.body?.cancel().catch(() => {});
+      }
+    } catch { status = 'unknown'; }
+    return this.#finishDeepSeekVerification({ tenantId, profileId, attemptId: reserve.dispatch.attemptId, status });
+  }
+
+  async #readDeepSeekVerification({ tenantId, profileId, expectedRevision, credentialVersion }) {
+    const result = await this.persistence.query(`select * from orgward.tenant_deepseek_profile_verifications
+      where tenant_id=$1 and profile_id=$2 and profile_revision=$3 and credential_version=$4`,
+    [tenantId, profileId, expectedRevision, credentialVersion]);
+    return this.#deepSeekVerificationView(result.rows[0]);
+  }
+
+  async #finishDeepSeekVerification({ tenantId, profileId, attemptId, status }) {
+    const result = await this.persistence.query(`update orgward.tenant_deepseek_profile_verifications
+      set status=$4,checked_at=clock_timestamp()
+      where tenant_id=$1 and profile_id=$2 and attempt_id=$3 returning *`, [tenantId, profileId, attemptId, status]);
+    const view = this.#deepSeekVerificationView(result.rows[0]);
+    if (!view) return null;
+    const current = await this.persistence.query(`select p.revision,s.version,s.status,s.expires_at
+      from orgward.tenant_deepseek_profiles p
+      join orgward.secret_references s on s.tenant_id=p.tenant_id and s.reference=p.credential_reference
+      where p.tenant_id=$1 and p.profile_id=$2`, [tenantId, profileId]);
+    const row = current.rows[0];
+    if (!row || row.revision !== view.profileRevision || row.version !== view.credentialVersion
+      || row.status !== 'active' || !row.expires_at || row.expires_at <= new Date()) view.status = 'stale';
+    return view;
   }
 
   async activateOpenAiCandidate({ tenantId, actor, actorAuthzGeneration, reference, commandId, expectedVersion, candidateVersion, reason }) {

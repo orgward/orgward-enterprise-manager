@@ -1910,6 +1910,14 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
       credentialReference: row.credential_reference, maxOutputTokens: Number(row.max_output_tokens),
       enabled: row.enabled, createdBy: row.created_by, updatedBy: row.updated_by,
       updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at),
+      verification: row.verification_status ? {
+        status: row.verification_status,
+        requestedAt: row.verification_requested_at instanceof Date ? row.verification_requested_at.toISOString() : String(row.verification_requested_at),
+        checkedAt: row.verification_checked_at instanceof Date ? row.verification_checked_at?.toISOString() ?? null : row.verification_checked_at ?? null,
+        cooldownUntil: row.verification_cooldown_until instanceof Date ? row.verification_cooldown_until.toISOString() : String(row.verification_cooldown_until),
+        profileRevision: Number(row.verification_profile_revision),
+        credentialVersion: Number(row.verification_credential_version),
+      } : null,
     } : null;
   }
 
@@ -1921,8 +1929,23 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         anyRoleGroups: tenantAdminOnly ? [] : [['workspace-read', 'workspace-write', 'tenant-admin']],
         ...(tenantAdminOnly ? { actorType: 'human' } : {}),
       });
-      const result = await client.query(`select * from orgward.tenant_deepseek_profiles
-        where tenant_id=$1 order by profile_id`, [tenantId]);
+      const result = await client.query(`select p.*,
+          case when p.enabled and s.status='active' and s.expires_at > clock_timestamp()
+            and v.profile_revision=p.revision and v.credential_version=s.version then v.status end as verification_status,
+          case when p.enabled and s.status='active' and s.expires_at > clock_timestamp()
+            and v.profile_revision=p.revision and v.credential_version=s.version then v.requested_at end as verification_requested_at,
+          case when p.enabled and s.status='active' and s.expires_at > clock_timestamp()
+            and v.profile_revision=p.revision and v.credential_version=s.version then v.checked_at end as verification_checked_at,
+          case when p.enabled and s.status='active' and s.expires_at > clock_timestamp()
+            and v.profile_revision=p.revision and v.credential_version=s.version then v.cooldown_until end as verification_cooldown_until,
+          case when p.enabled and s.status='active' and s.expires_at > clock_timestamp()
+            and v.profile_revision=p.revision and v.credential_version=s.version then v.profile_revision end as verification_profile_revision,
+          case when p.enabled and s.status='active' and s.expires_at > clock_timestamp()
+            and v.profile_revision=p.revision and v.credential_version=s.version then v.credential_version end as verification_credential_version
+        from orgward.tenant_deepseek_profiles p
+        left join orgward.secret_references s on s.tenant_id=p.tenant_id and s.reference=p.credential_reference
+        left join orgward.tenant_deepseek_profile_verifications v on v.tenant_id=p.tenant_id and v.profile_id=p.profile_id
+        where p.tenant_id=$1 order by p.profile_id`, [tenantId]);
       return result.rows.map((row) => this.#deepSeekProfile(row));
     });
   }

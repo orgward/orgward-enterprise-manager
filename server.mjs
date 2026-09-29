@@ -745,6 +745,9 @@ export function createApp({
   oidcBootstrapPrincipals = [],
   secretEncryptionKey = null,
   openAiValidationEndpoint = 'https://api.openai.com/v1/models',
+  deepSeekValidationEndpoint = 'https://api.deepseek.com/responses',
+  deepSeekValidationFetchImpl = fetch,
+  deepSeekValidationCooldownMs = 60_000,
   openAiAdminApiKey = null,
   openAiOrganizationId = null,
   openAiTenantProjects = null,
@@ -754,7 +757,8 @@ export function createApp({
   const persistence = databaseUrl ? new PostgresPersistence({ databaseUrl, faults: persistenceFaults }) : null;
   const sessionStore = oidcSessionStore ?? (persistence ? new PostgresOidcSessionStore(persistence, { bootstrapPrincipals: oidcBootstrapPrincipals }) : null);
   const secretStore = persistence ? new PostgresSecretStore(persistence, {
-    encryptionKey: secretEncryptionKey, openAiValidationEndpoint, openAiAdminApiKey, openAiOrganizationId,
+    encryptionKey: secretEncryptionKey, openAiValidationEndpoint, deepSeekValidationEndpoint,
+    deepSeekValidationFetchImpl, deepSeekValidationCooldownMs, openAiAdminApiKey, openAiOrganizationId,
     openAiTenantProjects, openAiAdminEndpoint,
   }) : null;
   const store = injectedProjectStore ?? (persistence ? new PostgresProjectStore(persistence) : new ProjectStore(dataDirectory));
@@ -1953,6 +1957,20 @@ export function createApp({
         const profiles = await executionService.tenantDeepSeekProfiles({ tenantId: requestTenant(request),
           principal: requestActor(request), authzGeneration: request.identity.authzGeneration });
         return sendJson(response, 200, { profiles });
+      }
+
+      const deepSeekVerifyMatch = pathname.match(/^\/api\/execution\/deepseek-profiles\/([a-z0-9][a-z0-9_-]{1,79})\/verify$/);
+      if (request.method === 'POST' && deepSeekVerifyMatch) {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified tenant administrator identity is required.');
+        if (!secretStore) throw apiFailure(503, 'SECRET_VAULT_UNAVAILABLE', 'DeepSeek profile verification requires PostgreSQL-backed encrypted credentials.');
+        const body = validateCommand(await readJson(request));
+        rejectAuthorityClaims(body);
+        if (Object.keys(body.payload).length) throw apiFailure(400, 'INVALID_DEEPSEEK_VERIFICATION', 'Profile verification accepts no caller-supplied prompt, model, credential, or project data.');
+        const result = await secretStore.verifyTenantDeepSeekProfile({
+          tenantId: requestTenant(request), actor: requestActor(request), actorAuthzGeneration: request.identity.authzGeneration,
+          profileId: deepSeekVerifyMatch[1], expectedRevision: body.expectedVersion,
+        });
+        return sendJson(response, 200, { verification: result });
       }
 
       const deepSeekProfileMatch = pathname.match(/^\/api\/execution\/deepseek-profiles\/([a-z0-9][a-z0-9_-]{1,79})$/);

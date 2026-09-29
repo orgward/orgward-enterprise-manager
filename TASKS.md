@@ -2322,6 +2322,25 @@ repair check superseded it.
   `npm run check` was run because PR-06 remains open. PR-06 cursor, checkbox and
   release-gate statuses remain unchanged.
 
+  PR-06 explicit tenant-managed DeepSeek profile verification (2026-09-29;
+  bounded): tenant admins can explicitly check saved model/credential access with
+  a fixed request that contains no project or customer data. The API uses the
+  server-owned tenant, profile, endpoint and encrypted credential; checks admin
+  authority and profile/credential revisions before dispatch; limits concurrent
+  calls and cooldown across edits/rotations; and persists only sanitized status,
+  timestamps and revisions. The UI discloses quota/cost and no-retry behavior.
+  Only a bounded, valid Responses API result marked completed/incomplete verifies;
+  failed, malformed, oversized, 401/403 and ambiguous responses remain safely
+  classified without persisting provider bodies. Focused test
+  `node ops/run-tests.mjs --test-name-pattern='tenant DeepSeek profile verification is explicit' tests/secrets.test.mjs`
+  passed 1/1 (0 failures/skips; 4.07s test, 5.52s runner), log
+  `/tmp/orgward-tests-F5vcCM/node-test.tap.log`. An earlier teardown failure was
+  traced to `/tmp` quota exhaustion during PostgreSQL checkpoint; stale,
+  task-generated disposable clusters with no live servers were removed and the
+  final run cleaned its cluster. `git diff --check` passed. No live provider or
+  machine credential was used. No full check was run because PR-06 remains open;
+  cursor, checkboxes and release gates are unchanged.
+
   PR-06 customer-facing unknown provider outcome (bounded; 2026-09-28; PR-06
   remains open): terminal run JSON now carries only
   `providerDiagnostic: { outcome: 'outcome_unknown' }` when the durable dispatch
@@ -5222,3 +5241,55 @@ isolation, and restart recovery` passed 1/1 (0 failures/skips; 2.57s TAP
 subtest, 2.94s command duration). No provider or credentials were used; no
 full-suite check was run. `git diff --check` passed. PR-06 remains active;
 task checkboxes, cursor and release gates are unchanged.
+
+  T-28 rendered owner-to-human-checkpoint proof attempt (2026-09-28): static
+  preflight covered the full PostgreSQL sequence, current routes/forms, response
+  envelope, and prior sanitized stops. The corrected harness asserted matching
+  synthetic API/OIDC owner and worker principal derivation twice. Its single
+  fixture invocation stopped during startup with `listen EADDRINUSE` at
+  `127.0.0.1:44577` (1.74s); no app/browser page or API journey was reached.
+  No browser process, rendered page, screenshot, AX snapshot, test, provider
+  request, credential read, source edit, or external effect occurred. Process
+  inspection found no remaining app/browser/PostgreSQL process; the task-created
+  partial PostgreSQL fixture directory was removed. No retry was made. Evidence:
+  `/tmp/orgward-t28-rendered-proof-20260928-one/` (`preflight.txt`,
+  `attempt-summary.txt`). Rendered T-28 remains unverified; PR-06 remains first
+  open, and task checkboxes, cursor, and release gates are unchanged.
+
+  T-28 corrected rendered proof attempt (2026-09-28): the synthetic OIDC server
+  bound on port 0 and its actual issuer was used consistently; owner and worker
+  API/session principal assertions passed 2/2, and `node --check` passed before
+  PostgreSQL/app startup. Worker foundation, owner project/source, membership,
+  binding proposal/enable, and case creation reached their expected HTTP statuses.
+  The attempt stopped at case creation because the harness expected
+  `createdCase.data.id`, while the case route returns the case directly as JSON
+  (HTTP 201). No G4/G5/G6, compile, browser, assignment review, promotion, start,
+  checkpoint, dependency check, or restart readback followed. The process session
+  was interrupted for cleanup after the first error; total session wall time was
+  approximately 35s. No tests or provider/credential/external calls occurred.
+  Evidence counts: 2 issuer/principal assertions, 0 tests, 0 rendered pages,
+  screenshots, AX snapshots, or completed human transitions. App/DB/PG and temp
+  harness were cleaned; no service remains live. No retry was made. Evidence:
+  `/tmp/orgward-t28-rendered-proof-20260928-corrected/` (`preflight.txt`,
+  `issuer-preflight.txt`, `attempt-summary.txt`). The prior EADDRINUSE attempt
+  remains documented above. Rendered T-28 remains unverified; PR-06 stays first
+  open and task checkboxes, cursor, and release gates are unchanged.
+
+
+  T-28 route-audited rendered proof attempt (2026-09-28): after static route/body-shape review and `node --check`, one provider-free fixture run used a port-0 synthetic OIDC issuer; owner/worker principal assertions passed 2/2. Worker foundation loaded; owner created the project/source, enrolled the worker, enabled `actor-founder` / `role-founder`, refreshed project.version, created the source-bound case, advanced G4/G5/G6, and compiled an 8-task plan. In the owner UI, all 8 worker binding selectors loaded; the owner saved assignment review revision 1, promoted runtime revision 1, and started an instance. Execution UI rendered the instance with all tasks PLANNED. The worker completion phase did not occur.
+
+  The first dependent-task start returned the expected HTTP 409. The harness stopped on an incorrect body assertion requiring `meta`; the route emits a `sendApiError` body with top-level `schemaVersion` and `error`, and no `meta`. The database conflict path is `startHumanProcessTask` in `src/platform/postgres-stores.mjs` with code `PROCESS_TASK_DEPENDENCY_UNSATISFIED` and message “Every dependency must be succeeded in this process instance before the human task can start.” `server.mjs` catches `/api/execution/process-task-*` and calls `sendApiError`; `sendApiError` serializes `schemaVersion` plus error fields `code`, `message`, `fieldErrors`, `correlationId`, `retryable`, `currentVersion`, `recoveryActions`. The raw response JSON was not retained, so evidence labels this structure source-derived, not a verbatim captured body. No second API request followed. Worker task start/completion, dependency-after check, app-only restart, and outcome/evidence/event readback remain unverified.
+
+  Evidence in `/tmp/orgward-t28-rendered-proof-20260928-route-audit/`: 28 successful API response receipts (25 HTTP 200, 3 HTTP 201), plus the 409 stop receipt; 6 sanitized PNG screenshots and 6 accessibility snapshots; static `route-table.txt`, `preflight.txt`, `issuer-preflight.txt`, and `dependency-409-response-shape.json`. No tests were run, no app source changed, and no provider/credential/external call occurred. App, browser, disposable PostgreSQL, and harness processes were cleaned; temporary fixture source was removed. Harness wall duration was not recorded, so no elapsed duration is claimed. `git diff --check` is run after this entry. The earlier EADDRINUSE and case-create parser stops remain documented above. PR-06 remains first open; task checkboxes, cursor, and release gates are unchanged.
+
+
+  T-28 final corrected proof invocation (2026-09-28): retained sanitized `fixture.mjs` in the route-audit evidence directory; `node --check` and a local assertion for `schemaVersion`, `error.code=PROCESS_TASK_DEPENDENCY_UNSATISFIED`, and absent top-level `meta` passed. OIDC bound to port 0 and owner/worker principal derivation assertions passed 2/2. The harness started the app and disposable PostgreSQL and logged `fixture-ready`, but I invoked it without a TTY; stdin was `/dev/null`, so the command loop could not receive the seed action. No API setup call or browser action ran. Per the one-run stop rule, I stopped this invocation without relaunch. Node, app, PostgreSQL, and temp directories were cleaned; no Chrome/browser process started. Counts: 0 API calls, 0 tests, 0 screenshots/AX snapshots, 0 worker transitions, 0 restart/readbacks. Provider and credential calls: 0. No product source change. Wall duration was not recorded. Evidence: `/tmp/orgward-t28-rendered-proof-20260928-route-audit/fixture.mjs`, `final-preflight.txt`, and `final-api-receipts.jsonl` (fixture-ready only). Prior proof receipts remain above. No task checkboxes, cursor, or release ledgers changed.
+
+
+  T-28 retained-harness invocation (2026-09-29): launched the sanitized fixture with a TTY and used its returned session id. `node --check`, local `sendApiError` shape assertion, dynamic OIDC port, and owner/worker principal checks passed. The seed action made 22 successful API calls (20 HTTP 200, 2 HTTP 201). Synthetic project/source setup, worker enrollment, `actor-founder` / `role-founder` proposal and enable, and direct source-bound case creation succeeded. The case flow returned S0 at create, S4 at run, S5 after requirement acceptance, S5 at the next advance, S6 after architecture acceptance, then S7 at the next advance. The harness expected S6 and stopped on `G6 S7`, its first unexpected result. No compile, browser, assignment review, promotion, instance start, dependency check, worker completion, or restart/readback followed. No product source change, tests, provider call, or credential read occurred. Evidence `/tmp/orgward-t28-rendered-proof-20260928-route-audit/final-attempt-summary.txt`, `final-api-receipts.jsonl`, retained `fixture.mjs`; 0 screenshots and 0 AX snapshots. Node/app/PostgreSQL and temp directories were cleaned; no browser started. Wall duration was not instrumented. Earlier EADDRINUSE, case-create parser, dependency error-shape, and stdin-control stops remain documented above. `git diff --check` passed. Product checkboxes, cursor, and release ledger remain unchanged.
+
+
+  T-28 corrected rendered attempt (2026-09-29): the retained harness passed syntax/control-flow preflight, started with TTY control, and used port-0 synthetic OIDC owner/worker identities. Source-bound workflow reached G6; corrected `/run` and compile succeeded (compile HTTP 201 direct). Owner browser rendered all 8 worker binding selectors; owner assigned them, saved review revision 1, promoted revision 1, and started an instance in UI. The first post-start runtime-list GET returned HTTP 200 direct `{instances,plans,runs}`, then a harness-only lookup failed because task rows expose `processPlanId` while the fixture searched `planId`. The dependent-before start was not sent; no worker task start/completion, dependent start/completion, app-only restart, or outcome/evidence/event readback occurred. Stop-on-first-unexpected was followed without a fix/retry. Evidence `/tmp/orgward-t28-rendered-proof-20260928-route-audit/final-rendered-attempt-summary.txt`, 24 successful API responses (21×200, 3×201), 3 sanitized owner screenshots and 3 AX snapshots; no saved Execution view screenshot and no worker view. Console command returned no output. No tests/provider/credential calls or product code edits. Processes/browser and temporary app/DB/PG state were cleaned; wall duration not captured. `git diff --check` passed; product checkboxes, cursor and release ledger unchanged. Earlier proof stops remain preserved above.
+
+
+  T-28 single corrected rendered attempt (2026-09-29): corrected only the retained sanitized `/tmp/orgward-t28-rendered-proof-20260928-route-audit/fixture.mjs` runtime selector/readback logic. `node --check` passed; 8/8 static predicates passed for the retained direct G6 `/run`, pinned `expectedProjectVersion`, `processPlanId` selector, flat-row readback, absence of old row `.planId`/nested `.tasks` assumptions, removed unused runtime-action helper, and exact outcome/evidence/event checks. Dynamic OIDC used an ephemeral port; owner/worker principal derivation assertions passed 2/2. A TTY-controlled fixture started and reached G6 compile. It made 22 successful setup API calls (19 HTTP 200, 3 HTTP 201), with no runtime task-list or dependent-conflict request. The first browser command failed before opening a page: system Chrome exited because its default sandbox was unavailable (`No usable sandbox`). Per the sandbox requirement, no `--no-sandbox` flag or host policy change was used; the single attempt stopped and was cleaned. Owner assignment/start UI, dependent-before 409, worker root/dependent start and completion, app-only restart, and persisted outcome/evidence/event readback were not reached. Evidence in the route-audit directory: retained sanitized fixture, updated `final-api-receipts.jsonl`, `final-fixture-state.json`, `final-preflight.txt`, and this attempt summary; zero screenshots, zero AX snapshots, zero worker transitions, zero tests. Provider and credential calls: 0. No product source changed. The fixture, disposable PostgreSQL/app state and browser session were closed; process inspection found no remaining app/PostgreSQL/Chrome/agent-browser process. Exact wall duration was not instrumented. Prior attempts and receipts above remain preserved; no retry was made. Task checkboxes, cursor, and release ledger are unchanged.

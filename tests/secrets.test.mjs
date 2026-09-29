@@ -357,6 +357,13 @@ test('tenant administrators manage encrypted credential references with rotation
   assert.match(source, /https:\/\/api\.deepseek\.com\/responses/);
   assert.match(source, /Existing generic credential reference/);
   assert.match(source, /does not test credential or model access/);
+  assert.match(source, /Verify sends one fixed, tiny request without project or customer data/);
+  assert.match(source, /may use provider quota or incur cost/);
+  assert.match(source, /no automatic retries/);
+  assert.match(source, /data-deepseek-verify/);
+  assert.match(source, /Verify provider access/);
+  assert.match(source, /\/verify/);
+  assert.match(source, /Unsaved profile edits do not match the saved verification/);
   assert.match(source, /deepseek-profile-create/);
   assert.match(source, /name="profileId" required pattern="\[a-z0-9\]/);
   assert.match(source, /form\.elements\.profileId\.value\.trim\(\)\.toLowerCase\(\)/);
@@ -476,6 +483,194 @@ test('tenant DeepSeek profiles are revisioned, tenant scoped, secret safe, and r
   assert.equal((await restored.json()).profiles[0].revision, 2);
   const capabilities = await send(app, '/api/execution/meta', 'alice');
   assert.equal((await capabilities.json()).profiles.some((entry) => entry.id === 'team-agent'), false);
+});
+
+test('tenant DeepSeek profile verification is explicit, deduplicated, sanitized, and revision-bound', async (t) => {
+  const postgres = await startPostgres();
+  const canary = 'fixture-deepseek-verification-credential-canary';
+  const providerBodyCanary = 'provider-response-body-must-not-escape';
+  let providerStatus = 200;
+  let providerResponseStatus = 'completed';
+  let providerCalls = 0;
+  const requests = [];
+  const fixture = await new Promise((resolve) => {
+    const server = createServer(async (request, response) => {
+      providerCalls += 1;
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      requests.push({ method: request.method, url: request.url, authorization: request.headers.authorization,
+        body: JSON.parse(Buffer.concat(chunks).toString('utf8')) });
+      response.writeHead(providerStatus, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ object: 'response', status: providerResponseStatus, marker: providerBodyCanary }));
+    });
+    server.listen(0, '127.0.0.1', () => resolve(server));
+  });
+  const key = Buffer.alloc(32, 0x51);
+  const app = await start(postgres.databaseUrl, key, null, {
+    deepSeekValidationEndpoint: `http://127.0.0.1:${fixture.address().port}/responses`,
+    deepSeekValidationCooldownMs: 1_000,
+  });
+  t.after(async () => { await close(app); await new Promise((resolve) => fixture.close(resolve)); await postgres.close(); });
+  const servedClient = await send(app, '/platform.js', 'alice');
+  assert.equal(servedClient.status, 200);
+  const clientSource = await servedClient.text();
+  assert.match(clientSource, /one fixed, tiny request without project or customer data; it may use provider quota or incur cost/);
+  assert.match(clientSource, /OrgWard sends no automatic retries and applies a per-profile cooldown/);
+  assert.match(clientSource, /Checked \$\{new Date\(verification\.checkedAt\)\.toLocaleString\(\)\}/);
+  assert.match(clientSource, /Verify provider access/);
+  assert.match(clientSource, /data-deepseek-verify/);
+
+  const secret = await send(app, '/api/v1/secrets/secret-verify', 'alice', {
+    method: 'PUT', body: rotateBody('verify-secret-create', 0, canary),
+  });
+  assert.equal(secret.status, 200);
+  const profileBody = { schemaVersion: '1.0', commandId: 'verify-profile-create', expectedRevision: 0,
+    payload: { label: 'Verification profile', model: 'deepseek-fixture', credentialReference: 'secret-verify',
+      maxOutputTokens: 128, enabled: true, reason: 'Create local verification fixture' } };
+  const created = await send(app, '/api/execution/deepseek-profiles/verify-fixture', 'alice', { method: 'PUT', body: profileBody });
+  assert.equal(created.status, 201);
+
+  const crossTenant = await send(app, '/api/execution/deepseek-profiles/verify-fixture/verify', 'other-admin', {
+    method: 'POST', body: { schemaVersion: '1.0', commandId: 'verify-cross-tenant', expectedVersion: 1, payload: {} },
+  });
+  assert.equal(crossTenant.status, 409);
+  assert.equal((await crossTenant.json()).error.code, 'DEEPSEEK_PROFILE_STALE');
+  assert.equal(providerCalls, 0, 'another tenant admin cannot verify a profile by matching ID');
+
+  const denied = await send(app, '/api/execution/deepseek-profiles/verify-fixture/verify', 'writer', {
+    method: 'POST', body: { schemaVersion: '1.0', commandId: 'verify-denied', expectedVersion: 1, payload: {} },
+  });
+  assert.equal(denied.status, 403);
+  assert.equal((await denied.json()).error.code, 'ACTION_FORBIDDEN');
+  const stale = await send(app, '/api/execution/deepseek-profiles/verify-fixture/verify', 'alice', {
+    method: 'POST', body: { schemaVersion: '1.0', commandId: 'verify-stale', expectedVersion: 2, payload: {} },
+  });
+  assert.equal(stale.status, 409);
+  assert.equal((await stale.json()).error.code, 'DEEPSEEK_PROFILE_STALE');
+  const injected = await send(app, '/api/execution/deepseek-profiles/verify-fixture/verify', 'alice', {
+    method: 'POST', body: { schemaVersion: '1.0', commandId: 'verify-injected', expectedVersion: 1,
+      payload: { prompt: 'customer data', endpoint: 'https://attacker.example' } },
+  });
+  assert.equal(injected.status, 400);
+  assert.equal(providerCalls, 0);
+
+  const sessionId = createHash('sha256').update(randomUUID()).digest('base64url');
+  await app.sessionStore.create(sessionId, { issuer, subject: 'alice', tenantId: 'tenant-a', principal: principal('alice'),
+    displayName: 'alice', actorType: 'human' }, Math.floor(Date.now() / 1000) + 300);
+  const cookieCsrf = await fetch(`http://127.0.0.1:${app.server.address().port}/api/execution/deepseek-profiles/verify-fixture/verify`, {
+    method: 'POST', headers: { cookie: `ow_session=${sessionId}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ schemaVersion: '1.0', commandId: 'verify-csrf', expectedVersion: 1, payload: {} }),
+  });
+  assert.equal(cookieCsrf.status, 403);
+  assert.equal((await cookieCsrf.json()).error.code, 'CROSS_SITE_REQUEST_DENIED');
+  assert.equal(providerCalls, 0);
+
+  const verifyBody = { schemaVersion: '1.0', commandId: 'verify-success', expectedVersion: 1, payload: {} };
+  const ledgerSnapshot = async () => {
+    const result = await app.persistence.query(`select
+      (select count(*) from orgward.aggregates where tenant_id='tenant-a') as aggregates,
+      (select count(*) from orgward.project_actor_binding_proposals where tenant_id='tenant-a') as proposals,
+      (select count(*) from orgward.process_task_instances where tenant_id='tenant-a') as task_instances,
+      (select count(*) from orgward.provider_dispatch_attempts where tenant_id='tenant-a') as dispatches`);
+    return result.rows[0];
+  };
+  const ledgersBefore = await ledgerSnapshot();
+  const [first, duplicate] = await Promise.all([
+    send(app, '/api/execution/deepseek-profiles/verify-fixture/verify', 'alice', { method: 'POST', body: verifyBody }),
+    send(app, '/api/execution/deepseek-profiles/verify-fixture/verify', 'alice', { method: 'POST', body: { ...verifyBody, commandId: 'verify-double-click' } }),
+  ]);
+  assert.equal(first.status, 200);
+  assert.equal(duplicate.status, 200);
+  const firstBody = await first.json(), duplicateBody = await duplicate.json();
+  assert.ok(['verified', 'checking'].includes(firstBody.verification.status));
+  assert.ok(['verified', 'checking'].includes(duplicateBody.verification.status));
+  assert.equal(providerCalls, 1, 'concurrent checks deduplicate to one provider request');
+  assert.deepEqual(requests[0], {
+    method: 'POST', url: '/responses', authorization: `Bearer ${canary}`,
+    body: { model: 'deepseek-fixture', input: 'Reply with exactly OK.', max_output_tokens: 8,
+      reasoning: { effort: 'none' }, store: false },
+  });
+  assert.equal(JSON.stringify([firstBody, duplicateBody]).includes(canary), false);
+  assert.equal(JSON.stringify([firstBody, duplicateBody]).includes(providerBodyCanary), false);
+  const successList = await send(app, '/api/execution/deepseek-profiles', 'alice');
+  const verifiedProfile = (await successList.json()).profiles[0];
+  assert.equal(verifiedProfile.verification.status, 'verified');
+  assert.equal(verifiedProfile.verification.profileRevision, 1);
+  assert.equal(verifiedProfile.verification.credentialVersion, 1);
+  assert.ok(verifiedProfile.verification.checkedAt);
+  const cooldown = await send(app, '/api/execution/deepseek-profiles/verify-fixture/verify', 'alice', {
+    method: 'POST', body: { ...verifyBody, commandId: 'verify-cooldown' },
+  });
+  assert.equal((await cooldown.json()).verification.status, 'verified');
+  assert.equal(providerCalls, 1, 'same-profile verification is cooldown limited');
+
+  const profileEdit = await send(app, '/api/execution/deepseek-profiles/verify-fixture', 'alice', {
+    method: 'PUT', body: { ...profileBody, commandId: 'verify-profile-edit', expectedRevision: 1,
+      payload: { ...profileBody.payload, label: 'Verification profile edited', reason: 'Update profile label' } },
+  });
+  assert.equal(profileEdit.status, 200);
+  assert.equal((await profileEdit.json()).profile.revision, 2);
+  const profileEditInvalidated = await send(app, '/api/execution/deepseek-profiles', 'alice');
+  assert.equal((await profileEditInvalidated.json()).profiles[0].verification, null,
+    'profile revision change invalidates the displayed result');
+  const revisionEditCooldown = await send(app, '/api/execution/deepseek-profiles/verify-fixture/verify', 'alice', {
+    method: 'POST', body: { ...verifyBody, commandId: 'verify-profile-edit-cooldown', expectedVersion: 2 },
+  });
+  assert.equal((await revisionEditCooldown.json()).verification.status, 'stale');
+  verifyBody.expectedVersion = 2;
+  assert.equal(providerCalls, 1, 'profile edit cannot bypass the profile cooldown');
+
+  const rotated = await send(app, '/api/v1/secrets/secret-verify', 'alice', {
+    method: 'PUT', body: rotateBody('verify-secret-rotate', 1, `${canary}-rotated`),
+  });
+  assert.equal(rotated.status, 200);
+  const invalidated = await send(app, '/api/execution/deepseek-profiles', 'alice');
+  assert.equal((await invalidated.json()).profiles[0].verification, null,
+    'credential rotation invalidates the displayed result');
+  const revisionCooldown = await send(app, '/api/execution/deepseek-profiles/verify-fixture/verify', 'alice', {
+    method: 'POST', body: { ...verifyBody, commandId: 'verify-rotation-cooldown' },
+  });
+  assert.equal((await revisionCooldown.json()).verification.status, 'stale');
+  assert.equal(providerCalls, 1, 'credential rotation cannot bypass the profile cooldown');
+
+  await new Promise((resolve) => setTimeout(resolve, 1_050));
+  providerStatus = 401;
+  const authFailure = await send(app, '/api/execution/deepseek-profiles/verify-fixture/verify', 'alice', {
+    method: 'POST', body: { ...verifyBody, commandId: 'verify-auth-failure' },
+  });
+  assert.equal((await authFailure.json()).verification.status, 'auth_failed');
+  assert.equal(providerCalls, 2);
+  assert.equal(JSON.stringify(requests).includes(canary), true, 'only the loopback provider receives credential material');
+  const authResult = await send(app, '/api/execution/deepseek-profiles', 'alice');
+  assert.equal((await authResult.json()).profiles[0].verification.status, 'auth_failed');
+
+  await new Promise((resolve) => setTimeout(resolve, 1_050));
+  providerStatus = 429;
+  const unknown = await send(app, '/api/execution/deepseek-profiles/verify-fixture/verify', 'alice', {
+    method: 'POST', body: { ...verifyBody, commandId: 'verify-unknown' },
+  });
+  assert.equal((await unknown.json()).verification.status, 'unknown');
+  assert.equal(providerCalls, 3, '429 is ambiguous and is not retried');
+  const persisted = await app.persistence.query(`select status,profile_revision,credential_version,requested_at,checked_at,cooldown_until
+    from orgward.tenant_deepseek_profile_verifications where tenant_id='tenant-a' and profile_id='verify-fixture'`);
+  assert.equal(persisted.rows[0].status, 'unknown');
+  assert.equal(JSON.stringify(persisted.rows).includes(canary), false);
+  assert.equal(JSON.stringify(persisted.rows).includes(providerBodyCanary), false);
+  assert.deepEqual(await ledgerSnapshot(), ledgersBefore,
+    'verification does not mutate process, run, proposal, outcome, dispatch, or audit ledgers');
+
+  await new Promise((resolve) => setTimeout(resolve, 1_050));
+  providerStatus = 200;
+  providerResponseStatus = 'failed';
+  const providerFailure = await send(app, '/api/execution/deepseek-profiles/verify-fixture/verify', 'alice', {
+    method: 'POST', body: { ...verifyBody, commandId: 'verify-provider-failed' },
+  });
+  const providerFailureBody = await providerFailure.json();
+  assert.equal(providerFailure.status, 200);
+  assert.equal(providerFailureBody.verification.status, 'unknown', 'HTTP 200 with response.status failed is not verified');
+  assert.equal(providerCalls, 4, 'failed response uses one request and is not retried');
+  assert.equal(JSON.stringify(providerFailureBody).includes(providerBodyCanary), false);
+  assert.equal(JSON.stringify(providerFailureBody).includes('failed'), false, 'provider status details are not exposed');
 });
 
 test('OpenAI candidate validation stages encrypted key, denies cross-tenant access, and activates with explicit unconfirmed revocation state', async (t) => {
