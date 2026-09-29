@@ -5532,3 +5532,58 @@ saw one `agent-browser-l` process owned by `ubuntu`; it was left untouched
 because its relation to this fixture or other shared work was unknown. Sanitized
 receipt: `/tmp/orgward-pr06-live-task-evaluation-stop.json`. PR-06 remains open;
 no task checkbox, cursor, or release gate changed.
+
+
+PR-06 fresh live-evaluation owner-account preflight stop (2026-09-29):
+The key-owning `openclaw` account (UID 1001, non-root) can write `/tmp`, execute
+the disposable PostgreSQL `initdb`, and traverse `/srv/orgward` plus the
+repository root (both mode 0750, group `openclaw`). The runtime read blockers
+were `server.mjs` mode 0600 `ubuntu:ubuntu` and `node_modules` mode 0700
+`ubuntu:ubuntu`. The check stopped before reading the key or starting
+PostgreSQL/app; no project, task, or provider request was made (0 dispatches,
+0 tests, no score). No permission change or root execution was attempted.
+Sanitized receipt: `/tmp/orgward-pr06-live-task-evaluation-owner-preflight.json`.
+PR-06 and release gates remain open; task checkboxes and cursor are unchanged.
+
+PR-06 post-restart owner proposal-apply attempt (2026-09-29): one fresh
+synthetic local-Responses fixture stopped at the first human-task start. The
+server returned HTTP 409 `PROCESS_TASK_STATE_CONFLICT` because the selected
+root task was not in a planned human state. The fixture did not reach task
+request, approval, provider dispatch, app restart, or owner review/apply; no
+proposal or responsive-browser evidence is claimed. The script's task flow
+reached no model execution before stopping, so it issued no provider request;
+no separate provider counter was retained. No retry was made. App, disposable
+PostgreSQL, and attributable temp profile processes/state exited or were
+removed; a process scan found no remaining app/PostgreSQL fixture process, and
+no browser session was opened. Corrected owner-account preflight facts are in
+`/tmp/orgward-pr06-live-task-evaluation-owner-preflight.json`. PR-06, task
+checkboxes, cursor, and release gates remain open and unchanged.
+
+
+PR-06 fresh live saved-task fixture stopped with unknown subprocess outcome
+(2026-09-29): the pre-existing ACL audit found 2,218 repository entries and
+no access/default ACL xattrs. A temporary named `openclaw` access ACL granted
+read-only access (directories r-x, files r--) with the original group entries
+retained; the complete ACL/mode/uid/gid inventory was restored and reverified
+in `finally`. The `openclaw` fixture subprocess exited 1 with empty stdout; its
+stderr was suppressed, so no sanitized run summary or dispatch counter survived.
+Provider dispatch count is unknown; no score, proposal, usage, or restart
+readback is claimed. No retry or tests occurred. Post-cleanup verification found
+zero ACL xattrs, an exact 2,218-entry mode/uid/gid match, no attributable app or
+PostgreSQL process, and no fixture profile directory. The unrelated
+`agent-browser` process was left untouched. Receipt:
+`/tmp/orgward-pr06-live-task-evaluation-acl-fixture-unknown.json`; original
+inventory: `/tmp/orgward-pr06-acl-original-modes.json`. PR-06/task/gate status
+remains open and unchanged.
+
+PR-06 owner-apply fresh fixture stopped before runtime creation (2026-09-29):
+the pre-action saved-plan/current-blueprint-version precondition failed
+(`finalPlan.source.blueprintVersion` did not match the project's latest
+blueprint version; the adjacent expected-revision assertion was checked in the
+same guard). The fixture had not started a task, created an approval or model
+request, or dispatched to its exact loopback Responses stub. No restart,
+browser, proposal/apply proof, or score is claimed. The fresh app and disposable
+PostgreSQL exited through the fixture cleanup path; a process scan found no
+attributable app/PostgreSQL process or profile temp directory, and no browser
+session was opened. No retry, tests, or source change occurred. PR-06, cursor,
+and release gates remain open.
