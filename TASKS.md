@@ -2368,6 +2368,30 @@ repair check superseded it.
   `/tmp/orgward-pr06-model-usage-validator-focused.log`. Syntax and
   `git diff --check` passed; PR-06 and release gates remain open.
 
+  PR-06 fully rendered founder-to-result journey (2026-09-29, revision
+  `6823d08`): a fresh disposable app/PostgreSQL fixture used synthetic OIDC
+  users, a synthetic credential and a loopback Responses stub. The founder
+  created a project through four discovery answers, edited and saved blueprint
+  v2, enabled the human and workload bindings, and used the Execution UI to
+  create and assign a plan with a mandatory human checkpoint. In the UI, the
+  assigned owner completed the human root, escalated and resolved the checkpoint,
+  completed it, and requested linked `task-process-deliver`. A distinct synthetic
+  user approved it, and the approved local profile was executed once through the
+  UI. After app-only restart, the browser showed all three task runtimes and the
+  run SUCCEEDED, with a proposed result, one citation and evidence hash. The
+  fixture returned no usage data, so the run truthfully shows
+  `unreported/usage_missing`. One-time fixture preparation added only the
+  synthetic workload identity/profile; project creation, bindings, planning,
+  task-state actions, approval, execution and result review were rendered.
+  Desktop/mobile screenshots and accessibility snapshot are listed in
+  `/tmp/orgward-pr06-operational-ui-receipt.json`. At 390px the body and document
+  widths were 390px; page errors and console errors were zero. No screen-reader
+  speech or keyboard-only pass is claimed. The fixture made one loopback call,
+  no live-provider request; app, database, browser, bridge and temporary state
+  were cleaned. No product code or tests changed in this browser run. Model
+  semantic evaluation and tenant-wide budget policy remain open; PR-06 and
+  release gates remain open.
+
   PR-06 managed DeepSeek checkpoint composition (2026-09-29): extended the
   existing saved-process PostgreSQL journey so a tenant-managed DeepSeek task
   is denied before its mandatory human checkpoint, then receives independent
