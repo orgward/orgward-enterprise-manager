@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { PostgresPersistence } from '../../src/platform/postgres.mjs';
 import { PostgresGitHubSourceStore } from '../../src/platform/postgres-stores.mjs';
 import { ExecutionService } from '../../src/execution/service.mjs';
+import { createApp } from '../../server.mjs';
 import { startPostgres } from '../helpers/postgres.mjs';
 
 test('GitHub bindings and snapshots survive store restart and require tenant-admin project-owner authority', async () => {
@@ -37,9 +39,16 @@ test('GitHub bindings and snapshots survive store restart and require tenant-adm
     const initial = new PostgresGitHubSourceStore(persistence);
     const binding = { tenantId, projectId, installationId: '123', repositoryId: '987654',
       repositoryName: 'fixture-org/service', branchRef: 'refs/heads/main', provider: 'github-app', credentialReference: 'github-installation:123' };
-    const snapshot = { id: 'snapshot-one', repositoryId: '987654', branchRef: 'refs/heads/main', commitOid: 'c'.repeat(40),
-      treeOid: 'd'.repeat(40), treeDigest: 'e'.repeat(64), manifestDigest: 'e'.repeat(64), policyVersion: 'github-read-snapshot-v1',
-      fileCount: 1, totalBytes: 4, files: [{ path: 'README.md', contentBase64: 'Zml4dA==' }] };
+    const sourceBytes = Buffer.from('fix');
+    const contentHash = createHash('sha256').update(sourceBytes).digest('hex');
+    const blobSha = createHash('sha1').update(`blob ${sourceBytes.length}\0`).update(sourceBytes).digest('hex');
+    const manifestDigest = createHash('sha256').update(JSON.stringify([{ path: 'README.md', mode: '100644', contentHash,
+      size: sourceBytes.length, blobSha }])).digest('hex');
+    const snapshot = { id: createHash('sha256').update(`987654\0refs/heads/main\0${'c'.repeat(40)}\0github-read-snapshot-v1`).digest('hex'),
+      repositoryId: '987654', branchRef: 'refs/heads/main', commitOid: 'c'.repeat(40), treeOid: 'd'.repeat(40),
+      treeDigest: manifestDigest, manifestDigest, policyVersion: 'github-read-snapshot-v1',
+      fileCount: 1, totalBytes: sourceBytes.length,
+      files: [{ path: 'README.md', mode: '100644', size: sourceBytes.length, contentHash, blobSha, contentBase64: sourceBytes.toString('base64') }] };
     const savedCapture = await initial.saveCapture({ tenantId, projectId, principal, authzGeneration: 1, binding, snapshot });
     assert.equal(Object.hasOwn(savedCapture.snapshots[0], 'files'), false, 'save response contains snapshot metadata only');
 
@@ -49,7 +58,7 @@ test('GitHub bindings and snapshots survive store restart and require tenant-adm
     assert.deepEqual(saved[0].snapshots[0], (({ files, ...metadata }) => metadata)(snapshot));
     const persistedSnapshot = await persistence.query(`select snapshots from orgward.github_repository_sources
       where tenant_id=$1 and project_id=$2 and repository_id=$3 and branch_ref=$4`, [tenantId, projectId, binding.repositoryId, binding.branchRef]);
-    assert.equal(persistedSnapshot.rows[0].snapshots[0].files[0].contentBase64, 'Zml4dA==', 'metadata projection leaves persisted source bytes intact');
+    assert.equal(persistedSnapshot.rows[0].snapshots[0].files[0].contentBase64, sourceBytes.toString('base64'), 'metadata projection leaves persisted source bytes intact');
     assert.equal(saved[0].credentialReference, 'github-installation:123');
     const editorSnapshots = await restartedStore.listSnapshotsForExecution({ tenantId, projectId, principal: editor, authzGeneration: 1 });
     assert.equal(editorSnapshots.length, 1, 'project editors can select a saved snapshot for a task');
@@ -61,9 +70,63 @@ test('GitHub bindings and snapshots survive store restart and require tenant-adm
     assert.equal(executionSelection.repositories[0].snapshotId, snapshot.id);
     assert.equal(Object.hasOwn(executionSelection.repositories[0], 'files'), false);
     assert.equal(Object.hasOwn(executionSelection.repositories[0], 'credentialReference'), false);
+    const selectableFiles = await new ExecutionService({ runDirectory: '/tmp/github-source-selection-test', githubSourceStore: restartedStore })
+      .listGitHubSnapshotFiles({ tenantId, projectId, principal: editor, authzGeneration: 1, snapshotId: snapshot.id });
+    assert.deepEqual(selectableFiles.files, [{ path: 'README.md', mode: '100644', size: 3, contentHash }]);
+    assert.equal(JSON.stringify(selectableFiles).includes('contentBase64'), false, 'file selection never returns source bytes');
+    assert.equal(JSON.stringify(selectableFiles).includes('credentialReference'), false);
+    await assert.rejects(new ExecutionService({ runDirectory: '/tmp/github-source-selection-test', githubSourceStore: restartedStore })
+      .listGitHubSnapshotFiles({ tenantId, projectId, principal: reader, authzGeneration: 1, snapshotId: snapshot.id }),
+    { code: 'ACTION_FORBIDDEN' }, 'file metadata requires project-editor selection authority');
+    await persistence.query(`update orgward.github_repository_sources
+      set snapshots=jsonb_set(snapshots, '{0,manifestDigest}', to_jsonb($5::text))
+      where tenant_id=$1 and project_id=$2 and repository_id=$3 and branch_ref=$4`,
+    [tenantId, projectId, binding.repositoryId, binding.branchRef, 'f'.repeat(64)]);
+    await assert.rejects(new ExecutionService({ runDirectory: '/tmp/github-source-selection-test', githubSourceStore: restartedStore })
+      .listGitHubSnapshotFiles({ tenantId, projectId, principal: editor, authzGeneration: 1, snapshotId: snapshot.id }),
+    { code: 'GITHUB_SNAPSHOT_MANIFEST_INVALID' }, 'metadata tampering fails closed before a file can be selected');
+    await persistence.query(`update orgward.github_repository_sources
+      set snapshots=jsonb_set(snapshots, '{0,manifestDigest}', to_jsonb($5::text))
+      where tenant_id=$1 and project_id=$2 and repository_id=$3 and branch_ref=$4`,
+    [tenantId, projectId, binding.repositoryId, binding.branchRef, manifestDigest]);
+    const apiIdentities = new Map([
+      ['editor', { issuer: 'https://identity.example.test', subject: 'editor', principal: editor, tenantId,
+        roles: ['workspace-write'], actorType: 'human', displayName: 'Editor', expiresAt: Math.floor(Date.now() / 1000) + 300 }],
+      ['reader', { issuer: 'https://identity.example.test', subject: 'reader', principal: reader, tenantId,
+        roles: ['workspace-read'], actorType: 'human', displayName: 'Reader', expiresAt: Math.floor(Date.now() / 1000) + 300 }],
+    ]);
+    const apiApp = createApp({ databaseUrl: postgres.databaseUrl, oidcAuthenticator: {
+      authenticate: async (request) => apiIdentities.get(request.headers.authorization?.slice(7)) ?? null,
+    } });
+    await apiApp.init();
+    try {
+      await new Promise((resolve) => apiApp.server.listen(0, '127.0.0.1', resolve));
+      const apiBase = `http://127.0.0.1:${apiApp.server.address().port}`;
+      const auth = (subject) => ({ headers: { authorization: `Bearer ${subject}` } });
+      const listResponse = await fetch(`${apiBase}/api/execution/local-repositories?projectId=${encodeURIComponent(projectId)}`, auth('editor'));
+      assert.equal(listResponse.status, 200);
+      const listed = await listResponse.json();
+      assert.equal(listed.repositories[0].snapshotId, snapshot.id);
+      assert.equal(listed.githubExecutionAvailable, false);
+      assert.equal(JSON.stringify(listed).includes('contentBase64'), false);
+      assert.equal(JSON.stringify(listed).includes('credentialReference'), false);
+      const filesResponse = await fetch(`${apiBase}/api/execution/github-snapshots/${snapshot.id}/files?projectId=${encodeURIComponent(projectId)}`, auth('editor'));
+      assert.equal(filesResponse.status, 200);
+      const filesPayload = await filesResponse.json();
+      assert.deepEqual(filesPayload.files, [{ path: 'README.md', mode: '100644', size: 3, contentHash }]);
+      assert.equal(JSON.stringify(filesPayload).includes('contentBase64'), false);
+      assert.equal(JSON.stringify(filesPayload).includes('credentialReference'), false);
+      const deniedFiles = await fetch(`${apiBase}/api/execution/github-snapshots/${snapshot.id}/files?projectId=${encodeURIComponent(projectId)}`, auth('reader'));
+      assert.equal(deniedFiles.status, 403, 'file metadata API enforces project-editor authority');
+      const deniedBody = await deniedFiles.json();
+      assert.equal(typeof deniedBody.error, 'string', 'the current execution route error envelope exposes a string message');
+    } finally {
+      await new Promise((resolve) => apiApp.server.close(resolve));
+      await apiApp.close();
+    }
     const resolvedSnapshot = await restartedStore.resolveSnapshotForExecution({ tenantId, projectId, principal: editor,
       authzGeneration: 1, snapshotId: snapshot.id });
-    assert.equal(resolvedSnapshot.snapshot.files[0].contentBase64, 'Zml4dA==', 'only the server-side resolver receives pinned bytes');
+    assert.equal(resolvedSnapshot.snapshot.files[0].contentBase64, sourceBytes.toString('base64'), 'only the server-side resolver receives pinned bytes');
     assert.equal(await restartedStore.resolveSnapshotForExecution({ tenantId, projectId, principal: editor,
       authzGeneration: 1, snapshotId: 'missing-snapshot' }), null, 'missing snapshot identities are not substituted with the latest ref');
     await assert.rejects(restartedStore.resolveSnapshotForExecution({ tenantId, projectId: byteProjectId, principal: editor,
@@ -112,7 +175,7 @@ test('GitHub bindings and snapshots survive store restart and require tenant-adm
       'the project history cap rejects without rewriting or evicting immutable records');
     const retained = await persistence.query(`select snapshots from orgward.github_repository_sources
       where tenant_id=$1 and project_id=$2 and repository_id=$3 and branch_ref=$4`, [tenantId, projectId, binding.repositoryId, binding.branchRef]);
-    assert.equal(retained.rows[0].snapshots[0].files[0].contentBase64, 'Zml4dA==', 'old source bytes remain persisted after metadata reads and cap rejection');
+    assert.equal(retained.rows[0].snapshots[0].files[0].contentBase64, sourceBytes.toString('base64'), 'old source bytes remain persisted after metadata reads and cap rejection');
 
     const byteBinding = { ...binding, projectId: byteProjectId };
     for (let index = 1; index <= 8; index += 1) {

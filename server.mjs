@@ -2124,6 +2124,19 @@ export function createApp({
         return sendJson(response, 201, { repository: githubRepositoryView(result), capturedSnapshotId: captured.snapshot.id });
       }
 
+      const githubSnapshotFilesMatch = pathname.match(/^\/api\/execution\/github-snapshots\/([a-f0-9]{64})\/files$/);
+      if (githubSnapshotFilesMatch && request.method === 'GET') {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified project editor identity is required to select snapshot files.');
+        const projectId = url.searchParams.get('projectId');
+        if (!/^project-[0-9a-f-]{36}$/i.test(projectId ?? '')) throw apiFailure(400, 'INVALID_PROJECT', 'Choose a valid project.');
+        if (!githubSourceStore) throw apiFailure(503, 'GITHUB_SOURCE_PERSISTENCE_REQUIRED', 'GitHub snapshot files require PostgreSQL source storage.');
+        const result = await executionService.listGitHubSnapshotFiles({ tenantId: requestTenant(request), projectId,
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration,
+          snapshotId: githubSnapshotFilesMatch[1] });
+        if (!result) throw apiFailure(404, 'GITHUB_SNAPSHOT_NOT_FOUND', 'The selected GitHub snapshot is unavailable in this project.');
+        return sendJson(response, 200, result);
+      }
+
       if (request.method === 'GET' && pathname === '/api/execution/local-repositories') {
         if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified workspace identity is required to list local repositories.');
         const projectId = url.searchParams.get('projectId');

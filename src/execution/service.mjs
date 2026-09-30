@@ -738,6 +738,52 @@ export class ExecutionService {
     }));
     return { available: false, reason: 'remote-patch-execution-not-enabled', repositories };
   }
+  async listGitHubSnapshotFiles({ tenantId, projectId, principal, authzGeneration, snapshotId }) {
+    if (!/^[a-f0-9]{64}$/.test(snapshotId ?? '') || !this.githubSourceStore?.listSnapshotFileManifestForExecution) return null;
+    const record = await this.githubSourceStore.listSnapshotFileManifestForExecution({ tenantId, projectId, principal, authzGeneration, snapshotId });
+    if (!record) return null;
+    const { binding, snapshot, files } = record;
+    const invalid = () => Object.assign(new Error('The saved GitHub snapshot file manifest failed its identity or metadata integrity check.'), {
+      statusCode: 409, code: 'GITHUB_SNAPSHOT_MANIFEST_INVALID', retryable: false,
+    });
+    const safeRef = typeof binding?.branchRef === 'string' && binding.branchRef.length <= 255
+      && binding.branchRef.startsWith('refs/heads/')
+      && binding.branchRef.split('/').every((part) => part && part !== '.' && part !== '..'
+        && !part.startsWith('.') && !part.endsWith('.') && !part.endsWith('.lock')
+        && !part.includes('..') && !part.includes('@{') && !/[\x00-\x20\x7f~^:?*\\[]/.test(part));
+    if (binding?.provider !== 'github-app' || String(binding.repositoryId) !== String(snapshot?.repositoryId)
+      || !/^[1-9][0-9]{0,15}$/.test(String(binding.repositoryId)) || !Number.isSafeInteger(Number(binding.repositoryId))
+      || !/^[1-9][0-9]{0,15}$/.test(String(binding.installationId)) || !Number.isSafeInteger(Number(binding.installationId))
+      || !safeRef || binding.branchRef !== snapshot?.branchRef || snapshot?.id !== snapshotId
+      || snapshot.policyVersion !== 'github-read-snapshot-v1' || !/^[a-f0-9]{40}$/.test(snapshot.commitOid ?? '')
+      || !/^[a-f0-9]{40}$/.test(snapshot.treeOid ?? '') || !Array.isArray(files) || files.length > 500
+      || !Number.isSafeInteger(snapshot.fileCount) || snapshot.fileCount !== files.length
+      || !Number.isSafeInteger(snapshot.totalBytes) || snapshot.totalBytes < 0 || snapshot.totalBytes > 8_000_000) throw invalid();
+    let totalBytes = 0;
+    let previousPath = null;
+    const manifest = files.map((file) => {
+      if (!file || typeof file.path !== 'string' || file.path.length > 1024 || file.path.startsWith('/')
+        || file.path.includes('\\') || /[\x00-\x1f\x7f:]/.test(file.path)
+        || file.path.split('/').length > 32 || file.path.split('/').some((part) => !part || part === '.' || part === '..')
+        || (previousPath !== null && previousPath.localeCompare(file.path) >= 0)
+        || !['100644', '100755'].includes(file.mode) || !Number.isSafeInteger(file.size) || file.size < 0 || file.size > 1_000_000
+        || !/^[a-f0-9]{64}$/.test(file.contentHash ?? '') || !/^[a-f0-9]{40}$/.test(file.blobSha ?? '')) throw invalid();
+      previousPath = file.path;
+      totalBytes += file.size;
+      if (totalBytes > 8_000_000) throw invalid();
+      return { path: file.path, mode: file.mode, contentHash: file.contentHash, size: file.size, blobSha: file.blobSha };
+    });
+    const manifestDigest = createHash('sha256').update(JSON.stringify(manifest)).digest('hex');
+    const expectedSnapshotId = createHash('sha256').update(`${binding.repositoryId}\0${binding.branchRef}\0${snapshot.commitOid}\0${snapshot.policyVersion}`).digest('hex');
+    if (totalBytes !== snapshot.totalBytes || manifestDigest !== snapshot.manifestDigest
+      || snapshot.treeDigest !== manifestDigest || expectedSnapshotId !== snapshotId) throw invalid();
+    return {
+      snapshot: { id: snapshot.id, repositoryId: String(snapshot.repositoryId), branchRef: snapshot.branchRef,
+        commitOid: snapshot.commitOid, treeOid: snapshot.treeOid, policyVersion: snapshot.policyVersion,
+        manifestDigest: snapshot.manifestDigest, fileCount: snapshot.fileCount, totalBytes: snapshot.totalBytes },
+      files: manifest.map(({ path: relativePath, mode, size, contentHash }) => ({ path: relativePath, mode, size, contentHash })),
+    };
+  }
   async cancelProcessTaskRun(input) {
     if (typeof this.store.cancelProcessTaskRun !== 'function') {
       throw Object.assign(new Error('Linked process task cancellation requires PostgreSQL-backed execution storage.'), {

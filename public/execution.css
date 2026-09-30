@@ -32,6 +32,10 @@
 .process-plan-controls .button { display: inline-flex; align-items: center; min-height: 44px; max-width: 100%; }
 .process-plan > label { display: grid; gap: 7px; width: min(100%, 480px); margin-top: 12px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
 .process-plan > label select { width: 100%; min-width: 0; color: var(--ink); background: #0d1218; border: 1px solid var(--exec-line); border-radius: 7px; padding: 11px; text-transform: none; letter-spacing: 0; }
+.github-snapshot-file-selection { display: grid; gap: 6px; max-height: 300px; max-width: min(100%, 620px); margin: 10px 0; padding: 10px; overflow: auto; border: 1px solid var(--exec-line); border-radius: 8px; }
+.github-snapshot-file-selection > legend { padding: 0 4px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+.github-snapshot-file-option { display: flex; align-items: flex-start; gap: 8px; min-height: 36px; padding: 6px 4px; color: var(--ink); font-size: 12px; text-transform: none; letter-spacing: 0; overflow-wrap: anywhere; }
+.github-snapshot-file-option input { flex: 0 0 auto; margin-top: 2px; }
 .task-assignment-transparency { width: 100%; max-width: 100%; margin-top: 8px; overflow-wrap: anywhere; }
 .task-assignment-transparency > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
 .task-assignment-transparency-field { margin: 7px 0; overflow-wrap: anywhere; }

@@ -667,6 +667,11 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(executionSource, /repository\.kind === 'github' && !state\.githubExecutionAvailable/);
   assert.match(executionSource, /githubSnapshotId/);
   assert.match(executionSource, /remote candidate execution is not enabled yet/);
+  assert.match(executionSource, /\/api\/execution\/github-snapshots\/\$\{encodeURIComponent\(snapshotId\)\}\/files/);
+  assert.match(executionSource, /MAX_GITHUB_SELECTED_FILES = 8/);
+  assert.match(executionSource, /MAX_GITHUB_SELECTED_BYTES = 8_000/);
+  assert.match(executionSource, /This selection stays in page state; task request and run remain disabled/);
+  assert.match(executionSource, /state\.githubFileSelections\.set\(selectionKey, selectedPaths\)/);
   assert.match(executionSource, /snapshotDigest = repository\.treeDigest/);
   assert.match(executionSource, /repositoryRefId = repository\.refId/);
   assert.match(executionSource, /repositoryCommitOid = repository\.commitOid/);
@@ -700,6 +705,8 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   const executionCss = await fetch(`${base}/execution.css`);
   assert.equal(executionCss.status, 200);
   const executionStyles = await executionCss.text();
+  assert.match(executionStyles, /\.github-snapshot-file-selection\s*\{/);
+  assert.match(executionStyles, /\.github-snapshot-file-option\s*\{/);
   assert.match(executionStyles, /\.execution-skip-link:focus\s*\{[^}]*transform:\s*translateY\(0\)[^}]*outline:\s*3px solid var\(--exec\)/);
   assert.match(executionStyles, /\.execution-main:focus\s*\{[^}]*outline:\s*3px solid var\(--exec\)/);
   assert.match(executionStyles, /\.process-plan-controls\s*\{[^}]*display:\s*flex;[^}]*flex-wrap:\s*wrap/);

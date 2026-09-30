@@ -41,11 +41,15 @@ import { encodeExecutionRoute, encodeStudioRoute, executionProcessTarget, execut
 import { currentProcessPlanFocusTarget, linkedPlanInstanceRouteTarget, linkedProcessPlanTarget, processPlanFreshness, processPlanRevisionFocusTarget, selectLinkedProcessPlanInstance, sourceProcessDesignLink } from './process-plan-navigation.mjs';
 
 const state = {
-  meta: null, projects: [], runs: [], taskInstances: [], runtimePlans: [], localRepositories: [], githubExecutionAvailable: false, githubExecutionUnavailableReason: null, run: null, runProject: null, proposalMembershipAccess: null, authenticated: false, currentPrincipal: null, planningProject: null, projectContextId: null,
+  meta: null, projects: [], runs: [], taskInstances: [], runtimePlans: [], localRepositories: [], githubExecutionAvailable: false, githubExecutionUnavailableReason: null, githubFileManifests: new Map(), githubFileSelections: new Map(), run: null, runProject: null, proposalMembershipAccess: null, authenticated: false, currentPrincipal: null, planningProject: null, projectContextId: null,
   actorBindingRows: [], actorBindingProjectId: null, actorBindingReadAvailable: false,
   selectedPlanInstances: new Map(),
   processTaskStatuses: new Map(),
 };
+const MAX_GITHUB_SELECTED_FILES = 8;
+const MAX_GITHUB_SELECTED_FILE_BYTES = 8_000;
+const MAX_GITHUB_SELECTED_BYTES = 8_000;
+const GITHUB_TEXT_FILE_EXTENSION = /\.(?:txt|md|mdx|js|mjs|cjs|ts|tsx|jsx|json|css|scss|html|htm|xml|ya?ml|toml|py|go|rs|java|kt|swift|rb|php|sql|sh|bash|c|h|cc|cpp|hpp|cs|vue|svelte)$/i;
 state.pendingProcessPlans = new Map();
 state.pendingTaskRuns = new Map();
 state.submittingTaskRequests = new Set();
@@ -1153,6 +1157,74 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
               attrs: { value: '__saved_repository_unavailable__', disabled: true, selected: true },
             }));
           }
+          const githubFileSelectionPanel = el('fieldset', { className: 'github-snapshot-file-selection', attrs: { hidden: true } });
+          const renderGithubFileSelection = async () => {
+            githubFileSelectionPanel.replaceChildren();
+            const repository = state.localRepositories.find((entry) => (entry.selectionId ?? entry.id) === repositorySelect.value);
+            if (repository?.kind !== 'github') {
+              githubFileSelectionPanel.hidden = true;
+              return;
+            }
+            githubFileSelectionPanel.hidden = false;
+            const snapshotId = repository.snapshotId;
+            const manifestCacheKey = `${project.tenantId}\n${project.id}\n${snapshotId}`;
+            const selectionKey = `${project.id}\n${plan.id}\n${task.id}\n${snapshotId}`;
+            githubFileSelectionPanel.append(el('legend', { text: 'Select text files for a future patch request' }));
+            const summary = el('p', { className: 'muted', attrs: { role: 'status', 'aria-live': 'polite' },
+              text: 'Loading file metadata; source bytes are not sent to this page.' });
+            githubFileSelectionPanel.append(summary);
+            let manifest = state.githubFileManifests.get(manifestCacheKey);
+            if (!manifest) {
+              try {
+                manifest = await api(`/api/execution/github-snapshots/${encodeURIComponent(snapshotId)}/files?projectId=${encodeURIComponent(project.id)}`);
+                if (repositorySelect.value !== (repository.selectionId ?? repository.id)) return;
+                state.githubFileManifests.set(manifestCacheKey, manifest);
+              } catch (error) {
+                if (repositorySelect.value !== (repository.selectionId ?? repository.id)) return;
+                summary.textContent = error.message || 'The snapshot file manifest is unavailable.';
+                return;
+              }
+            }
+            if (repositorySelect.value !== (repository.selectionId ?? repository.id)) return;
+            const eligible = manifest.files.filter((file) => GITHUB_TEXT_FILE_EXTENSION.test(file.path)
+              && Number.isSafeInteger(file.size) && file.size >= 0 && file.size <= MAX_GITHUB_SELECTED_FILE_BYTES).slice(0, 100);
+            let selectedPaths = new Set(state.githubFileSelections.get(selectionKey) ?? []);
+            const summaryText = () => {
+              const chosen = eligible.filter((file) => selectedPaths.has(file.path));
+              const bytes = chosen.reduce((total, file) => total + file.size, 0);
+              summary.textContent = `${chosen.length}/${MAX_GITHUB_SELECTED_FILES} files selected · ${bytes}/${MAX_GITHUB_SELECTED_BYTES} UTF-8 bytes. This selection stays in page state; task request and run remain disabled.`;
+            };
+            summaryText();
+            if (manifest.files.length > eligible.length) githubFileSelectionPanel.append(el('p', { className: 'muted',
+              text: 'Only bounded files with a text-oriented filename are selectable; actual UTF-8 and NUL validation happens server-side before any future prompt.' }));
+            if (manifest.files.filter((file) => GITHUB_TEXT_FILE_EXTENSION.test(file.path)
+              && Number.isSafeInteger(file.size) && file.size >= 0 && file.size <= MAX_GITHUB_SELECTED_FILE_BYTES).length > 100) {
+              githubFileSelectionPanel.append(el('p', { className: 'muted', text: 'Showing the first 100 eligible paths.' }));
+            }
+            for (const file of eligible) {
+              const checkbox = el('input', { attrs: { type: 'checkbox', value: file.path,
+                ...(selectedPaths.has(file.path) ? { checked: true } : {}) } });
+              checkbox.addEventListener('change', () => {
+                const next = new Set(selectedPaths);
+                if (checkbox.checked) next.add(file.path);
+                else next.delete(file.path);
+                const chosen = eligible.filter((entry) => next.has(entry.path));
+                const bytes = chosen.reduce((total, entry) => total + entry.size, 0);
+                if (next.size > MAX_GITHUB_SELECTED_FILES || bytes > MAX_GITHUB_SELECTED_BYTES) {
+                  checkbox.checked = false;
+                  summary.textContent = `Selection limit reached: choose at most ${MAX_GITHUB_SELECTED_FILES} files and ${MAX_GITHUB_SELECTED_BYTES} aggregate bytes.`;
+                  return;
+                }
+                selectedPaths = next;
+                state.githubFileSelections.set(selectionKey, selectedPaths);
+                summaryText();
+              });
+              githubFileSelectionPanel.append(el('label', { className: 'github-snapshot-file-option' }, [
+                checkbox, el('span', { text: `${file.path} · ${file.size} bytes · ${file.contentHash.slice(0, 12)}` }),
+              ]));
+            }
+          };
+          repositorySelect.addEventListener('change', () => { void renderGithubFileSelection(); });
           const updateRepositorySelectionState = () => {
             const selected = state.localRepositories.find((repository) => (repository.selectionId ?? repository.id) === repositorySelect.value);
             const disabledRemote = selected?.kind === 'github' && !state.githubExecutionAvailable;
@@ -1172,6 +1244,7 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
           updateProfileDisclosure();
           const requestStatus = el('p', { className: 'muted', attrs: { role: 'status', 'aria-live': 'polite' }, text: requestPresentation.status });
           updateRepositorySelectionState();
+          void renderGithubFileSelection();
           requestButton.addEventListener('click', () => {
             void requestTaskApproval({ project, plan, task, selectedInstance, profileId: profileSelect.value,
               repositorySelectionId: repositorySelect.value, requestButton, profileSelect, repositorySelect, requestStatus, requestKey });
@@ -1179,7 +1252,7 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
           item.append(
             profileDisclosure, el('label', { text: 'Configured execution profile' }, profileSelect),
             ...(state.localRepositories.length || pendingRequest?.payload?.repositoryId || pendingRequest?.payload?.githubSnapshotId
-              ? [el('label', { text: 'Repository source' }, repositorySelect),
+              ? [el('label', { text: 'Repository source' }, repositorySelect), githubFileSelectionPanel,
                 ...(state.localRepositories.some((repository) => repository.kind === 'github') && !state.githubExecutionAvailable
                   ? [el('p', { className: 'muted', attrs: { role: 'status' }, text: 'Saved GitHub snapshots are listed for selection, but remote candidate execution is not enabled yet.' })] : [])] : []),
             requestButton, requestStatus,

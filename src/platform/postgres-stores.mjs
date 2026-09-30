@@ -1841,6 +1841,23 @@ export class PostgresGitHubSourceStore {
     });
   }
 
+  async listSnapshotFileManifestForExecution({ tenantId, projectId, principal, authzGeneration, snapshotId }) {
+    return this.persistence.transaction(async (client) => {
+      await this.#authorizeExecution(client, { tenantId, projectId, principal, authzGeneration });
+      const result = await client.query(`select source.binding, item.value - 'files' as snapshot,
+          coalesce((select jsonb_agg(jsonb_build_object(
+              'path', file.value->'path', 'mode', file.value->'mode', 'size', file.value->'size',
+              'contentHash', file.value->'contentHash', 'blobSha', file.value->'blobSha') order by file.ordinality)
+            from jsonb_array_elements(coalesce(item.value->'files', '[]'::jsonb)) with ordinality as file(value, ordinality)), '[]'::jsonb) as files
+        from orgward.github_repository_sources source
+        cross join lateral jsonb_array_elements(source.snapshots) item(value)
+        where source.tenant_id=$1 and source.project_id=$2 and item.value->>'id'=$3
+        limit 1`, [tenantId, projectId, snapshotId]);
+      return result.rows[0] ? { binding: result.rows[0].binding, snapshot: result.rows[0].snapshot,
+        files: result.rows[0].files } : null;
+    });
+  }
+
   async saveCapture({ tenantId, projectId, principal, authzGeneration, binding, snapshot }) {
     return this.persistence.transaction(async (client) => {
       await this.#authorize(client, { tenantId, projectId, principal, authzGeneration });

@@ -5525,6 +5525,24 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   cursor and release gates remain open; structured patch execution and candidate
   diff/verification remain the next implementation boundary.
 
+  Per-snapshot GitHub file-selection foundation (2026-09-30): Added an authorized
+  project-editor API for validated path/mode/size/content-hash metadata from one
+  pinned snapshot; the SQL projection excludes source bytes and the API omits
+  blob identifiers and credential references. The served execution UI presents
+  page-state-only selection capped at eight files and 8,000 aggregate bytes,
+  while task submission and remote execution remain disabled. Initial focused
+  PostgreSQL/HTTP/UI invocation passed 1/2: the metadata route returned the
+  expected reader 403, but the test incorrectly expected a nested error code
+  rather than the route's current string `error` envelope. Repair aligned the
+  assertion to the current envelope; the same focused invocation passed 2/2
+  (0 failures, cancellations or skips; 2.67s wrapper). Logs:
+  `/tmp/orgward-tests-S8Care/node-test.tap.log` (initial assertion mismatch) and
+  `/tmp/orgward-tests-AwcKom/node-test.tap.log` (passing repair). Syntax and
+  `git diff --check` passed. No full check, provider call, GitHub access or
+  external effect was used; PR-08, its task checkbox, cursor and gates remain
+  unchanged. Broker-backed patch generation and isolated verification remain
+  out of scope for this slice.
+
 - [ ] PR-09 — Authorized environments, release and rollback (T-33–T-35; E-10).
   Let a user review an exact candidate, approve a protected environment action,
   observe its result and recover through rollback. Bind authority to principals,
