@@ -45,9 +45,9 @@ the earlier PR; PR-11 closes their remaining standalone scope and qualification.
 Broader qualification remains mandatory before release; this ordering does not
 mark any P/E gate complete. Active section order below follows this list.
 
-Active cursor: PR-07. The active checkboxes below are the source of truth;
+Active cursor: PR-08. The active checkboxes below are the source of truth;
 `npm run task:next` checks that this cursor matches their first open PR in section
-order. PR-01 through PR-06 are complete, and PR-07 is next. A stale PR
+order. PR-01 through PR-07 are complete, and PR-08 is next. A stale PR
 number in a saved goal, dated receipt or older document does not reset the queue.
 Read this header and the active PR outcome at the line printed by
 `npm run task:next`; search receipts only for a concrete dependency.
@@ -4892,7 +4892,7 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
 
 ## Governed software delivery
 
-- [ ] PR-07 — Intent-to-plan engineering workflow (T-25–T-28). Connect approved
+- [x] PR-07 — Intent-to-plan engineering workflow (T-25–T-28). Connect approved
   enterprise intent to context/impact, traced requirements, architecture alternatives
   and recovery design, then compile accepted work into the shared durable engine.
 
@@ -5249,6 +5249,43 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   full check, commit or push for this fix. Rendered T-28 remains unverified;
   PR-06 remains first open and task checkboxes, cursor and release gates are
   unchanged.
+
+  PR-07 T-25–T-28 saved-source to durable-compile PostgreSQL journey
+  (2026-09-30): extended the existing PostgreSQL compare-and-swap restart test
+  with the current saved-source pin, Context/Impact source evidence, an edited
+  and accepted source-traced G4 requirement, and an edited and accepted G5
+  alternative with migration and recovery changes. After compiling G6 into the
+  shared software-delivery engine, app-only restart assertions compare the exact
+  source, accepted-requirement, architecture and G6 hashes, then verify every
+  compiled task's requirement/decision/context references and mapped dependency
+  IDs against the persisted G6 work graph. The focused runner passed the named
+  PostgreSQL journey 1/1 with 0 failures and 0 skips (3.93s test,
+  5.35s runner wall); TAP `/tmp/orgward-tests-tZmwTd/node-test.tap.log`.
+  `node --check tests/persistence.test.mjs` and `git diff --check` passed. Two
+  preliminary focused runs exposed fixture request mistakes (stale case version
+  after the concurrency check; client-supplied actor fields rejected by the DB
+  API); both were corrected before the passing run. No full check, browser,
+  provider/credential call or external effect. The rendered browser proof remains
+  unverified: the known host Chrome startup failure is `No usable sandbox`, and
+  no browser launch or bypass was attempted for this increment. The test runner
+  closed the disposable PostgreSQL fixture and process inspection found no
+  remaining app, database, Chrome or agent-browser process. PR-07 remains first
+  open; release gates remain open and unchanged.
+
+  PR-07 implementation acceptance complete (2026-09-30): the current joined
+  PostgreSQL journey verifies the saved-source Context/Impact, source-traced G4
+  requirement, accepted G5 alternatives/migration/recovery, G6 compilation and
+  exact compiled task/dependency references after app restart. Earlier rendered
+  evidence shows the source-bound case, requirement/architecture review and
+  inert compiled draft at desktop/narrow width. The frozen tree passed its single
+  `npm run check`: 427 passed, 0 failed, 1 skipped (optional PostgreSQL
+  backup/restore journey because `pg_dump`/client tools are unavailable; 84.62s
+  TAP, 88.63s wrapper). Logs: `/tmp/orgward-pr07-final-check-20260930.log` and
+  `/tmp/orgward-tests-erNySU/node-test.tap.log`. PR-07 is checked complete and
+  the cursor advances to PR-08. The skipped recovery journey is not passing
+  coverage; release gates remain separate and unchanged. The rendered
+  post-compile owner promotion/human runtime/restart path remains unverified
+  because host Chrome reports `No usable sandbox`; no browser bypass was used.
 
 - [ ] PR-08 — SCM, agent changes and immutable assurance (T-29–T-32; E-06, E-09).
   Let a user onboard a repository, request a bounded agent change, review its diff,
@@ -5743,3 +5780,20 @@ and process inspection found no attributable service/browser process. No product
 source/tests changed. Sanitized receipt:
 `/tmp/orgward-pr06-owner-review-proof-20260930/attempt-summary.json`. PR-06,
 cursor and release gates remain open and unchanged.
+
+  T-28 rendered proof continuation preflight (2026-09-30): retained fixture
+  passed `node --check`; agent-browser 0.38.1 is installed. The latest prior
+  attempt failed before page load because host Google Chrome exited with
+  `No usable sandbox`; only system Google Chrome was found as a browser
+  executable. Per the one-attempt/no-known-startup-retry constraint, no browser
+  launch variant was attempted and no fixture was started. No fresh case or
+  compiled plan was created and no fresh promotable-human-task preflight was
+  performed. Prior-run artifacts show an 8-task compiled plan and 8 owner-page
+  worker-binding selectors, but do not verify fresh source binding or task
+  promotability. G4/G5/G6 rendering, assignment review, promotion/start, human
+  checkpoint completion, app-only restart and persisted result/evidence/event
+  readback remain unverified in this increment. No tests, provider/credential
+  calls or product source changes. Process inspection found no app, PostgreSQL,
+  Chrome or agent-browser process. Evidence:
+  `/tmp/orgward-t28-rendered-proof-20260930-stop-summary.txt`. PR-07 remains
+  first open; task checkboxes, cursor and release ledger remain unchanged.

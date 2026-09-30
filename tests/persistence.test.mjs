@@ -2935,7 +2935,67 @@ test('change cases and execution runs use PostgreSQL compare-and-swap state acro
   assert.deepEqual(advances.map((response) => response.status).sort(), [200, 409]);
   const advanced = await request(app.base, `/api/sdlc/cases/${changeCase.id}`);
   assert.equal(advanced.version, 1);
-  const requirementsAccepted = await acceptSdlcRequirements(app.base, changeCase.id, 'pg-cas-requirements');
+  let requirementsReview = await request(app.base, `/api/sdlc/cases/${changeCase.id}/run`, {
+    method: 'POST', body: JSON.stringify({ version: advanced.version, idempotencyKey: 'pg-cas-run-to-g4' }),
+  });
+  assert.equal(requirementsReview.currentStage, 'S4');
+  const sourceHash = requirementsReview.sourceBinding.sourceHash;
+  const sourceEvidenceRef = requirementsReview.artifacts.context.sourceBindingEvidenceRef;
+  assert.ok(sourceEvidenceRef);
+  assert.ok(requirementsReview.artifacts.context.evidenceRefs.includes(sourceEvidenceRef));
+  assert.equal(requirementsReview.artifacts.context.sourceBindingHash, sourceHash);
+  assert.ok(requirementsReview.artifacts.impact.impacts.some((impact) =>
+    impact.isRequestedSource && impact.objectRef === requirementsReview.sourceBinding.objectId && impact.sourceHash === sourceHash));
+  const requirementDraft = requirementsReview.artifacts.requirements.requirements[0];
+  assert.ok(requirementDraft.sourceLinks.some((link) => link.type === 'SAVED_DESIGN_OBJECT'
+    && link.ref === requirementsReview.sourceBinding.objectId && link.hash === sourceHash));
+  const requirementEdit = { statement: 'Members submit a verified ownership update through the saved service.' };
+  requirementsReview = await request(app.base, `/api/sdlc/cases/${changeCase.id}/edit-requirements`, {
+    method: 'POST', body: JSON.stringify({ version: requirementsReview.version,
+      expectedDraftRevision: requirementsReview.artifacts.requirements.draftRevision,
+      requirementId: requirementDraft.id, changes: requirementEdit, idempotencyKey: 'pg-cas-requirements-edit' }),
+  });
+  assert.equal(requirementsReview.artifacts.requirements.requirements[0].statement, requirementEdit.statement);
+  requirementsReview = await request(app.base, `/api/sdlc/cases/${changeCase.id}/accept-requirements`, {
+    method: 'POST', body: JSON.stringify({ version: requirementsReview.version,
+      expectedDraftRevision: requirementsReview.artifacts.requirements.draftRevision,
+      idempotencyKey: 'pg-cas-requirements-accept' }),
+  });
+  const acceptedRequirementBaseline = requirementsReview.artifacts.requirements.acceptedBaseline;
+  assert.equal(acceptedRequirementBaseline.requirements[0].statement, requirementEdit.statement);
+  assert.equal(acceptedRequirementBaseline.sourceHash, sourceHash);
+  assert.equal(acceptedRequirementBaseline.requirements[0].sourceLinks.find((link) => link.type === 'SAVED_DESIGN_OBJECT').hash, sourceHash);
+  let architectureReview = await request(app.base, `/api/sdlc/cases/${changeCase.id}/advance`, {
+    method: 'POST', body: JSON.stringify({ version: requirementsReview.version, idempotencyKey: 'pg-cas-open-g5' }),
+  });
+  assert.equal(architectureReview.currentStage, 'S5');
+  const selectedOption = architectureReview.artifacts.architecture.options[1];
+  assert.ok(architectureReview.artifacts.architecture.options.length >= 2, 'G5 retains comparable alternatives');
+  assert.ok(architectureReview.artifacts.architecture.options.every((option) => option.migration.length >= 2
+    && option.healthCriteria.length && option.rollbackForwardRecovery));
+  const recoveryEdit = 'If reconciliation fails, stop expansion, preserve the legacy read path, restore from the verified snapshot, and replay the durable outbox after health checks pass.';
+  const architectureEdit = {
+    selectedOptionId: selectedOption.id,
+    selectionRationale: 'The event-backed alternative meets the accepted ownership update requirement while preserving recoverable writes.',
+    rollbackForwardRecovery: recoveryEdit,
+    migration: [...selectedOption.migration, { step: selectedOption.migration.length + 1,
+      action: 'Expand only after reconciliation and recovery drills pass.',
+      healthCheck: 'Replay and restore drills pass before the legacy path is retired.' }],
+  };
+  architectureReview = await request(app.base, `/api/sdlc/cases/${changeCase.id}/edit-architecture`, {
+    method: 'POST', body: JSON.stringify({ version: architectureReview.version,
+      expectedDraftRevision: architectureReview.artifacts.architecture.draftRevision,
+      optionId: selectedOption.id, changes: architectureEdit, idempotencyKey: 'pg-cas-architecture-edit' }),
+  });
+  assert.equal(architectureReview.artifacts.architecture.options.find((option) => option.id === selectedOption.id).rollbackForwardRecovery, recoveryEdit);
+  assert.equal(architectureReview.artifacts.architecture.options.find((option) => option.id === selectedOption.id).migration.at(-1).step, architectureEdit.migration.length);
+  const acceptedArchitectureResponse = await request(app.base, `/api/sdlc/cases/${changeCase.id}/accept-architecture`, {
+    method: 'POST', body: JSON.stringify({ version: architectureReview.version,
+      expectedDraftRevision: architectureReview.artifacts.architecture.draftRevision,
+      idempotencyKey: 'pg-cas-architecture-accept' }),
+  });
+  assert.equal(acceptedArchitectureResponse.currentStage, 'S6');
+  const requirementsAccepted = acceptedArchitectureResponse;
   const runToCheckpoint = await request(app.base, `/api/sdlc/cases/${changeCase.id}/run`, {
     method: 'POST', body: JSON.stringify({ version: requirementsAccepted.version, idempotencyKey: 'pg-case-run' }),
   });
@@ -3386,12 +3446,32 @@ test('change cases and execution runs use PostgreSQL compare-and-swap state acro
   app = await start(postgres.databaseUrl, { executionProfiles: [profile], oidcAuthenticator });
   const reloadedCase = await request(app.base, `/api/sdlc/cases/${changeCase.id}`);
   assert.equal(reloadedCase.version, runToCheckpoint.version);
+  assert.equal(reloadedCase.sourceBinding.sourceHash, sourceHash);
+  assert.equal(reloadedCase.sourceBinding.projectId, project.data.id);
+  assert.equal(reloadedCase.sourceBinding.blueprintId, selection.expectedBlueprintId);
+  assert.equal(reloadedCase.sourceBinding.blueprintVersion, selection.expectedBlueprintVersion);
+  assert.equal(reloadedCase.sourceBinding.objectId, selection.sourceObjectId);
+  assert.equal(reloadedCase.artifacts.context.sourceBindingHash, sourceHash);
+  assert.ok(reloadedCase.artifacts.context.evidenceRefs.includes(sourceEvidenceRef));
+  assert.ok(reloadedCase.artifacts.impact.impacts.some((impact) =>
+    impact.isRequestedSource && impact.objectRef === selection.sourceObjectId && impact.sourceHash === sourceHash));
+  const reloadedRequirements = reloadedCase.artifacts.requirements.acceptedBaseline;
+  assert.equal(reloadedRequirements.contentHash, acceptedRequirements.contentHash);
+  assert.equal(reloadedRequirements.sourceHash, sourceHash);
+  assert.equal(reloadedRequirements.requirements[0].statement, requirementEdit.statement);
+  assert.equal(reloadedRequirements.requirements[0].sourceLinks.find((link) => link.type === 'SAVED_DESIGN_OBJECT').hash, sourceHash);
   const reloadedArchitecture = reloadedCase.artifacts.architecture.acceptedBaseline;
   assert.equal(reloadedArchitecture.draftHash, acceptedArchitecture.draftHash);
   assert.equal(reloadedArchitecture.requirementsBaselineHash, acceptedRequirements.contentHash);
   assert.equal(reloadedArchitecture.requirementsBaselineVersion, acceptedRequirements.version);
   assert.equal(reloadedArchitecture.sourceHash, reloadedCase.sourceBinding.sourceHash);
   assert.equal(reloadedArchitecture.intentHash, reloadedCase.intent.contentHash);
+  assert.equal(reloadedArchitecture.draftHash, compiled.plan.binding.architectureBaselineHash);
+  assert.equal(reloadedArchitecture.requirementsBaselineHash, compiled.plan.binding.requirementsBaselineHash);
+  assert.equal(reloadedArchitecture.sourceHash, compiled.plan.binding.sourceHash);
+  assert.equal(reloadedArchitecture.options.find((option) => option.id === selectedOption.id).rollbackForwardRecovery, recoveryEdit);
+  assert.ok(reloadedArchitecture.options.find((option) => option.id === selectedOption.id).migration.some((step) =>
+    step.action === 'Expand only after reconciliation and recovery drills pass.'));
   assert.ok(reloadedCase.artifacts.plan.workItems.every((item) => item.architectureBaselineHash === reloadedArchitecture.draftHash));
   const reloadedSoftwareDrafts = await request(app.base, `/api/sdlc/cases/${changeCase.id}/software-delivery-plans`);
   assert.equal(reloadedSoftwareDrafts.plans.length, 2);
@@ -3404,6 +3484,20 @@ test('change cases and execution runs use PostgreSQL compare-and-swap state acro
   assert.equal(reloadedV2Draft.assignmentReview.revision, 3);
   assert.equal(reloadedV2Draft.assignmentReview.executable, false);
   assert.equal(reloadedV1Draft.plan.contentHash, legacyDraft.contentHash);
+  assert.equal(reloadedV2Draft.plan.binding.g6PlanHash, runToCheckpoint.artifacts.plan.contentHash);
+  assert.equal(reloadedV2Draft.plan.binding.architectureBaselineHash, reloadedArchitecture.draftHash);
+  assert.equal(reloadedV2Draft.plan.binding.requirementsBaselineHash, reloadedRequirements.contentHash);
+  assert.equal(reloadedV2Draft.plan.binding.sourceHash, sourceHash);
+  const reloadedTasksByWorkItem = new Map(reloadedV2Draft.plan.tasks.map((task) => [task.g6WorkItemId, task]));
+  assert.equal(reloadedTasksByWorkItem.size, runToCheckpoint.artifacts.plan.workItems.length);
+  for (const workItem of runToCheckpoint.artifacts.plan.workItems) {
+    const task = reloadedTasksByWorkItem.get(workItem.id);
+    assert.ok(task, `compiled task for ${workItem.id} survives restart`);
+    assert.deepEqual(task.requirementRefs, workItem.requirementRefs);
+    assert.deepEqual(task.decisionRefs, workItem.decisionRefs);
+    assert.deepEqual(task.dependencies, workItem.dependencies.map((dependency) => reloadedTasksByWorkItem.get(dependency).id));
+    assert.equal(task.contextPackageRef, workItem.contextPackageRef);
+  }
   const restartedRuntime = await request(app.base, `/api/execution/process-task-instances?projectId=${project.data.id}`);
   assert.equal(restartedRuntime.plans.find((plan) => plan.id === compiled.plan.id)?.snapshotHash, promoted.result.snapshotHash);
   const restartedTaskRuntimes = restartedRuntime.instances.filter((runtime) =>
