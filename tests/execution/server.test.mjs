@@ -110,11 +110,20 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   const executionSource = await executionClient.text();
   assert.match(executionSource, /Repeat fixed verification/,
     'saved GitHub candidates expose an explicit repeat-verification action');
-  assert.match(executionSource, /Matched on this repeat run/);
   assert.match(executionSource, /A matching failed verifier remains failed/,
     'the served candidate review keeps a matched failing verifier visibly failed');
   assert.match(executionSource, /github-candidate-verification-repeats/,
     'repeat history and actions use the authenticated candidate-specific API');
+  assert.match(executionSource, /Original verifier observation[\s\S]*Original result: \$\{originalOutcome\}[\s\S]*output hash \$\{verification\.outputHash\}/,
+    'the candidate panel labels the original verifier status, exit code and output hash');
+  assert.match(executionSource, /github-candidate-repeat-history[\s\S]*github-candidate-repeat-action-status/,
+    'repeat action feedback and saved observation history use separate regions');
+  assert.match(executionSource, /repeatActionStatus\.replaceChildren\(el\('p', \{ className: 'muted', text: 'Repeating[\s\S]*appendAttempt\(attempt\);[\s\S]*await loadAttempts\(\)/,
+    'starting or completing a repeat updates action feedback and refreshes append-only history');
+  assert.match(executionSource, /Comparison with original: \$\{comparison\}[\s\S]*Verifier result: \$\{outcome\}[\s\S]*Output hash: \$\{verification\.outputHash/,
+    'each repeat shows comparison, verifier outcome, exit code and output hash');
+  assert.doesNotMatch(executionSource, /repeatHistory\.replaceChildren\(/,
+    'repeat actions never clear already loaded history');
   const instanceOptionLabelClient = await fetch(`${base}/process-instance-option-label.mjs`);
   assert.equal(instanceOptionLabelClient.status, 200);
   const instanceOptionLabelSource = await instanceOptionLabelClient.text();

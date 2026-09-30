@@ -5738,6 +5738,20 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   `/tmp/orgward-tests-SZP7EN/node-test.tap.log`; test syntax and
   `git diff --check` passed. No other source behavior changed.
 
+  Repeat-verification panel UX follow-up (2026-09-30): the panel now keeps saved
+  repeat observations in an append-only history region while pending/error
+  feedback uses a separate live region. A successful repeat appends the new
+  observation and refreshes history without clearing existing rows; stale
+  history loads cannot overwrite a newer attempt. Original and repeat results
+  both label outcome/status, exit code and output hash, while a matched failed
+  verification still reads FAILED. The first filtered served-client run failed
+  1/1 (0 skips) on a stale assertion for the former “Matched on this repeat run”
+  wording, log `/tmp/orgward-tests-SPrJBN/node-test.tap.log`; removing only that
+  obsolete assertion allowed the same filtered run to pass 1/1 (0 failures,
+  0 skips; 0.78s runner time, 686ms TAP duration), log
+  `/tmp/orgward-tests-CZFxao/node-test.tap.log`. Client/test syntax checks and
+  `git diff --check` passed. No API or persisted record behavior changed.
+
 - [ ] PR-09 — Authorized environments, release and rollback (T-33–T-35; E-10).
   Let a user review an exact candidate, approve a protected environment action,
   observe its result and recover through rollback. Bind authority to principals,

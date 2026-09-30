@@ -2807,7 +2807,11 @@ function renderRepositoryCandidate(candidate) {
   } else content.push(el('p', { className: 'muted', text: 'The candidate contains no file changes.' }));
   if (candidate.verification) {
     const verification = candidate.verification;
-    content.push(el('p', { text: `Verification ${verification.id} v${verification.version} · ${verification.status} · exit ${verification.exitCode} · tree ${verification.treeDigest} · command ${verification.commandHash} · output ${verification.outputHash}` }));
+    const originalOutcome = verification.status === 'COMPLETED' && verification.exitCode === 0 ? 'PASSED'
+      : verification.status === 'INCONCLUSIVE' ? 'INCONCLUSIVE' : 'FAILED';
+    content.push(el('h4', { text: 'Original verifier observation' }));
+    content.push(el('p', { text: `Original result: ${originalOutcome} · status ${verification.status} · exit code ${verification.exitCode} · output hash ${verification.outputHash}` }));
+    content.push(el('p', { className: 'muted', text: `Verifier ${verification.id} v${verification.version} · candidate tree ${verification.treeDigest} · command/profile ${verification.commandHash}` }));
     if (typeof verification.stdoutTruncated !== 'boolean' || typeof verification.stderrTruncated !== 'boolean') {
       content.push(el('p', { className: 'muted', text: 'This saved verification record has no truncation metadata, so whether its output was truncated is unknown. The output hash covers the saved stdout and stderr.' }));
     } else if (verification.stdoutTruncated || verification.stderrTruncated) {
@@ -2820,44 +2824,59 @@ function renderRepositoryCandidate(candidate) {
     if (verification.stderr) content.push(el('pre', { className: 'execution-output execution-error', text: verification.stderr }));
   }
   if (candidate.source?.type === 'github-app' && candidate.candidateEvidence?.hash && candidate.runId) {
-    const repeatStatus = el('div', { className: 'github-candidate-repeat-status', attrs: { 'aria-live': 'polite' } });
+    const repeatHistory = el('div', { className: 'github-candidate-repeat-history', attrs: { 'aria-label': 'Repeat verification history' } });
+    const repeatActionStatus = el('div', { className: 'github-candidate-repeat-action-status', attrs: { 'aria-live': 'polite' } });
     const repeatButton = el('button', { className: 'button', text: 'Repeat fixed verification', attrs: { type: 'button', 'data-action': 'repeat-github-verification' } });
     let commandId = null;
+    let historyGeneration = 0;
+    const renderedAttemptIds = new Set();
     const loadAttempts = async () => {
+      const requestedGeneration = historyGeneration;
       const response = await fetch(`/api/execution/runs/${encodeURIComponent(candidate.runId)}/github-candidate-verification-repeats`);
       if (!response.ok) throw new Error('Repeat verification history could not be loaded.');
       const payload = await response.json();
       if (!Array.isArray(payload.attempts)) throw new Error('Repeat verification history has an invalid response.');
-      repeatStatus.replaceChildren(...payload.attempts.map((attempt) => {
-        const row = el('div'); renderAttemptInto(row, attempt); return row;
-      }));
+      if (requestedGeneration !== historyGeneration) return;
+      for (const attempt of payload.attempts) appendAttempt(attempt);
     };
-    const renderAttemptInto = (target, attempt) => {
-      const result = attempt.verification?.status === 'COMPLETED' && attempt.verification?.exitCode === 0
-        ? 'verifier passed' : `verifier ${attempt.verification?.status ?? 'INCONCLUSIVE'}${attempt.verification?.exitCode === null ? '' : ` (exit ${attempt.verification.exitCode})`}`;
-      const comparison = attempt.comparison === 'matched' ? `Matched on this repeat run; ${result}.`
-        : attempt.comparison === 'mismatch' ? `Mismatch on this repeat run; ${result}.`
-          : `Inconclusive repeat run; ${result}.`;
-      target.append(el('p', { className: 'muted', text: `${comparison} Attempt ${attempt.attemptId} · output ${attempt.verification?.outputHash ?? 'unavailable'}` }));
+    const appendAttempt = (attempt) => {
+      if (typeof attempt.attemptId !== 'string' || renderedAttemptIds.has(attempt.attemptId)) return;
+      renderedAttemptIds.add(attempt.attemptId);
+      const verification = attempt.verification ?? {};
+      const outcome = verification.status === 'COMPLETED' && verification.exitCode === 0 ? 'PASSED'
+        : verification.status === 'INCONCLUSIVE' ? 'INCONCLUSIVE' : 'FAILED';
+      const comparison = attempt.comparison === 'matched' ? 'MATCHED'
+        : attempt.comparison === 'mismatch' ? 'MISMATCH' : 'INCONCLUSIVE';
+      const row = el('article', { className: 'github-candidate-repeat-observation', attrs: { 'data-repeat-attempt-id': attempt.attemptId } }, [
+        el('h5', { text: `Repeat observation · ${attempt.attemptId}` }),
+        el('p', { text: `Comparison with original: ${comparison}` }),
+        el('p', { text: `Verifier result: ${outcome} · status ${verification.status ?? 'INCONCLUSIVE'} · exit code ${verification.exitCode ?? 'not available'}` }),
+        el('p', { text: `Output hash: ${verification.outputHash ?? 'not available'}` }),
+      ]);
+      repeatHistory.append(row);
     };
     repeatButton.addEventListener('click', async () => {
       repeatButton.disabled = true;
-      repeatStatus.replaceChildren(el('p', { className: 'muted', text: 'Repeating the fixed verifier in a fresh isolated workspace…' }));
+      historyGeneration += 1;
+      repeatActionStatus.replaceChildren(el('p', { className: 'muted', text: 'Repeating the fixed verifier in a fresh isolated workspace…' }));
       commandId ??= `repeat-${crypto.randomUUID()}`;
       try {
         const response = await fetch(`/api/execution/runs/${encodeURIComponent(candidate.runId)}/github-candidate-verification-repeats`, {
           method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ commandId }),
         });
         const attempt = await response.json();
-        if (!response.ok) throw new Error(attempt.message ?? attempt.error ?? 'Repeat verification could not start.');
-        renderAttemptInto(repeatStatus, attempt);
+        if (!response.ok) throw new Error(typeof attempt.error === 'string' ? attempt.error : attempt.error?.message ?? attempt.message ?? 'Repeat verification could not start.');
+        appendAttempt(attempt);
+        repeatActionStatus.replaceChildren(el('p', { className: 'muted', text: 'Repeat observation saved; history refreshed.' }));
         commandId = null;
+        await loadAttempts();
       } catch (error) {
-        repeatStatus.replaceChildren(el('p', { className: 'muted', text: error.message }));
+        repeatActionStatus.replaceChildren(el('p', { className: 'muted', text: error.message }));
       } finally { repeatButton.disabled = false; }
     });
-    content.push(el('p', { className: 'muted', text: 'A repeat is a new append-only observation of the same saved candidate and fixed verifier. A matching failed verifier remains failed.' }), repeatButton, repeatStatus);
-    void loadAttempts().catch((error) => repeatStatus.replaceChildren(el('p', { className: 'muted', text: error.message })));
+    content.push(el('p', { className: 'muted', text: 'A repeat is a new append-only observation of the same saved candidate and fixed verifier. A matching failed verifier remains failed.' }), repeatButton,
+      repeatActionStatus, el('h4', { text: 'Repeat verifier observations' }), repeatHistory);
+    void loadAttempts().catch((error) => repeatActionStatus.replaceChildren(el('p', { className: 'muted', text: error.message })));
   }
   return section(candidate.source?.type === 'github-app' ? 'GitHub candidate · review only' : 'Local repository candidate · review only', content);
 }
