@@ -254,10 +254,12 @@ function redact(value) {
 }
 
 export class ExecutionService {
-  constructor({ runDirectory, store = null, profiles = [], secretStore = null, localRepositories = [], commandAdapterFactory = (options) => new CommandExecutionAdapter(options) }) {
+  constructor({ runDirectory, store = null, profiles = [], secretStore = null, localRepositories = [], githubSourceStore = null,
+    commandAdapterFactory = (options) => new CommandExecutionAdapter(options) }) {
     this.store = store ?? new ExecutionRunStore(runDirectory);
     this.secretStore = secretStore;
     this.commandAdapterFactory = commandAdapterFactory;
+    this.githubSourceStore = githubSourceStore;
     this.localRepositories = new Map();
     for (const repository of localRepositories) {
       const isGit = repository.kind === 'git';
@@ -711,6 +713,30 @@ export class ExecutionService {
       }
     }
     return listed;
+  }
+  async listGitHubSnapshots({ tenantId, projectId, principal, authzGeneration }) {
+    if (!this.githubSourceStore?.listSnapshotsForExecution) return { available: false, reason: 'persistence-unavailable', repositories: [] };
+    const records = await this.githubSourceStore.listSnapshotsForExecution({ tenantId, projectId, principal, authzGeneration });
+    const repositories = records.map(({ binding, snapshot }) => ({
+      id: `github-${binding.repositoryId}`,
+      selectionId: `github:${snapshot.id}`,
+      kind: 'github',
+      label: `${binding.repositoryName} · ${binding.branchRef}`,
+      repositoryName: binding.repositoryName,
+      installationId: String(binding.installationId),
+      repositoryId: String(binding.repositoryId),
+      branchRef: binding.branchRef,
+      snapshotId: snapshot.id,
+      commitOid: snapshot.commitOid,
+      treeOid: snapshot.treeOid,
+      policyVersion: snapshot.policyVersion,
+      manifestDigest: snapshot.manifestDigest,
+      treeDigest: snapshot.manifestDigest,
+      fileCount: snapshot.fileCount,
+      totalBytes: snapshot.totalBytes,
+      capturedAt: snapshot.capturedAt,
+    }));
+    return { available: false, reason: 'remote-patch-execution-not-enabled', repositories };
   }
   async cancelProcessTaskRun(input) {
     if (typeof this.store.cancelProcessTaskRun !== 'function') {

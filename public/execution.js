@@ -41,7 +41,7 @@ import { encodeExecutionRoute, encodeStudioRoute, executionProcessTarget, execut
 import { currentProcessPlanFocusTarget, linkedPlanInstanceRouteTarget, linkedProcessPlanTarget, processPlanFreshness, processPlanRevisionFocusTarget, selectLinkedProcessPlanInstance, sourceProcessDesignLink } from './process-plan-navigation.mjs';
 
 const state = {
-  meta: null, projects: [], runs: [], taskInstances: [], runtimePlans: [], localRepositories: [], run: null, runProject: null, proposalMembershipAccess: null, authenticated: false, currentPrincipal: null, planningProject: null, projectContextId: null,
+  meta: null, projects: [], runs: [], taskInstances: [], runtimePlans: [], localRepositories: [], githubExecutionAvailable: false, githubExecutionUnavailableReason: null, run: null, runProject: null, proposalMembershipAccess: null, authenticated: false, currentPrincipal: null, planningProject: null, projectContextId: null,
   actorBindingRows: [], actorBindingProjectId: null, actorBindingReadAvailable: false,
   selectedPlanInstances: new Map(),
   processTaskStatuses: new Map(),
@@ -475,9 +475,11 @@ async function loadPlanningProject(projectId, preferredProcessId = null, planTar
         const repositories = await api(`/api/execution/local-repositories?projectId=${encodeURIComponent(projectId)}`);
         if (document.querySelector('#plan-project')?.value !== projectId) return;
         state.localRepositories = repositories.repositories ?? [];
-      } catch { state.localRepositories = []; }
+        state.githubExecutionAvailable = repositories.githubExecutionAvailable === true;
+        state.githubExecutionUnavailableReason = repositories.githubExecutionUnavailableReason ?? null;
+      } catch { state.localRepositories = []; state.githubExecutionAvailable = false; state.githubExecutionUnavailableReason = 'source-list-unavailable'; }
     } else {
-      state.taskInstances = []; state.runtimePlans = []; state.localRepositories = [];
+      state.taskInstances = []; state.runtimePlans = []; state.localRepositories = []; state.githubExecutionAvailable = false; state.githubExecutionUnavailableReason = null;
     }
     let restoredPlanTarget = planTarget;
     if (restoredPlanTarget) {
@@ -1129,25 +1131,36 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
             text: requestPresentation.buttonLabel,
             attrs: { type: 'button', disabled: requestPresentation.buttonDisabled },
           });
-          const repositorySelect = el('select', { attrs: { 'aria-label': `Local repository for ${task.title}` } });
-          repositorySelect.append(el('option', { text: 'No local repository', attrs: { value: '' } }));
+          const repositorySelect = el('select', { attrs: { 'aria-label': `Repository source for ${task.title}` } });
+          repositorySelect.append(el('option', { text: 'No repository', attrs: { value: '' } }));
           repositorySelect.disabled = requestPresentation.locked;
           for (const repository of state.localRepositories) repositorySelect.append(el('option', {
-            text: `${repository.label}${repository.kind === 'git' ? ` · ${repository.refLabel} @ ${repository.commitOid.slice(0, 12)}` : ''} · ${repository.fileCount} files · ${repository.treeDigest.slice(0, 12)}`,
+            text: `${repository.label}${repository.kind === 'git' ? ` · ${repository.refLabel} @ ${repository.commitOid.slice(0, 12)}` : repository.kind === 'github' ? ` @ ${repository.commitOid.slice(0, 12)} · ${repository.fileCount} files` : ` · ${repository.fileCount} files · ${repository.treeDigest.slice(0, 12)}`}${repository.kind === 'github' && !state.githubExecutionAvailable ? ' · remote execution unavailable' : ''}`,
             attrs: { value: repository.selectionId ?? repository.id },
           }));
           const savedRepository = pendingRequest?.payload?.repositoryId
             ? state.localRepositories.find((repository) => repository.id === pendingRequest.payload.repositoryId
               && repository.treeDigest === pendingRequest.payload.snapshotDigest
               && (repository.kind !== 'git' || (repository.refId === pendingRequest.payload.repositoryRefId
-                && repository.commitOid === pendingRequest.payload.repositoryCommitOid))) : null;
-          if (requestPresentation.locked && pendingRequest?.payload?.repositoryId) {
+                && repository.commitOid === pendingRequest.payload.repositoryCommitOid)))
+            : pendingRequest?.payload?.githubSnapshotId
+              ? state.localRepositories.find((repository) => repository.kind === 'github'
+                && repository.snapshotId === pendingRequest.payload.githubSnapshotId) : null;
+          if (requestPresentation.locked && (pendingRequest?.payload?.repositoryId || pendingRequest?.payload?.githubSnapshotId)) {
             if (savedRepository) repositorySelect.value = savedRepository.selectionId ?? savedRepository.id;
             else repositorySelect.append(el('option', {
-              text: `Saved repository snapshot ${pendingRequest.payload.repositoryId} · unavailable or changed`,
+              text: `Saved repository snapshot ${pendingRequest.payload.repositoryId ?? pendingRequest.payload.githubSnapshotId} · unavailable or changed`,
               attrs: { value: '__saved_repository_unavailable__', disabled: true, selected: true },
             }));
           }
+          const updateRepositorySelectionState = () => {
+            const selected = state.localRepositories.find((repository) => (repository.selectionId ?? repository.id) === repositorySelect.value);
+            const disabledRemote = selected?.kind === 'github' && !state.githubExecutionAvailable;
+            requestButton.disabled = requestPresentation.buttonDisabled || disabledRemote;
+            if (disabledRemote) requestStatus.textContent = 'This pinned GitHub snapshot is selectable, but remote candidate execution is not enabled yet.';
+            else requestStatus.textContent = requestPresentation.status;
+          };
+          repositorySelect.addEventListener('change', updateRepositorySelectionState);
           const profileDisclosure = el('p', { className: 'muted' });
           const updateProfileDisclosure = () => {
             const selectedProfile = (state.meta?.profiles ?? []).find((profile) => profile.id === profileSelect.value);
@@ -1158,14 +1171,17 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
           profileSelect.addEventListener('change', updateProfileDisclosure);
           updateProfileDisclosure();
           const requestStatus = el('p', { className: 'muted', attrs: { role: 'status', 'aria-live': 'polite' }, text: requestPresentation.status });
+          updateRepositorySelectionState();
           requestButton.addEventListener('click', () => {
             void requestTaskApproval({ project, plan, task, selectedInstance, profileId: profileSelect.value,
               repositorySelectionId: repositorySelect.value, requestButton, profileSelect, repositorySelect, requestStatus, requestKey });
           });
           item.append(
             profileDisclosure, el('label', { text: 'Configured execution profile' }, profileSelect),
-            ...(state.localRepositories.length || pendingRequest?.payload?.repositoryId
-              ? [el('label', { text: 'Server-configured local repository' }, repositorySelect)] : []),
+            ...(state.localRepositories.length || pendingRequest?.payload?.repositoryId || pendingRequest?.payload?.githubSnapshotId
+              ? [el('label', { text: 'Repository source' }, repositorySelect),
+                ...(state.localRepositories.some((repository) => repository.kind === 'github') && !state.githubExecutionAvailable
+                  ? [el('p', { className: 'muted', attrs: { role: 'status' }, text: 'Saved GitHub snapshots are listed for selection, but remote candidate execution is not enabled yet.' })] : [])] : []),
             requestButton, requestStatus,
           );
         }

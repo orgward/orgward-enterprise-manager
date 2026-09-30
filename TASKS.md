@@ -5501,6 +5501,30 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   `git diff --check` passed. No full check or live GitHub access was used; PR-08,
   task checkbox, cursor and release gates remain open and unchanged.
 
+  Editor-scoped GitHub snapshot selection foundation (2026-09-30): Execution's
+  repository selector now lists saved GitHub snapshot identity (repository,
+  canonical branch ref, commit/tree, policy/manifest digests, file count and size)
+  for authorized project editors. PostgreSQL removes `files` in the metadata query;
+  the service view also omits content and the installation credential reference.
+  A separate server-side resolver returns the exact selected immutable snapshot
+  only after current workspace-write/tenant-admin and project-editor authority
+  checks; missing IDs are not substituted with the latest ref. The UI allows
+  selecting the pinned source but disables task submission and reports that
+  remote candidate execution is not enabled. Per Sol's execution-boundary
+  finding, dispatch remains out of scope until the broker-backed structured patch
+  flow can apply validated edits and run an operator-fixed verifier with no extra
+  mounts or credentials. Local repository behavior is unchanged.
+
+  The first focused store/served-UI run exposed one stale static assertion for
+  the pending-request fallback text; after aligning it with the added GitHub ID
+  fallback, the final focused invocation passed 2/2 tests (0 failures or skips;
+  2.42s wrapper, 1.26s TAP). Log: `/tmp/orgward-tests-XWc6uw/node-test.tap.log`;
+  first run: `/tmp/orgward-tests-fBEyna/node-test.tap.log`. Syntax checks,
+  `npm run task:next` and `git diff --check` passed. No full check, provider call,
+  real GitHub access or external effect was used. PR-08 and its task checkbox,
+  cursor and release gates remain open; structured patch execution and candidate
+  diff/verification remain the next implementation boundary.
+
 - [ ] PR-09 — Authorized environments, release and rollback (T-33–T-35; E-10).
   Let a user review an exact candidate, approve a protected environment action,
   observe its result and recover through rollback. Bind authority to principals,

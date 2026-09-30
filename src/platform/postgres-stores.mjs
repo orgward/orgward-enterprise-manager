@@ -1800,6 +1800,11 @@ export class PostgresGitHubSourceStore {
     await lockProjectAccess(client, { tenantId, projectId, principal, minimum: 'owner' });
   }
 
+  async #authorizeExecution(client, { tenantId, projectId, principal, authzGeneration }) {
+    await requirePrincipalAuthority(client, { tenantId, principal, anyRoleGroups: [['workspace-write', 'tenant-admin']], authzGeneration, actorType: 'human' });
+    await lockProjectAccess(client, { tenantId, projectId, principal, minimum: 'editor' });
+  }
+
   async listForProject({ tenantId, projectId, principal, authzGeneration }) {
     return this.persistence.transaction(async (client) => {
       await this.#authorize(client, { tenantId, projectId, principal, authzGeneration });
@@ -1809,6 +1814,30 @@ export class PostgresGitHubSourceStore {
         from orgward.github_repository_sources source
         where tenant_id=$1 and project_id=$2 order by updated_at desc, repository_id, branch_ref`, [tenantId, projectId]);
       return result.rows.map((row) => ({ ...row.binding, snapshots: row.snapshots }));
+    });
+  }
+
+  async listSnapshotsForExecution({ tenantId, projectId, principal, authzGeneration }) {
+    return this.persistence.transaction(async (client) => {
+      await this.#authorizeExecution(client, { tenantId, projectId, principal, authzGeneration });
+      const result = await client.query(`select source.binding,
+          coalesce((select jsonb_agg(item.value - 'files' order by item.ordinality)
+            from jsonb_array_elements(source.snapshots) with ordinality as item(value, ordinality)), '[]'::jsonb) as snapshots
+        from orgward.github_repository_sources source
+        where tenant_id=$1 and project_id=$2 order by updated_at desc, repository_id, branch_ref`, [tenantId, projectId]);
+      return result.rows.flatMap((row) => (row.snapshots ?? []).map((snapshot) => ({ binding: row.binding, snapshot })));
+    });
+  }
+
+  async resolveSnapshotForExecution({ tenantId, projectId, principal, authzGeneration, snapshotId }) {
+    return this.persistence.transaction(async (client) => {
+      await this.#authorizeExecution(client, { tenantId, projectId, principal, authzGeneration });
+      const result = await client.query(`select source.binding, item.value as snapshot
+        from orgward.github_repository_sources source
+        cross join lateral jsonb_array_elements(source.snapshots) item(value)
+        where source.tenant_id=$1 and source.project_id=$2 and item.value->>'id'=$3
+        limit 1`, [tenantId, projectId, snapshotId]);
+      return result.rows[0] ? { binding: result.rows[0].binding, snapshot: result.rows[0].snapshot } : null;
     });
   }
 

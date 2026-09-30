@@ -156,7 +156,7 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(executionSource, /repositorySelect\.disabled = requestPresentation\.locked/);
   assert.match(executionSource, /profileSelect\.value = savedProfileId/);
   assert.match(executionSource, /repositorySelect\.value = savedRepository\.selectionId \?\? savedRepository\.id/);
-  assert.match(executionSource, /Saved repository snapshot \$\{pendingRequest\.payload\.repositoryId\} · unavailable or changed/);
+  assert.match(executionSource, /Saved repository snapshot \$\{pendingRequest\.payload\.repositoryId \?\? pendingRequest\.payload\.githubSnapshotId\} · unavailable or changed/);
   assert.match(executionSource, /findPendingProcessTaskRequest\(processTaskIntentStorage\(\)/,
     'an accepted request remains findable if the selection changes to its concrete instance');
   assert.match(executionSource, /processTaskRequestPresentation\(pendingRequest, \{\s*submitting: isSubmittingTaskRequest, recoveringNewInstance,/,
@@ -663,7 +663,10 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(executionSource, /Apply as new proposed blueprint version/);
   assert.match(executionSource, /BlueprintProposalApplied/);
   assert.match(executionSource, /api\/execution\/local-repositories\?projectId=/);
-  assert.match(executionSource, /Server-configured local repository/);
+  assert.match(executionSource, /Repository source/);
+  assert.match(executionSource, /repository\.kind === 'github' && !state\.githubExecutionAvailable/);
+  assert.match(executionSource, /githubSnapshotId/);
+  assert.match(executionSource, /remote candidate execution is not enabled yet/);
   assert.match(executionSource, /snapshotDigest = repository\.treeDigest/);
   assert.match(executionSource, /repositoryRefId = repository\.refId/);
   assert.match(executionSource, /repositoryCommitOid = repository\.commitOid/);

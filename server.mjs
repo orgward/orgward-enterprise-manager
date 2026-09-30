@@ -786,7 +786,8 @@ export function createApp({
     workspaceRoot: path.resolve(executionWorkspaceDirectory), timeoutMs: 60_000,
   };
   const executionService = new ExecutionService({ runDirectory: executionDirectory, store: executionStore, secretStore,
-    profiles: [...executionProfiles, ...(enableLocalExecution ? [localProfile] : [])], localRepositories });
+    profiles: [...executionProfiles, ...(enableLocalExecution ? [localProfile] : [])], localRepositories,
+    githubSourceStore });
   if (!persistence) {
     const resolveLocalProjectAccess = async ({ tenantId, projectId, principal, minimum = 'reader' }) => {
       const project = await store.getForPrincipal(projectId, tenantId, principal);
@@ -2129,7 +2130,18 @@ export function createApp({
         if (!/^project-[0-9a-f-]{36}$/i.test(projectId ?? '')) throw apiFailure(400, 'INVALID_PROJECT', 'Choose a valid project.');
         const repositories = await executionService.listLocalRepositories({ tenantId: requestTenant(request), projectId,
           principal: requestActor(request), authzGeneration: request.identity.authzGeneration });
-        return sendJson(response, 200, { repositories });
+        let github = { available: false, reason: 'persistence-unavailable', repositories: [] };
+        if (githubSourceStore) {
+          try {
+            github = await executionService.listGitHubSnapshots({ tenantId: requestTenant(request), projectId,
+              principal: requestActor(request), authzGeneration: request.identity.authzGeneration });
+          } catch (error) {
+            if (error.code !== 'ACTION_FORBIDDEN') throw error;
+            github = { available: false, reason: 'project-editor-access-required', repositories: [] };
+          }
+        }
+        return sendJson(response, 200, { repositories: [...repositories, ...github.repositories],
+          githubExecutionAvailable: github.available, githubExecutionUnavailableReason: github.reason });
       }
 
       if (request.method === 'POST' && pathname === '/api/execution/process-task-runs') {
