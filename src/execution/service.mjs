@@ -1468,15 +1468,37 @@ export class ExecutionService {
           }
         }
         const changes = localRepositoryDiff(repositoryBefore, repositoryAfter);
-        result = { ...result,
-          ...(run.githubPatchSelection ? { changedArtifacts: changes.filter((change) => change.afterHash && change.change !== 'mode_changed')
-            .map((change) => ({ path: change.path, contentHash: change.afterHash, hashAlgorithm: 'sha256-raw' })) } : {}),
-          repositoryCandidate: {
+        const repositoryCandidate = {
           repositoryId: run.processTaskRef.repository.id, snapshotId: repositoryBefore.snapshotId,
           sourceTreeDigest: repositoryBefore.treeDigest, treeDigest: candidateTreeDigest,
           ...(repositoryBefore.repositorySource ? { source: repositoryBefore.repositorySource } : {}),
           changes, verification,
-        } };
+        };
+        if (run.githubPatchSelection) {
+          const version = 'github-candidate-evidence-v1';
+          const selectedFileHashes = run.githubPatchSelection.selectedFiles.map(({ path: selectedPath, mode, size, contentHash }) => ({
+            path: selectedPath, mode, size, contentHash,
+          }));
+          const diffMetadata = changes.map(({ path: changedPath, change, beforeMode, afterMode, beforeHash, afterHash }) => ({
+            path: changedPath, change, beforeMode, afterMode, beforeHash, afterHash,
+          }));
+          const verifierReceipt = verification ? {
+            id: verification.id, version: verification.version, profileHash: run.githubPatchSelection.verifier.profileHash,
+            commandHash: verification.commandHash, treeDigest: verification.treeDigest, status: verification.status,
+            exitCode: verification.exitCode, outputHash: verification.outputHash,
+            stdoutTruncated: verification.stdoutTruncated, stderrTruncated: verification.stderrTruncated,
+          } : null;
+          const candidateEvidenceHash = digest({ version,
+            sourceSnapshot: run.processTaskRef.repository.source,
+            sourceTreeDigest: repositoryBefore.treeDigest, selectedFileHashes,
+            candidateTreeDigest, diffMetadata, verifierReceipt });
+          repositoryCandidate.candidateEvidence = { version, hash: candidateEvidenceHash };
+          result.evidenceHash = candidateEvidenceHash;
+        }
+        result = { ...result,
+          ...(run.githubPatchSelection ? { changedArtifacts: changes.filter((change) => change.afterHash && change.change !== 'mode_changed')
+            .map((change) => ({ path: change.path, contentHash: change.afterHash, hashAlgorithm: 'sha256-raw' })) } : {}),
+          repositoryCandidate };
       }
       const generatedProposal = result.status === 'COMPLETED' && run.workItem?.proposalContext
         ? createGeneratedBlueprintProposal(run, result.stdout, result.modelUsage) : null;
@@ -1493,7 +1515,10 @@ export class ExecutionService {
         complete: (candidate) => {
           candidate.execution = execution;
           candidate.status = result.status === 'COMPLETED' ? 'SUCCEEDED' : 'FAILED';
-          executionEvent(candidate, candidate.status === 'SUCCEEDED' ? 'ExecutionSucceeded' : 'ExecutionFailed', command.principal ?? 'execution-worker', { evidenceHash: result.evidenceHash, exitCode: result.exitCode });
+          executionEvent(candidate, candidate.status === 'SUCCEEDED' ? 'ExecutionSucceeded' : 'ExecutionFailed', command.principal ?? 'execution-worker', {
+            evidenceHash: result.evidenceHash, exitCode: result.exitCode,
+            ...(result.repositoryCandidate?.candidateEvidence ? { candidateEvidenceHash: result.repositoryCandidate.candidateEvidence.hash } : {}),
+          });
           return candidate;
         },
         reason: active.cancelReason,

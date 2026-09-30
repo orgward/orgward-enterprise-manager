@@ -5650,6 +5650,23 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   Static syntax checks and `git diff --check` passed. No live provider or
   GitHub call was made; PR-08 and release pointers remain open.
 
+  GitHub immutable candidate assurance receipt (2026-09-30): each brokered
+  GitHub candidate now carries `github-candidate-evidence-v1`, hashing the exact
+  approved source identity, pinned source tree, selected path/mode/size/content
+  hashes, final candidate tree, canonical diff metadata and fixed verifier
+  identity/result/output hash. The same hash is saved as execution evidence and
+  included in the content-hashed terminal event; the review panel displays the
+  version and full hash. The linked persistence fixture independently
+  recomputes the receipt and asserts the terminal event carries that hash. Its
+  initial focused run failed 0/1 because the receipt used the context source
+  object without the `github-app` discriminator present in the approved source
+  identity. The receipt was corrected to bind that exact approved source object;
+  the one repair run passed 1/1 (0 failures, cancellations or skips; 18.12s).
+  Logs: `/tmp/orgward-github-candidate-receipt-focused.tap.log` (initial
+  assertion failure) and `/tmp/orgward-github-candidate-receipt-repair.tap.log`
+  (passing repair). Static syntax checks and `git diff --check` passed. No full
+  check, provider/GitHub live call, commit or push was performed.
+
 - [ ] PR-09 — Authorized environments, release and rollback (T-33–T-35; E-10).
   Let a user review an exact candidate, approve a protected environment action,
   observe its result and recover through rollback. Bind authority to principals,

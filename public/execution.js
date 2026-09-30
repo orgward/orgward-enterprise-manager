@@ -2729,6 +2729,9 @@ function renderRepositoryCandidate(candidate) {
       : `Repository ${candidate.repositoryId} · pinned source ${candidate.sourceTreeDigest} · exact candidate tree ${candidate.treeDigest}` }),
     el('p', { className: 'muted', text: 'Review-only candidate. OrgWard has not written changes back to the configured repository or pushed them.' }),
   ];
+  if (candidate.candidateEvidence?.version && /^[a-f0-9]{64}$/.test(candidate.candidateEvidence.hash ?? '')) {
+    content.push(el('p', { className: 'muted', text: `Candidate evidence ${candidate.candidateEvidence.version} · ${candidate.candidateEvidence.hash}` }));
+  }
   if (candidate.changes?.length) {
     const list = el('ul', { className: 'repository-candidate-diff', attrs: { 'aria-label': 'Candidate path changes' } });
     for (const change of candidate.changes) {

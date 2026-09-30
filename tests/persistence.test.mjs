@@ -9297,6 +9297,37 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.deepEqual(githubCandidate.execution.repositoryCandidate.changes.map((change) => [change.path, change.change]), [
     ['README.md', 'modified'],
   ]);
+  const githubCandidateReceipt = githubCandidate.execution.repositoryCandidate.candidateEvidence;
+  assert.equal(githubCandidateReceipt.version, 'github-candidate-evidence-v1');
+  assert.match(githubCandidateReceipt.hash, /^[a-f0-9]{64}$/);
+  const candidateDiffMetadata = githubCandidate.execution.repositoryCandidate.changes.map((change) => ({
+    path: change.path, change: change.change, beforeMode: change.beforeMode, afterMode: change.afterMode,
+    beforeHash: change.beforeHash, afterHash: change.afterHash,
+  }));
+  const candidateVerification = githubCandidate.execution.repositoryCandidate.verification;
+  assert.equal(githubCandidateReceipt.hash, digest({
+    version: 'github-candidate-evidence-v1',
+    sourceSnapshot: githubRequest.processTaskRef.repository.source,
+    sourceTreeDigest: githubCandidate.execution.repositoryCandidate.sourceTreeDigest,
+    selectedFileHashes: githubRequest.processTaskRef.repository.selectedFiles.map(({ path: selectedPath, mode, size, contentHash }) => ({
+      path: selectedPath, mode, size, contentHash,
+    })),
+    candidateTreeDigest: githubCandidate.execution.repositoryCandidate.treeDigest,
+    diffMetadata: candidateDiffMetadata,
+    verifierReceipt: {
+      id: candidateVerification.id, version: candidateVerification.version,
+      profileHash: githubRequest.processTaskRef.repository.verification.profileHash,
+      commandHash: candidateVerification.commandHash, treeDigest: candidateVerification.treeDigest,
+      status: candidateVerification.status, exitCode: candidateVerification.exitCode,
+      outputHash: candidateVerification.outputHash, stdoutTruncated: candidateVerification.stdoutTruncated,
+      stderrTruncated: candidateVerification.stderrTruncated,
+    },
+  }), 'the receipt commits to the exact pinned source, selected files, candidate tree/diff and verifier result');
+  assert.equal(githubCandidate.execution.evidenceHash, githubCandidateReceipt.hash,
+    'execution evidence carries the candidate receipt hash');
+  const githubTerminalEvent = githubCandidate.events.at(-1);
+  assert.equal(githubTerminalEvent.data.evidenceHash, githubCandidateReceipt.hash);
+  assert.equal(githubTerminalEvent.data.candidateEvidenceHash, githubCandidateReceipt.hash);
   assert.equal(githubCandidate.execution.stdout, 'Applied bounded updates to 1 selected file.');
   assert.equal(providerRequest.body.model, 'gpt-fixture');
   assert.equal(providerRequest.body.store, false);
