@@ -2137,6 +2137,30 @@ export function createApp({
         return sendJson(response, 200, result);
       }
 
+      const githubSnapshotSelectionMatch = pathname.match(/^\/api\/execution\/github-snapshots\/([a-f0-9]{64})\/selection-validation$/);
+      if (githubSnapshotSelectionMatch && request.method === 'POST') {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified project editor identity is required to validate snapshot file selection.');
+        const body = await readJson(request);
+        if (!body || typeof body !== 'object' || Array.isArray(body)) throw apiFailure(400, 'INVALID_GITHUB_SNAPSHOT_SELECTION', 'Provide a project and selected snapshot paths.');
+        const unknownFields = Object.keys(body).filter((field) => !['projectId', 'selectedPaths'].includes(field));
+        if (unknownFields.length) throw apiFailure(400, 'INVALID_GITHUB_SNAPSHOT_SELECTION', 'Selection validation accepts only projectId and selectedPaths.', {
+          fieldErrors: unknownFields.map((field) => ({ field, message: 'This field is not accepted.' })),
+        });
+        if (!/^project-[0-9a-f-]{36}$/i.test(body.projectId ?? '') || !Array.isArray(body.selectedPaths)
+          || body.selectedPaths.length < 1 || body.selectedPaths.length > 8
+          || body.selectedPaths.some((entry) => typeof entry !== 'string' || entry.length > 1024
+            || entry.startsWith('/') || entry.includes('\\') || /[\x00-\x1f\x7f:]/.test(entry)
+            || entry.split('/').length > 32 || entry.split('/').some((part) => !part || part === '.' || part === '..'))
+          || new Set(body.selectedPaths).size !== body.selectedPaths.length) {
+          throw apiFailure(400, 'INVALID_GITHUB_SNAPSHOT_SELECTION', 'Select one to eight unique paths from the saved snapshot.');
+        }
+        const result = await executionService.validateGitHubSnapshotSelection({ tenantId: requestTenant(request),
+          projectId: body.projectId, principal: requestActor(request), authzGeneration: request.identity.authzGeneration,
+          snapshotId: githubSnapshotSelectionMatch[1], selectedPaths: body.selectedPaths });
+        if (!result) throw apiFailure(404, 'GITHUB_SNAPSHOT_NOT_FOUND', 'The selected GitHub snapshot is unavailable in this project.');
+        return sendJson(response, 200, result);
+      }
+
       if (request.method === 'GET' && pathname === '/api/execution/local-repositories') {
         if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified workspace identity is required to list local repositories.');
         const projectId = url.searchParams.get('projectId');

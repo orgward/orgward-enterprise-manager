@@ -5560,6 +5560,29 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   `git diff --check` passed. No external calls or effects occurred; PR-08,
   checkbox, cursor and release gates remain unchanged.
 
+  Authenticated GitHub selection-validation server seam (2026-09-30): Added a
+  strict validation-only POST for one exact project snapshot and one to eight
+  unique selected paths. It uses the current project-editor authorization and
+  generation check, resolves only the exact project snapshot from PostgreSQL,
+  verifies all persisted bytes through the pure snapshot context builder, and
+  returns only pinned snapshot identity plus selected path/mode/hash/UTF-8 byte
+  metadata. Unknown fields, malformed/duplicate/out-of-scope paths, missing or
+  cross-project IDs, stale authorization and tampered bytes fail closed. The
+  response contains no text, provider/credential data or source bytes; this is
+  not a prompt preview and does not enable task submission or dispatch.
+  The focused PostgreSQL/loopback test ultimately passed 1/1 (0 failures,
+  cancellations or skips; 2.45s). Three earlier test runs failed on fixture
+  assumptions: first the cross-project editor lacked target membership; next
+  the HTTP harness expected a caller-supplied stale generation even though its
+  persisted session refreshes that value; third the old direct-store assertion
+  still expected denial after granting target membership. Each was corrected
+  in test setup/assertions only. Logs: `/tmp/orgward-tests-64t1Aq/node-test.tap.log`,
+  `/tmp/orgward-tests-iyb4te/node-test.tap.log`,
+  `/tmp/orgward-tests-ExYOVQ/node-test.tap.log` (failures), and
+  `/tmp/orgward-tests-CYryGF/node-test.tap.log` (passing final run). Syntax and
+  `git diff --check` passed. No full check, provider/GitHub calls, dispatch or
+  external effect was used; PR-08, checkbox, cursor and gates remain unchanged.
+
 - [ ] PR-09 — Authorized environments, release and rollback (T-33–T-35; E-10).
   Let a user review an exact candidate, approve a protected environment action,
   observe its result and recover through rollback. Bind authority to principals,

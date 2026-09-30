@@ -7,6 +7,7 @@ import { digest } from '../sdlc/contracts.mjs';
 import { CommandExecutionAdapter } from '../sdlc/execution-adapter.mjs';
 import { captureLocalRepositorySnapshot, localRepositoryDiff, materializeLocalRepositorySnapshot } from './local-repository-snapshot.mjs';
 import { captureGitRepositorySnapshot } from './git-repository-snapshot.mjs';
+import { buildGitHubSnapshotTextContext } from './github-snapshot-context.mjs';
 import { readWorkspaceArtifact } from './artifact-file.mjs';
 import { linkedRunOutcomeCategory } from './linked-run-outcome-category.mjs';
 import { allowlistedProviderTransportFailureClass, classifyProviderTransportFailure } from './provider-transport-diagnostic.mjs';
@@ -782,6 +783,17 @@ export class ExecutionService {
         commitOid: snapshot.commitOid, treeOid: snapshot.treeOid, policyVersion: snapshot.policyVersion,
         manifestDigest: snapshot.manifestDigest, fileCount: snapshot.fileCount, totalBytes: snapshot.totalBytes },
       files: manifest.map(({ path: relativePath, mode, size, contentHash }) => ({ path: relativePath, mode, size, contentHash })),
+    };
+  }
+  async validateGitHubSnapshotSelection({ tenantId, projectId, principal, authzGeneration, snapshotId, selectedPaths }) {
+    if (!/^[a-f0-9]{64}$/.test(snapshotId ?? '') || !this.githubSourceStore?.resolveSnapshotForExecution) return null;
+    const record = await this.githubSourceStore.resolveSnapshotForExecution({ tenantId, projectId, principal, authzGeneration, snapshotId });
+    if (!record) return null;
+    const context = buildGitHubSnapshotTextContext({ binding: record.binding, snapshot: record.snapshot, snapshotId, selectedPaths });
+    return {
+      validationOnly: true,
+      sourceSnapshot: context.sourceSnapshot,
+      files: context.files.map(({ path, mode, contentHash, text }) => ({ path, mode, contentHash, size: Buffer.byteLength(text, 'utf8') })),
     };
   }
   async cancelProcessTaskRun(input) {

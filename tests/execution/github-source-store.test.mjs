@@ -34,7 +34,7 @@ test('GitHub bindings and snapshots survive store restart and require tenant-adm
     await persistence.query(`insert into orgward.aggregates (tenant_id,aggregate_kind,aggregate_id,version,state,state_hash,updated_at)
       values ($1,'project',$2,0,$3::jsonb,$4,$5)`, [tenantId, byteProjectId, JSON.stringify(byteProjectState), 'b'.repeat(64), now]);
     await persistence.query(`insert into orgward.project_memberships (tenant_id,project_id,principal,access,granted_by)
-      values ($1,$2,$3,'owner',$3)`, [tenantId, byteProjectId, principal]);
+      values ($1,$2,$3,'owner',$3),($1,$2,$4,'editor',$3)`, [tenantId, byteProjectId, principal, editor]);
 
     const initial = new PostgresGitHubSourceStore(persistence);
     const binding = { tenantId, projectId, installationId: '123', repositoryId: '987654',
@@ -78,6 +78,10 @@ test('GitHub bindings and snapshots survive store restart and require tenant-adm
     await assert.rejects(new ExecutionService({ runDirectory: '/tmp/github-source-selection-test', githubSourceStore: restartedStore })
       .listGitHubSnapshotFiles({ tenantId, projectId, principal: reader, authzGeneration: 1, snapshotId: snapshot.id }),
     { code: 'ACTION_FORBIDDEN' }, 'file metadata requires project-editor selection authority');
+    await assert.rejects(new ExecutionService({ runDirectory: '/tmp/github-source-selection-test', githubSourceStore: restartedStore })
+      .validateGitHubSnapshotSelection({ tenantId, projectId, principal: editor, authzGeneration: 0,
+        snapshotId: snapshot.id, selectedPaths: ['README.md'] }),
+    { code: 'AUTHORITY_GENERATION_STALE' }, 'selection validation rejects a stale caller authorization generation');
     await persistence.query(`update orgward.github_repository_sources
       set snapshots=jsonb_set(snapshots, '{0,manifestDigest}', to_jsonb($5::text))
       where tenant_id=$1 and project_id=$2 and repository_id=$3 and branch_ref=$4`,
@@ -103,6 +107,9 @@ test('GitHub bindings and snapshots survive store restart and require tenant-adm
       await new Promise((resolve) => apiApp.server.listen(0, '127.0.0.1', resolve));
       const apiBase = `http://127.0.0.1:${apiApp.server.address().port}`;
       const auth = (subject) => ({ headers: { authorization: `Bearer ${subject}` } });
+      const validateSelection = (snapshotId, subject, payload) => fetch(`${apiBase}/api/execution/github-snapshots/${snapshotId}/selection-validation`, {
+        ...auth(subject), method: 'POST', headers: { ...auth(subject).headers, 'content-type': 'application/json' }, body: JSON.stringify(payload),
+      });
       const listResponse = await fetch(`${apiBase}/api/execution/local-repositories?projectId=${encodeURIComponent(projectId)}`, auth('editor'));
       assert.equal(listResponse.status, 200);
       const listed = await listResponse.json();
@@ -120,6 +127,32 @@ test('GitHub bindings and snapshots survive store restart and require tenant-adm
       assert.equal(deniedFiles.status, 403, 'file metadata API enforces project-editor authority');
       const deniedBody = await deniedFiles.json();
       assert.equal(typeof deniedBody.error, 'string', 'the current execution route error envelope exposes a string message');
+      const validated = await validateSelection(snapshot.id, 'editor', { projectId, selectedPaths: ['README.md'] });
+      assert.equal(validated.status, 200);
+      const validatedBody = await validated.json();
+      assert.equal(validatedBody.validationOnly, true);
+      assert.equal(validatedBody.sourceSnapshot.snapshotId, snapshot.id);
+      assert.deepEqual(validatedBody.files, [{ path: 'README.md', mode: '100644', size: 3, contentHash }]);
+      assert.equal(JSON.stringify(validatedBody).includes('contentBase64'), false);
+      assert.equal(JSON.stringify(validatedBody).includes('credentialReference'), false);
+      assert.equal(JSON.stringify(validatedBody).includes('"text"'), false, 'selected UTF-8 text never leaves the server');
+      assert.equal((await validateSelection(snapshot.id, 'editor', { projectId, selectedPaths: ['../escape'] })).status, 400);
+      assert.equal((await validateSelection(snapshot.id, 'editor', { projectId, selectedPaths: ['README.md', 'README.md'] })).status, 400);
+      assert.equal((await validateSelection(snapshot.id, 'editor', { projectId, selectedPaths: ['README.md'], prompt: 'extra' })).status, 400);
+      assert.equal((await validateSelection('f'.repeat(64), 'editor', { projectId, selectedPaths: ['README.md'] })).status, 404);
+      assert.equal((await validateSelection(snapshot.id, 'editor', { projectId: byteProjectId, selectedPaths: ['README.md'] })).status, 404,
+        'a snapshot ID cannot be resolved across project ownership');
+      assert.equal((await validateSelection(snapshot.id, 'reader', { projectId, selectedPaths: ['README.md'] })).status, 403);
+      await persistence.query(`update orgward.github_repository_sources
+        set snapshots=jsonb_set(snapshots, '{0,files,0,contentBase64}', to_jsonb($5::text))
+        where tenant_id=$1 and project_id=$2 and repository_id=$3 and branch_ref=$4`,
+      [tenantId, projectId, binding.repositoryId, binding.branchRef, Buffer.from('bad').toString('base64')]);
+      assert.equal((await validateSelection(snapshot.id, 'editor', { projectId, selectedPaths: ['README.md'] })).status, 409,
+        'tampered persisted snapshot content is rejected before validation metadata is returned');
+      await persistence.query(`update orgward.github_repository_sources
+        set snapshots=jsonb_set(snapshots, '{0,files,0,contentBase64}', to_jsonb($5::text))
+        where tenant_id=$1 and project_id=$2 and repository_id=$3 and branch_ref=$4`,
+      [tenantId, projectId, binding.repositoryId, binding.branchRef, sourceBytes.toString('base64')]);
     } finally {
       await new Promise((resolve) => apiApp.server.close(resolve));
       await apiApp.close();
@@ -129,8 +162,8 @@ test('GitHub bindings and snapshots survive store restart and require tenant-adm
     assert.equal(resolvedSnapshot.snapshot.files[0].contentBase64, sourceBytes.toString('base64'), 'only the server-side resolver receives pinned bytes');
     assert.equal(await restartedStore.resolveSnapshotForExecution({ tenantId, projectId, principal: editor,
       authzGeneration: 1, snapshotId: 'missing-snapshot' }), null, 'missing snapshot identities are not substituted with the latest ref');
-    await assert.rejects(restartedStore.resolveSnapshotForExecution({ tenantId, projectId: byteProjectId, principal: editor,
-      authzGeneration: 1, snapshotId: snapshot.id }), { code: 'ACTION_FORBIDDEN' }, 'a saved ID cannot cross project bindings');
+    assert.equal(await restartedStore.resolveSnapshotForExecution({ tenantId, projectId: byteProjectId, principal: editor,
+      authzGeneration: 1, snapshotId: snapshot.id }), null, 'an authorized different project cannot resolve this snapshot ID');
     await assert.rejects(restartedStore.listSnapshotsForExecution({ tenantId, projectId, principal: reader, authzGeneration: 1 }),
       { code: 'ACTION_FORBIDDEN' }, 'project readers cannot select source snapshots for task requests');
     await assert.rejects(restartedStore.listSnapshotsForExecution({ tenantId: 'other-tenant', projectId, principal: editor, authzGeneration: 1 }),
