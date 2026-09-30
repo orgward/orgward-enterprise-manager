@@ -2332,6 +2332,19 @@ repair check superseded it.
   evidence, not automated provider-quality qualification or a tenant-wide dollar
   budget; PR-06, its cursor and release gates remain open.
 
+  PR-06 human proposal-review rendered proof attempt (2026-09-30, revision
+  `5637686`): one synthetic loopback fixture stopped at its first task action.
+  Starting the assigned human root returned HTTP 409
+  `PROCESS_TASK_STATE_CONFLICT` because the task was not in `PLANNED` state.
+  Per the one-attempt stop rule, it was not retried. No browser opened, proposal
+  was created, or provider request was made (0 dispatches). The controller
+  cleaned the disposable app/PostgreSQL and synthetic profile/cookie state; no
+  product source or tests changed. The fixture failure does not establish a
+  product regression and leaves rendered owner review/apply, responsive and
+  keyboard evidence unverified. Receipt:
+  `/tmp/orgward-pr06-human-review-rendered-proof.json`. PR-06, cursor and release
+  gates remain open and unchanged.
+
   Development provider authorization (2026-09-29): the user explicitly permits
   use of the exposed low-budget DeepSeek test key on this private VPS for bounded
   synthetic OrgWard verification and a fresh model task, and does not intend to
