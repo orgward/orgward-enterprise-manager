@@ -2537,6 +2537,33 @@ export function createApp({
         return;
       }
 
+      const githubCandidateRepeatMatch = pathname.match(/^\/api\/execution\/runs\/(execution-run-[0-9a-f-]{36})\/github-candidate-verification-repeats$/);
+      if (githubCandidateRepeatMatch && ['GET', 'POST'].includes(request.method)) {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified project editor identity is required to review or repeat candidate verification.');
+        const runId = githubCandidateRepeatMatch[1];
+        const principal = requestActor(request);
+        const authzGeneration = request.identity.authzGeneration;
+        if (request.method === 'GET') {
+          const attempts = await executionService.listGitHubCandidateVerificationRepeats({ id: runId,
+            tenantId: requestTenant(request), principal, authzGeneration });
+          if (!attempts) throw apiFailure(404, 'EXECUTION_RUN_NOT_FOUND', 'The GitHub candidate run was not found in this project.');
+          return sendJson(response, 200, { attempts });
+        }
+        const body = await readJson(request);
+        if (!body || typeof body !== 'object' || Array.isArray(body)) throw apiFailure(400, 'INVALID_COMMAND', 'Repeat verification accepts only a commandId.');
+        rejectAuthorityClaims(body);
+        const unknown = Object.keys(body).filter((field) => field !== 'commandId');
+        if (unknown.length || !/^[a-z0-9][a-z0-9_.:-]{0,159}$/i.test(body.commandId ?? '')) {
+          throw apiFailure(400, 'INVALID_COMMAND', 'Repeat verification accepts only a valid commandId.', {
+            fieldErrors: unknown.map((field) => ({ field, message: 'This field is not accepted.' })),
+          });
+        }
+        const attempt = await executionService.repeatGitHubCandidateVerification({ id: runId,
+          tenantId: requestTenant(request), principal, authzGeneration, commandId: body.commandId });
+        if (!attempt) throw apiFailure(404, 'EXECUTION_RUN_NOT_FOUND', 'The GitHub candidate run was not found in this project.');
+        return sendJson(response, attempt.replayed ? 200 : 201, attempt);
+      }
+
       const executionRunMatch = pathname.match(/^\/api\/execution\/runs\/(execution-run-[0-9a-f-]{36})$/);
       if (request.method === 'GET' && executionRunMatch) {
         const deliverRun = (run) => sendJson(response, 200, run);

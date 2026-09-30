@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import http from 'node:http';
 import https from 'node:https';
 import { digest } from '../sdlc/contracts.mjs';
@@ -260,12 +260,21 @@ function githubCandidateSourceSnapshot(snapshot, sourceSnapshot) {
   const files = snapshot.files.map(({ path: relativePath, mode, size, contentHash, contentBase64 }) => ({
     path: relativePath, mode, size, contentHash, contentBase64,
   }));
-  const treeDigest = createHash('sha256').update(JSON.stringify(files.map(({ path: relativePath, mode, contentHash, size }) => ({
-    path: relativePath, mode, contentHash, size,
-  })))).digest('hex');
+  const treeDigest = githubCandidateTreeDigest(files);
   return { snapshotId: sourceSnapshot.snapshotId, treeDigest, fileCount: files.length,
     totalBytes: files.reduce((total, file) => total + file.size, 0), files,
     repositorySource: { type: 'github-app', ...sourceSnapshot } };
+}
+
+function githubCandidateTreeDigest(files) {
+  return createHash('sha256').update(JSON.stringify(files.map(({ path: relativePath, mode, contentHash, size }) => ({
+    path: relativePath, mode, contentHash, size,
+  })))).digest('hex');
+}
+
+function githubCandidateEvidenceHash({ sourceSnapshot, sourceTreeDigest, selectedFileHashes, candidateTreeDigest, diffMetadata, verifierReceipt }) {
+  return digest({ version: 'github-candidate-evidence-v1', sourceSnapshot, sourceTreeDigest,
+    selectedFileHashes, candidateTreeDigest, diffMetadata, verifierReceipt });
 }
 
 export class ExecutionService {
@@ -476,6 +485,192 @@ export class ExecutionService {
       throw principalScopeUnavailable();
     }
     return readAndDeliver(await this.store.get(id, tenantId));
+  }
+  async repeatGitHubCandidateVerification({ id, tenantId, principal, authzGeneration, commandId }) {
+    if (!/^execution-run-[0-9a-f-]{36}$/.test(id ?? '')
+      || !/^[a-z0-9][a-z0-9_.:-]{0,159}$/i.test(commandId ?? '')
+      || typeof this.store.readGitHubCandidateVerificationRun !== 'function'
+      || typeof this.store.appendGitHubCandidateVerificationRepeat !== 'function') return null;
+    const context = await this.store.readGitHubCandidateVerificationRun({ tenantId, runId: id, principal, authzGeneration, commandId });
+    if (!context) return null;
+    const { run, priorAttempt } = context;
+    const candidate = run.execution?.repositoryCandidate;
+    const evidence = candidate?.candidateEvidence;
+    if (!run.githubPatchSelection || !candidate || !evidence
+      || !['SUCCEEDED', 'FAILED'].includes(run.status)
+      || evidence.version !== 'github-candidate-evidence-v1'
+      || evidence.hash !== run.execution?.evidenceHash
+      || run.execution?.repositoryCandidate?.source?.snapshotId !== run.githubPatchSelection.sourceSnapshot?.snapshotId) {
+      throw Object.assign(new Error('This run does not contain a complete immutable GitHub candidate receipt.'), {
+        statusCode: 409, code: 'GITHUB_CANDIDATE_EVIDENCE_INVALID', retryable: false,
+      });
+    }
+    const terminalEvent = run.events?.findLast?.((event) => ['ExecutionSucceeded', 'ExecutionFailed'].includes(event.type));
+    if (!terminalEvent || terminalEvent.data?.candidateEvidenceHash !== evidence.hash
+      || terminalEvent.data?.evidenceHash !== evidence.hash) {
+      throw Object.assign(new Error('The terminal event does not commit to this immutable GitHub candidate receipt.'), {
+        statusCode: 409, code: 'GITHUB_CANDIDATE_EVIDENCE_INVALID', retryable: false,
+      });
+    }
+    const requestHash = digest({ runId: id, commandId, candidateEvidenceHash: evidence.hash });
+    if (priorAttempt) {
+      if (priorAttempt.requestHash !== requestHash) throw Object.assign(new Error('This command ID is already bound to different candidate evidence.'), {
+        statusCode: 409, code: 'IDEMPOTENCY_CONFLICT', retryable: false,
+      });
+      return { ...priorAttempt.attempt, replayed: true };
+    }
+
+    const selection = run.githubPatchSelection;
+    const pinnedRepository = run.processTaskRef?.repository;
+    const expectedRepository = { id: `github-${selection.sourceSnapshot?.repositoryId}`, kind: 'github-app',
+      snapshotId: selection.sourceSnapshot?.snapshotId, treeDigest: selection.repositoryTreeDigest,
+      source: { type: 'github-app', ...selection.sourceSnapshot }, selectedFiles: selection.selectedFiles,
+      verification: selection.verifier };
+    if (!selection.sourceSnapshot || !Array.isArray(selection.selectedFiles) || !selection.verifier
+      || digest(pinnedRepository) !== digest(expectedRepository)) {
+      throw Object.assign(new Error('The GitHub source, selected-file hashes, or verifier do not match the approved immutable task binding.'), {
+        statusCode: 409, code: 'GITHUB_CANDIDATE_BINDING_STALE', retryable: false,
+      });
+    }
+    const originalVerification = candidate.verification;
+    const verifier = this.githubVerifierProfile;
+    const verifierMatches = verifier && verifier.id === selection.verifier.id
+      && verifier.version === selection.verifier.version && verifier.profileHash === selection.verifier.profileHash
+      && verifier.profileHash === originalVerification?.commandHash;
+    const sourceRecord = await this.githubSourceStore?.resolveSnapshotForExecution?.({ tenantId,
+      projectId: run.projectId, principal, authzGeneration, snapshotId: selection.sourceSnapshot.snapshotId });
+    if (!sourceRecord) throw Object.assign(new Error('The pinned source snapshot is unavailable in this project.'), {
+      statusCode: 409, code: 'GITHUB_SNAPSHOT_NOT_FOUND', retryable: false,
+    });
+    const sourceContext = buildGitHubSnapshotTextContext({ binding: sourceRecord.binding, snapshot: sourceRecord.snapshot,
+      snapshotId: selection.sourceSnapshot.snapshotId, selectedPaths: selection.selectedFiles.map((file) => file.path) });
+    if (digest(sourceContext.sourceSnapshot) !== digest(selection.sourceSnapshot)) {
+      throw Object.assign(new Error('The pinned source snapshot identity or content changed.'), {
+        statusCode: 409, code: 'GITHUB_SNAPSHOT_SELECTION_STALE', retryable: false,
+      });
+    }
+    const actualSelectedFileHashes = sourceContext.files.map(({ path: selectedPath, mode, text, contentHash }) => ({
+      path: selectedPath, mode, size: Buffer.byteLength(text, 'utf8'), contentHash,
+    }));
+    if (digest(actualSelectedFileHashes) !== digest(selection.selectedFiles)) {
+      throw Object.assign(new Error('The selected-file hashes no longer match the pinned approved source.'), {
+        statusCode: 409, code: 'GITHUB_CANDIDATE_BINDING_STALE', retryable: false,
+      });
+    }
+    const sourceSnapshot = githubCandidateSourceSnapshot(sourceRecord.snapshot, sourceContext.sourceSnapshot);
+    if (sourceSnapshot.treeDigest !== selection.repositoryTreeDigest || sourceSnapshot.treeDigest !== candidate.sourceTreeDigest) {
+      throw Object.assign(new Error('The pinned source tree digest does not match the saved candidate.'), {
+        statusCode: 409, code: 'GITHUB_SNAPSHOT_SELECTION_STALE', retryable: false,
+      });
+    }
+    const candidateFiles = sourceSnapshot.files.map((file) => ({ ...file }));
+    const changedArtifacts = run.execution.changedArtifacts ?? [];
+    if (!Array.isArray(changedArtifacts) || changedArtifacts.length > 8) {
+      throw Object.assign(new Error('The saved candidate artifact manifest is invalid.'), { statusCode: 409, code: 'GITHUB_CANDIDATE_EVIDENCE_INVALID' });
+    }
+    for (const artifact of changedArtifacts) {
+      const change = candidate.changes?.find((entry) => entry.path === artifact.path && entry.change === 'modified'
+        && entry.afterHash === artifact.contentHash);
+      const selected = selection.selectedFiles.find((entry) => entry.path === artifact.path);
+      if (!change || !selected || artifact.hashAlgorithm !== 'sha256-raw') {
+        throw Object.assign(new Error('A saved candidate artifact is outside its approved selected-file manifest.'), {
+          statusCode: 409, code: 'GITHUB_CANDIDATE_EVIDENCE_INVALID',
+        });
+      }
+      const contents = await readWorkspaceArtifact({ configuredRoot: this.githubCandidateWorkspaceRoot, runId: run.id,
+        segments: artifact.path.split('/'), expectedHash: artifact.contentHash, hashAlgorithm: 'sha256-raw' });
+      if (!contents) throw Object.assign(new Error('A saved candidate file failed its content hash check.'), {
+        statusCode: 409, code: 'GITHUB_CANDIDATE_EVIDENCE_INVALID',
+      });
+      const file = candidateFiles.find((entry) => entry.path === artifact.path);
+      if (!file || file.mode !== selected.mode) throw Object.assign(new Error('A candidate path or mode differs from its selected source file.'), {
+        statusCode: 409, code: 'GITHUB_CANDIDATE_EVIDENCE_INVALID',
+      });
+      file.contentBase64 = contents.toString('base64');
+      file.contentHash = createHash('sha256').update(contents).digest('hex');
+      file.size = contents.length;
+    }
+    const reconstructedTreeDigest = githubCandidateTreeDigest(candidateFiles);
+    const reconstructedDiff = localRepositoryDiff(sourceSnapshot, { ...sourceSnapshot, files: candidateFiles,
+      treeDigest: reconstructedTreeDigest });
+    const diffMetadata = (entries) => entries.map(({ path: changedPath, change, beforeMode, afterMode, beforeHash, afterHash }) => ({
+      path: changedPath, change, beforeMode, afterMode, beforeHash, afterHash,
+    }));
+    if (reconstructedTreeDigest !== candidate.treeDigest
+      || digest(diffMetadata(reconstructedDiff)) !== digest(diffMetadata(candidate.changes ?? []))) {
+      throw Object.assign(new Error('The materialized candidate does not match its saved tree and diff evidence.'), {
+        statusCode: 409, code: 'GITHUB_CANDIDATE_EVIDENCE_INVALID',
+      });
+    }
+    const selectedFileHashes = selection.selectedFiles.map(({ path: selectedPath, mode, size, contentHash }) => ({
+      path: selectedPath, mode, size, contentHash,
+    }));
+    const savedVerifierReceipt = originalVerification ? {
+      id: originalVerification.id, version: originalVerification.version, profileHash: selection.verifier.profileHash,
+      commandHash: originalVerification.commandHash, treeDigest: originalVerification.treeDigest,
+      status: originalVerification.status, exitCode: originalVerification.exitCode, outputHash: originalVerification.outputHash,
+      stdoutTruncated: originalVerification.stdoutTruncated, stderrTruncated: originalVerification.stderrTruncated,
+    } : null;
+    if (githubCandidateEvidenceHash({ sourceSnapshot: pinnedRepository.source, sourceTreeDigest: candidate.sourceTreeDigest,
+      selectedFileHashes, candidateTreeDigest: candidate.treeDigest, diffMetadata: diffMetadata(candidate.changes ?? []),
+      verifierReceipt: savedVerifierReceipt }) !== evidence.hash) {
+      throw Object.assign(new Error('The candidate evidence receipt failed its canonical hash check.'), {
+        statusCode: 409, code: 'GITHUB_CANDIDATE_EVIDENCE_INVALID',
+      });
+    }
+
+    const createdAt = new Date().toISOString();
+    const attemptId = `github-candidate-verification-${randomUUID()}`;
+    let verification = { id: selection.verifier.id, version: selection.verifier.version,
+      profileHash: selection.verifier.profileHash, commandHash: originalVerification?.commandHash ?? selection.verifier.profileHash,
+      treeDigest: candidate.treeDigest, status: 'INCONCLUSIVE', exitCode: null, outputHash: digest({ launch: 'inconclusive' }),
+      stdoutTruncated: false, stderrTruncated: false };
+    let launchError = null;
+    if (verifierMatches) {
+      let workspace = null;
+      try {
+        await mkdir(this.githubCandidateWorkspaceRoot, { recursive: true, mode: 0o700 });
+        workspace = await mkdtemp(path.join(this.githubCandidateWorkspaceRoot, `${run.id}-repeat-`));
+        await materializeLocalRepositorySnapshot({ ...sourceSnapshot, files: candidateFiles, treeDigest: reconstructedTreeDigest }, workspace);
+        const beforeVerify = await captureLocalRepositorySnapshot(workspace, { excludeGitDirectory: false });
+        if (beforeVerify.treeDigest !== candidate.treeDigest) throw new Error('The fresh candidate workspace failed its tree check.');
+        const adapter = this.commandAdapterFactory({ executable: verifier.executable, args: verifier.args,
+          timeoutMs: verifier.timeoutMs, name: verifier.id, version: verifier.version, environment: {},
+          sandbox: { executable: verifier.bubblewrapExecutable, readOnlyFiles: [], allowedEnvironment: [] } });
+        const checked = await adapter.execute({ id: `repeat-${run.id}`, objective: 'Repeat the fixed verifier against the exact saved candidate.' },
+          { id: run.id, candidateTreeDigest: candidate.treeDigest, repositoryId: pinnedRepository.id }, { workspace });
+        const stdout = redact(checked.stdout).slice(0, 20_000);
+        const stderr = redact(checked.stderr).slice(0, 20_000);
+        const afterVerify = await captureLocalRepositorySnapshot(workspace, { excludeGitDirectory: false });
+        verification = { ...verification, status: typeof checked.status === 'string' ? checked.status : 'FAILED', exitCode: checked.exitCode,
+          stdoutTruncated: checked.stdoutTruncated === true || redact(checked.stdout).length > 20_000,
+          stderrTruncated: checked.stderrTruncated === true || redact(checked.stderr).length > 20_000,
+          outputHash: digest({ stdout, stderr }) };
+        if (afterVerify.treeDigest !== candidate.treeDigest) verification.status = 'FAILED';
+      } catch {
+        launchError = 'verifier_launch_failed';
+      } finally {
+        if (workspace) await rm(workspace, { recursive: true, force: true });
+      }
+    } else launchError = 'verifier_profile_unavailable_or_changed';
+    const comparison = launchError ? 'inconclusive'
+      : (verification.status === originalVerification?.status && verification.exitCode === originalVerification?.exitCode
+        && verification.outputHash === originalVerification?.outputHash ? 'matched' : 'mismatch');
+    const attempt = { version: 'github-candidate-verification-repeat-v1', attemptId, runId: id, commandId, requestHash,
+      candidateEvidenceVersion: evidence.version, candidateEvidenceHash: evidence.hash,
+      sourceSnapshotId: selection.sourceSnapshot.snapshotId, sourceTreeDigest: candidate.sourceTreeDigest,
+      candidateTreeDigest: candidate.treeDigest, verifier: { id: selection.verifier.id, version: selection.verifier.version,
+        profileHash: selection.verifier.profileHash, commandHash: verification.commandHash }, comparison,
+      ...(launchError ? { inconclusiveReason: launchError } : {}), verification, createdAt };
+    const saved = await this.store.appendGitHubCandidateVerificationRepeat({ tenantId, runId: id, principal, authzGeneration,
+      commandId, requestHash, expectedCandidateEvidenceHash: evidence.hash, attempt });
+    return saved ? { ...saved.attempt, replayed: saved.replayed } : null;
+  }
+  async listGitHubCandidateVerificationRepeats({ id, tenantId, principal, authzGeneration }) {
+    if (!/^execution-run-[0-9a-f-]{36}$/.test(id ?? '')
+      || typeof this.store.readGitHubCandidateVerificationRepeats !== 'function') return null;
+    const rows = await this.store.readGitHubCandidateVerificationRepeats({ tenantId, runId: id, principal, authzGeneration });
+    return rows?.map(({ attempt }) => attempt) ?? null;
   }
   async readArtifact(id, tenantId, principal, relativePath, { authzGeneration = null, onArtifact = null } = {}) {
     if (!/^execution-run-[0-9a-f-]{36}$/.test(id ?? '')
@@ -1488,7 +1683,7 @@ export class ExecutionService {
             exitCode: verification.exitCode, outputHash: verification.outputHash,
             stdoutTruncated: verification.stdoutTruncated, stderrTruncated: verification.stderrTruncated,
           } : null;
-          const candidateEvidenceHash = digest({ version,
+          const candidateEvidenceHash = githubCandidateEvidenceHash({
             sourceSnapshot: run.processTaskRef.repository.source,
             sourceTreeDigest: repositoryBefore.treeDigest, selectedFileHashes,
             candidateTreeDigest, diffMetadata, verifierReceipt });

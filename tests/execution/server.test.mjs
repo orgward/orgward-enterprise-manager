@@ -108,6 +108,13 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   const executionClient = await fetch(`${base}/execution.js`);
   assert.equal(executionClient.status, 200);
   const executionSource = await executionClient.text();
+  assert.match(executionSource, /Repeat fixed verification/,
+    'saved GitHub candidates expose an explicit repeat-verification action');
+  assert.match(executionSource, /Matched on this repeat run/);
+  assert.match(executionSource, /A matching failed verifier remains failed/,
+    'the served candidate review keeps a matched failing verifier visibly failed');
+  assert.match(executionSource, /github-candidate-verification-repeats/,
+    'repeat history and actions use the authenticated candidate-specific API');
   const instanceOptionLabelClient = await fetch(`${base}/process-instance-option-label.mjs`);
   assert.equal(instanceOptionLabelClient.status, 200);
   const instanceOptionLabelSource = await instanceOptionLabelClient.text();

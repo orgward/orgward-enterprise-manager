@@ -5710,6 +5710,34 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   browser, live provider/GitHub call or full check was run. PR-08, task and gate
   pointers remain open and unchanged.
 
+  Repeat-verification receipt (2026-09-30): saved GitHub candidates now expose
+  an authenticated project-editor action to rerun the exact pinned verifier over
+  reconstructed, hash-checked candidate bytes in a fresh private no-network
+  workspace. Each observation is stored in a dedicated append-only PostgreSQL
+  table and separate audit event, bound to the original candidate receipt and
+  source/candidate tree plus verifier identity. `{commandId}` is the sole POST
+  input: retries replay one attempt, while a new ID creates another; repeat
+  results retain status/exit/output hash without verifier output. The UI labels
+  matched/mismatched/inconclusive results and keeps a matched failed verifier
+  visibly failed. The first combined focused run passed the served-client test
+  but failed the PostgreSQL journey at the new reader-denial assertion because
+  the fixture expected a nested error code instead of the existing string error
+  envelope (1/2, 0 skips), log `/tmp/orgward-tests-NkFdMM/node-test.tap.log`.
+  After correcting only that assertion, the same filtered invocation passed 2/2
+  (0 failures, 0 skips; 18.83s runner time, 17.69s TAP duration), log
+  `/tmp/orgward-tests-tKrr5s/node-test.tap.log`. JavaScript syntax checks and
+  `git diff --check` passed. No full check, external GitHub/provider call,
+  write-back, commit or push was performed; PR-08 and the task/gate pointers
+  remain open and unchanged.
+
+  Repeat-verification immutability assertion (2026-09-30): the linked
+  PostgreSQL journey now deep-compares the post-repeat, post-restart terminal
+  event with the exact event captured before repeats, alongside its existing
+  candidate-receipt hash assertion. The focused persistence-only run passed
+  1/1 (0 failures, 0 skips; 18.63s runner time, 17.43s TAP duration), log
+  `/tmp/orgward-tests-SZP7EN/node-test.tap.log`; test syntax and
+  `git diff --check` passed. No other source behavior changed.
+
 - [ ] PR-09 — Authorized environments, release and rollback (T-33–T-35; E-10).
   Let a user review an exact candidate, approve a protected environment action,
   observe its result and recover through rollback. Bind authority to principals,

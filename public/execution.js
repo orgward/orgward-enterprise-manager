@@ -2819,6 +2819,46 @@ function renderRepositoryCandidate(candidate) {
     if (verification.stdout) content.push(el('pre', { className: 'execution-output', text: verification.stdout }));
     if (verification.stderr) content.push(el('pre', { className: 'execution-output execution-error', text: verification.stderr }));
   }
+  if (candidate.source?.type === 'github-app' && candidate.candidateEvidence?.hash && candidate.runId) {
+    const repeatStatus = el('div', { className: 'github-candidate-repeat-status', attrs: { 'aria-live': 'polite' } });
+    const repeatButton = el('button', { className: 'button', text: 'Repeat fixed verification', attrs: { type: 'button', 'data-action': 'repeat-github-verification' } });
+    let commandId = null;
+    const loadAttempts = async () => {
+      const response = await fetch(`/api/execution/runs/${encodeURIComponent(candidate.runId)}/github-candidate-verification-repeats`);
+      if (!response.ok) throw new Error('Repeat verification history could not be loaded.');
+      const payload = await response.json();
+      if (!Array.isArray(payload.attempts)) throw new Error('Repeat verification history has an invalid response.');
+      repeatStatus.replaceChildren(...payload.attempts.map((attempt) => {
+        const row = el('div'); renderAttemptInto(row, attempt); return row;
+      }));
+    };
+    const renderAttemptInto = (target, attempt) => {
+      const result = attempt.verification?.status === 'COMPLETED' && attempt.verification?.exitCode === 0
+        ? 'verifier passed' : `verifier ${attempt.verification?.status ?? 'INCONCLUSIVE'}${attempt.verification?.exitCode === null ? '' : ` (exit ${attempt.verification.exitCode})`}`;
+      const comparison = attempt.comparison === 'matched' ? `Matched on this repeat run; ${result}.`
+        : attempt.comparison === 'mismatch' ? `Mismatch on this repeat run; ${result}.`
+          : `Inconclusive repeat run; ${result}.`;
+      target.append(el('p', { className: 'muted', text: `${comparison} Attempt ${attempt.attemptId} · output ${attempt.verification?.outputHash ?? 'unavailable'}` }));
+    };
+    repeatButton.addEventListener('click', async () => {
+      repeatButton.disabled = true;
+      repeatStatus.replaceChildren(el('p', { className: 'muted', text: 'Repeating the fixed verifier in a fresh isolated workspace…' }));
+      commandId ??= `repeat-${crypto.randomUUID()}`;
+      try {
+        const response = await fetch(`/api/execution/runs/${encodeURIComponent(candidate.runId)}/github-candidate-verification-repeats`, {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ commandId }),
+        });
+        const attempt = await response.json();
+        if (!response.ok) throw new Error(attempt.message ?? attempt.error ?? 'Repeat verification could not start.');
+        renderAttemptInto(repeatStatus, attempt);
+        commandId = null;
+      } catch (error) {
+        repeatStatus.replaceChildren(el('p', { className: 'muted', text: error.message }));
+      } finally { repeatButton.disabled = false; }
+    });
+    content.push(el('p', { className: 'muted', text: 'A repeat is a new append-only observation of the same saved candidate and fixed verifier. A matching failed verifier remains failed.' }), repeatButton, repeatStatus);
+    void loadAttempts().catch((error) => repeatStatus.replaceChildren(el('p', { className: 'muted', text: error.message })));
+  }
   return section(candidate.source?.type === 'github-app' ? 'GitHub candidate · review only' : 'Local repository candidate · review only', content);
 }
 

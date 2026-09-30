@@ -9356,6 +9356,45 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(JSON.stringify(persistedGithubCandidate).includes(openAiFixtureSecret), false);
   assert.equal(JSON.stringify(persistedGithubCandidate).includes('contentBase64'), false,
     'the durable run view contains no source or candidate file bytes');
+  const repeatRoute = `/api/execution/runs/${githubRequest.id}/github-candidate-verification-repeats`;
+  const repeatReaderDenied = await request(app.base, repeatRoute, { ...as('readonly'), method: 'POST',
+    body: JSON.stringify({ commandId: 'github-repeat-reader-denied' }) }, 403);
+  assert.equal(typeof repeatReaderDenied.error, 'string', 'the existing 403 API envelope reports a string error message');
+  const firstRepeat = await request(app.base, repeatRoute, { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ commandId: 'github-repeat-first' }) }, 201);
+  assert.equal(firstRepeat.comparison, 'matched');
+  assert.equal(firstRepeat.verification.status, 'COMPLETED');
+  assert.equal(firstRepeat.verification.exitCode, 0);
+  assert.match(firstRepeat.verification.outputHash, /^[a-f0-9]{64}$/);
+  assert.equal(Object.hasOwn(firstRepeat.verification, 'stdout'), false,
+    'repeat records expose a bounded output hash without returning verifier output');
+  assert.equal(JSON.stringify(firstRepeat).includes(openAiFixtureSecret), false,
+    'repeat responses never disclose the model broker credential');
+  assert.equal(verifierObservations.length, 2, 'a deliberate repeat invokes the fixed verifier exactly once');
+  const repeatReplay = await request(app.base, repeatRoute, { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ commandId: 'github-repeat-first' }) });
+  assert.equal(repeatReplay.replayed, true);
+  assert.equal(repeatReplay.attemptId, firstRepeat.attemptId);
+  assert.equal(verifierObservations.length, 2, 'idempotent replay does not invoke the verifier again');
+  const secondRepeat = await request(app.base, repeatRoute, { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ commandId: 'github-repeat-second' }) }, 201);
+  assert.notEqual(secondRepeat.attemptId, firstRepeat.attemptId,
+    'a new command ID creates a distinct append-only repeat attempt');
+  assert.equal(verifierObservations.length, 3);
+  const repeatsBeforeRestart = await request(app.base, repeatRoute, as('alice'));
+  assert.deepEqual(repeatsBeforeRestart.attempts.map((attempt) => attempt.attemptId), [firstRepeat.attemptId, secondRepeat.attemptId]);
+  await close(app);
+  app = await start(postgres.databaseUrl, { executionProfiles: profiles, oidcAuthenticator,
+    secretEncryptionKey: Buffer.alloc(32, 0x5c), openAiValidationEndpoint: `${providerOrigin}/v1/models`,
+    githubVerifierProfile: fixedGithubVerifierProfile });
+  const repeatsAfterRestart = await request(app.base, repeatRoute, as('alice'));
+  assert.deepEqual(repeatsAfterRestart.attempts, repeatsBeforeRestart.attempts,
+    'append-only verifier observations and comparison evidence survive PostgreSQL application restart');
+  const githubCandidateAfterRepeat = await request(app.base, `/api/execution/runs/${githubRequest.id}`, as('alice'));
+  assert.equal(githubCandidateAfterRepeat.execution.repositoryCandidate.candidateEvidence.hash, githubCandidateReceipt.hash,
+  'repeat verification leaves the original candidate receipt unchanged');
+  assert.deepEqual(githubCandidateAfterRepeat.events.at(-1), githubTerminalEvent,
+    'repeat observations leave the original terminal event byte-for-byte unchanged');
   await rm(githubCandidateWorkspace, { recursive: true, force: true });
 
   const staleAgentPauseRequest = await taskRequest('process-task-pause-stale-agent-request', {

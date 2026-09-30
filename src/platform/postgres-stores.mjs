@@ -2018,6 +2018,126 @@ export class PostgresChangeCaseStore extends PostgresDocumentStore {
 export class PostgresExecutionRunStore extends PostgresDocumentStore {
   constructor(persistence) { super(persistence, 'execution_run'); }
 
+  async #authorizedGitHubCandidateRun(client, { tenantId, runId, principal, authzGeneration }) {
+    if (!/^execution-run-[0-9a-f-]{36}$/.test(runId ?? '') || !principal) return null;
+    const scope = await client.query(`select project_id from orgward.aggregate_project_scopes
+      where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2 for key share`, [tenantId, runId]);
+    if (!scope.rowCount) return null;
+    const projectId = scope.rows[0].project_id;
+    await lockProjectAccess(client, { tenantId, projectId, principal, minimum: 'editor' });
+    await requirePrincipalAuthority(client, { tenantId, principal, roles: ['workspace-write'], authzGeneration });
+    const aggregate = await client.query(`select * from orgward.aggregates
+      where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2 for share`, [tenantId, runId]);
+    if (!aggregate.rowCount) return null;
+    const run = verifyAggregateRow(aggregate.rows[0]);
+    if (run.projectId !== projectId) throw persistenceIntegrity('An execution run scope does not match its saved project identity.');
+    return { run, projectId };
+  }
+
+  #githubCandidateRepeat(row) {
+    if (!row) return null;
+    if (!row.result || contentHash(row.result) !== row.attempt_hash) {
+      throw persistenceIntegrity('A GitHub candidate verification repeat failed its stored hash check.');
+    }
+    return structuredClone(row.result);
+  }
+
+  async readGitHubCandidateVerificationRun({ tenantId, runId, principal, authzGeneration, commandId = null }) {
+    return this.persistence.transaction(async (client) => {
+      const context = await this.#authorizedGitHubCandidateRun(client, { tenantId, runId, principal, authzGeneration });
+      if (!context) return null;
+      let priorAttempt = null;
+      if (commandId) {
+        const prior = await client.query(`select command_id,request_hash,result,attempt_hash
+          from orgward.github_candidate_verification_repeats where tenant_id=$1 and run_id=$2 and command_id=$3`,
+        [tenantId, runId, commandId]);
+        if (prior.rowCount) priorAttempt = { commandId: prior.rows[0].command_id,
+          requestHash: prior.rows[0].request_hash, attempt: this.#githubCandidateRepeat(prior.rows[0]) };
+      }
+      return { run: structuredClone(context.run), priorAttempt };
+    });
+  }
+
+  async readGitHubCandidateVerificationRepeats({ tenantId, runId, principal, authzGeneration, commandId = null }) {
+    return this.persistence.transaction(async (client) => {
+      const context = await this.#authorizedGitHubCandidateRun(client, { tenantId, runId, principal, authzGeneration });
+      if (!context) return null;
+      const result = await client.query(`select command_id, request_hash, result, attempt_hash
+        from orgward.github_candidate_verification_repeats
+        where tenant_id=$1 and project_id=$2 and run_id=$3
+          and ($4::text is null or command_id=$4)
+        order by created_at, attempt_id`, [tenantId, context.projectId, runId, commandId]);
+      const attempts = result.rows.map((row) => ({ commandId: row.command_id, requestHash: row.request_hash,
+        attempt: this.#githubCandidateRepeat(row) }));
+      return commandId === null ? attempts : attempts[0] ?? null;
+    });
+  }
+
+  async appendGitHubCandidateVerificationRepeat({ tenantId, runId, principal, authzGeneration,
+    commandId, requestHash, expectedCandidateEvidenceHash, attempt }) {
+    return this.persistence.transaction(async (client) => {
+      const context = await this.#authorizedGitHubCandidateRun(client, { tenantId, runId, principal, authzGeneration });
+      if (!context) return null;
+      const original = context.run.execution?.repositoryCandidate?.candidateEvidence;
+      const candidate = context.run.execution?.repositoryCandidate;
+      const selection = context.run.githubPatchSelection;
+      if (original?.version !== 'github-candidate-evidence-v1'
+        || original.hash !== expectedCandidateEvidenceHash
+        || context.run.execution?.evidenceHash !== expectedCandidateEvidenceHash
+        || !selection || attempt?.sourceSnapshotId !== selection.sourceSnapshot?.snapshotId
+        || attempt?.sourceTreeDigest !== candidate?.sourceTreeDigest
+        || attempt?.candidateTreeDigest !== candidate?.treeDigest
+        || attempt?.candidateEvidenceVersion !== original?.version
+        || attempt?.verifier?.id !== selection.verifier?.id
+        || attempt?.verifier?.version !== selection.verifier?.version
+        || attempt?.verifier?.profileHash !== selection.verifier?.profileHash) {
+        throw conflict('The saved GitHub candidate evidence changed. Reload before repeating verification.', context.run.version,
+          'GITHUB_CANDIDATE_EVIDENCE_STALE');
+      }
+      const prior = await client.query(`select command_id, request_hash, result, attempt_hash
+        from orgward.github_candidate_verification_repeats
+        where tenant_id=$1 and run_id=$2 and command_id=$3`, [tenantId, runId, commandId]);
+      if (prior.rowCount) {
+        if (prior.rows[0].request_hash !== requestHash) throw conflict('This verification command ID was already used for different candidate evidence.', null, 'IDEMPOTENCY_CONFLICT');
+        return { attempt: this.#githubCandidateRepeat(prior.rows[0]), replayed: true };
+      }
+      if (!attempt || attempt.runId !== runId || attempt.candidateEvidenceHash !== expectedCandidateEvidenceHash
+        || attempt.comparison === undefined || !['matched', 'mismatch', 'inconclusive'].includes(attempt.comparison)
+        || !/^github-candidate-verification-[0-9a-f-]{36}$/.test(attempt.attemptId ?? '')) {
+        throw new Error('The GitHub candidate verification repeat record is invalid.');
+      }
+      const attemptHash = contentHash(attempt);
+      const inserted = await client.query(`insert into orgward.github_candidate_verification_repeats
+        (tenant_id,project_id,run_id,attempt_id,command_id,request_hash,candidate_evidence_version,
+          candidate_evidence_hash,source_snapshot_id,source_tree_digest,candidate_tree_digest,verifier_id,
+          verifier_version,verifier_profile_hash,verifier_command_hash,comparison,result,attempt_hash)
+        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17::jsonb,$18)
+        on conflict (tenant_id,run_id,command_id) do nothing returning attempt_id`,
+      [tenantId, context.projectId, runId, attempt.attemptId, commandId, requestHash,
+        attempt.candidateEvidenceVersion, attempt.candidateEvidenceHash, attempt.sourceSnapshotId,
+        attempt.sourceTreeDigest, attempt.candidateTreeDigest, attempt.verifier.id, attempt.verifier.version,
+        attempt.verifier.profileHash, attempt.verifier.commandHash, attempt.comparison,
+        canonicalJson(attempt), attemptHash]);
+      if (!inserted.rowCount) {
+        const concurrent = await client.query(`select command_id,request_hash,result,attempt_hash
+          from orgward.github_candidate_verification_repeats where tenant_id=$1 and run_id=$2 and command_id=$3`,
+        [tenantId, runId, commandId]);
+        if (!concurrent.rowCount) throw persistenceIntegrity('A GitHub candidate verification repeat conflict has no replay record.');
+        if (concurrent.rows[0].request_hash !== requestHash) throw conflict('This verification command ID was already used for different candidate evidence.', null, 'IDEMPOTENCY_CONFLICT');
+        return { attempt: this.#githubCandidateRepeat(concurrent.rows[0]), replayed: true };
+      }
+      const event = { eventId: `event-${randomUUID()}`, schemaVersion: '1.0', tenantId,
+        aggregateId: attempt.attemptId, aggregateVersion: 1, type: 'GitHubCandidateVerificationRepeated',
+        actor: principal, occurredAt: attempt.createdAt, correlationId: commandId, causationId: runId,
+        data: { runId, attemptId: attempt.attemptId, candidateEvidenceHash: attempt.candidateEvidenceHash,
+          comparison: attempt.comparison, status: attempt.verification.status,
+          exitCode: attempt.verification.exitCode, outputHash: attempt.verification.outputHash }, evidenceRefs: [] };
+      await recordEvent(client, { tenantId, kind: 'github_candidate_verification_repeat', id: attempt.attemptId,
+        version: 1, commandId, event });
+      return { attempt: structuredClone(attempt), replayed: false };
+    });
+  }
+
   #deepSeekProfile(row) {
     return row ? {
       id: row.profile_id, revision: Number(row.revision), label: row.label, model: row.model_id,
