@@ -12,6 +12,8 @@ import { ChangeCaseStore } from './src/sdlc/store.mjs';
 import { EXECUTION_STATUSES } from './src/execution/contracts.mjs';
 import { ExecutionService } from './src/execution/service.mjs';
 import { blueprintProposalEvaluationFailure, verifyGeneratedBlueprintProposal } from './src/execution/proposals.mjs';
+import { proposalHumanReviewHash, proposalHumanReviewMatches, validateProposalHumanReview,
+  PROPOSAL_HUMAN_RUBRIC_VERSION } from './src/execution/proposal-human-review.mjs';
 import { PostgresPersistence } from './src/platform/postgres.mjs';
 import { OidcAuthenticator } from './src/platform/oidc.mjs';
 import { OidcLoginFlow } from './src/platform/oidc-login.mjs';
@@ -1709,16 +1711,81 @@ export function createApp({
         });
       }
 
+      const blueprintProposalReviewMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/blueprint-proposals\/(execution-run-[0-9a-f-]{36})\/reviews$/);
+      if (request.method === 'POST' && blueprintProposalReviewMatch) {
+        requireWriteAccess(request);
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified workspace owner must record a proposal review.');
+        if (request.identity.actorType !== 'human') {
+          throw apiFailure(403, 'HUMAN_REVIEWER_REQUIRED', 'A verified human workspace owner must record a proposal review.');
+        }
+        const body = validateCommand(await readJson(request));
+        const payloadKeys = Object.keys(body.payload).sort();
+        if (payloadKeys.join(',') !== 'criteria,proposalHash'
+          || typeof body.payload.proposalHash !== 'string' || !/^[a-f0-9]{64}$/.test(body.payload.proposalHash)) {
+          throw apiFailure(400, 'INVALID_COMMAND', 'A proposal review requires its saved SHA-256 hash and rubric answers.');
+        }
+        requirePrincipalStoreMethod(store, 'updateWithCommandForPrincipal');
+        const tenantId = requestTenant(request);
+        const actor = requestActor(request);
+        const [projectId, runId] = [blueprintProposalReviewMatch[1], blueprintProposalReviewMatch[2]];
+        const run = await executionService.get(runId, tenantId, actor, { authzGeneration: request.identity.authzGeneration });
+        if (!run || run.projectId !== projectId) throw apiFailure(404, 'BLUEPRINT_PROPOSAL_NOT_FOUND', 'The saved proposal was not found in this project.');
+        const proposal = run.execution?.generatedProposal;
+        verifyGeneratedBlueprintProposal(run, proposal);
+        if (proposal.proposalHash !== body.payload.proposalHash) {
+          throw apiFailure(409, 'BLUEPRINT_PROPOSAL_HASH_MISMATCH', 'The proposal changed. Reload its saved review before recording a judgment.');
+        }
+        const criteria = validateProposalHumanReview(body.payload.criteria, proposal.citations);
+        const reviewedAt = new Date().toISOString();
+        const reviewCore = {
+          rubricVersion: PROPOSAL_HUMAN_RUBRIC_VERSION,
+          runId, proposalHash: proposal.proposalHash,
+          blueprintId: proposal.blueprintId, blueprintVersion: proposal.blueprintVersion,
+          sourceEnvelopeHash: proposal.sourceEnvelopeHash,
+          reviewedBy: actor, reviewedAt, criteria,
+        };
+        const reviewHash = proposalHumanReviewHash(reviewCore);
+        const command = {
+          operation: 'project.review-execution-blueprint-proposal',
+          commandId: body.commandId,
+          payloadHash: payloadHash({ schemaVersion: body.schemaVersion, expectedVersion: body.expectedVersion,
+            actor, runId, proposalHash: proposal.proposalHash, criteria }),
+          expectedVersion: body.expectedVersion,
+          apply(project) {
+            normalizeProject(project, { tenantId, actor });
+            const latest = latestBlueprint(project);
+            if (!latest || latest.id !== proposal.blueprintId || latest.version !== proposal.blueprintVersion) {
+              throw apiFailure(409, 'BLUEPRINT_PROPOSAL_STALE', 'A newer blueprint version exists. Review a proposal generated from the current design.');
+            }
+            project.version += 1;
+            project.updatedAt = reviewedAt;
+            project.updatedBy = actor;
+            project.events.push(projectEvent(project, {
+              type: 'BlueprintProposalReviewed', actor, commandId: body.commandId, correlationId,
+              data: { ...reviewCore, reviewHash },
+            }));
+          },
+        };
+        const result = await store.updateWithCommandForPrincipal(projectId, tenantId, command, actor, {
+          requiredPrincipalRoles: ['workspace-write'], authzGeneration: request.identity.authzGeneration,
+          minimumProjectAccess: 'owner',
+        });
+        if (!result) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
+        return sendApi(response, 200, projectView(result.project), { correlationId, event: result.project.events.at(-1), meta: { replayed: result.replayed } });
+      }
+
       const blueprintProposalApplyMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/blueprint-proposals\/(execution-run-[0-9a-f-]{36})\/apply$/);
       if (request.method === 'POST' && blueprintProposalApplyMatch) {
         requireWriteAccess(request);
         if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified workspace owner must apply a saved proposal.');
         const body = validateCommand(await readJson(request));
         const payloadKeys = Object.keys(body.payload);
-        if (payloadKeys.length !== 1 || payloadKeys[0] !== 'proposalHash'
-          || typeof body.payload.proposalHash !== 'string' || !/^[a-f0-9]{64}$/.test(body.payload.proposalHash)) {
-          throw apiFailure(400, 'INVALID_COMMAND', 'Applying a proposal requires its saved SHA-256 proposal hash.', {
-            fieldErrors: [{ field: 'payload.proposalHash', message: 'Provide the proposal hash shown in the review.' }],
+        if (payloadKeys.sort().join(',') !== 'proposalHash,reviewEventId,reviewHash'
+          || typeof body.payload.proposalHash !== 'string' || !/^[a-f0-9]{64}$/.test(body.payload.proposalHash)
+          || typeof body.payload.reviewEventId !== 'string' || typeof body.payload.reviewHash !== 'string'
+          || !/^[a-f0-9]{64}$/.test(body.payload.reviewHash)) {
+          throw apiFailure(400, 'INVALID_COMMAND', 'Applying a proposal requires its saved proposal and owner review references.', {
+            fieldErrors: [{ field: 'payload.reviewEventId', message: 'Save a complete owner rubric review before applying.' }],
           });
         }
         requirePrincipalStoreMethod(store, 'updateWithCommandForPrincipal');
@@ -1737,7 +1804,8 @@ export function createApp({
         const command = {
           operation: 'project.apply-execution-blueprint-proposal',
           commandId: body.commandId,
-          payloadHash: payloadHash({ schemaVersion: body.schemaVersion, expectedVersion: body.expectedVersion, runId, proposalHash: proposal.proposalHash }),
+          payloadHash: payloadHash({ schemaVersion: body.schemaVersion, expectedVersion: body.expectedVersion, runId,
+            proposalHash: proposal.proposalHash, reviewEventId: body.payload.reviewEventId, reviewHash: body.payload.reviewHash }),
           expectedVersion: body.expectedVersion,
           apply(project) {
             normalizeProject(project, { tenantId, actor });
@@ -1748,6 +1816,14 @@ export function createApp({
             if (project.events.some((event) => event.type === 'BlueprintProposalApplied'
               && event.data?.proposalHash === proposal.proposalHash)) {
               throw apiFailure(409, 'BLUEPRINT_PROPOSAL_ALREADY_APPLIED', 'This proposal has already been applied.');
+            }
+            const reviewEvent = [...project.events].reverse().find((event) => event.type === 'BlueprintProposalReviewed'
+              && event.data?.runId === runId && event.data?.proposalHash === proposal.proposalHash);
+            if (!reviewEvent || !proposalHumanReviewMatches(reviewEvent, proposal)
+              || reviewEvent.eventId !== body.payload.reviewEventId
+              || reviewEvent.data.reviewHash !== body.payload.reviewHash
+              || !reviewEvent.data.criteria.every((criterion) => criterion.judgment === 'pass')) {
+              throw apiFailure(409, 'BLUEPRINT_PROPOSAL_REVIEW_REQUIRED', 'A current all-pass owner rubric review is required before applying this proposal.');
             }
             const blueprint = applyBlueprintProposal(project, proposal, actor);
             project.version += 1;
@@ -1762,6 +1838,7 @@ export function createApp({
                 objectId: proposal.target.id, field: 'detail', epistemicStatus: 'proposed-design',
                 sourceIds: proposal.citations.map(({ id }) => id),
                 sourceHashes: proposal.citations.map(({ hash }) => hash),
+                reviewEventId: reviewEvent.eventId, reviewHash: reviewEvent.data.reviewHash,
               },
             }));
           },

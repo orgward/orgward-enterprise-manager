@@ -12,6 +12,7 @@ import { createApp } from '../server.mjs';
 import { blueprintPublicationDigest, createProject, validateBlueprint } from '../src/model.mjs';
 import { coverageForBlueprint } from '../public/coverage-dashboard.mjs';
 import { linkedProcessTaskResult } from '../public/linked-process-task-result.mjs';
+import { deriveBlueprintProposalReviewState } from '../public/proposal-review-state.mjs';
 import { processTaskSourceReview } from '../public/process-task-source-review.mjs';
 import { processTaskHumanInputReview } from '../public/human-task-input-review.mjs';
 import { humanTaskOutputApplicationState } from '../public/human-task-output-application.mjs';
@@ -9152,9 +9153,18 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   }, 201)).data;
   const crossProjectProposalApply = await request(app.base,
     `/api/v1/projects/${otherProject.id}/blueprint-proposals/${openAiSuccessfulRun.id}/apply`, {
-      ...as('alice'), method: 'POST', body: command('proposal-apply-cross-project', { proposalHash: generatedProposal.proposalHash }, otherProject.version),
+      ...as('alice'), method: 'POST', body: command('proposal-apply-cross-project', {
+        proposalHash: generatedProposal.proposalHash, reviewEventId: 'missing-review', reviewHash: '0'.repeat(64),
+      }, otherProject.version),
     }, 404);
   assert.equal(crossProjectProposalApply.error.code, 'BLUEPRINT_PROPOSAL_NOT_FOUND');
+  const crossProjectProposalReview = await request(app.base,
+    `/api/v1/projects/${otherProject.id}/blueprint-proposals/${openAiSuccessfulRun.id}/reviews`, {
+      ...as('alice'), method: 'POST', body: command('proposal-review-cross-project', {
+        proposalHash: generatedProposal.proposalHash, criteria: [],
+      }, otherProject.version),
+    }, 404);
+  assert.equal(crossProjectProposalReview.error.code, 'BLUEPRINT_PROPOSAL_NOT_FOUND');
   const crossProjectPlan = await taskRequest('process-task-cross-project-plan', {
     ...successInput, projectId: otherProject.id, revision: revision3.data.processPlans.at(-1).revision,
   }, 'alice', 409);
@@ -9170,15 +9180,119 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   const runtimeBeforeProposalApply = (await request(app.base,
     `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances;
   const editorProposalApply = await request(app.base, proposalApplyPath, {
-    ...as('bob'), method: 'POST', body: command('proposal-apply-editor-denied', { proposalHash: generatedProposal.proposalHash }, projectBeforeProposalApply.version),
+    ...as('bob'), method: 'POST', body: command('proposal-apply-editor-denied', {
+      proposalHash: generatedProposal.proposalHash, reviewEventId: 'missing-review', reviewHash: '0'.repeat(64),
+    }, projectBeforeProposalApply.version),
   }, 403);
   assert.equal(editorProposalApply.error.code, 'ACTION_FORBIDDEN');
+  const proposalReviewPath = `/api/v1/projects/${project.id}/blueprint-proposals/${openAiSuccessfulRun.id}/reviews`;
+  const reviewCriteria = (judgment) => [
+    'relevance-to-task', 'source-support', 'actionability', 'scope-and-risk',
+  ].map((criterionId) => ({ criterionId, judgment, reason: `Owner checked ${criterionId} against the saved task and source.`,
+    evidence: [{ sourceId: generatedProposal.citations[0].id, sourceHash: generatedProposal.citations[0].hash }] }));
+  const applyBeforeReview = await request(app.base, proposalApplyPath, {
+    ...as('alice'), method: 'POST', body: command('proposal-apply-before-review', {
+      proposalHash: generatedProposal.proposalHash, reviewEventId: 'missing-review', reviewHash: '0'.repeat(64),
+    }, projectBeforeProposalApply.version),
+  }, 409);
+  assert.equal(applyBeforeReview.error.code, 'BLUEPRINT_PROPOSAL_REVIEW_REQUIRED');
+  const editorProposalReview = await request(app.base, proposalReviewPath, {
+    ...as('bob'), method: 'POST', body: command('proposal-review-editor-denied', {
+      proposalHash: generatedProposal.proposalHash, criteria: reviewCriteria('pass'),
+    }, projectBeforeProposalApply.version),
+  }, 403);
+  assert.equal(editorProposalReview.error.code, 'ACTION_FORBIDDEN');
+  const workloadProposalReview = await request(app.base, proposalReviewPath, {
+    ...as('servicebot'), method: 'POST', body: command('proposal-review-workload-denied', {
+      proposalHash: generatedProposal.proposalHash, criteria: reviewCriteria('pass'),
+    }, projectBeforeProposalApply.version),
+  }, 403);
+  assert.equal(workloadProposalReview.error.code, 'HUMAN_REVIEWER_REQUIRED');
+  const invalidEvidenceReview = await request(app.base, proposalReviewPath, {
+    ...as('alice'), method: 'POST', body: command('proposal-review-invalid-evidence', {
+      proposalHash: generatedProposal.proposalHash,
+      criteria: reviewCriteria('pass').map((entry, index) => index === 0
+        ? { ...entry, evidence: [{ sourceId: entry.evidence[0].sourceId, sourceHash: '0'.repeat(64) }] } : entry),
+    }, projectBeforeProposalApply.version),
+  }, 400);
+  assert.equal(invalidEvidenceReview.error.code, 'BLUEPRINT_PROPOSAL_REVIEW_INVALID');
+  const needsAttentionReview = await request(app.base, proposalReviewPath, {
+    ...as('alice'), method: 'POST', body: command('proposal-review-needs-attention', {
+      proposalHash: generatedProposal.proposalHash, criteria: reviewCriteria('needs-attention'),
+    }, projectBeforeProposalApply.version),
+  });
+  assert.equal(needsAttentionReview.event.type, 'BlueprintProposalReviewed');
+  const applyNeedsAttention = await request(app.base, proposalApplyPath, {
+    ...as('alice'), method: 'POST', body: command('proposal-apply-needs-attention', {
+      proposalHash: generatedProposal.proposalHash,
+      reviewEventId: needsAttentionReview.event.eventId,
+      reviewHash: needsAttentionReview.event.data.reviewHash,
+    }, needsAttentionReview.data.version),
+  }, 409);
+  assert.equal(applyNeedsAttention.error.code, 'BLUEPRINT_PROPOSAL_REVIEW_REQUIRED');
+  const passedReviewCommand = command('proposal-review-all-pass', {
+    proposalHash: generatedProposal.proposalHash, criteria: reviewCriteria('pass'),
+  }, needsAttentionReview.data.version);
+  const passedReview = await request(app.base, proposalReviewPath, {
+    ...as('alice'), method: 'POST', body: passedReviewCommand,
+  });
+  assert.equal(passedReview.event.type, 'BlueprintProposalReviewed');
+  assert.equal(passedReview.event.actor, principal('alice'));
+  assert.equal(passedReview.event.data.reviewedBy, principal('alice'));
+  assert.deepEqual(passedReview.event.data.criteria.map(({ criterionId }) => criterionId), [
+    'relevance-to-task', 'source-support', 'actionability', 'scope-and-risk',
+  ]);
+  assert.deepEqual(passedReview.event.data.criteria[0].evidence, [{
+    sourceId: generatedProposal.citations[0].id, sourceHash: generatedProposal.citations[0].hash,
+  }]);
+  const passedReviewReplay = await request(app.base, proposalReviewPath, {
+    ...as('alice'), method: 'POST', body: passedReviewCommand,
+  });
+  assert.equal(passedReviewReplay.meta.replayed, true);
+  assert.equal(passedReviewReplay.data.events.filter((event) => event.type === 'BlueprintProposalReviewed'
+    && event.data.reviewHash === passedReview.event.data.reviewHash).length, 1);
+  const supersedingNeedsAttentionReview = await request(app.base, proposalReviewPath, {
+    ...as('alice'), method: 'POST', body: command('proposal-review-later-needs-attention', {
+      proposalHash: generatedProposal.proposalHash, criteria: reviewCriteria('needs-attention'),
+    }, passedReview.data.version),
+  });
+  assert.equal(supersedingNeedsAttentionReview.event.type, 'BlueprintProposalReviewed');
+  const supersededAllPassApply = await request(app.base, proposalApplyPath, {
+    ...as('alice'), method: 'POST', body: command('proposal-apply-superseded-pass-review', {
+      proposalHash: generatedProposal.proposalHash, reviewEventId: passedReview.event.eventId,
+      reviewHash: passedReview.event.data.reviewHash,
+    }, supersedingNeedsAttentionReview.data.version),
+  }, 409);
+  assert.equal(supersededAllPassApply.error.code, 'BLUEPRINT_PROPOSAL_REVIEW_REQUIRED',
+    'a later needs-attention review invalidates an earlier all-pass review for apply');
+  const finalPassedReviewCommand = command('proposal-review-final-all-pass', {
+    proposalHash: generatedProposal.proposalHash, criteria: reviewCriteria('pass'),
+  }, supersedingNeedsAttentionReview.data.version);
+  const finalPassedReview = await request(app.base, proposalReviewPath, {
+    ...as('alice'), method: 'POST', body: finalPassedReviewCommand,
+  });
+  assert.equal(finalPassedReview.event.type, 'BlueprintProposalReviewed');
+  const oldReviewApply = await request(app.base, proposalApplyPath, {
+    ...as('alice'), method: 'POST', body: command('proposal-apply-prior-review', {
+      proposalHash: generatedProposal.proposalHash, reviewEventId: needsAttentionReview.event.eventId,
+      reviewHash: needsAttentionReview.event.data.reviewHash,
+    }, finalPassedReview.data.version),
+  }, 409);
+  assert.equal(oldReviewApply.error.code, 'BLUEPRINT_PROPOSAL_REVIEW_REQUIRED',
+    'a prior review cannot be reused after a newer owner review');
+  project = finalPassedReview.data;
+  const projectReadyToApply = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
   const appliedProposal = await request(app.base, proposalApplyPath, {
-    ...as('alice'), method: 'POST', body: command('proposal-apply-success', { proposalHash: generatedProposal.proposalHash }, projectBeforeProposalApply.version),
+    ...as('alice'), method: 'POST', body: command('proposal-apply-success', {
+      proposalHash: generatedProposal.proposalHash, reviewEventId: finalPassedReview.event.eventId,
+      reviewHash: finalPassedReview.event.data.reviewHash,
+    }, projectReadyToApply.version),
   });
   project = appliedProposal.data;
   assert.equal(appliedProposal.event.type, 'BlueprintProposalApplied');
   assert.equal(appliedProposal.event.data.proposalHash, generatedProposal.proposalHash);
+  assert.equal(appliedProposal.event.data.reviewEventId, finalPassedReview.event.eventId);
+  assert.equal(appliedProposal.event.data.reviewHash, finalPassedReview.event.data.reviewHash);
   assert.equal(appliedProposal.event.data.epistemicStatus, 'proposed-design');
   assert.deepEqual(appliedProposal.event.data.sourceIds, ['information-customer-signal']);
   assert.deepEqual(appliedProposal.event.data.sourceHashes, generatedProposal.citations.map(({ hash }) => hash));
@@ -9202,18 +9316,28 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.deepEqual(runtimeAfterProposalApply, runtimeBeforeProposalApply,
     'applying proposed detail does not change process runtime or assignment state');
   const proposalApplyReplay = await request(app.base, proposalApplyPath, {
-    ...as('alice'), method: 'POST', body: command('proposal-apply-success', { proposalHash: generatedProposal.proposalHash }, projectBeforeProposalApply.version),
+    ...as('alice'), method: 'POST', body: command('proposal-apply-success', {
+      proposalHash: generatedProposal.proposalHash, reviewEventId: finalPassedReview.event.eventId,
+      reviewHash: finalPassedReview.event.data.reviewHash,
+    }, projectReadyToApply.version),
   });
   assert.equal(proposalApplyReplay.meta.replayed, true);
   assert.equal(proposalApplyReplay.data.blueprintVersions.length, project.blueprintVersions.length);
   assert.equal(proposalApplyReplay.data.events.filter((event) => event.type === 'BlueprintProposalApplied'
     && event.data.proposalHash === generatedProposal.proposalHash).length, 1);
+  assert.equal(proposalApplyReplay.data.events.filter((event) => event.type === 'BlueprintProposalReviewed'
+    && event.data.reviewHash === finalPassedReview.event.data.reviewHash).length, 1);
   const changedProposalHash = await request(app.base, proposalApplyPath, {
-    ...as('alice'), method: 'POST', body: command('proposal-apply-hash-mismatch', { proposalHash: '0'.repeat(64) }, project.version),
+    ...as('alice'), method: 'POST', body: command('proposal-apply-hash-mismatch', {
+      proposalHash: '0'.repeat(64), reviewEventId: finalPassedReview.event.eventId, reviewHash: finalPassedReview.event.data.reviewHash,
+    }, project.version),
   }, 409);
   assert.equal(changedProposalHash.error.code, 'BLUEPRINT_PROPOSAL_HASH_MISMATCH');
   const staleProposalApply = await request(app.base, proposalApplyPath, {
-    ...as('alice'), method: 'POST', body: command('proposal-apply-stale-version', { proposalHash: generatedProposal.proposalHash }, project.version),
+    ...as('alice'), method: 'POST', body: command('proposal-apply-stale-version', {
+      proposalHash: generatedProposal.proposalHash, reviewEventId: finalPassedReview.event.eventId,
+      reviewHash: finalPassedReview.event.data.reviewHash,
+    }, project.version),
   }, 409);
   assert.equal(staleProposalApply.error.code, 'BLUEPRINT_PROPOSAL_STALE');
 
@@ -9364,7 +9488,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances;
   const blockedProposalApply = await request(app.base, blockedProposalApplyPath, {
     ...as('alice'), method: 'POST', body: command('proposal-apply-blocked-unchanged', {
-      proposalHash: blockedProposal.proposalHash,
+      proposalHash: blockedProposal.proposalHash, reviewEventId: 'missing-review', reviewHash: '0'.repeat(64),
     }, projectBeforeBlockedApply.version),
   }, 409);
   assert.equal(blockedProposalApply.error.code, 'BLUEPRINT_PROPOSAL_EVALUATION_BLOCKED');
@@ -9377,25 +9501,41 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   const projectBeforeFreshProposalApply = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
   assert.equal(projectBeforeFreshProposalApply.latestBlueprint.version, freshDependentProposal.blueprintVersion,
     'the fresh dependent result is pinned to the current blueprint and remains eligible for apply');
+  const freshProposalReviewPath = `/api/v1/projects/${project.id}/blueprint-proposals/${freshDependentRun.id}/reviews`;
+  const freshReviewCriteria = ['relevance-to-task', 'source-support', 'actionability', 'scope-and-risk'].map((criterionId) => ({
+    criterionId, judgment: 'pass', reason: `Owner checked ${criterionId} against the exact fresh source.`,
+    evidence: [{ sourceId: freshDependentProposal.citations[0].id, sourceHash: freshDependentProposal.citations[0].hash }],
+  }));
+  const freshProposalReview = await request(app.base, freshProposalReviewPath, {
+    ...as('alice'), method: 'POST', body: command('proposal-journey-owner-review', {
+      proposalHash: freshDependentProposal.proposalHash, criteria: freshReviewCriteria,
+    }, projectBeforeFreshProposalApply.version),
+  });
+  assert.equal(freshProposalReview.event.type, 'BlueprintProposalReviewed');
+  const freshProjectReadyToApply = freshProposalReview.data;
   const freshPlansBeforeApply = structuredClone(projectBeforeFreshProposalApply.processPlans);
   const freshRuntimesBeforeApply = (await request(app.base,
     `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances;
   const editorFreshProposalApply = await request(app.base, freshProposalApplyPath, {
     ...as('bob'), method: 'POST', body: command('proposal-journey-editor-denied', {
-      proposalHash: freshDependentProposal.proposalHash,
-    }, projectBeforeFreshProposalApply.version),
+      proposalHash: freshDependentProposal.proposalHash, reviewEventId: freshProposalReview.event.eventId,
+      reviewHash: freshProposalReview.event.data.reviewHash,
+    }, freshProjectReadyToApply.version),
   }, 403);
   assert.equal(editorFreshProposalApply.error.code, 'ACTION_FORBIDDEN');
   const freshProposalApplied = await request(app.base, freshProposalApplyPath, {
     ...as('alice'), method: 'POST', body: command('proposal-journey-apply', {
-      proposalHash: freshDependentProposal.proposalHash,
-    }, projectBeforeFreshProposalApply.version),
+      proposalHash: freshDependentProposal.proposalHash, reviewEventId: freshProposalReview.event.eventId,
+      reviewHash: freshProposalReview.event.data.reviewHash,
+    }, freshProjectReadyToApply.version),
   });
   const freshProposalApplyEvent = freshProposalApplied.event;
   project = freshProposalApplied.data;
   assert.equal(freshProposalApplyEvent.type, 'BlueprintProposalApplied');
   assert.equal(freshProposalApplyEvent.data.runId, freshDependentRun.id);
   assert.equal(freshProposalApplyEvent.data.proposalHash, freshDependentProposal.proposalHash);
+  assert.equal(freshProposalApplyEvent.data.reviewEventId, freshProposalReview.event.eventId);
+  assert.equal(freshProposalApplyEvent.data.reviewHash, freshProposalReview.event.data.reviewHash);
   assert.deepEqual(freshProposalApplyEvent.data.sourceIds, freshDependentProposal.citations.map(({ id }) => id));
   assert.deepEqual(freshProposalApplyEvent.data.sourceHashes, freshDependentProposal.citations.map(({ hash }) => hash));
   assert.equal(project.latestBlueprint.version, freshDependentProposal.blueprintVersion + 1);
@@ -9413,8 +9553,9 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     'applying the proposal does not mutate the checkpoint or dependent process runtime');
   const freshApplyReplay = await request(app.base, freshProposalApplyPath, {
     ...as('alice'), method: 'POST', body: command('proposal-journey-apply', {
-      proposalHash: freshDependentProposal.proposalHash,
-    }, projectBeforeFreshProposalApply.version),
+      proposalHash: freshDependentProposal.proposalHash, reviewEventId: freshProposalReview.event.eventId,
+      reviewHash: freshProposalReview.event.data.reviewHash,
+    }, freshProjectReadyToApply.version),
   });
   assert.equal(freshApplyReplay.meta.replayed, true);
   assert.equal(freshApplyReplay.data.events.filter((event) => event.type === 'BlueprintProposalApplied'
@@ -9476,6 +9617,15 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     assert.deepEqual(run.processTaskRef, [firstRoot, secondRoot, dependent].find((candidate) => candidate.id === run.id).processTaskRef);
   }
   const restoredProject = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
+  const restoredAppliedProposalEvent = restoredProject.events.find((event) => event.type === 'BlueprintProposalApplied'
+    && event.data?.proposalHash === generatedProposal.proposalHash);
+  const restoredReviewState = deriveBlueprintProposalReviewState({ proposal: restoredOpenAiRun.execution.generatedProposal,
+    project: restoredProject, membershipAccess: 'owner', appliedEvent: restoredAppliedProposalEvent });
+  assert.equal(restoredReviewState.status, 'applied');
+  assert.equal(restoredReviewState.review.status, 'passed');
+  assert.equal(restoredReviewState.review.eventId, finalPassedReview.event.eventId);
+  assert.equal(restoredReviewState.review.criteria.length, 4,
+    'the owner rubric remains visible from append-only events after restart and application');
   const restoredHumanPlan = restoredProject.processPlans.find((candidate) => candidate.id === humanRootPlan.id
     && candidate.revision === humanRootRevision.revision);
   assert.ok(restoredHumanPlan, 'the saved human task plan remains available after PostgreSQL restart');
@@ -9500,7 +9650,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances;
   const blockedProposalApplyAfterRestart = await request(app.base, blockedProposalApplyPath, {
     ...as('alice'), method: 'POST', body: command('proposal-apply-blocked-unchanged-after-restart', {
-      proposalHash: blockedProposal.proposalHash,
+      proposalHash: blockedProposal.proposalHash, reviewEventId: 'missing-review', reviewHash: '0'.repeat(64),
     }, restoredProject.version),
   }, 409);
   assert.equal(blockedProposalApplyAfterRestart.error.code, 'BLUEPRINT_PROPOSAL_EVALUATION_BLOCKED');
@@ -9520,7 +9670,10 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.deepEqual(restoredGenericAppliedBlueprint.edit.proposalProvenance.citations,
     [{ id: 'information-customer-signal', hash: generatedProposal.citations[0].hash }]);
   const proposalReplayAfterRestart = await request(app.base, proposalApplyPath, {
-    ...as('alice'), method: 'POST', body: command('proposal-apply-success', { proposalHash: generatedProposal.proposalHash }, projectBeforeProposalApply.version),
+    ...as('alice'), method: 'POST', body: command('proposal-apply-success', {
+      proposalHash: generatedProposal.proposalHash, reviewEventId: finalPassedReview.event.eventId,
+      reviewHash: finalPassedReview.event.data.reviewHash,
+    }, projectReadyToApply.version),
   });
   assert.equal(proposalReplayAfterRestart.meta.replayed, true);
   assert.equal(proposalReplayAfterRestart.data.events.filter((event) => event.type === 'BlueprintProposalApplied'
@@ -9541,8 +9694,9 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     freshDependentProposal.citations.map(({ id, hash }) => ({ id, hash })));
   const freshProposalReplayAfterRestart = await request(app.base, freshProposalApplyPath, {
     ...as('alice'), method: 'POST', body: command('proposal-journey-apply', {
-      proposalHash: freshDependentProposal.proposalHash,
-    }, projectBeforeFreshProposalApply.version),
+      proposalHash: freshDependentProposal.proposalHash, reviewEventId: freshProposalReview.event.eventId,
+      reviewHash: freshProposalReview.event.data.reviewHash,
+    }, freshProjectReadyToApply.version),
   });
   assert.equal(freshProposalReplayAfterRestart.meta.replayed, true);
   assert.equal(freshProposalReplayAfterRestart.data.events.filter((event) => event.type === 'BlueprintProposalApplied'

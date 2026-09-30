@@ -603,6 +603,12 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(executionSource, /deriveBlueprintProposalReviewState/);
   assert.match(executionSource, /proposalApplyFailureDisposition/);
   assert.match(executionSource, /proposalApplyFailureDisposition\(error\) === 'reconcile'/);
+  assert.match(executionSource, /blueprint-proposals\/\$\{encodeURIComponent\(run\.id\)\}\/reviews/);
+  assert.match(executionSource, /data-form': 'proposal-human-review'/);
+  assert.match(executionSource, /Choose judgment/);
+  assert.match(executionSource, /These are human judgments, not automated quality scores/);
+  assert.match(executionSource, /reviewEventId: run\.proposalApplication\.review\.eventId/);
+  assert.match(executionSource, /reviewHash: run\.proposalApplication\.review\.reviewHash/);
   assert.match(executionSource, /pendingProposalApplies\.delete\(run\.id\)/);
   const linkedRunAmendmentClient = await fetch(`${base}/linked-run-amendment.mjs`);
   assert.equal(linkedRunAmendmentClient.status, 200);
@@ -708,6 +714,11 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   const proposalReviewSource = await proposalReviewClient.text();
   assert.match(proposalReviewSource, /status: 'evaluation-blocked', canApply: false/);
   assert.match(proposalReviewSource, /SUPPORTED_EVALUATOR_VERSION = 1/);
+  assert.match(proposalReviewSource, /relevance-to-task/);
+  assert.match(proposalReviewSource, /source-support/);
+  assert.match(proposalReviewSource, /actionability/);
+  assert.match(proposalReviewSource, /scope-and-risk/);
+  assert.match(proposalReviewSource, /review-required/);
   assert.match(proposalReviewSource, /Structural checks blocked this proposal/);
   assert.match(proposalReviewSource, /Open current design/);
   assert.match(proposalReviewSource, /Open updated design/);

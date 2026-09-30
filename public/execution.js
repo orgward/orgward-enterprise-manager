@@ -28,7 +28,7 @@ import { blockedProcessTaskRecoveryCopy, processTaskRecoveryAction, selectFreshP
 import { processTaskAssignmentTransparency } from './process-task-assignment.mjs';
 import { processTaskGuidanceReview } from './process-task-guidance-review.mjs';
 import { processTaskSourceReview } from './process-task-source-review.mjs';
-import { deriveBlueprintProposalReviewState, proposalApplyFailureDisposition, proposalDesignLink } from './proposal-review-state.mjs';
+import { deriveBlueprintProposalReviewState, HUMAN_PROPOSAL_RUBRIC, proposalApplyFailureDisposition, proposalDesignLink } from './proposal-review-state.mjs';
 import { acceptProcessTaskRequest, clearPendingProcessTaskRequest, findPendingProcessTaskRequest,
   processTaskRequestPresentation, processTaskRequestReconciled, processTaskRequestStorageKey,
   readPendingProcessTaskRequest, reconciledSavedProcessTaskRequests, savePendingProcessTaskRequest } from './process-task-request.mjs';
@@ -58,6 +58,7 @@ state.pendingRunPauses = new Map();
 state.pendingRunAmendments = new Map();
 state.pendingInstanceCommands = new Map();
 state.pendingProposalApplies = new Map();
+state.pendingProposalReviews = new Map();
 const main = document.querySelector('#execution-main');
 const list = document.querySelector('#run-list');
 const toast = document.querySelector('#execution-toast');
@@ -2190,6 +2191,73 @@ async function loadProposalApplication(run, project = null) {
   });
 }
 
+async function saveGeneratedProposalReview(form) {
+  const run = state.run;
+  const proposal = run?.execution?.generatedProposal;
+  if (!proposal || !run.projectId || !state.authenticated || !run.proposalApplication?.canRecordReview
+    || !Number.isInteger(state.runProject?.version)) return;
+  const formData = new FormData(form);
+  const criteria = HUMAN_PROPOSAL_RUBRIC.map(({ id }) => ({
+    criterionId: id,
+    judgment: String(formData.get(`judgment:${id}`) ?? ''),
+    reason: String(formData.get(`reason:${id}`) ?? ''),
+    evidence: formData.getAll(`evidence:${id}`).map((value) => {
+      const citation = proposal.citations.find(({ id: citationId }) => citationId === value);
+      return citation ? { sourceId: citation.id, sourceHash: citation.hash } : null;
+    }).filter(Boolean),
+  }));
+  const missingEvidence = criteria.find(({ evidence }) => evidence.length === 0);
+  if (missingEvidence) {
+    notify(`Select at least one cited source for ${HUMAN_PROPOSAL_RUBRIC.find(({ id }) => id === missingEvidence.criterionId)?.label ?? 'each review criterion'}.`);
+    form.querySelector(`input[name="evidence:${missingEvidence.criterionId}"]`)?.focus();
+    return;
+  }
+  const submit = form.querySelector('button[type="submit"]');
+  if (submit) submit.disabled = true;
+  let pending = state.pendingProposalReviews.get(run.id);
+  if (!pending) {
+    pending = { commandId: `blueprint-proposal-review:${crypto.randomUUID()}`,
+      expectedVersion: state.runProject.version, proposalHash: proposal.proposalHash, criteria };
+    state.pendingProposalReviews.set(run.id, pending);
+  }
+  try {
+    const result = await api(`/api/v1/projects/${encodeURIComponent(run.projectId)}/blueprint-proposals/${encodeURIComponent(run.id)}/reviews`, {
+      method: 'POST', body: JSON.stringify({ schemaVersion: '1.0',
+        commandId: pending.commandId,
+        expectedVersion: pending.expectedVersion,
+        payload: { proposalHash: pending.proposalHash, criteria: pending.criteria } }),
+    });
+    state.pendingProposalReviews.delete(run.id);
+    state.runProject = result.data;
+    const applied = (result.data.events ?? []).find((event) => event.type === 'BlueprintProposalApplied'
+      && event.data?.proposalHash === proposal.proposalHash);
+    run.proposalApplication = deriveBlueprintProposalReviewState({
+      proposal, project: result.data, membershipAccess: state.proposalMembershipAccess, appliedEvent: applied,
+    });
+    renderRun();
+    notify('Owner rubric review saved as an append-only project event.');
+  } catch (error) {
+    if (proposalApplyFailureDisposition(error) === 'reconcile') state.pendingProposalReviews.delete(run.id);
+    if (error.status === 409) {
+      try {
+        state.runProject = (await api(`/api/v1/projects/${encodeURIComponent(run.projectId)}`)).data;
+        const applied = (state.runProject.events ?? []).find((event) => event.type === 'BlueprintProposalApplied'
+          && event.data?.proposalHash === proposal.proposalHash);
+        run.proposalApplication = deriveBlueprintProposalReviewState({
+          proposal, project: state.runProject, membershipAccess: state.proposalMembershipAccess, appliedEvent: applied,
+        });
+        renderRun();
+      } catch {
+        state.runProject = null;
+        run.proposalApplication = deriveBlueprintProposalReviewState({ proposal, project: null });
+        renderRun();
+      }
+    }
+    if (submit) submit.disabled = false;
+    notify(error.message);
+  }
+}
+
 async function command(action, body, event = null) {
   const button = document.querySelector(`[data-action="${action}"]`);
   const keyboardInvoked = isRunActionKeyboardActivation(event, button, document);
@@ -2359,8 +2427,10 @@ async function applyGeneratedProposal() {
   try {
     const result = await api(`/api/v1/projects/${encodeURIComponent(run.projectId)}/blueprint-proposals/${encodeURIComponent(run.id)}/apply`, {
       method: 'POST', body: JSON.stringify({
-        schemaVersion: '1.0', commandId: pending.commandId, expectedVersion: pending.expectedVersion,
-        payload: { proposalHash: pending.proposalHash },
+      schemaVersion: '1.0', commandId: pending.commandId, expectedVersion: pending.expectedVersion,
+        payload: { proposalHash: pending.proposalHash,
+          reviewEventId: run.proposalApplication.review.eventId,
+          reviewHash: run.proposalApplication.review.reviewHash },
       }),
     });
     state.pendingProposalApplies.delete(run.id);
@@ -2427,6 +2497,57 @@ function renderGeneratedProposal(proposal, application) {
     }))));
   } else {
     content.push(el('p', { className: 'muted', text: 'No supported structural evaluation is available. This proposal remains review-only.' }));
+  }
+  content.push(el('h4', { text: 'Owner semantic review' }));
+  content.push(el('p', { className: 'muted', text: 'These are human judgments, not automated quality scores. Evidence references bind to the proposal’s cited saved sources; their IDs and hashes do not prove that a claim is true.' }));
+  const review = application?.review;
+  if (review) {
+    content.push(el('p', { text: `Latest owner review: ${review.status === 'passed' ? 'all criteria passed' : 'needs attention'} · reviewer ${review.reviewer}` }));
+    content.push(el('ul', { className: 'proposal-human-review' }, review.criteria.map((criterion) => {
+      const evidenceNames = criterion.evidence.map((reference) => proposal.citations.find((citation) =>
+        citation.id === reference.sourceId && citation.hash === reference.sourceHash)?.name ?? 'Unavailable cited source');
+      return el('li', { text: `${HUMAN_PROPOSAL_RUBRIC.find(({ id }) => id === criterion.criterionId)?.label ?? criterion.criterionId}: ${criterion.judgment === 'pass' ? 'Pass' : 'Needs attention'} — ${criterion.reason} · evidence: ${evidenceNames.join(', ')}` });
+    })));
+    if (review.status === 'passed' && canApply) {
+      content.push(el('p', { className: 'muted', text: 'All four owner judgments passed. Applying remains a separate action that creates a new proposed blueprint version.' }));
+    }
+  } else if (application?.status === 'review-required' || application?.status === 'review-needs-attention') {
+    content.push(el('p', { className: 'muted', text: application.message }));
+  }
+  if (application?.canRecordReview) {
+    const prior = new Map((review?.criteria ?? []).map((criterion) => [criterion.criterionId, criterion]));
+    const rubricForm = el('form', { className: 'proposal-human-review-form', attrs: { 'data-form': 'proposal-human-review' } }, [
+      el('p', { className: 'muted', text: 'Review each criterion against the task and cited source context. All four must pass to enable the separate apply action. A new review appends a record; it does not alter prior judgments.' }),
+      ...HUMAN_PROPOSAL_RUBRIC.map(({ id, label }) => {
+        const old = prior.get(id);
+        const select = el('select', { attrs: { name: `judgment:${id}`, required: true, 'aria-label': `${label} judgment` } },
+          [el('option', { text: 'Choose judgment', attrs: { value: '', disabled: true, ...(old ? {} : { selected: true }) } }),
+            ...['pass', 'needs-attention'].map((judgment) => el('option', {
+            text: judgment === 'pass' ? 'Pass' : 'Needs attention',
+            attrs: { value: judgment, ...(old?.judgment === judgment ? { selected: true } : {}) },
+          }))]);
+        const reason = el('textarea', { attrs: { name: `reason:${id}`, required: true, minLength: 1, maxLength: 400,
+          rows: 2, 'aria-label': `${label} reason`, placeholder: 'Explain this judgment (1–400 characters).' } });
+        reason.value = old?.reason ?? '';
+        const evidence = el('fieldset', {}, [el('legend', { text: `${label} evidence (select at least one cited source)` }),
+          ...proposal.citations.map((citation) => {
+            const checked = old?.evidence?.some((reference) => reference.sourceId === citation.id && reference.sourceHash === citation.hash);
+            const source = proposal.sourceEnvelope?.sources?.find((entry) => entry.id === citation.id && entry.hash === citation.hash);
+            return el('label', { className: 'proposal-review-source' }, [
+              el('input', { attrs: { type: 'checkbox', name: `evidence:${id}`, value: citation.id, ...(checked ? { checked: true } : {}) } }),
+              el('span', {}, [document.createTextNode(`${citation.name} (${citation.type})`),
+                ...(source?.detail ? [el('span', { className: 'muted', text: ` — ${source.detail}` })] : [])]),
+            ]);
+          })]);
+        return el('fieldset', { className: 'proposal-review-criterion' }, [el('legend', { text: label }), select, reason, evidence]);
+      }),
+      el('button', { className: 'button primary', text: review ? 'Save new owner review' : 'Save owner review', attrs: { type: 'submit' } }),
+    ]);
+    rubricForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      void saveGeneratedProposalReview(rubricForm);
+    });
+    content.push(rubricForm);
   }
   content.push(el('h4', { text: 'Cited saved task inputs' }));
   content.push(el('ul', {}, proposal.citations.map((citation) => el('li', { text: `${citation.name} (${citation.type}) · ${citation.id} · ${citation.hash}` }))));

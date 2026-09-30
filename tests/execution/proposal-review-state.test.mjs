@@ -3,6 +3,8 @@ import test from 'node:test';
 import { deriveBlueprintProposalReviewState, proposalApplyFailureDisposition, proposalDesignLink } from '../../public/proposal-review-state.mjs';
 
 const proposal = {
+  runId: 'run-one', proposalHash: 'a'.repeat(64), sourceEnvelopeHash: 'b'.repeat(64),
+  citations: [{ id: 'source-one', hash: 'c'.repeat(64), name: 'Pinned source', type: 'information' }],
   blueprintId: 'blueprint-one', blueprintVersion: 4,
   evaluation: { evaluatorVersion: 1, rubricVersion: 1, meaning: 'structural-checks-only', status: 'passed', checks: [] },
 };
@@ -12,15 +14,68 @@ const project = {
   graph: { nodes: [{ id: 'capability-service' }] },
 };
 
-test('proposal review state allows only an owner to apply a current unapplied proposal', () => {
-  assert.deepEqual(deriveBlueprintProposalReviewState({ proposal, project, membershipAccess: 'owner' }), {
-    status: 'owner-can-apply', canApply: true, currentBlueprintVersion: 4,
-  });
+const reviewEvent = (judgment = 'pass', overrides = {}) => ({
+  eventId: 'event-review', type: 'BlueprintProposalReviewed', actor: 'owner-one', occurredAt: '2026-09-29T12:00:00.000Z',
+  data: { rubricVersion: 1, runId: proposal.runId, proposalHash: proposal.proposalHash,
+    blueprintId: proposal.blueprintId, blueprintVersion: proposal.blueprintVersion,
+    sourceEnvelopeHash: proposal.sourceEnvelopeHash, reviewHash: 'd'.repeat(64), reviewedBy: 'owner-one',
+    reviewedAt: '2026-09-29T12:00:00.000Z', criteria: [
+      'relevance-to-task', 'source-support', 'actionability', 'scope-and-risk',
+    ].map((criterionId) => ({ criterionId, judgment, reason: 'Reviewed against the cited source.',
+      evidence: [{ sourceId: 'source-one', sourceHash: 'c'.repeat(64) }] })),
+  }, ...overrides,
+});
 
-  const editor = deriveBlueprintProposalReviewState({ proposal, project, membershipAccess: 'editor' });
+test('proposal requires a matching all-pass owner rubric review before apply', () => {
+  const required = deriveBlueprintProposalReviewState({ proposal, project, membershipAccess: 'owner' });
+  assert.equal(required.status, 'review-required');
+  assert.equal(required.canRecordReview, true);
+  assert.equal(required.canApply, false);
+
+  const reviewedProject = { ...project, events: [reviewEvent()] };
+  const owner = deriveBlueprintProposalReviewState({ proposal, project: reviewedProject, membershipAccess: 'owner' });
+  assert.equal(owner.status, 'owner-can-apply');
+  assert.equal(owner.canApply, true);
+  assert.equal(owner.review.status, 'passed');
+
+  const editor = deriveBlueprintProposalReviewState({ proposal, project: reviewedProject, membershipAccess: 'editor' });
   assert.equal(editor.status, 'owner-required');
+  assert.equal(editor.canRecordReview, false);
   assert.equal(editor.canApply, false);
-  assert.match(editor.message, /workspace owner can apply/i);
+  assert.match(editor.message, /only a workspace owner/i);
+
+  const needsAttention = deriveBlueprintProposalReviewState({ proposal,
+    project: { ...project, events: [reviewEvent('needs-attention')] }, membershipAccess: 'owner' });
+  assert.equal(needsAttention.status, 'review-needs-attention');
+  assert.equal(needsAttention.canApply, false);
+  assert.equal(needsAttention.canRecordReview, true, 'an owner can append a corrective review');
+  const supersededPass = deriveBlueprintProposalReviewState({ proposal,
+    project: { ...project, events: [reviewEvent(), reviewEvent('needs-attention', {
+      eventId: 'event-review-later', occurredAt: '2026-09-29T12:01:00.000Z',
+      data: { ...reviewEvent('needs-attention').data, reviewedAt: '2026-09-29T12:01:00.000Z' },
+    })] }, membershipAccess: 'owner' });
+  assert.equal(supersededPass.status, 'review-needs-attention');
+  assert.equal(supersededPass.canApply, false, 'a later negative review supersedes an earlier all-pass review');
+
+  const unsupportedLatest = deriveBlueprintProposalReviewState({ proposal,
+    project: { ...project, events: [reviewEvent(), reviewEvent('pass', {
+      eventId: 'event-review-unsupported-latest',
+      data: { ...reviewEvent().data, rubricVersion: 99 },
+    })] }, membershipAccess: 'owner' });
+  assert.equal(unsupportedLatest.status, 'review-required');
+  assert.equal(unsupportedLatest.review, null);
+  assert.equal(unsupportedLatest.canApply, false,
+    'an unsupported newer review must not expose an older all-pass review');
+
+  const malformedLatest = deriveBlueprintProposalReviewState({ proposal,
+    project: { ...project, events: [reviewEvent(), reviewEvent('pass', {
+      eventId: 'event-review-malformed-latest',
+      data: { ...reviewEvent().data, criteria: [] },
+    })] }, membershipAccess: 'owner' });
+  assert.equal(malformedLatest.status, 'review-required');
+  assert.equal(malformedLatest.review, null);
+  assert.equal(malformedLatest.canApply, false,
+    'a malformed newer review must fail closed instead of falling back to an older pass');
 });
 
 test('stale, applied, and unavailable proposals never expose the apply action', () => {
@@ -35,13 +90,14 @@ test('stale, applied, and unavailable proposals never expose the apply action', 
   }).status, 'stale', 'a matching version number with a different blueprint ID is stale');
 
   const applied = deriveBlueprintProposalReviewState({
-    proposal, project: { latestBlueprint: { id: proposal.blueprintId, version: 5 } },
+    proposal, project: { latestBlueprint: { id: proposal.blueprintId, version: 5 }, events: [reviewEvent()] },
     membershipAccess: 'owner', appliedEvent: { eventId: 'event-apply', data: { appliedBlueprintVersion: 5, objectId: 'capability-service' } },
   });
   assert.equal(applied.status, 'applied');
   assert.equal(applied.canApply, false);
   assert.equal(applied.blueprintVersion, 5);
   assert.equal(applied.objectId, 'capability-service');
+  assert.equal(applied.review.status, 'passed', 'the applied state keeps the human review inspectable');
 
   const unavailable = deriveBlueprintProposalReviewState({ proposal, project: null, membershipAccess: 'owner' });
   assert.equal(unavailable.status, 'project-unavailable');

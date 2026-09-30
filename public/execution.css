@@ -65,3 +65,12 @@
 .repository-diff-removed { color: #991b1b; background: #fee2e2; display: inline-block; min-width: 100%; }
 .repository-diff-context { display: inline-block; min-width: 100%; }
 @media (max-width: 760px) { .execution-shell { display: block; }.execution-sidebar { border-right: 0; border-bottom: 1px solid var(--exec-line); padding: 18px 15px; }.run-list { display: flex; overflow-x: auto; gap: 7px; }.run-link { flex: 0 0 270px; min-height: 60px; }.execution-main { padding: 26px 15px 50px; }.run-heading { flex-direction: column; }.evidence-grid { grid-template-columns: repeat(2,1fr); }.inline-action { flex-direction: column; }.inline-action .button { min-height: 44px; } }
+.proposal-human-review-form { display: grid; gap: 14px; margin: 16px 0; max-width: 100%; }
+.proposal-review-criterion { min-width: 0; display: grid; gap: 10px; border: 1px solid var(--exec-line); border-radius: 8px; padding: 12px; }
+.proposal-review-criterion > legend, .proposal-review-criterion > fieldset > legend { color: var(--ink); font-weight: 600; }
+.proposal-review-criterion select, .proposal-review-criterion textarea { box-sizing: border-box; width: 100%; max-width: 100%; color: var(--ink); background: #0d1218; border: 1px solid var(--exec-line); border-radius: 7px; padding: 10px; font: inherit; }
+.proposal-review-criterion > fieldset { min-width: 0; display: grid; gap: 8px; border: 0; padding: 0; }
+.proposal-review-source { display: flex; gap: 8px; align-items: flex-start; overflow-wrap: anywhere; }
+.proposal-review-source input { flex: 0 0 auto; margin-top: 4px; }
+.proposal-review-source span { min-width: 0; }
+.proposal-human-review, .proposal-structural-checks { padding-inline-start: 22px; overflow-wrap: anywhere; }

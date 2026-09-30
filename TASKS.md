@@ -2310,6 +2310,28 @@ repair check superseded it.
   resilience and operations qualification, while keeping authorization, tenant
   isolation, safe tool bounds and auditable state transitions in the path.
 
+  PR-06 bounded owner proposal-review increment (2026-09-30): applying a saved
+  generated proposal now requires a separate, append-only review by a verified
+  human workspace owner. The versioned rubric asks about task relevance, factual
+  accuracy and support from pinned cited sources, actionability, and scope/risk.
+  Each judgment requires an explicit pass/needs-attention choice, a bounded reason,
+  and at least one exact cited source ID/hash. Reviews bind to run, proposal hash,
+  blueprint ID/version and source-envelope hash. Only the latest valid all-pass
+  review enables apply; later negative, malformed or unsupported reviews prevent
+  reuse of an older pass. The apply event records the review event/hash, and the
+  review remains visible after apply/restart. Structural checks remain separately
+  labeled; the UI states that human judgments are not automated scores and hashes
+  do not establish truth. Focused helper/state/proposal/served-client tests passed
+  20/20 (1.023s); after final latest-event fail-closed and rubric-copy changes,
+  helper/state tests passed 8/8 (0.252s). The name-filtered PostgreSQL linked-task
+  proposal journey passed 1/1 (16.848s), including workload/editor denial,
+  apply-before-review, negative and superseded reviews, idempotent replay,
+  application, and restart readback; its provider is a disposable loopback stub.
+  `node --check server.mjs` and `git diff --check` passed. No live provider,
+  credential, browser or full `npm run check` was run. This is human rubric review
+  evidence, not automated provider-quality qualification or a tenant-wide dollar
+  budget; PR-06, its cursor and release gates remain open.
+
   Development provider authorization (2026-09-29): the user explicitly permits
   use of the exposed low-budget DeepSeek test key on this private VPS for bounded
   synthetic OrgWard verification and a fresh model task, and does not intend to

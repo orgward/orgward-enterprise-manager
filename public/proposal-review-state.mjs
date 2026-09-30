@@ -3,6 +3,44 @@ import { encodeStudioRoute } from './shared-interactions.mjs';
 const SUPPORTED_EVALUATOR_VERSION = 1;
 const SUPPORTED_RUBRIC_VERSION = 1;
 const EVALUATION_MEANING = 'structural-checks-only';
+export const HUMAN_PROPOSAL_RUBRIC = Object.freeze([
+  { id: 'relevance-to-task', label: 'Relevant to the assigned task' },
+  { id: 'source-support', label: 'Factually accurate and supported by pinned cited sources' },
+  { id: 'actionability', label: 'Concrete and actionable' },
+  { id: 'scope-and-risk', label: 'Within approved scope and risk' },
+]);
+
+function isValidHumanReview(event, proposal) {
+  return event?.data?.rubricVersion === SUPPORTED_RUBRIC_VERSION
+    && event.data?.blueprintId === proposal?.blueprintId
+    && event.data?.blueprintVersion === proposal?.blueprintVersion
+    && event.data?.sourceEnvelopeHash === proposal?.sourceEnvelopeHash
+    && typeof event.data?.reviewHash === 'string'
+    && Array.isArray(event.data?.criteria)
+    && event.data.criteria.length === HUMAN_PROPOSAL_RUBRIC.length
+    && event.data.criteria.every((criterion, index) => criterion.criterionId === HUMAN_PROPOSAL_RUBRIC[index].id
+      && ['pass', 'needs-attention'].includes(criterion.judgment)
+      && typeof criterion.reason === 'string' && criterion.reason.length >= 1 && criterion.reason.length <= 400
+      && Array.isArray(criterion.evidence) && criterion.evidence.length > 0
+      && criterion.evidence.every((ref) => proposal.citations?.some((citation) => citation.id === ref.sourceId
+        && citation.hash === ref.sourceHash)));
+}
+
+function latestHumanReview(proposal, project) {
+  const event = (project?.events ?? []).filter((candidate) => candidate?.type === 'BlueprintProposalReviewed'
+    && candidate.data?.runId === proposal?.runId
+    && candidate.data?.proposalHash === proposal?.proposalHash).at(-1) ?? null;
+  if (!event || !isValidHumanReview(event, proposal)) return null;
+  const passed = event.data.criteria.every((criterion) => criterion.judgment === 'pass');
+  return {
+    eventId: event.eventId,
+    reviewHash: event.data.reviewHash,
+    reviewer: event.data.reviewedBy,
+    reviewedAt: event.data.reviewedAt,
+    criteria: event.data.criteria,
+    status: passed ? 'passed' : 'needs-attention',
+  };
+}
 
 function proposalEvaluationFailure(proposal) {
   const evaluation = proposal?.evaluation;
@@ -28,6 +66,7 @@ export function deriveBlueprintProposalReviewState({ proposal, project, membersh
   if (appliedEvent) {
     return {
       status: 'applied', canApply: false,
+      review: latestHumanReview(proposal, project),
       blueprintVersion: appliedEvent.data?.appliedBlueprintVersion ?? null,
       objectId: typeof appliedEvent.data?.objectId === 'string' ? appliedEvent.data.objectId : null,
       eventId: appliedEvent.eventId ?? null,
@@ -50,13 +89,24 @@ export function deriveBlueprintProposalReviewState({ proposal, project, membersh
       message: evaluationFailure,
     };
   }
+  const review = latestHumanReview(proposal, project);
+  const reviewPassed = review?.status === 'passed';
   if (membershipAccess === 'owner') {
-    return { status: 'owner-can-apply', canApply: true, currentBlueprintVersion: latest.version };
+    return {
+      status: reviewPassed ? 'owner-can-apply' : review ? 'review-needs-attention' : 'review-required',
+      canRecordReview: true, canApply: reviewPassed, review, currentBlueprintVersion: latest.version,
+      ...(reviewPassed ? {} : { message: review
+        ? 'This review marked at least one item as needing attention. Record a new all-pass review before applying.'
+        : 'Complete and save the owner rubric review before applying this proposal.' }),
+    };
   }
   return {
     status: 'owner-required', canApply: false,
+    canRecordReview: false, review,
     currentBlueprintVersion: latest.version,
-    message: 'A workspace owner can apply this proposal as a new immutable proposed version. Other project members can review it here.',
+    message: review
+      ? `Owner review recorded: ${review.status}. Only a workspace owner can record a new review or apply this proposal.`
+      : 'A workspace owner must record the rubric review and apply this proposal. Other project members can review it here.',
   };
 }
 
