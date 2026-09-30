@@ -5543,6 +5543,23 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   unchanged. Broker-backed patch generation and isolated verification remain
   out of scope for this slice.
 
+  Pure GitHub snapshot text-context verifier (2026-09-30): Added a standalone
+  side-effect-free server module that verifies the current GitHub App binding,
+  canonical repository/ref IDs, deterministic snapshot ID, policy/commit/tree
+  identity, sorted safe manifest paths, regular file modes, count/size bounds,
+  canonical base64, raw SHA-256, Git blob SHA-1, aggregate size and manifest/tree
+  digest before exposing any source text. Its selection builder requires one to
+  eight unique paths present in the pinned snapshot, enforces 8,000 bytes per
+  file and in aggregate, and rejects binary controls or invalid UTF-8 with fatal
+  decoding. It returns only selected path/mode/hash/text plus pinned snapshot
+  identity; no route, persisted selection, provider call or dispatch was added.
+  Focused unit tests passed 4/4 on initial run and again after adding separate
+  SHA-256/blob-hash tamper assertions (0 failures, cancellations or skips; final
+  0.25s). Logs: `/tmp/orgward-tests-NA2Fvt/node-test.tap.log` and
+  `/tmp/orgward-tests-Cvsbb3/node-test.tap.log`. Syntax checks and
+  `git diff --check` passed. No external calls or effects occurred; PR-08,
+  checkbox, cursor and release gates remain unchanged.
+
 - [ ] PR-09 — Authorized environments, release and rollback (T-33–T-35; E-10).
   Let a user review an exact candidate, approve a protected environment action,
   observe its result and recover through rollback. Bind authority to principals,
