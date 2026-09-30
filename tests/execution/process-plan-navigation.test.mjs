@@ -98,6 +98,14 @@ test('selected run route round-trips only an accessible saved run for exact keyb
     `/execution.html?project=${projectId}&process=process-customer-intake`);
 });
 
+test('GitHub onboarding handoff routes only a valid immutable snapshot ID in its project context', () => {
+  const snapshotId = 'a'.repeat(64);
+  assert.equal(encodeExecutionRoute(projectId, null, null, snapshotId),
+    `/execution.html?project=${projectId}&githubSnapshot=${snapshotId}`);
+  assert.equal(encodeExecutionRoute(projectId, null, null, 'a'.repeat(63)), `/execution.html?project=${projectId}`);
+  assert.equal(encodeExecutionRoute('invalid', null, null, snapshotId), '/execution.html');
+});
+
 test('saved plan card links to its available source process in the same project map', () => {
   const processId = 'process-customer-intake';
   const blueprint = {

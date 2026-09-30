@@ -12,6 +12,7 @@ import { createApp } from '../server.mjs';
 import { blueprintPublicationDigest, createProject, validateBlueprint } from '../src/model.mjs';
 import { coverageForBlueprint } from '../public/coverage-dashboard.mjs';
 import { linkedProcessTaskResult } from '../public/linked-process-task-result.mjs';
+import { encodeExecutionRoute } from '../public/shared-interactions.mjs';
 import { deriveBlueprintProposalReviewState } from '../public/proposal-review-state.mjs';
 import { processTaskSourceReview } from '../public/process-task-source-review.mjs';
 import { processTaskHumanInputReview } from '../public/human-task-input-review.mjs';
@@ -9241,6 +9242,9 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     size: githubSourceBytes.length, blobSha: githubBlobSha }];
   const githubManifestDigest = createHash('sha256').update(JSON.stringify(githubManifest)).digest('hex');
   const githubSnapshotId = createHash('sha256').update(`${githubRepositoryId}\0${githubBranchRef}\0${githubCommitOid}\0github-read-snapshot-v1`).digest('hex');
+  const githubHandoffRoute = encodeExecutionRoute(project.id, null, null, githubSnapshotId);
+  const handedOffSnapshotId = new URL(githubHandoffRoute, 'http://orgward.test').searchParams.get('githubSnapshot');
+  assert.equal(handedOffSnapshotId, githubSnapshotId, 'the onboarding action preserves the exact immutable snapshot ID');
   const githubSnapshot = { id: githubSnapshotId, repositoryId: githubRepositoryId, branchRef: githubBranchRef,
     commitOid: githubCommitOid, treeOid: 'd'.repeat(40), treeDigest: githubManifestDigest,
     manifestDigest: githubManifestDigest, policyVersion: 'github-read-snapshot-v1', fileCount: 1,
@@ -9256,10 +9260,12 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(githubRepositoryInventory.githubExecutionAvailable, true,
     'a fixed verifier, PostgreSQL snapshot store, broker and model profile make the GitHub task selector available');
   const githubRequest = await taskRequest('process-task-github-candidate-integration', {
-    ...planInput, revision: 3, profileId: 'process-task-openai', githubSnapshotId, githubSelectedPaths: ['README.md'],
+    ...planInput, revision: 3, profileId: 'process-task-openai', githubSnapshotId: handedOffSnapshotId, githubSelectedPaths: ['README.md'],
   });
   assert.equal(githubRequest.status, 'AWAITING_APPROVAL');
   assert.equal(githubRequest.processTaskRef.repository.kind, 'github-app');
+  assert.equal(githubRequest.processTaskRef.repository.snapshotId, handedOffSnapshotId,
+    'the linked PostgreSQL request pins the snapshot handed off from onboarding');
   assert.equal(githubRequest.processTaskRef.repository.source.commitOid, githubCommitOid);
   assert.deepEqual(githubRequest.processTaskRef.repository.selectedFiles.map((file) => file.path), ['README.md']);
   assert.equal(Object.hasOwn(githubRequest.profile, 'credential'), false,
@@ -9294,6 +9300,8 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(verifierObservations[0].executable, fixedGithubVerifierProfile.executable);
   assert.deepEqual(verifierObservations[0].args, fixedGithubVerifierProfile.args);
   assert.equal(githubCandidate.execution.repositoryCandidate.verification.status, 'COMPLETED');
+  assert.equal(githubCandidate.execution.repositoryCandidate.source.snapshotId, handedOffSnapshotId,
+    'the candidate remains pinned to the handed-off snapshot after approval and execution');
   assert.deepEqual(githubCandidate.execution.repositoryCandidate.changes.map((change) => [change.path, change.change]), [
     ['README.md', 'modified'],
   ]);

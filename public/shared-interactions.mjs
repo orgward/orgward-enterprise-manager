@@ -33,9 +33,12 @@ export function encodeStudioRoute({ projectId = null, view = 'blueprint', select
   return query ? `/?${query}` : '/';
 }
 
-export function encodeExecutionRoute(projectId = null, planTarget = null, runId = null) {
+export function encodeExecutionRoute(projectId = null, planTarget = null, runId = null, githubSnapshotId = null) {
   const studioRoute = encodeStudioRoute({ projectId });
   const url = new URL(studioRoute, 'http://orgward.local');
+  if (PROJECT_ID.test(projectId ?? '') && /^[a-f0-9]{64}$/.test(githubSnapshotId ?? '')) {
+    url.searchParams.set('githubSnapshot', githubSnapshotId);
+  }
   if (PROJECT_ID.test(projectId ?? '') && planTarget?.projectId === projectId
     && SAFE_ID.test(planTarget.processId ?? '')) {
     url.searchParams.set('process', planTarget.processId);

@@ -5667,6 +5667,49 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   (passing repair). Static syntax checks and `git diff --check` passed. No full
   check, provider/GitHub live call, commit or push was performed.
 
+  Snapshot-to-task handoff (2026-09-30): saved GitHub snapshot rows now expose
+  an explicit Execution link carrying the exact validated snapshot ID. The
+  Execution route accepts only a 64-hex identifier and preselects it only when
+  that exact ID appears in the current project's authorized repository list;
+  the existing project-scoped file-manifest read and task-request revalidation
+  remain authoritative. Per-task file selection is loaded without preselecting
+  paths; the user still chooses paths, task and profile and explicitly submits.
+  The filtered PostgreSQL fixture derives the request snapshot from the
+  onboarding handoff route and asserts the request and candidate retain that
+  ID. One combined focused invocation ran the handoff route test, served-client
+  test and linked persistence test: 2 passed, 1 failed, 0 skipped. The route and
+  persistence assertions passed; the served-client test stopped first on an
+  existing stale assertion at `tests/execution/server.test.mjs:597` expecting
+  `/pinned input record content and source notes/`, text no longer present in
+  the current served Execution client. After updating only that assertion to
+  the existing disclosure copy, the single repair invocation again completed
+  2/3 with 1 failure and 0 skips: the route and persistence tests passed, while
+  the served-client test stopped at the next stale assertion on line 598,
+  `/unrelated project records or credential material/`, also absent from the
+  current served source. The run did not reach the new handoff source assertions;
+  no further fixes or reruns were made. Logs:
+  `/tmp/orgward-github-snapshot-handoff-focused.tap.log` (initial 2/3) and
+  `/tmp/orgward-github-snapshot-handoff-repair.tap.log` (repair 2/3). The repair
+  removed only the stale line-598 disclosure assertion and the line-679 message
+  claiming task requests remain disabled; line 597 already checks the current
+  credential/source disclosure and the handoff assertions cover no auto-submit.
+  The one isolated served-client rerun passed 1/1 (0 failures, cancellations or
+  skips; TAP 629.204ms), log
+  `/tmp/orgward-github-snapshot-handoff-server-repair.tap.log`. `git diff
+  --check` passed. No full check, browser, live provider/GitHub call, external
+  effect, commit or push occurred; PR-08, task and gate pointers remain open.
+
+  Snapshot handoff unsent-draft guard follow-up (2026-09-30): the saved-snapshot
+  Execution link now uses the existing `allowRouteChange()` guard, matching the
+  neighboring Plan-this-process link. The served-client assertion verifies the
+  guard. The prior isolated server run passed 1/1 (TAP 629.204ms), log
+  `/tmp/orgward-github-snapshot-handoff-server-repair.tap.log`; the final
+  filtered server run passed 1/1 (0 failures, cancellations or skips; TAP
+  640.197ms), log
+  `/tmp/orgward-github-snapshot-handoff-unsaved-draft.tap.log`. No PostgreSQL,
+  browser, live provider/GitHub call or full check was run. PR-08, task and gate
+  pointers remain open and unchanged.
+
 - [ ] PR-09 — Authorized environments, release and rollback (T-33–T-35; E-10).
   Let a user review an exact candidate, approve a protected environment action,
   observe its result and recover through rollback. Bind authority to principals,

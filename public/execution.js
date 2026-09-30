@@ -40,8 +40,11 @@ import { boundedLineDiff, readBoundedUtf8Response } from './repository-text-diff
 import { encodeExecutionRoute, encodeStudioRoute, executionProcessTarget, executionProjectContext, executionRunRouteTarget } from './shared-interactions.mjs';
 import { currentProcessPlanFocusTarget, linkedPlanInstanceRouteTarget, linkedProcessPlanTarget, processPlanFreshness, processPlanRevisionFocusTarget, selectLinkedProcessPlanInstance, sourceProcessDesignLink } from './process-plan-navigation.mjs';
 
+const requestedGithubSnapshotHandoffId = new URLSearchParams(window.location.search).get('githubSnapshot');
 const state = {
-  meta: null, projects: [], runs: [], taskInstances: [], runtimePlans: [], localRepositories: [], githubExecutionAvailable: false, githubExecutionUnavailableReason: null, githubFileManifests: new Map(), githubFileSelections: new Map(), run: null, runProject: null, proposalMembershipAccess: null, authenticated: false, currentPrincipal: null, planningProject: null, projectContextId: null,
+  meta: null, projects: [], runs: [], taskInstances: [], runtimePlans: [], localRepositories: [], githubExecutionAvailable: false, githubExecutionUnavailableReason: null,
+  githubSnapshotHandoffId: /^[a-f0-9]{64}$/.test(requestedGithubSnapshotHandoffId ?? '') ? requestedGithubSnapshotHandoffId : null,
+  githubFileManifests: new Map(), githubFileSelections: new Map(), githubRepositorySelections: new Map(), run: null, runProject: null, proposalMembershipAccess: null, authenticated: false, currentPrincipal: null, planningProject: null, projectContextId: null,
   actorBindingRows: [], actorBindingProjectId: null, actorBindingReadAvailable: false,
   selectedPlanInstances: new Map(),
   processTaskStatuses: new Map(),
@@ -481,6 +484,13 @@ async function loadPlanningProject(projectId, preferredProcessId = null, planTar
         state.localRepositories = repositories.repositories ?? [];
         state.githubExecutionAvailable = repositories.githubExecutionAvailable === true;
         state.githubExecutionUnavailableReason = repositories.githubExecutionUnavailableReason ?? null;
+        if (state.githubSnapshotHandoffId) {
+          const handedOffSnapshot = state.localRepositories.find((repository) => repository.kind === 'github'
+            && repository.snapshotId === state.githubSnapshotHandoffId);
+          executionAnnouncement.textContent = handedOffSnapshot
+            ? `Snapshot from repository onboarding is available: ${handedOffSnapshot.repositoryName} · ${handedOffSnapshot.branchRef} · ${handedOffSnapshot.commitOid}. Choose a task, profile and files; nothing has been submitted.`
+            : 'The handed-off GitHub snapshot is not available to this project. Choose a current saved snapshot from this project to continue.';
+        }
       } catch { state.localRepositories = []; state.githubExecutionAvailable = false; state.githubExecutionUnavailableReason = 'source-list-unavailable'; }
     } else {
       state.taskInstances = []; state.runtimePlans = []; state.localRepositories = []; state.githubExecutionAvailable = false; state.githubExecutionUnavailableReason = null;
@@ -1157,6 +1167,19 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
               attrs: { value: '__saved_repository_unavailable__', disabled: true, selected: true },
             }));
           }
+          const repositorySelectionKey = `${project.id}\n${plan.id}\n${task.id}`;
+          if (!requestPresentation.locked) {
+            if (state.githubRepositorySelections.has(repositorySelectionKey)) {
+              repositorySelect.value = state.githubRepositorySelections.get(repositorySelectionKey);
+            } else if (state.githubSnapshotHandoffId) {
+              const handedOffSnapshot = state.localRepositories.find((repository) => repository.kind === 'github'
+                && repository.snapshotId === state.githubSnapshotHandoffId);
+              if (handedOffSnapshot) {
+                repositorySelect.value = handedOffSnapshot.selectionId;
+                state.githubRepositorySelections.set(repositorySelectionKey, handedOffSnapshot.selectionId);
+              }
+            }
+          }
           const githubFileSelectionPanel = el('fieldset', { className: 'github-snapshot-file-selection', attrs: { hidden: true } });
           const renderGithubFileSelection = async () => {
             githubFileSelectionPanel.replaceChildren();
@@ -1192,7 +1215,9 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
             const summaryText = () => {
               const chosen = eligible.filter((file) => selectedPaths.has(file.path));
               const bytes = chosen.reduce((total, file) => total + file.size, 0);
-              summary.textContent = `${chosen.length}/${MAX_GITHUB_SELECTED_FILES} files selected · ${bytes}/${MAX_GITHUB_SELECTED_BYTES} UTF-8 bytes. Only these validated files can be sent to the selected model after approval.`;
+              const handoffDisclosure = repository.snapshotId === state.githubSnapshotHandoffId
+                ? 'Snapshot from onboarding is preselected. Choose paths, task and profile; no request is submitted automatically. ' : '';
+              summary.textContent = `${handoffDisclosure}${chosen.length}/${MAX_GITHUB_SELECTED_FILES} files selected · ${bytes}/${MAX_GITHUB_SELECTED_BYTES} UTF-8 bytes. Only these validated files can be sent to the selected model after approval.`;
             };
             summaryText();
             if (manifest.files.length > eligible.length) githubFileSelectionPanel.append(el('p', { className: 'muted',
@@ -1225,7 +1250,10 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
               ]));
             }
           };
-          repositorySelect.addEventListener('change', () => { void renderGithubFileSelection(); });
+          repositorySelect.addEventListener('change', () => {
+            state.githubRepositorySelections.set(repositorySelectionKey, repositorySelect.value);
+            void renderGithubFileSelection();
+          });
           const updateRepositorySelectionState = () => {
             const selected = state.localRepositories.find((repository) => (repository.selectionId ?? repository.id) === repositorySelect.value);
             const selectedProfile = (state.meta?.profiles ?? []).find((profile) => profile.id === profileSelect.value);

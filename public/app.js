@@ -328,7 +328,17 @@ async function refreshGitHubSnapshots() {
       : !result.configured ? 'GitHub App onboarding is disabled until the server operator configures the GitHub App.' : '';
     list.replaceChildren();
     for (const repository of result.repositories ?? []) for (const snapshot of repository.snapshots ?? []) {
-      list.append(element('li', { text: `${repository.repositoryName} · ${repository.branchRef} · ${snapshot.commitOid} · ${snapshot.fileCount} files / ${snapshot.totalBytes} bytes · tree ${snapshot.treeDigest}` }));
+      const useSnapshot = element('a', { text: 'Use this snapshot in an Execution task', attrs: {
+        href: encodeExecutionRoute(state.project.id, null, null, snapshot.id),
+        'data-github-snapshot-handoff': snapshot.id,
+      } });
+      useSnapshot.addEventListener('click', (event) => {
+        if (!allowRouteChange()) event.preventDefault();
+      });
+      list.append(element('li', {}, [
+        element('span', { text: `${repository.repositoryName} · ${repository.branchRef} · ${snapshot.commitOid} · ${snapshot.fileCount} files / ${snapshot.totalBytes} bytes · tree ${snapshot.treeDigest}` }),
+        useSnapshot,
+      ]));
     }
   } catch (error) {
     status.textContent = error.message;

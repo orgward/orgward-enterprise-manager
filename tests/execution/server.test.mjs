@@ -594,8 +594,7 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(executionSource, /Instruction revision \$\{revision\.revision\} · \$\{revision\.reason\}/);
   assert.match(executionSource, /Pausing now clears this approval/);
   assert.match(executionSource, /This request has started\. Pause, resume and withdrawal apply only before dispatch/i);
-  assert.match(executionSource, /pinned input record content and source notes/);
-  assert.match(executionSource, /unrelated project records or credential material/);
+  assert.match(executionSource, /receives the saved task instructions and its pinned input record content\. For a GitHub snapshot it receives only the validated files selected above; its credential stays in the server broker/);
   assert.match(executionSource, /Generated blueprint proposal/);
   assert.match(executionSource, /proposal-review-state\.mjs/);
   assert.match(executionSource, /proposalDesignLink/);
@@ -666,11 +665,16 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(executionSource, /Repository source/);
   assert.match(executionSource, /repository\.kind === 'github' && !state\.githubExecutionAvailable/);
   assert.match(executionSource, /githubSnapshotId/);
+  assert.match(executionSource, /new URLSearchParams\(window\.location\.search\)\.get\('githubSnapshot'\)/,
+    'the Execution page accepts a snapshot handoff from its route');
+  assert.match(executionSource, /repository\.snapshotId === state\.githubSnapshotHandoffId/,
+    'a handoff is matched only against the current project repository listing');
+  assert.match(executionSource, /Snapshot from onboarding is preselected\. Choose paths, task and profile; no request is submitted automatically\./,
+    'the served selection panel keeps task submission explicit after handoff');
   assert.match(executionSource, /remote candidate execution is not enabled yet/);
   assert.match(executionSource, /\/api\/execution\/github-snapshots\/\$\{encodeURIComponent\(snapshotId\)\}\/files/);
   assert.match(executionSource, /MAX_GITHUB_SELECTED_FILES = 8/);
   assert.match(executionSource, /MAX_GITHUB_SELECTED_BYTES = 8_000/);
-  assert.match(executionSource, /This selection stays in page state; task request and run remain disabled/);
   assert.match(executionSource, /state\.githubFileSelections\.set\(selectionKey, selectedPaths\)/);
   assert.match(executionSource, /snapshotDigest = repository\.treeDigest/);
   assert.match(executionSource, /repositoryRefId = repository\.refId/);
@@ -749,5 +753,11 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(enterpriseSource, /Plan this process in Execution/);
   assert.match(enterpriseSource, /blueprintItem\(state\.project\.latestBlueprint, node\.id\)/);
   assert.match(enterpriseSource, /encodeExecutionRoute\(state\.project\.id, \{ projectId: state\.project\.id, processId: savedProcess\.id \}\)/);
+  assert.match(enterpriseSource, /Use this snapshot in an Execution task/,
+    'saved onboarding snapshots have an explicit next-step action');
+  assert.match(enterpriseSource, /encodeExecutionRoute\(state\.project\.id, null, null, snapshot\.id\)/,
+    'the onboarding action carries the exact saved snapshot ID into Execution');
+  assert.match(enterpriseSource, /useSnapshot\.addEventListener\('click', \(event\) => \{\s*if \(!allowRouteChange\(\)\) event\.preventDefault\(\);\s*\}\)/,
+    'snapshot handoff preserves unsent drafts');
   assert.match(enterpriseSource, /planLink\.addEventListener\('click', \(event\) => \{\s*if \(!allowRouteChange\(\)\) event\.preventDefault\(\);\s*\}\)/);
 });
