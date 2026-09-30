@@ -1169,7 +1169,7 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
             const snapshotId = repository.snapshotId;
             const manifestCacheKey = `${project.tenantId}\n${project.id}\n${snapshotId}`;
             const selectionKey = `${project.id}\n${plan.id}\n${task.id}\n${snapshotId}`;
-            githubFileSelectionPanel.append(el('legend', { text: 'Select text files for a future patch request' }));
+            githubFileSelectionPanel.append(el('legend', { text: 'Select text files for the proposed patch' }));
             const summary = el('p', { className: 'muted', attrs: { role: 'status', 'aria-live': 'polite' },
               text: 'Loading file metadata; source bytes are not sent to this page.' });
             githubFileSelectionPanel.append(summary);
@@ -1192,7 +1192,7 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
             const summaryText = () => {
               const chosen = eligible.filter((file) => selectedPaths.has(file.path));
               const bytes = chosen.reduce((total, file) => total + file.size, 0);
-              summary.textContent = `${chosen.length}/${MAX_GITHUB_SELECTED_FILES} files selected · ${bytes}/${MAX_GITHUB_SELECTED_BYTES} UTF-8 bytes. This selection stays in page state; task request and run remain disabled.`;
+              summary.textContent = `${chosen.length}/${MAX_GITHUB_SELECTED_FILES} files selected · ${bytes}/${MAX_GITHUB_SELECTED_BYTES} UTF-8 bytes. Only these validated files can be sent to the selected model after approval.`;
             };
             summaryText();
             if (manifest.files.length > eligible.length) githubFileSelectionPanel.append(el('p', { className: 'muted',
@@ -1218,6 +1218,7 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
                 selectedPaths = next;
                 state.githubFileSelections.set(selectionKey, selectedPaths);
                 summaryText();
+                updateRepositorySelectionState();
               });
               githubFileSelectionPanel.append(el('label', { className: 'github-snapshot-file-option' }, [
                 checkbox, el('span', { text: `${file.path} · ${file.size} bytes · ${file.contentHash.slice(0, 12)}` }),
@@ -1227,17 +1228,27 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
           repositorySelect.addEventListener('change', () => { void renderGithubFileSelection(); });
           const updateRepositorySelectionState = () => {
             const selected = state.localRepositories.find((repository) => (repository.selectionId ?? repository.id) === repositorySelect.value);
-            const disabledRemote = selected?.kind === 'github' && !state.githubExecutionAvailable;
+            const selectedProfile = (state.meta?.profiles ?? []).find((profile) => profile.id === profileSelect.value);
+            const hasModelProfile = ['provider-openai', 'provider-deepseek'].includes(selectedProfile?.kind);
+            const selectionKey = selected?.kind === 'github' ? `${project.id}\n${plan.id}\n${task.id}\n${selected.snapshotId}` : null;
+            const pendingPaths = pendingRequest?.payload?.githubSnapshotId === selected?.snapshotId
+              ? pendingRequest.payload.githubSelectedPaths : null;
+            const selectedCount = pendingPaths?.length ?? (selectionKey ? (state.githubFileSelections.get(selectionKey)?.size ?? 0) : 0);
+            const disabledRemote = selected?.kind === 'github'
+              && (!state.githubExecutionAvailable || !hasModelProfile || selectedCount < 1);
             requestButton.disabled = requestPresentation.buttonDisabled || disabledRemote;
-            if (disabledRemote) requestStatus.textContent = 'This pinned GitHub snapshot is selectable, but remote candidate execution is not enabled yet.';
+            if (selected?.kind === 'github' && !state.githubExecutionAvailable) requestStatus.textContent = 'GitHub candidate execution is unavailable until a fixed verifier and brokered model profile are configured.';
+            else if (selected?.kind === 'github' && !hasModelProfile) requestStatus.textContent = 'Select a broker-backed OpenAI or DeepSeek profile to request a GitHub candidate.';
+            else if (selected?.kind === 'github' && selectedCount < 1) requestStatus.textContent = 'Select at least one bounded text file for the GitHub candidate.';
             else requestStatus.textContent = requestPresentation.status;
           };
           repositorySelect.addEventListener('change', updateRepositorySelectionState);
+          profileSelect.addEventListener('change', updateRepositorySelectionState);
           const profileDisclosure = el('p', { className: 'muted' });
           const updateProfileDisclosure = () => {
             const selectedProfile = (state.meta?.profiles ?? []).find((profile) => profile.id === profileSelect.value);
             profileDisclosure.textContent = ['provider-openai', 'provider-deepseek'].includes(selectedProfile?.kind)
-              ? `After independent approval, this ${selectedProfile.kind === 'provider-deepseek' ? 'DeepSeek' : 'OpenAI'} profile receives the saved task instructions, its pinned input record content and source notes, and the selected output context. It does not receive unrelated project records or credential material. The result is a review-only cited proposal.`
+              ? `After independent approval, this ${selectedProfile.kind === 'provider-deepseek' ? 'DeepSeek' : 'OpenAI'} profile receives the saved task instructions and its pinned input record content. For a GitHub snapshot it receives only the validated files selected above; its credential stays in the server broker. The result is a review-only candidate.`
               : 'This records the assigned agent reference; the configured local profile runs under the OrgWard worker after separate approval, not as the bound workload identity.';
           };
           profileSelect.addEventListener('change', updateProfileDisclosure);
@@ -1958,12 +1969,20 @@ async function requestTaskApproval({ project, plan, task, selectedInstance, prof
       if (repositorySelectionId) {
         const repository = state.localRepositories.find((entry) => (entry.selectionId ?? entry.id) === repositorySelectionId);
         if (!repository) throw new Error('Reload the project to select a current local repository snapshot.');
-        payload.repositoryId = repository.id;
-        if (repository.kind === 'git') {
-          payload.repositoryRefId = repository.refId;
-          payload.repositoryCommitOid = repository.commitOid;
+        if (repository.kind === 'github') {
+          const selectionKey = `${project.id}\n${plan.id}\n${task.id}\n${repository.snapshotId}`;
+          const selectedPaths = [...(state.githubFileSelections.get(selectionKey) ?? [])].sort();
+          if (!selectedPaths.length || selectedPaths.length > MAX_GITHUB_SELECTED_FILES) throw new Error('Select one to eight bounded text files for the GitHub candidate.');
+          payload.githubSnapshotId = repository.snapshotId;
+          payload.githubSelectedPaths = selectedPaths;
+        } else {
+          payload.repositoryId = repository.id;
+          if (repository.kind === 'git') {
+            payload.repositoryRefId = repository.refId;
+            payload.repositoryCommitOid = repository.commitOid;
+          }
+          payload.snapshotDigest = repository.treeDigest;
         }
-        payload.snapshotDigest = repository.treeDigest;
       }
       pending = { commandId: `process-task-request:${crypto.randomUUID()}`, payload,
         tenantId: project.tenantId, principal: state.currentPrincipal };
@@ -2769,7 +2788,7 @@ function renderRepositoryCandidate(candidate) {
     if (verification.stdout) content.push(el('pre', { className: 'execution-output', text: verification.stdout }));
     if (verification.stderr) content.push(el('pre', { className: 'execution-output execution-error', text: verification.stderr }));
   }
-  return section('Local repository candidate · review only', content);
+  return section(candidate.source?.type === 'github-app' ? 'GitHub candidate · review only' : 'Local repository candidate · review only', content);
 }
 
 function renderRun() {

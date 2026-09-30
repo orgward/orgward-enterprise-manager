@@ -22,6 +22,7 @@ import { hasVerifiedHumanTaskSuccess, LegacyImporter, PostgresChangeCaseStore, P
 import { PostgresSecretStore } from './src/platform/secrets.mjs';
 import { GitHubSourceIngestion } from './src/execution/github-source-ingestion.mjs';
 import { parseInstallConfig } from './src/platform/install-config.mjs';
+import { parseGitHubVerifierProfile } from './src/execution/github-verifier-profile.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -756,6 +757,7 @@ export function createApp({
   deepSeekValidationFetchImpl = fetch,
   deepSeekValidationCooldownMs = 60_000,
   githubAppConfig = null,
+  githubVerifierProfile = null,
   githubFetchImpl = fetch,
   openAiAdminApiKey = null,
   openAiOrganizationId = null,
@@ -787,7 +789,7 @@ export function createApp({
   };
   const executionService = new ExecutionService({ runDirectory: executionDirectory, store: executionStore, secretStore,
     profiles: [...executionProfiles, ...(enableLocalExecution ? [localProfile] : [])], localRepositories,
-    githubSourceStore });
+    githubSourceStore, githubVerifierProfile });
   if (!persistence) {
     const resolveLocalProjectAccess = async ({ tenantId, projectId, principal, minimum = 'reader' }) => {
       const project = await store.getForPrincipal(projectId, tenantId, principal);
@@ -2185,7 +2187,7 @@ export function createApp({
         const body = validateCommand(await readJson(request), { versionRequired: false });
         rejectAuthorityClaims(body);
         const allowedEnvelope = new Set(['schemaVersion', 'commandId', 'payload']);
-        const payloadFields = new Set(['projectId', 'planId', 'revision', 'planInstanceId', 'taskId', 'profileId', 'profileRevision', 'repositoryId', 'repositoryRefId', 'repositoryCommitOid', 'snapshotDigest']);
+        const payloadFields = new Set(['projectId', 'planId', 'revision', 'planInstanceId', 'taskId', 'profileId', 'profileRevision', 'repositoryId', 'repositoryRefId', 'repositoryCommitOid', 'snapshotDigest', 'githubSnapshotId', 'githubSelectedPaths']);
         const unknownEnvelope = Object.keys(body).filter((field) => !allowedEnvelope.has(field));
         const unknownPayload = Object.keys(body.payload).filter((field) => !payloadFields.has(field));
         if (unknownEnvelope.length || unknownPayload.length) {
@@ -2215,6 +2217,16 @@ export function createApp({
             || !/^[a-f0-9]{64}$/.test(body.payload.snapshotDigest)))) {
           throw apiFailure(400, 'INVALID_LOCAL_REPOSITORY_BINDING', 'Choose a listed repository snapshot; host paths and incomplete bindings are not accepted.');
         }
+        const githubRequested = body.payload.githubSnapshotId !== undefined || body.payload.githubSelectedPaths !== undefined;
+        if (githubRequested && (body.payload.repositoryId !== undefined || body.payload.repositoryRefId !== undefined
+          || body.payload.repositoryCommitOid !== undefined || body.payload.snapshotDigest !== undefined
+          || !/^[a-f0-9]{64}$/.test(body.payload.githubSnapshotId ?? '')
+          || !Array.isArray(body.payload.githubSelectedPaths) || body.payload.githubSelectedPaths.length < 1
+          || body.payload.githubSelectedPaths.length > 8 || body.payload.githubSelectedPaths.some((entry) => typeof entry !== 'string'
+            || entry.length < 1 || entry.length > 1024)
+          || new Set(body.payload.githubSelectedPaths).size !== body.payload.githubSelectedPaths.length)) {
+          throw apiFailure(400, 'INVALID_GITHUB_SNAPSHOT_SELECTION', 'Choose one exact saved GitHub snapshot and one to eight unique selected paths.');
+        }
         if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified workspace identity is required to request work from a saved task.');
         const result = await executionService.createForProcessTask({
           tenantId: requestTenant(request), projectId, planId, revision, planInstanceId,
@@ -2223,6 +2235,8 @@ export function createApp({
           repositoryId: body.payload.repositoryId, repositoryRefId: body.payload.repositoryRefId,
           repositoryCommitOid: body.payload.repositoryCommitOid,
           snapshotDigest: body.payload.snapshotDigest,
+          githubSnapshotId: body.payload.githubSnapshotId,
+          githubSelectedPaths: body.payload.githubSelectedPaths,
           principal: requestActor(request), authzGeneration: request.identity.authzGeneration,
         });
         if (!result) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'The project or authorized membership was not found.');
@@ -3107,7 +3121,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   try { localRepositories = JSON.parse(process.env.ORGWARD_LOCAL_REPOSITORIES ?? '[]'); }
   catch { console.error('ORGWARD_LOCAL_REPOSITORIES must contain a JSON array of server-configured local repository bindings.'); process.exitCode = 1; process.exit(); }
   if (!Array.isArray(localRepositories)) { console.error('ORGWARD_LOCAL_REPOSITORIES must contain a JSON array of server-configured local repository bindings.'); process.exitCode = 1; process.exit(); }
-  const app = createApp({ dataDirectory, sdlcDirectory, executionDirectory, executionWorkspaceDirectory, enableLocalExecution, executionProfiles, localRepositories, databaseUrl, oidcAuthenticator, oidcLoginFlow, oidcBootstrapPrincipals: authMode === 'oidc' ? bootstrapPrincipals : [], secretEncryptionKey, openAiAdminApiKey, openAiOrganizationId, openAiTenantProjects, githubAppConfig: githubApp, readOnly: legacyReadOnlyMode });
+  let githubVerifierProfile = null;
+  try { githubVerifierProfile = parseGitHubVerifierProfile(process.env.ORGWARD_GITHUB_VERIFIER ?? null); }
+  catch (error) { console.error(error.message); process.exitCode = 1; process.exit(); }
+  const app = createApp({ dataDirectory, sdlcDirectory, executionDirectory, executionWorkspaceDirectory, enableLocalExecution, executionProfiles, localRepositories, databaseUrl, oidcAuthenticator, oidcLoginFlow, oidcBootstrapPrincipals: authMode === 'oidc' ? bootstrapPrincipals : [], secretEncryptionKey, openAiAdminApiKey, openAiOrganizationId, openAiTenantProjects, githubAppConfig: githubApp, githubVerifierProfile, readOnly: legacyReadOnlyMode });
   const { server } = app;
   await app.init();
   let shuttingDown = false;

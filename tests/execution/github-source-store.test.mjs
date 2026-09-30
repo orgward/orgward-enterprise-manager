@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import { PostgresPersistence } from '../../src/platform/postgres.mjs';
 import { PostgresGitHubSourceStore } from '../../src/platform/postgres-stores.mjs';
 import { ExecutionService } from '../../src/execution/service.mjs';
+import { executionRunView } from '../../src/execution/contracts.mjs';
 import { createApp } from '../../server.mjs';
 import { startPostgres } from '../helpers/postgres.mjs';
 
@@ -70,6 +74,47 @@ test('GitHub bindings and snapshots survive store restart and require tenant-adm
     assert.equal(executionSelection.repositories[0].snapshotId, snapshot.id);
     assert.equal(Object.hasOwn(executionSelection.repositories[0], 'files'), false);
     assert.equal(Object.hasOwn(executionSelection.repositories[0], 'credentialReference'), false);
+    const verifierConfiguredButRemotePathUnavailable = await new ExecutionService({ runDirectory: '/tmp/github-source-selection-test',
+      githubSourceStore: restartedStore, githubVerifierProfile: { id: 'fixed-verify', version: '1.0.0',
+        executable: '/usr/bin/node', args: ['/opt/orgward/verify.mjs'] } })
+      .listGitHubSnapshots({ tenantId, projectId, principal: editor, authzGeneration: 1 });
+    assert.equal(verifierConfiguredButRemotePathUnavailable.available, false,
+      'verifier presence alone does not enable remote requests before the brokered candidate path exists');
+    const readyForBrokeredCandidates = await new ExecutionService({ runDirectory: '/tmp/github-source-selection-test',
+      githubSourceStore: restartedStore, secretStore: { useForAuthorizedLease() {} },
+      profiles: [{ id: 'fixture-deepseek', kind: 'provider-deepseek', version: '1.0.0', label: 'Fixture DeepSeek',
+        credentialReference: 'secret-fixture', model: 'deepseek-fixture' }],
+      githubVerifierProfile: { id: 'fixed-verify', version: '1.0.0', executable: '/usr/bin/node', args: ['/opt/orgward/verify.mjs'] } })
+      .listGitHubSnapshots({ tenantId, projectId, principal: editor, authzGeneration: 1 });
+    assert.equal(readyForBrokeredCandidates.available, true,
+      'the selector becomes available only when source storage, broker-backed model profile, and fixed verifier are configured');
+    const credentialBoundRun = { id: 'execution-run-00000000-0000-4000-8000-000000000001', profile: { credential: { reference: 'secret-fixture', version: 1 } }, githubPatchSelection: {} };
+    assert.equal(Object.hasOwn(executionRunView(credentialBoundRun).profile, 'credential'), false,
+      'GitHub run API views do not serialize provider credential references');
+    const runDirectory = await mkdtemp(path.join(tmpdir(), 'github-candidate-views-'));
+    try {
+      const sourceContext = await new ExecutionService({ runDirectory, githubSourceStore: restartedStore })
+        .validateGitHubSnapshotSelection({ tenantId, projectId, principal: editor, authzGeneration: 1,
+          snapshotId: snapshot.id, selectedPaths: ['README.md'] });
+      const selected = sourceContext.files;
+      const repositoryTreeDigest = createHash('sha256').update(JSON.stringify(selected.map(({ path: filePath, mode, contentHash, size }) => ({
+        path: filePath, mode, contentHash, size,
+      })))).digest('hex');
+      const runId = 'execution-run-32345678-1234-4234-8234-123456789012';
+      const candidateBytes = Buffer.from('candidate');
+      const run = { id: runId, tenantId, projectId, processTaskRef: { repository: { treeDigest: repositoryTreeDigest } },
+        githubPatchSelection: { sourceSnapshot: sourceContext.sourceSnapshot, selectedFiles: selected },
+        execution: { changedArtifacts: [{ path: 'README.md', contentHash: createHash('sha256').update(candidateBytes).digest('hex'), hashAlgorithm: 'sha256-raw' }] } };
+      const runStore = { withPrincipalAuthority: async ({ operation }) => operation(run) };
+      const viewService = new ExecutionService({ runDirectory, store: runStore, githubSourceStore: restartedStore });
+      const candidateDirectory = path.join(runDirectory, 'github-candidate-workspaces', runId);
+      await mkdir(candidateDirectory, { recursive: true, mode: 0o700 });
+      await writeFile(path.join(candidateDirectory, 'README.md'), candidateBytes, { mode: 0o600 });
+      const sourceFile = await viewService.readRepositorySource(runId, tenantId, editor, 'README.md', { authzGeneration: 1 });
+      const candidateFile = await viewService.readArtifact(runId, tenantId, editor, 'README.md', { authzGeneration: 1 });
+      assert.equal(sourceFile.contents.toString(), 'fix', 'source retrieval re-resolves the exact pinned saved snapshot');
+      assert.equal(candidateFile.contents.toString(), 'candidate', 'candidate retrieval serves only the saved hash from the private run workspace');
+    } finally { await rm(runDirectory, { recursive: true, force: true }); }
     const selectableFiles = await new ExecutionService({ runDirectory: '/tmp/github-source-selection-test', githubSourceStore: restartedStore })
       .listGitHubSnapshotFiles({ tenantId, projectId, principal: editor, authzGeneration: 1, snapshotId: snapshot.id });
     assert.deepEqual(selectableFiles.files, [{ path: 'README.md', mode: '100644', size: 3, contentHash }]);
@@ -122,6 +167,15 @@ test('GitHub bindings and snapshots survive store restart and require tenant-adm
       const filesPayload = await filesResponse.json();
       assert.deepEqual(filesPayload.files, [{ path: 'README.md', mode: '100644', size: 3, contentHash }]);
       assert.equal(JSON.stringify(filesPayload).includes('contentBase64'), false);
+      const invalidGitHubRequest = await fetch(`${apiBase}/api/execution/process-task-runs`, {
+        ...auth('editor'), method: 'POST', headers: { ...auth('editor').headers, 'content-type': 'application/json' },
+        body: JSON.stringify({ schemaVersion: '1.0', commandId: 'github-duplicate-selected-paths', payload: {
+          projectId, planId: 'process-plan-12345678-1234-4234-8234-123456789012', revision: 1,
+          taskId: 'task-test', profileId: 'fixture-deepseek', githubSnapshotId: snapshot.id,
+          githubSelectedPaths: ['README.md', 'README.md'],
+        } }),
+      });
+      assert.equal(invalidGitHubRequest.status, 400, 'duplicate selected paths are rejected at the strict task-request API boundary');
       assert.equal(JSON.stringify(filesPayload).includes('credentialReference'), false);
       const deniedFiles = await fetch(`${apiBase}/api/execution/github-snapshots/${snapshot.id}/files?projectId=${encodeURIComponent(projectId)}`, auth('reader'));
       assert.equal(deniedFiles.status, 403, 'file metadata API enforces project-editor authority');

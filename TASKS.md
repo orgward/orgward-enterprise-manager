@@ -5583,6 +5583,73 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   `git diff --check` passed. No full check, provider/GitHub calls, dispatch or
   external effect was used; PR-08, checkbox, cursor and gates remain unchanged.
 
+  Brokered GitHub candidate execution (2026-09-30): Connected the saved-snapshot
+  selector to linked process-task approval requests, with an exact snapshot ID
+  and selected path/mode/hash identity pinned in the durable repository request
+  hash. The worker re-resolves and verifies all snapshot bytes and selected-file
+  hashes before constructing a fully serialized request bounded to 16 KiB; only
+  selected text reaches the existing credential-brokered model call, with
+  `tools: []` and `store: false`. Strict JSON output can update only existing
+  selected regular text files, preserving path and mode; validation precedes
+  no-follow descriptor-based workspace writes. A configured fixed verifier runs
+  in the existing bubblewrap isolation with network unshared, cleared env and no
+  extra mounts. Candidate diff, verification receipt, exact pinned-source reads
+  and hash-checked private candidate artifacts use existing review APIs. Run
+  views omit provider credential references. UI/API remain unavailable unless a
+  fixed verifier, PostgreSQL snapshot store, broker and model profile are present;
+  no GitHub or provider live call, write-back, or commit/push occurred.
+
+  The initial focused run failed 2/10: a malformed-path test fixture omitted its
+  selected-file base record, and candidate artifact serving rejected the test's
+  unsupported hash algorithm label. Both fixtures were corrected, and the
+  artifact metadata now uses the reader's raw SHA-256 label. The single repair
+  rerun passed 10/10 (0 failures, cancellations or skips; 2.91s). Logs:
+  `/tmp/orgward-github-candidate-focused.tap.log` (initial failure) and
+  `/tmp/orgward-github-candidate-focused-repair.tap.log` (passing repair).
+  Syntax checks and `git diff --check` passed. The focused coverage verifies
+  request byte limits, strict patch parsing, traversal/symlink rejection,
+  verifier profile bounds, API path validation, credential-reference redaction,
+  restart persistence and exact source/candidate file reads. It does not issue a
+  live provider call. PR-08, its task checkbox, cursor and release gates remain
+  unchanged pending parent review.
+
+  GitHub candidate binding/e2e review follow-up (2026-09-30): before dispatch,
+  the service now compares the complete persisted GitHub repository reference
+  (snapshot/source identity, selected file hashes, and verifier identity) against
+  the independently pinned patch selection. Added a PostgreSQL/loopback fixture
+  for approval through brokered patching, fixed verification, candidate review,
+  and source/artifact reads, including credential non-disclosure assertions.
+  Its initial focused run failed 0/1 because the test referenced a nonexistent
+  `app.githubSourceStore`; the fixture was corrected to use
+  `app.executionService.githubSourceStore`. The one repair rerun then failed
+  0/1 before reaching the new flow: its request used a stale plan revision and
+  received HTTP 409 `PROCESS_PLAN_REVISION_STALE` instead of 201. Logs:
+  `/tmp/orgward-github-candidate-e2e.tap.log` (initial setup failure) and
+  `/tmp/orgward-github-candidate-e2e-repair.tap.log` (stale plan revision).
+  The fixture was corrected to use revision 3, matching the latest saved graph.
+  The final single filtered persistence invocation passed 1/1 (0 failures,
+  cancellations or skips; 18.59s), exercising approval, loopback brokered patch
+  generation, private materialization, the injected fixed verifier, candidate
+  diff/source/artifact reads, restart persistence, and credential non-disclosure.
+  Log: `/tmp/orgward-github-candidate-e2e-final.tap.log`. Static preflight and
+  `git diff --check` passed. No live provider or GitHub call was made.
+
+  Creation-time GitHub prompt-size preflight (2026-09-30): the transactional
+  process-task `buildRun` callback now serializes the full selected-text prompt
+  using the resolved model settings before returning the run for persistence.
+  Thus escaped source that exceeds 16 KiB fails while constructing the approved
+  request, before a task instance/request is saved or any provider dispatch can
+  occur. Added a focused helper assertion using 7,000 newline bytes (within the
+  raw 8 KiB selection limit) whose JSON escaping exceeds the full request cap.
+  The initial filtered run passed the PostgreSQL integration test but failed
+  the new size assertion because its 4,000-byte fixture did not expand past the
+  ceiling (1/2 passed); the fixture was raised to 7,000 bytes. The repair run
+  passed 2/2 (0 failures, cancellations or skips; 18.10s). Logs:
+  `/tmp/orgward-github-prompt-preflight-focused.tap.log` (initial fixture
+  failure) and `/tmp/orgward-github-prompt-preflight-repair.tap.log` (passing).
+  Static syntax checks and `git diff --check` passed. No live provider or
+  GitHub call was made; PR-08 and release pointers remain open.
+
 - [ ] PR-09 — Authorized environments, release and rollback (T-33–T-35; E-10).
   Let a user review an exact candidate, approve a protected environment action,
   observe its result and recover through rollback. Bind authority to principals,

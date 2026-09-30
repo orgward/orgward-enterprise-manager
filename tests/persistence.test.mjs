@@ -6414,7 +6414,16 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
       body: chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {},
     };
     let citedSourceId = 'information-customer-signal';
+    let modelOutputText = null;
     if (typeof providerRequest.body.input === 'string') {
+      try {
+        const githubPrompt = JSON.parse(providerRequest.body.input);
+        if (Array.isArray(githubPrompt.selectedFiles)) {
+          modelOutputText = JSON.stringify({ updates: githubPrompt.selectedFiles.map((file) => ({
+            path: file.path, baseContentHash: file.contentHash, content: file.text.replace('before', 'after'),
+          })) });
+        }
+      } catch { /* Existing proposal fixtures use a wrapped non-JSON prompt. */ }
       try {
         const promptJson = providerRequest.body.input.slice(providerRequest.body.input.lastIndexOf('\n\n') + 2);
         const parsedPrompt = JSON.parse(promptJson);
@@ -6435,12 +6444,13 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     const proposedDetail = nextProposalDetailOverride
       ?? 'Recurring repair signals are grouped into service needs for founder review.';
     nextProposalDetailOverride = null;
-    response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ status: 'completed', usage: { input_tokens: 100, output_tokens: 60, total_tokens: 160 }, output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify({
+    modelOutputText ??= JSON.stringify({
       proposedDetail,
       rationale: 'The saved customer signal describes recurring repair history.',
       citations: [citedSourceId],
-    }) }] }] }));
+    });
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ status: 'completed', usage: { input_tokens: 100, output_tokens: 60, total_tokens: 160 }, output: [{ type: 'message', content: [{ type: 'output_text', text: modelOutputText }] }] }));
   });
   await new Promise((resolve) => providerFixture.listen(0, '127.0.0.1', resolve));
   const providerOrigin = `http://127.0.0.1:${providerFixture.address().port}`;
@@ -6490,9 +6500,11 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
       providerEndpoint: `${providerOrigin}/v1/execute`,
     },
   ];
+  const fixedGithubVerifierProfile = { id: 'github-fixture-verifier', version: '1.0.0', executable: '/usr/bin/node',
+    args: ['/opt/orgward/github-fixture-verifier.mjs'], timeoutMs: 5_000 };
   let app = await start(postgres.databaseUrl, {
     executionProfiles: profiles, oidcAuthenticator, secretEncryptionKey: Buffer.alloc(32, 0x5c),
-    openAiValidationEndpoint: `${providerOrigin}/v1/models`,
+    openAiValidationEndpoint: `${providerOrigin}/v1/models`, githubVerifierProfile: fixedGithubVerifierProfile,
   });
   const as = (subject) => ({ headers: { authorization: `Bearer ${subject}` } });
   const principal = (subject) => `oidc:${createHash('sha256').update(`https://persistence-identity.example.test\n${subject}`).digest('hex')}`;
@@ -7048,6 +7060,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   app = await start(postgres.databaseUrl, {
     executionProfiles: profiles, oidcAuthenticator, secretEncryptionKey: Buffer.alloc(32, 0x5c),
     openAiValidationEndpoint: `${providerOrigin}/v1/models`, localRepositories: [localRepositoryBinding, gitRepositoryBinding],
+    githubVerifierProfile: fixedGithubVerifierProfile,
   });
   assert.equal((await request(app.base, '/api/execution/local-repositories?projectId=' + encodeURIComponent(project.id), as('alice')))
     .repositories.find((repository) => repository.id === 'git-reference').commitOid, movedGitCommit,
@@ -7383,7 +7396,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   await close(app);
   app = await start(postgres.databaseUrl, {
     executionProfiles: profiles, oidcAuthenticator, secretEncryptionKey: Buffer.alloc(32, 0x5c),
-    openAiValidationEndpoint: `${providerOrigin}/v1/models`,
+    openAiValidationEndpoint: `${providerOrigin}/v1/models`, githubVerifierProfile: fixedGithubVerifierProfile,
   });
   const recoveredUnknownRun = await request(app.base, `/api/execution/runs/${unresolvedAfterRestartRun.id}`, as('alice'));
   assert.equal(recoveredUnknownRun.status, 'INTERRUPTED', 'application restart recovers the persisted linked RUNNING task');
@@ -7401,7 +7414,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   await close(app);
   app = await start(postgres.databaseUrl, {
     executionProfiles: profiles, oidcAuthenticator, secretEncryptionKey: Buffer.alloc(32, 0x5c),
-    openAiValidationEndpoint: `${providerOrigin}/v1/models`,
+    openAiValidationEndpoint: `${providerOrigin}/v1/models`, githubVerifierProfile: fixedGithubVerifierProfile,
   });
   const unknownBoundaryAfterRestart = await instanceControlForRun(unresolvedAfterRestartRun);
   assert.equal(unknownBoundaryAfterRestart.status, 'PAUSE_REQUESTED', 'unknown provider outcomes keep the pause request pending across restart');
@@ -7549,7 +7562,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(terminalHumanResolve.error.code, 'PROCESS_INSTANCE_ABANDONED_UNVERIFIED');
   await close(app);
   app = await start(postgres.databaseUrl, { executionProfiles: profiles, oidcAuthenticator, secretEncryptionKey: Buffer.alloc(32, 0x5c),
-    openAiValidationEndpoint: `${providerOrigin}/v1/models` });
+    openAiValidationEndpoint: `${providerOrigin}/v1/models`, githubVerifierProfile: fixedGithubVerifierProfile });
   const abandonedAfterRestart = await instanceControlForRun(unresolvedAfterRestartRun);
   assert.equal(abandonedAfterRestart.status, 'ABANDONED_UNVERIFIED');
   assert.deepEqual(abandonedAfterRestart.events.at(-1).data.evidence, abandonmentPayload.evidence);
@@ -7669,7 +7682,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(deepSeekAbandonReplay.replayed, true);
   await close(app);
   app = await start(postgres.databaseUrl, { executionProfiles: profiles, oidcAuthenticator, secretEncryptionKey: Buffer.alloc(32, 0x5c),
-    openAiValidationEndpoint: `${providerOrigin}/v1/models` });
+    openAiValidationEndpoint: `${providerOrigin}/v1/models`, githubVerifierProfile: fixedGithubVerifierProfile });
   const deepSeekAfterRestart = await instanceControlForRun(deepSeekUnknownRun);
   assert.equal(deepSeekAfterRestart.status, 'ABANDONED_UNVERIFIED');
   assert.deepEqual(deepSeekAfterRestart.events.at(-1).data.evidence, deepSeekAbandonPayload.evidence);
@@ -9217,6 +9230,95 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     && runtime.taskId === mixedHumanRootTask.id).assignedToCurrentPrincipal, false,
   'the completed human assignment is now stale even though its terminal checkpoint still gates the agent task');
 
+  const githubSourceBytes = Buffer.from('before\n');
+  const githubContentHash = createHash('sha256').update(githubSourceBytes).digest('hex');
+  const githubBlobSha = createHash('sha1').update(`blob ${githubSourceBytes.length}\0`).update(githubSourceBytes).digest('hex');
+  const githubRepositoryId = '987654321';
+  const githubInstallationId = '123456789';
+  const githubBranchRef = 'refs/heads/main';
+  const githubCommitOid = 'c'.repeat(40);
+  const githubManifest = [{ path: 'README.md', mode: '100644', contentHash: githubContentHash,
+    size: githubSourceBytes.length, blobSha: githubBlobSha }];
+  const githubManifestDigest = createHash('sha256').update(JSON.stringify(githubManifest)).digest('hex');
+  const githubSnapshotId = createHash('sha256').update(`${githubRepositoryId}\0${githubBranchRef}\0${githubCommitOid}\0github-read-snapshot-v1`).digest('hex');
+  const githubSnapshot = { id: githubSnapshotId, repositoryId: githubRepositoryId, branchRef: githubBranchRef,
+    commitOid: githubCommitOid, treeOid: 'd'.repeat(40), treeDigest: githubManifestDigest,
+    manifestDigest: githubManifestDigest, policyVersion: 'github-read-snapshot-v1', fileCount: 1,
+    totalBytes: githubSourceBytes.length, files: [{ ...githubManifest[0], contentBase64: githubSourceBytes.toString('base64') }] };
+  await app.executionService.githubSourceStore.saveCapture({ tenantId: 'tenant-a', projectId: project.id,
+    principal: principal('alice'), authzGeneration: await authzGeneration(app, 'alice'),
+    binding: { tenantId: 'tenant-a', projectId: project.id, installationId: githubInstallationId,
+      repositoryId: githubRepositoryId, repositoryName: 'fixture-org/fixture-repo', branchRef: githubBranchRef,
+      provider: 'github-app', credentialReference: `github-installation:${githubInstallationId}` },
+    snapshot: githubSnapshot });
+  const githubRepositoryInventory = await request(app.base,
+    `/api/execution/local-repositories?projectId=${encodeURIComponent(project.id)}`, as('alice'));
+  assert.equal(githubRepositoryInventory.githubExecutionAvailable, true,
+    'a fixed verifier, PostgreSQL snapshot store, broker and model profile make the GitHub task selector available');
+  const githubRequest = await taskRequest('process-task-github-candidate-integration', {
+    ...planInput, revision: 3, profileId: 'process-task-openai', githubSnapshotId, githubSelectedPaths: ['README.md'],
+  });
+  assert.equal(githubRequest.status, 'AWAITING_APPROVAL');
+  assert.equal(githubRequest.processTaskRef.repository.kind, 'github-app');
+  assert.equal(githubRequest.processTaskRef.repository.source.commitOid, githubCommitOid);
+  assert.deepEqual(githubRequest.processTaskRef.repository.selectedFiles.map((file) => file.path), ['README.md']);
+  assert.equal(Object.hasOwn(githubRequest.profile, 'credential'), false,
+    'GitHub request views omit the provider credential reference');
+  assert.equal(JSON.stringify(githubRequest).includes(openAiFixtureSecret), false);
+  assert.equal(Object.hasOwn(githubRequest, 'repositorySnapshot'), false);
+  const githubApproval = await request(app.base, `/api/execution/runs/${githubRequest.id}/approve`, {
+    ...as('bob'), method: 'POST', body: JSON.stringify({ version: githubRequest.version }),
+  });
+  assert.equal(githubApproval.status, 'APPROVED');
+  const verifierObservations = [];
+  app.executionService.commandAdapterFactory = (options) => {
+    verifierObservations.push(options);
+    return { execute: async (_workItem, _contextPackage, { workspace }) => {
+      const names = await readdir(workspace);
+      assert.deepEqual(names, ['README.md'], 'the verifier receives only the private materialized saved repository tree');
+      const candidateContents = await readFile(path.join(workspace, 'README.md'), 'utf8');
+      assert.equal(candidateContents, 'after\n');
+      assert.equal(candidateContents.includes(openAiFixtureSecret), false, 'provider credentials never enter the verifier workspace');
+      assert.deepEqual(options.environment, {}, 'the isolated verifier receives an empty custom environment');
+      assert.deepEqual(options.sandbox.readOnlyFiles, [], 'the verifier has no extra host-file mounts');
+      assert.deepEqual(options.sandbox.allowedEnvironment, []);
+      return { status: 'COMPLETED', exitCode: 0, stdout: 'verified pinned candidate', stderr: '',
+        stdoutTruncated: false, stderrTruncated: false };
+    } };
+  };
+  const githubCandidate = await request(app.base, `/api/execution/runs/${githubRequest.id}/execute`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: githubApproval.version }),
+  });
+  assert.equal(githubCandidate.status, 'SUCCEEDED', JSON.stringify(githubCandidate));
+  assert.equal(verifierObservations.length, 1, 'the approved GitHub run dispatched one fixed verifier');
+  assert.equal(verifierObservations[0].executable, fixedGithubVerifierProfile.executable);
+  assert.deepEqual(verifierObservations[0].args, fixedGithubVerifierProfile.args);
+  assert.equal(githubCandidate.execution.repositoryCandidate.verification.status, 'COMPLETED');
+  assert.deepEqual(githubCandidate.execution.repositoryCandidate.changes.map((change) => [change.path, change.change]), [
+    ['README.md', 'modified'],
+  ]);
+  assert.equal(githubCandidate.execution.stdout, 'Applied bounded updates to 1 selected file.');
+  assert.equal(providerRequest.body.model, 'gpt-fixture');
+  assert.equal(providerRequest.body.store, false);
+  assert.deepEqual(providerRequest.body.tools, []);
+  const githubPrompt = JSON.parse(providerRequest.body.input);
+  assert.deepEqual(githubPrompt.selectedFiles.map((file) => [file.path, file.text]), [['README.md', 'before\n']]);
+  assert.equal(JSON.stringify(providerRequest.body).includes(openAiFixtureSecret), false,
+    'the broker credential is not included in model input or request metadata');
+  assert.equal(JSON.stringify(githubCandidate).includes(openAiFixtureSecret), false,
+    'run and candidate API results contain no provider credential material');
+  const githubSourceResponse = await fetch(`${app.base}/api/execution/runs/${githubRequest.id}/repository-source?path=README.md`, as('alice'));
+  assert.equal(Buffer.from(await githubSourceResponse.arrayBuffer()).toString(), 'before\n');
+  const githubArtifactResponse = await fetch(`${app.base}/api/execution/runs/${githubRequest.id}/artifact?path=README.md`, as('alice'));
+  assert.equal(Buffer.from(await githubArtifactResponse.arrayBuffer()).toString(), 'after\n');
+  assert.equal(providerCallCount > 0, true);
+  const githubCandidateWorkspace = path.join(app.executionService.githubCandidateWorkspaceRoot, githubRequest.id);
+  const persistedGithubCandidate = await request(app.base, `/api/execution/runs/${githubRequest.id}`, as('alice'));
+  assert.equal(JSON.stringify(persistedGithubCandidate).includes(openAiFixtureSecret), false);
+  assert.equal(JSON.stringify(persistedGithubCandidate).includes('contentBase64'), false,
+    'the durable run view contains no source or candidate file bytes');
+  await rm(githubCandidateWorkspace, { recursive: true, force: true });
+
   const staleAgentPauseRequest = await taskRequest('process-task-pause-stale-agent-request', {
     ...successInput, revision: 3,
   });
@@ -9680,6 +9782,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   app = await start(postgres.databaseUrl, {
     executionProfiles: profiles, oidcAuthenticator, secretEncryptionKey: Buffer.alloc(32, 0x5c),
     openAiValidationEndpoint: `${providerOrigin}/v1/models`,
+    githubVerifierProfile: fixedGithubVerifierProfile,
   });
   const restoredRuns = (await request(app.base, '/api/execution/runs', as('alice'))).runs;
   assert.deepEqual(new Map(restoredRuns.map((run) => [run.id, run.status])).get(firstRoot.id), 'FAILED');

@@ -8,6 +8,8 @@ import { CommandExecutionAdapter } from '../sdlc/execution-adapter.mjs';
 import { captureLocalRepositorySnapshot, localRepositoryDiff, materializeLocalRepositorySnapshot } from './local-repository-snapshot.mjs';
 import { captureGitRepositorySnapshot } from './git-repository-snapshot.mjs';
 import { buildGitHubSnapshotTextContext } from './github-snapshot-context.mjs';
+import { applyGitHubPatchUpdates, buildGitHubPatchPrompt, parseGitHubPatchOutput } from './github-patch.mjs';
+import { parseGitHubVerifierProfile } from './github-verifier-profile.mjs';
 import { readWorkspaceArtifact } from './artifact-file.mjs';
 import { linkedRunOutcomeCategory } from './linked-run-outcome-category.mjs';
 import { allowlistedProviderTransportFailureClass, classifyProviderTransportFailure } from './provider-transport-diagnostic.mjs';
@@ -254,13 +256,28 @@ function redact(value) {
   return String(value ?? '').replace(/(bearer\s+)[a-z0-9._~+\/-]+/gi, '$1[REDACTED]').replace(/(api[_-]?key|token|secret|password)\s*[=:]\s*\S+/gi, '$1=[REDACTED]');
 }
 
+function githubCandidateSourceSnapshot(snapshot, sourceSnapshot) {
+  const files = snapshot.files.map(({ path: relativePath, mode, size, contentHash, contentBase64 }) => ({
+    path: relativePath, mode, size, contentHash, contentBase64,
+  }));
+  const treeDigest = createHash('sha256').update(JSON.stringify(files.map(({ path: relativePath, mode, contentHash, size }) => ({
+    path: relativePath, mode, contentHash, size,
+  })))).digest('hex');
+  return { snapshotId: sourceSnapshot.snapshotId, treeDigest, fileCount: files.length,
+    totalBytes: files.reduce((total, file) => total + file.size, 0), files,
+    repositorySource: { type: 'github-app', ...sourceSnapshot } };
+}
+
 export class ExecutionService {
   constructor({ runDirectory, store = null, profiles = [], secretStore = null, localRepositories = [], githubSourceStore = null,
-    commandAdapterFactory = (options) => new CommandExecutionAdapter(options) }) {
+    githubVerifierProfile = null, commandAdapterFactory = (options) => new CommandExecutionAdapter(options) }) {
     this.store = store ?? new ExecutionRunStore(runDirectory);
+    this.githubCandidateWorkspaceRoot = path.resolve(runDirectory, 'github-candidate-workspaces');
     this.secretStore = secretStore;
     this.commandAdapterFactory = commandAdapterFactory;
     this.githubSourceStore = githubSourceStore;
+    this.githubVerifierProfile = parseGitHubVerifierProfile(githubVerifierProfile);
+    this.githubPatchExecutionReady = false;
     this.localRepositories = new Map();
     for (const repository of localRepositories) {
       const isGit = repository.kind === 'git';
@@ -289,6 +306,8 @@ export class ExecutionService {
     }
     if (this.secretStore) this.secretStore.onCredentialInvalidated = (change) => this.cancelCredentialReference(change);
     this.profiles = new Map(profiles.map((profile) => { const valid = validateProfile(profile); return [valid.id, valid]; }));
+    this.githubPatchExecutionReady = Boolean(this.githubVerifierProfile && this.githubSourceStore && this.secretStore
+      && ([...this.profiles.values()].some(isModelProvider) || typeof this.store.getTenantDeepSeekProfile === 'function'));
     this.active = new Map();
     this.recoveryTimer = null;
   }
@@ -468,8 +487,8 @@ export class ExecutionService {
       if (!run || run.tenantId !== tenantId || !Array.isArray(run.execution?.changedArtifacts)) return null;
       const record = run.execution.changedArtifacts.find((entry) => entry.path === relativePath);
       const profile = this.profiles.get(run.profile?.id);
-      if (!record || !/^[a-f0-9]{64}$/.test(record.contentHash ?? '') || !profile) return null;
-      const configuredRoot = path.resolve(profile.workspaceRoot);
+      if (!record || !/^[a-f0-9]{64}$/.test(record.contentHash ?? '') || (!profile && !run.githubPatchSelection)) return null;
+      const configuredRoot = path.resolve(run.githubPatchSelection ? this.githubCandidateWorkspaceRoot : profile.workspaceRoot);
       const workspace = path.resolve(configuredRoot, run.id);
       if (path.dirname(workspace) !== configuredRoot) return null;
       const contents = await readWorkspaceArtifact({
@@ -495,9 +514,23 @@ export class ExecutionService {
       || relativePath.length > 500 || relativePath.includes('\\') || relativePath.includes('\0')
       || relativePath.split('/').some((segment) => !segment || segment === '.' || segment === '..')) return null;
     const readAndDeliver = async (run) => {
-      if (!run || run.tenantId !== tenantId || !run.processTaskRef?.repository
-        || run.repositorySnapshot?.treeDigest !== run.processTaskRef.repository.treeDigest) return null;
-      const record = run.repositorySnapshot.files.find((entry) => entry.path === relativePath);
+      if (!run || run.tenantId !== tenantId || !run.processTaskRef?.repository) return null;
+      let repositorySnapshot = run.repositorySnapshot;
+      if (run.githubPatchSelection) {
+        const selected = run.githubPatchSelection.selectedFiles?.some((entry) => entry.path === relativePath);
+        if (!selected || !this.githubSourceStore?.resolveSnapshotForExecution) return null;
+        const sourceRecord = await this.githubSourceStore.resolveSnapshotForExecution({ tenantId,
+          projectId: run.projectId, principal, authzGeneration,
+          snapshotId: run.githubPatchSelection.sourceSnapshot?.snapshotId });
+        if (!sourceRecord) return null;
+        const context = buildGitHubSnapshotTextContext({ binding: sourceRecord.binding, snapshot: sourceRecord.snapshot,
+          snapshotId: run.githubPatchSelection.sourceSnapshot.snapshotId,
+          selectedPaths: run.githubPatchSelection.selectedFiles.map((file) => file.path) });
+        if (digest(context.sourceSnapshot) !== digest(run.githubPatchSelection.sourceSnapshot)) return null;
+        repositorySnapshot = githubCandidateSourceSnapshot(sourceRecord.snapshot, context.sourceSnapshot);
+      }
+      if (!repositorySnapshot || repositorySnapshot.treeDigest !== run.processTaskRef.repository.treeDigest) return null;
+      const record = repositorySnapshot.files.find((entry) => entry.path === relativePath);
       if (!record || !/^[a-f0-9]{64}$/.test(record.contentHash ?? '')) return null;
       const contents = Buffer.from(record.contentBase64, 'base64');
       if (contents.length !== record.size || createHash('sha256').update(contents).digest('hex') !== record.contentHash) return null;
@@ -574,6 +607,51 @@ export class ExecutionService {
         statusCode: 503, code: 'BROKER_AUTHORITY_REQUIRED', retryable: false,
       });
     }
+    const githubSelectionRequested = input.githubSnapshotId !== undefined || input.githubSelectedPaths !== undefined;
+    let githubPatchContext = null;
+    let githubSourceRecord = null;
+    let githubRepositoryRef = null;
+    if (githubSelectionRequested) {
+      if (input.repositoryId !== undefined || input.repositoryRefId !== undefined || input.repositoryCommitOid !== undefined
+        || input.snapshotDigest !== undefined
+        || !/^[a-f0-9]{64}$/.test(input.githubSnapshotId ?? '')
+        || !Array.isArray(input.githubSelectedPaths) || input.githubSelectedPaths.length < 1 || input.githubSelectedPaths.length > 8
+        || input.githubSelectedPaths.some((entry) => typeof entry !== 'string')
+        || new Set(input.githubSelectedPaths).size !== input.githubSelectedPaths.length) {
+        throw Object.assign(new Error('Choose one exact saved GitHub snapshot and one to eight unique selected paths.'), {
+          statusCode: 400, code: 'INVALID_GITHUB_SNAPSHOT_SELECTION', retryable: false,
+        });
+      }
+      if (!this.githubVerifierProfile || !this.githubPatchExecutionReady) throw Object.assign(new Error('GitHub candidate execution requires the operator-configured fixed verifier and enabled brokered patch path.'), {
+        statusCode: 503, code: 'GITHUB_CANDIDATE_EXECUTION_UNAVAILABLE', retryable: false,
+      });
+      if ((profile && !isModelProvider(profile)) || !this.githubSourceStore?.resolveSnapshotForExecution) {
+        throw Object.assign(new Error('GitHub candidate requests require a broker-backed model profile and PostgreSQL snapshot storage.'), {
+          statusCode: 503, code: 'GITHUB_CANDIDATE_EXECUTION_UNAVAILABLE', retryable: false,
+        });
+      }
+      githubSourceRecord = await this.githubSourceStore.resolveSnapshotForExecution({ tenantId: input.tenantId,
+        projectId: input.projectId, principal: input.principal, authzGeneration: input.authzGeneration,
+        snapshotId: input.githubSnapshotId });
+      if (!githubSourceRecord) throw Object.assign(new Error('The selected GitHub snapshot is unavailable in this project.'), {
+        statusCode: 404, code: 'GITHUB_SNAPSHOT_NOT_FOUND', retryable: false,
+      });
+      githubPatchContext = buildGitHubSnapshotTextContext({ binding: githubSourceRecord.binding,
+        snapshot: githubSourceRecord.snapshot, snapshotId: input.githubSnapshotId, selectedPaths: input.githubSelectedPaths });
+      const selectedFiles = githubPatchContext.files.map(({ path: relativePath, mode, contentHash, text }) => ({
+        path: relativePath, mode, contentHash, size: Buffer.byteLength(text, 'utf8'),
+      }));
+      const sourceSnapshot = githubCandidateSourceSnapshot(githubSourceRecord.snapshot, githubPatchContext.sourceSnapshot);
+      githubRepositoryRef = {
+        id: `github-${githubPatchContext.sourceSnapshot.repositoryId}`, kind: 'github-app',
+        snapshotId: githubPatchContext.sourceSnapshot.snapshotId,
+        treeDigest: sourceSnapshot.treeDigest,
+        source: { type: 'github-app', ...githubPatchContext.sourceSnapshot },
+        selectedFiles,
+        verification: { id: this.githubVerifierProfile.id, version: this.githubVerifierProfile.version,
+          profileHash: this.githubVerifierProfile.profileHash },
+      };
+    }
     const repository = input.repositoryId
       ? this.localRepositories.get(`${input.tenantId}\n${input.projectId}\n${input.repositoryId}`) : null;
     if (input.repositoryId && !repository) throw Object.assign(new Error('This local repository is not configured for the selected project.'), {
@@ -610,10 +688,11 @@ export class ExecutionService {
       verification: { id: repository.verification.id, version: repository.verification.version ?? '1.0.0',
         commandHash: digest({ executable: repository.verification.executable, args: repository.verification.args }) },
     } : null;
+    const repositoryBinding = githubRepositoryRef ?? repositoryRef;
     const requestHash = digest({
       projectId: input.projectId, planId: input.planId, revision: input.revision,
       planInstanceId: input.planInstanceId ?? null, taskId: input.taskId, profileId: input.profileId,
-      ...(repositoryRef ? { repository: repositoryRef, repositoryRefId: input.repositoryRefId ?? null,
+      ...(repositoryBinding ? { repository: repositoryBinding, repositoryRefId: input.repositoryRefId ?? null,
         repositoryCommitOid: input.repositoryCommitOid ?? null } : {}),
       ...(managedDeepSeek ? { managedProfileRevision: input.profileRevision } : {}),
       ...(isModelProvider(profile) ? {
@@ -630,7 +709,7 @@ export class ExecutionService {
       tenantId: input.tenantId, projectId: input.projectId, principal: input.principal,
       authzGeneration: input.authzGeneration, planId: input.planId, revision: input.revision,
       planInstanceId: input.planInstanceId, taskId: input.taskId, commandId: input.commandId, requestHash,
-      repositoryRef,
+      repositoryRef: repositoryBinding,
       buildRun: async ({ project, plan, task, processTaskRef, client }) => {
         let repositorySnapshot = null;
         if (repository) {
@@ -661,10 +740,12 @@ export class ExecutionService {
             client, tenantId: input.tenantId,
           });
           runProfile = { ...runProfile, credentialVersion: binding.version };
-          const pinnedBlueprint = project.blueprintVersions?.find((candidate) => candidate.id === processTaskRef.blueprintId
-            && candidate.version === processTaskRef.blueprintVersion);
-          taskGuidance = createProcessTaskGuidanceSnapshot({ blueprint: pinnedBlueprint, plan, task, processTaskRef });
-          proposalContext = createProcessTaskProposalContext({ blueprint: pinnedBlueprint, task, processTaskRef, taskGuidance });
+          if (!githubPatchContext) {
+            const pinnedBlueprint = project.blueprintVersions?.find((candidate) => candidate.id === processTaskRef.blueprintId
+              && candidate.version === processTaskRef.blueprintVersion);
+            taskGuidance = createProcessTaskGuidanceSnapshot({ blueprint: pinnedBlueprint, plan, task, processTaskRef });
+            proposalContext = createProcessTaskProposalContext({ blueprint: pinnedBlueprint, task, processTaskRef, taskGuidance });
+          }
         }
         const run = createExecutionRun({
           tenantId: input.tenantId, projectId: input.projectId, profile: runProfile, requestedBy: input.principal,
@@ -684,6 +765,16 @@ export class ExecutionService {
           taskGuidance,
         });
         if (repositorySnapshot) run.repositorySnapshot = repositorySnapshot;
+        if (githubPatchContext) run.githubPatchSelection = {
+          sourceSnapshot: structuredClone(githubPatchContext.sourceSnapshot),
+          selectedFiles: structuredClone(githubRepositoryRef.selectedFiles),
+          verifier: structuredClone(githubRepositoryRef.verification),
+          repositoryTreeDigest: githubRepositoryRef.treeDigest,
+        };
+        if (githubPatchContext) {
+          buildGitHubPatchPrompt({ run, context: githubPatchContext, model: runProfile.model,
+            maxOutputTokens: runProfile.maxOutputTokens, deepSeek: runProfile.dynamicDeepSeek });
+        }
         return run;
       },
     });
@@ -737,7 +828,9 @@ export class ExecutionService {
       totalBytes: snapshot.totalBytes,
       capturedAt: snapshot.capturedAt,
     }));
-    return { available: false, reason: 'remote-patch-execution-not-enabled', repositories };
+    return { available: Boolean(this.githubVerifierProfile && this.githubPatchExecutionReady),
+      reason: !this.githubVerifierProfile ? 'fixed-github-verifier-not-configured'
+        : this.githubPatchExecutionReady ? null : 'remote-patch-execution-not-enabled', repositories };
   }
   async listGitHubSnapshotFiles({ tenantId, projectId, principal, authzGeneration, snapshotId }) {
     if (!/^[a-f0-9]{64}$/.test(snapshotId ?? '') || !this.githubSourceStore?.listSnapshotFileManifestForExecution) return null;
@@ -1065,7 +1158,54 @@ export class ExecutionService {
       || (profile.dynamicDeepSeek && run.profile.providerMaxOutputTokens !== profile.maxOutputTokens))) {
       throw Object.assign(new Error('The approved model provider settings differ from the configured profile. Create a new execution run and approve the current settings.'), { statusCode: 409, code: 'EXECUTION_PROFILE_STALE', retryable: false });
     }
-    const modelPrompt = isModelProvider(profile) ? buildModelPrompt(run) : null;
+    let githubPatchContext = null;
+    let githubSourceRecord = null;
+    let modelPrompt = null;
+    if (run.githubPatchSelection) {
+      const verifier = this.githubVerifierProfile;
+      const selection = run.githubPatchSelection;
+      const sourceSnapshot = selection.sourceSnapshot;
+      const pinnedRepository = run.processTaskRef?.repository;
+      const expectedRepository = sourceSnapshot && Array.isArray(selection.selectedFiles) && selection.verifier
+        ? { id: `github-${sourceSnapshot.repositoryId}`, kind: 'github-app', snapshotId: sourceSnapshot.snapshotId,
+          treeDigest: selection.repositoryTreeDigest,
+          source: { type: 'github-app', ...sourceSnapshot },
+          selectedFiles: selection.selectedFiles,
+          verification: selection.verifier }
+        : null;
+      if (!expectedRepository || digest(pinnedRepository) !== digest(expectedRepository)) {
+        throw Object.assign(new Error('The GitHub snapshot, selected-file hashes, or verifier do not match the immutable approved repository binding.'), {
+          statusCode: 409, code: 'GITHUB_CANDIDATE_BINDING_STALE', retryable: false,
+        });
+      }
+      if (!verifier || verifier.profileHash !== run.githubPatchSelection.verifier?.profileHash
+        || verifier.id !== run.githubPatchSelection.verifier?.id || verifier.version !== run.githubPatchSelection.verifier?.version
+        || !isModelProvider(profile) || !this.githubSourceStore?.resolveSnapshotForExecution) {
+        throw Object.assign(new Error('The fixed GitHub verifier or brokered patch profile changed after approval.'), {
+          statusCode: 409, code: 'GITHUB_CANDIDATE_PROFILE_STALE', retryable: false,
+        });
+      }
+      githubSourceRecord = await this.githubSourceStore.resolveSnapshotForExecution({ tenantId, projectId: run.projectId,
+        principal: command.scopePrincipal, authzGeneration: command.authorityGeneration,
+        snapshotId: run.githubPatchSelection.sourceSnapshot?.snapshotId });
+      if (!githubSourceRecord) throw Object.assign(new Error('The exact approved GitHub snapshot is no longer available.'), {
+        statusCode: 409, code: 'GITHUB_SNAPSHOT_NOT_FOUND', retryable: false,
+      });
+      const selectedPaths = run.githubPatchSelection.selectedFiles?.map((file) => file.path);
+      githubPatchContext = buildGitHubSnapshotTextContext({ binding: githubSourceRecord.binding,
+        snapshot: githubSourceRecord.snapshot, snapshotId: run.githubPatchSelection.sourceSnapshot.snapshotId, selectedPaths });
+      const selectedIdentity = githubPatchContext.files.map(({ path: relativePath, mode, contentHash, text }) => ({
+        path: relativePath, mode, contentHash, size: Buffer.byteLength(text, 'utf8'),
+      }));
+      if (digest(githubPatchContext.sourceSnapshot) !== digest(run.githubPatchSelection.sourceSnapshot)
+        || digest(selectedIdentity) !== digest(run.githubPatchSelection.selectedFiles)) {
+        throw Object.assign(new Error('The approved GitHub snapshot or selected file hashes no longer match the durable request.'), {
+          statusCode: 409, code: 'GITHUB_SNAPSHOT_SELECTION_STALE', retryable: false,
+        });
+      }
+      modelPrompt = buildGitHubPatchPrompt({ run, context: githubPatchContext, model: profile.model,
+        maxOutputTokens: profile.maxOutputTokens, deepSeek: profile.dynamicDeepSeek });
+    } else if (isModelProvider(profile)) modelPrompt = buildModelPrompt(run);
     const configuredCredential = profile.credentialReference
       ? { reference: profile.credentialReference, version: profile.credentialVersion } : null;
     const approvedCredential = run.profile.credential ?? null;
@@ -1112,7 +1252,7 @@ export class ExecutionService {
       approvalPrincipal: run.approval?.principal ?? null,
       authzGeneration: command.authorityGeneration ?? null,
       workerId: randomUUID(), controller: new AbortController(), cancelReason: null, handle: null,
-      modelPrompt,
+      modelPrompt, githubPatchContext, githubSourceRecord,
       dispatchAuthorizationPending: true,
       done: new Promise((resolve) => { settleActive = resolve; }),
     };
@@ -1153,11 +1293,24 @@ export class ExecutionService {
         authzGeneration: command.scopePrincipal ? command.authorityGeneration : null,
       });
       runningCommitted = true;
-      const workspace = providerProfile ? null : path.resolve(path.join(profile.workspaceRoot, run.id));
-      if (!providerProfile && !workspace.startsWith(`${profile.workspaceRoot}${path.sep}`)) throw new Error('Execution workspace escaped the configured root.');
-      if (!providerProfile) await mkdir(workspace, { recursive: true, mode: 0o700 });
+      const githubPatchRun = Boolean(run.githubPatchSelection);
+      const workspace = providerProfile
+        ? (githubPatchRun ? path.resolve(this.githubCandidateWorkspaceRoot, run.id) : null)
+        : path.resolve(path.join(profile.workspaceRoot, run.id));
+      const workspaceRoot = githubPatchRun ? this.githubCandidateWorkspaceRoot : profile.workspaceRoot;
+      if (workspace && !workspace.startsWith(`${workspaceRoot}${path.sep}`)) throw new Error('Execution workspace escaped the configured root.');
+      if (githubPatchRun) await mkdir(this.githubCandidateWorkspaceRoot, { recursive: true, mode: 0o700 });
+      if (workspace) await mkdir(workspace, { recursive: true, mode: 0o700 });
       let repositoryBefore = null;
-      if (run.processTaskRef?.repository) {
+      if (githubPatchRun) {
+        repositoryBefore = githubCandidateSourceSnapshot(active.githubSourceRecord.snapshot, githubPatchContext.sourceSnapshot);
+        if (repositoryBefore.treeDigest !== run.processTaskRef?.repository?.treeDigest) {
+          throw Object.assign(new Error('The approved GitHub snapshot tree identity changed before candidate materialization.'), {
+            statusCode: 409, code: 'GITHUB_SNAPSHOT_SELECTION_STALE', retryable: false,
+          });
+        }
+        await materializeLocalRepositorySnapshot(repositoryBefore, workspace);
+      } else if (run.processTaskRef?.repository) {
         if (!run.repositorySnapshot || run.repositorySnapshot.treeDigest !== run.processTaskRef.repository.treeDigest) {
           throw Object.assign(new Error('The pinned local repository snapshot is unavailable or invalid.'), { code: 'LOCAL_REPOSITORY_SNAPSHOT_INVALID' });
         }
@@ -1257,27 +1410,43 @@ export class ExecutionService {
         result.catch(() => {});
       }
       let result = await handle.result;
+      if (run.githubPatchSelection && result.status === 'COMPLETED') {
+        const updates = parseGitHubPatchOutput(result.stdout, githubPatchContext.files);
+        await applyGitHubPatchUpdates(workspace, githubPatchContext.files, updates);
+        result = { ...result, stdout: `Applied bounded updates to ${updates.length} selected file${updates.length === 1 ? '' : 's'}.`,
+          evidenceHash: digest({ patchHashes: updates.map(({ path: relativePath, contentHash }) => ({ path: relativePath, contentHash })),
+            modelUsage: result.modelUsage ?? null }) };
+      }
       if (repositoryBefore && result.status === 'COMPLETED') {
         const repositoryAfter = await captureLocalRepositorySnapshot(workspace, { excludeGitDirectory: false });
-        const repositoryConfig = this.localRepositories.get(`${tenantId}\n${run.projectId}\n${run.processTaskRef.repository.id}`);
-        if (!repositoryConfig) throw Object.assign(new Error('The pinned local repository binding is no longer configured.'), { code: 'LOCAL_REPOSITORY_NOT_FOUND' });
-        const verificationCommandHash = digest({ executable: repositoryConfig.verification.executable, args: repositoryConfig.verification.args });
-        if (repositoryConfig.verification.id !== run.processTaskRef.repository.verification?.id
-          || (repositoryConfig.verification.version ?? '1.0.0') !== run.processTaskRef.repository.verification?.version
-          || verificationCommandHash !== run.processTaskRef.repository.verification?.commandHash) {
+        const repositoryConfig = run.githubPatchSelection ? null
+          : this.localRepositories.get(`${tenantId}\n${run.projectId}\n${run.processTaskRef.repository.id}`);
+        if (!run.githubPatchSelection && !repositoryConfig) throw Object.assign(new Error('The pinned local repository binding is no longer configured.'), { code: 'LOCAL_REPOSITORY_NOT_FOUND' });
+        const verificationConfig = run.githubPatchSelection ? this.githubVerifierProfile : repositoryConfig.verification;
+        const verificationCommandHash = run.githubPatchSelection ? verificationConfig?.profileHash
+          : digest({ executable: verificationConfig.executable, args: verificationConfig.args });
+        const verificationMatches = run.githubPatchSelection
+          ? verificationCommandHash === run.githubPatchSelection.verifier?.profileHash
+            && verificationConfig?.id === run.githubPatchSelection.verifier?.id
+            && verificationConfig?.version === run.githubPatchSelection.verifier?.version
+          : verificationConfig?.id === run.processTaskRef.repository.verification?.id
+            && (verificationConfig?.version ?? '1.0.0') === run.processTaskRef.repository.verification?.version
+            && verificationCommandHash === run.processTaskRef.repository.verification?.commandHash;
+        if (!verificationConfig || !verificationMatches) {
           throw Object.assign(new Error('The local verification command changed after the task snapshot was pinned.'), {
-            code: 'LOCAL_REPOSITORY_VERIFICATION_STALE', statusCode: 409, retryable: false,
+            code: run.githubPatchSelection ? 'GITHUB_VERIFIER_PROFILE_STALE' : 'LOCAL_REPOSITORY_VERIFICATION_STALE', statusCode: 409, retryable: false,
           });
         }
         let verification = null;
         const candidateTreeDigest = repositoryAfter.treeDigest;
-        if (repositoryConfig.verification) {
-          const verificationConfig = repositoryConfig.verification;
+        if (verificationConfig) {
           const verificationAdapter = this.commandAdapterFactory({ executable: verificationConfig.executable,
             args: verificationConfig.args, timeoutMs: verificationConfig.timeoutMs ?? profile.timeoutMs,
-            name: verificationConfig.id, version: verificationConfig.version ?? '1.0.0', sandbox: profile.sandbox });
+            name: verificationConfig.id, version: verificationConfig.version ?? '1.0.0',
+            ...(run.githubPatchSelection ? { environment: {}, sandbox: { executable: verificationConfig.bubblewrapExecutable,
+              readOnlyFiles: [], allowedEnvironment: [] } } : { sandbox: profile.sandbox }) });
           const checked = await verificationAdapter.execute({ id: `verify-${run.workItem.id}`, objective: 'Verify the exact captured candidate tree.' },
-            { id: run.id, candidateTreeDigest, repositoryId: repositoryConfig.id }, { workspace, signal: active.controller.signal });
+            { id: run.id, candidateTreeDigest, repositoryId: run.processTaskRef.repository.id }, { workspace, signal: active.controller.signal });
           const redactedVerificationStdout = redact(checked.stdout);
           const redactedVerificationStderr = redact(checked.stderr);
           const verificationStdoutTruncated = checked.stdoutTruncated === true || redactedVerificationStdout.length > 20_000;
@@ -1298,11 +1467,15 @@ export class ExecutionService {
             result = { ...result, status: 'FAILED', exitCode: verification.exitCode ?? 1 };
           }
         }
-        result = { ...result, repositoryCandidate: {
-          repositoryId: repositoryConfig.id, snapshotId: repositoryBefore.snapshotId,
+        const changes = localRepositoryDiff(repositoryBefore, repositoryAfter);
+        result = { ...result,
+          ...(run.githubPatchSelection ? { changedArtifacts: changes.filter((change) => change.afterHash && change.change !== 'mode_changed')
+            .map((change) => ({ path: change.path, contentHash: change.afterHash, hashAlgorithm: 'sha256-raw' })) } : {}),
+          repositoryCandidate: {
+          repositoryId: run.processTaskRef.repository.id, snapshotId: repositoryBefore.snapshotId,
           sourceTreeDigest: repositoryBefore.treeDigest, treeDigest: candidateTreeDigest,
           ...(repositoryBefore.repositorySource ? { source: repositoryBefore.repositorySource } : {}),
-          changes: localRepositoryDiff(repositoryBefore, repositoryAfter), verification,
+          changes, verification,
         } };
       }
       const generatedProposal = result.status === 'COMPLETED' && run.workItem?.proposalContext
@@ -1419,11 +1592,17 @@ export class ExecutionService {
         ...(profile.dynamicDeepSeek ? { reasoning: { effort: 'none' } } : {}) }
       : { objective: instructions.objective, requirements: instructions.requirements };
     const serializedBody = JSON.stringify(requestBody);
+    const serializedBodyBytes = Buffer.byteLength(serializedBody, 'utf8');
+    if (run.githubPatchSelection && serializedBodyBytes > 16 * 1024) {
+      throw Object.assign(new Error('The complete serialized GitHub patch request exceeds the 16 KiB limit.'), {
+        statusCode: 413, code: 'PROCESS_TASK_PROPOSAL_CONTEXT_TOO_LARGE', retryable: false,
+      });
+    }
     const modelBudgetEnvelope = isModelProvider(profile) ? {
       provider: profile.dynamicDeepSeek ? 'deepseek' : 'openai',
       model: profile.model,
       profileRevision: profile.version,
-      promptBytes: Buffer.byteLength(proposalInput, 'utf8'),
+      promptBytes: run.githubPatchSelection ? serializedBodyBytes : Buffer.byteLength(proposalInput, 'utf8'),
       promptByteCeiling: MAX_BLUEPRINT_PROPOSAL_PROMPT_BYTES,
       requestedOutputTokens: profile.maxOutputTokens,
       timeoutMs: Math.min(profile.timeoutMs ?? 20_000, 20_000),

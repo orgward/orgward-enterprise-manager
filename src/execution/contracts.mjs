@@ -339,6 +339,7 @@ export function executionEvent(run, type, actor, data) {
 export function executionRunView(run) {
   const view = structuredClone(run);
   delete view.repositorySnapshot;
+  if (view.githubPatchSelection && view.profile?.credential) delete view.profile.credential;
   if (view.execution?.workspace) {
     delete view.execution.workspace;
     view.execution.workspaceRef = `workspace:${run.id}`;
