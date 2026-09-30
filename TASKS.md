@@ -5641,3 +5641,46 @@ TAP 78.50s, runner 79.64s, outer wall 82.30s). Full log
 log remains `/tmp/orgward-pr06-final-full-check-3eaa818.log`. This repair changes
 tests only, not product behavior; `git diff --check` passed. PR-06 remains open;
 task checkbox, cursor and release gates are unchanged.
+
+PR-06 tenant model handoff envelope and usage evidence (bounded; 2026-09-30):
+the tenant-wide single-flight control and per-attempt provider envelope
+remain in PostgreSQL; completed and outcome-unknown model runs now also expose a
+strictly allowlisted `execution.modelAttemptEvidence` summary through the
+existing run API. The summary contains provider/model/profile revision, prompt
+byte count and ceiling, requested output cap, timeout, zero tools, usage state,
+and unknown cost; it contains no prompt text, credential, or source text. The
+Execution run view renders those limits beside token usage, including unresolved
+outcome status. Tenant denial copy states that the current run stopped before
+dispatch and requires a fresh request/approval after the active handoff ends.
+Existing unavailable-usage and uncertain-outcome records remain truthful; no
+prices, dollar caps, or tenant budget-compliance claims were introduced.
+
+Focused history: a prior 7-test invocation of
+`node --test --test-name-pattern='tenant-wide model handoff|pre-handoff cancellation releases|DeepSeek missing or malformed token usage|DeepSeek outcome-unknown HTTP responses|served tenant DeepSeek setup encrypts|model usage presentation shows|execution HTTP surface enforces approval' tests/execution/provider.test.mjs tests/foundation.test.mjs tests/execution/linked-process-task-result.test.mjs tests/execution/server.test.mjs`
+had 6 pass/1 fail because the restart assertion omitted the newly backfilled
+provider/model/profile columns; log `/tmp/orgward-pr06-tenant-model-budget-focused.tap.log`.
+The corrected invocation passed 7/7 (0 failed/cancelled/skipped; TAP 5432.673ms),
+log `/tmp/orgward-pr06-tenant-model-budget-focused-final.tap.log`.
+After adding run-level evidence projection, this exact focused command passed
+9/9 (0 failed/cancelled/skipped; TAP 5908.911ms):
+`node --test --test-name-pattern='DeepSeek uses its fixed|tenant-wide model handoff|pre-handoff cancellation releases|DeepSeek missing or malformed token usage|DeepSeek outcome-unknown HTTP responses|model attempt evidence presentation|model usage presentation shows|served tenant DeepSeek setup encrypts|execution HTTP surface enforces approval' tests/execution/provider.test.mjs tests/execution/linked-process-task-result.test.mjs tests/foundation.test.mjs tests/execution/server.test.mjs`.
+Log `/tmp/orgward-pr06-tenant-model-budget-projection-focused.tap.log`.
+Syntax checks and `git diff --check` passed. No live provider, credential,
+browser, or full check was used. T-22 still lacks configured tenant token/dollar
+caps, authoritative pricing, and reconciliation of unresolved usage; PR-06,
+task checkbox, cursor, and release gates remain open and unchanged.
+
+PR-06 tenant model envelope review follow-up (2026-09-30): the run-view
+formatter now accepts OpenAI's configured 2,000-token cap while retaining
+DeepSeek's 64–512 range. A loopback canary case verifies that a parsed,
+credential-bearing model output leaves the OrgWard run FAILED with no saved
+output, while the completed provider attempt retains validated numeric usage
+and secret-free envelope evidence and releases the tenant slot. The combined
+focused invocation
+`node --test --test-name-pattern='DeepSeek uses its fixed|DeepSeek secret-quarantined output keeps validated usage|tenant-wide model handoff|pre-handoff cancellation releases|DeepSeek missing or malformed token usage|DeepSeek outcome-unknown HTTP responses|model attempt evidence presentation|model usage presentation shows|served tenant DeepSeek setup encrypts|execution HTTP surface enforces approval' tests/execution/provider.test.mjs tests/execution/linked-process-task-result.test.mjs tests/foundation.test.mjs tests/execution/server.test.mjs`
+passed 10/10 (0 failed/cancelled/skipped; TAP 6217.147ms), log
+`/tmp/orgward-pr06-tenant-model-budget-final-review.tap.log`. The preceding
+projection-only focused run passed 9/9 (TAP 5908.911ms), log
+`/tmp/orgward-pr06-tenant-model-budget-projection-focused.tap.log`. Syntax checks
+and `git diff --check` passed. No provider, credential, browser or full check
+was used; PR-06/T-22 and release gates remain open.

@@ -397,6 +397,7 @@ test('served tenant DeepSeek setup encrypts the key before binding and supports 
   t.after(() => rm(root, { recursive: true, force: true }));
   const app = await start(root); t.after(() => close(app.server));
   const script = await fetch(`${app.base}/platform.js`).then((response) => response.text());
+  assert.match(script, /Tenant model budget: not configured; no tenant token or dollar cap is enforced\. OrgWard allows one active model-provider handoff at a time across this tenant\. Provider cost remains unknown; reported tokens are counts, not prices\./);
   const workflow = script.slice(script.indexOf('async function createDeepSeekProfileWithKey'), script.indexOf('async function retryDeepSeekProfileBinding'));
   assert.match(script, /document\.addEventListener\('submit', \(event\) => \{/);
   for (const name of ['saveProjectMember', 'revokeIdentity', 'replaceIdentityRoles', 'storeSecretReference',

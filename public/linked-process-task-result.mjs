@@ -57,24 +57,52 @@ export function modelUsagePresentation(usage) {
     && usage.totalTokens === usage.inputTokens + usage.outputTokens) {
     return {
       status: 'reported',
-      label: `Reported model usage: ${usage.inputTokens} input tokens, ${usage.outputTokens} output tokens, ${usage.totalTokens} total tokens.`,
+      label: `Reported model usage: ${usage.inputTokens} input tokens, ${usage.outputTokens} output tokens, ${usage.totalTokens} total tokens. Cost is unknown; no tenant-budget compliance claim is made.`,
     };
   }
   if (hasExactKeys(usage, ['status', 'reason']) && usage.status === 'unreported') {
     const messages = {
-      usage_missing: 'The provider did not report token usage; input, output, and total counts are unavailable.',
-      usage_invalid: 'The provider returned invalid usage metadata; token counts are unavailable.',
-      dispatch_not_started: 'Provider dispatch did not start; no model usage was reported.',
+      usage_missing: 'The provider did not report token usage; input, output, and total counts are unavailable. Cost is unknown; no tenant-budget compliance claim is made.',
+      usage_invalid: 'The provider returned invalid usage metadata; token counts are unavailable. Cost is unknown; no tenant-budget compliance claim is made.',
+      dispatch_not_started: 'Provider dispatch did not start; no model usage was reported. Cost is unknown; no tenant-budget compliance claim is made.',
     };
     if (Object.hasOwn(messages, usage.reason)) return { status: 'unreported', label: messages[usage.reason] };
   }
   if (hasExactKeys(usage, ['status']) && usage.status === 'reserved') {
     return {
       status: 'reserved',
-      label: 'Provider dispatch outcome is uncertain; token usage remains unreported. Reconcile this run before requesting more work.',
+      label: 'Provider dispatch outcome is uncertain; token usage remains unreported and cost is unknown. This attempt remains recorded; no tenant-budget compliance claim is made.',
     };
   }
   return { status: 'unavailable', label: 'Saved model usage metadata could not be validated; token counts are unavailable.' };
+}
+
+export function modelAttemptEvidencePresentation(evidence) {
+  if (evidence == null) return null;
+  const maximumOutputTokens = evidence?.provider === 'deepseek' ? 512 : 2_000;
+  const common = ['provider', 'model', 'profileRevision', 'promptBytes', 'promptByteCeiling',
+    'requestedOutputTokens', 'timeoutMs', 'toolCount', 'usageStatus', 'costStatus'];
+  const keys = evidence?.usageStatus === 'unreported' ? [...common, 'usageReason'] : common;
+  if (!hasExactKeys(evidence, keys)
+    || !['openai', 'deepseek'].includes(evidence.provider)
+    || !isBoundedText(evidence.model, 120, true)
+    || !isBoundedText(evidence.profileRevision, 80, true)
+    || !Number.isSafeInteger(evidence.promptBytes) || evidence.promptBytes < 1 || evidence.promptBytes > 16_384
+    || evidence.promptByteCeiling !== 16_384
+    || !Number.isSafeInteger(evidence.requestedOutputTokens) || evidence.requestedOutputTokens < (evidence.provider === 'deepseek' ? 64 : 1) || evidence.requestedOutputTokens > maximumOutputTokens
+    || !Number.isSafeInteger(evidence.timeoutMs) || evidence.timeoutMs < 1 || evidence.timeoutMs > 20_000
+    || evidence.toolCount !== 0 || evidence.costStatus !== 'unknown'
+    || !['reported', 'unreported', 'outcome_unknown'].includes(evidence.usageStatus)
+    || (evidence.usageStatus === 'unreported' && !['usage_missing', 'usage_invalid'].includes(evidence.usageReason))) {
+    return { status: 'unavailable', label: 'Saved model request limits could not be validated.' };
+  }
+  const usage = evidence.usageStatus === 'reported' ? 'token usage reported'
+    : evidence.usageStatus === 'outcome_unknown' ? 'provider outcome unknown; usage unresolved'
+      : `token usage unreported (${evidence.usageReason})`;
+  return {
+    status: evidence.usageStatus,
+    label: `Model request: ${evidence.provider}/${evidence.model} · profile ${evidence.profileRevision} · prompt ${evidence.promptBytes}/${evidence.promptByteCeiling} bytes · output cap ${evidence.requestedOutputTokens} tokens · timeout ${evidence.timeoutMs} ms · tools ${evidence.toolCount} · ${usage} · cost unknown.`,
+  };
 }
 
 function proposalReview(run, project) {

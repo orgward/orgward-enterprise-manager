@@ -258,7 +258,7 @@ function renderAdministration() {
   const deepSeekAdminContent = state.deepSeekAdmin?.error
     ? `<p class="muted-copy" role="status">${escapeHtml(state.deepSeekAdmin.error)}</p>`
     : state.deepSeekAdmin?.profiles
-      ? deepSeekRows
+      ? `<p class="muted-copy">Tenant model budget: not configured; no tenant token or dollar cap is enforced. OrgWard allows one active model-provider handoff at a time across this tenant. Provider cost remains unknown; reported tokens are counts, not prices.</p>${deepSeekRows}`
       : '<p class="muted-copy">Tenant DeepSeek profile management is available to tenant administrators.</p>';
   const itemDetails = importResult?.data?.items?.length
     ? `<ul class="import-results" aria-label="Legacy import record results">${importResult.data.items.slice(0, 20).map((item) => `<li><code>${escapeHtml(item.sourcePath)}</code><span>${escapeHtml(item.status)}${item.errorCode ? ` · ${escapeHtml(item.errorCode)}` : ''}</span></li>`).join('')}</ul>${importResult.data.items.length > 20 ? `<p class="muted-copy">Showing 20 of ${escapeHtml(importResult.data.items.length)} records.</p>` : ''}`

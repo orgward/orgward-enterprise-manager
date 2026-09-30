@@ -29,6 +29,36 @@ function associatedData(tenantId, reference, version) {
   return Buffer.from(`${tenantId}\n${reference}\n${version}`, 'utf8');
 }
 
+function validModelHandoffEnvelope(value) {
+  const keys = ['provider', 'model', 'profileRevision', 'promptBytes', 'promptByteCeiling',
+    'requestedOutputTokens', 'timeoutMs', 'toolCount'].sort();
+  return value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).sort().join(',') === keys.join(',')
+    && ['openai', 'deepseek'].includes(value.provider)
+    && typeof value.model === 'string' && value.model.length >= 1 && value.model.length <= 100
+    && typeof value.profileRevision === 'string' && value.profileRevision.length >= 1 && value.profileRevision.length <= 120
+    && Number.isSafeInteger(value.promptBytes) && value.promptBytes >= 1 && value.promptBytes <= 16_384
+    && value.promptByteCeiling === 16_384
+    && Number.isSafeInteger(value.requestedOutputTokens) && value.requestedOutputTokens >= 1 && value.requestedOutputTokens <= 2_000
+    && Number.isSafeInteger(value.timeoutMs) && value.timeoutMs >= 1 && value.timeoutMs <= 20_000
+    && value.toolCount === 0;
+}
+
+function boundedAttemptUsage(value, requestedOutputTokens) {
+  if (value && value.status === 'reported'
+    && Number.isSafeInteger(value.inputTokens) && value.inputTokens >= 0 && value.inputTokens <= 16_384
+    && Number.isSafeInteger(value.outputTokens) && value.outputTokens >= 0 && value.outputTokens <= requestedOutputTokens
+    && Number.isSafeInteger(value.totalTokens)
+    && value.totalTokens === value.inputTokens + value.outputTokens) {
+    return { status: 'reported', inputTokens: value.inputTokens,
+      outputTokens: value.outputTokens, totalTokens: value.totalTokens };
+  }
+  if (value && value.status === 'unreported' && ['usage_missing', 'usage_invalid'].includes(value.reason)) {
+    return { status: 'unreported', reason: value.reason };
+  }
+  return { status: 'unreported', reason: 'usage_invalid' };
+}
+
 function seal(key, tenantId, reference, version, value) {
   const nonce = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key, nonce);
@@ -874,7 +904,7 @@ export class PostgresSecretStore {
     if (!leaseCheck.rows[0]?.active) throw failure(403, 'WORKER_LEASE_INVALID', 'The worker lease is no longer authorized.');
     const finalExpiryCheck = await client.query('select $1::timestamptz > clock_timestamp() as credential_valid', [secret.rows[0].expires_at]);
     if (!finalExpiryCheck.rows[0].credential_valid) throw failure(409, 'SECRET_CREDENTIAL_EXPIRED', 'The approved credential expired while authorizing provider use.');
-    return { ...secret.rows[0], processTaskRef: processTaskRef ?? null };
+    return { ...secret.rows[0], processTaskRef: processTaskRef ?? null, run };
   }
 
   async #cancelBoundLeases(client, { tenantId, reference, reason }) {
@@ -1123,7 +1153,7 @@ export class PostgresSecretStore {
 
   // Provider callbacks are server-side only. Authorization comes from persisted
   // PostgreSQL state; a callback supplied by the caller cannot assert a lease.
-  async useForAuthorizedLease({ tenantId, reference, expectedVersion, runId, projectId, principal, workerId, authzGeneration, signal, operation }) {
+  async useForAuthorizedLease({ tenantId, reference, expectedVersion, runId, projectId, principal, workerId, authzGeneration, signal, operation, modelBudgetEnvelope = null }) {
     if (!this.encryptionKey) throw failure(503, 'SECRET_ENCRYPTION_UNAVAILABLE', 'Provider credentials are unavailable.');
     if (typeof tenantId !== 'string' || !tenantId || typeof operation !== 'function') {
       throw failure(403, 'BROKER_AUTHORITY_REQUIRED', 'An authorized worker lease is required.');
@@ -1131,19 +1161,54 @@ export class PostgresSecretStore {
     if (!/^secret-[a-z0-9][a-z0-9._-]{0,79}$/.test(reference ?? '') || !Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
       throw failure(400, 'INVALID_SECRET_BINDING', 'The approved credential reference and version are invalid.');
     }
+    if (modelBudgetEnvelope !== null && !validModelHandoffEnvelope(modelBudgetEnvelope)) {
+      throw failure(400, 'MODEL_HANDOFF_ENVELOPE_INVALID', 'The bounded model handoff envelope is invalid.');
+    }
     const attemptId = randomUUID();
     const reservation = await this.persistence.transaction(async (client) => {
       const row = await this.#authorizeLease(client, { tenantId, reference, expectedVersion, runId, projectId, principal, workerId, authzGeneration });
+      const modelRun = ['provider-openai', 'provider-deepseek'].includes(row.run.profile?.kind);
+      if (modelRun !== Boolean(modelBudgetEnvelope)
+        || (modelRun && (modelBudgetEnvelope.provider !== (row.run.profile.kind === 'provider-deepseek' ? 'deepseek' : 'openai')
+          || modelBudgetEnvelope.model !== row.run.profile.providerModel
+          || modelBudgetEnvelope.profileRevision !== row.run.profile.version))) {
+        throw failure(409, 'MODEL_HANDOFF_ENVELOPE_MISMATCH', 'The bounded model handoff envelope does not match the approved run profile.');
+      }
+      if (modelRun) {
+        await client.query(`insert into orgward.tenant_model_handoff_controls (tenant_id)
+          values ($1) on conflict (tenant_id) do nothing`, [tenantId]);
+        const control = await client.query(`select active_run_id,active_attempt_id,active_status
+          from orgward.tenant_model_handoff_controls where tenant_id=$1 for update`, [tenantId]);
+        if (!control.rowCount) throw failure(503, 'TENANT_MODEL_HANDOFF_CONTROL_UNAVAILABLE', 'Tenant model handoff control is unavailable.');
+        if (control.rows[0].active_attempt_id !== null) {
+          throw failure(409, 'TENANT_MODEL_HANDOFF_ACTIVE', 'This run was stopped before provider dispatch because another model-provider handoff is active for this tenant. After it finishes, request and approve a fresh run.');
+        }
+      }
       const inserted = await client.query(`insert into orgward.provider_dispatch_attempts
-        (tenant_id,run_id,project_id,principal,worker_id,attempt_id,credential_reference,credential_version,status)
-        values ($1,$2,$3,$4,$5,$6,$7,$8,'reserved')
+        (tenant_id,run_id,project_id,principal,worker_id,attempt_id,credential_reference,credential_version,status,
+          model_provider,model_id,profile_revision,prompt_bytes,prompt_byte_ceiling,requested_output_tokens,timeout_ms,tool_count,
+          usage_status,cost_status)
+        values ($1,$2,$3,$4,$5,$6,$7,$8,'reserved',$9,$10,$11,$12,$13,$14,$15,$16,
+          case when $9::text is null then null else 'reserved' end,
+          case when $9::text is null then null else 'unknown' end)
         on conflict (tenant_id,run_id) do nothing returning attempt_id`,
-      [tenantId, runId, projectId, principal, workerId, attemptId, reference, expectedVersion]);
+      [tenantId, runId, projectId, principal, workerId, attemptId, reference, expectedVersion,
+        modelBudgetEnvelope?.provider ?? null, modelBudgetEnvelope?.model ?? null,
+        modelBudgetEnvelope?.profileRevision ?? null, modelBudgetEnvelope?.promptBytes ?? null,
+        modelBudgetEnvelope?.promptByteCeiling ?? null, modelBudgetEnvelope?.requestedOutputTokens ?? null,
+        modelBudgetEnvelope?.timeoutMs ?? null, modelBudgetEnvelope?.toolCount ?? null]);
       if (!inserted.rowCount) throw failure(409, 'PROVIDER_ATTEMPT_EXISTS', 'This run already has a provider dispatch attempt. Create and approve a new run before retrying.');
+      if (modelRun) {
+        const reservedControl = await client.query(`update orgward.tenant_model_handoff_controls
+          set active_run_id=$2,active_attempt_id=$3,active_status='reserved',updated_at=now()
+          where tenant_id=$1 and active_attempt_id is null returning tenant_id`, [tenantId, runId, attemptId]);
+        if (!reservedControl.rowCount) throw failure(409, 'TENANT_MODEL_HANDOFF_ACTIVE', 'This run was stopped before provider dispatch because another model-provider handoff is active for this tenant. After it finishes, request and approve a fresh run.');
+      }
       const decipher = createDecipheriv('aes-256-gcm', this.encryptionKey, row.nonce);
       decipher.setAAD(associatedData(tenantId, reference, row.version));
       decipher.setAuthTag(row.auth_tag);
-      return { credential: Buffer.concat([decipher.update(row.ciphertext), decipher.final()]).toString('utf8'), expiresAt: row.expires_at };
+      return { credential: Buffer.concat([decipher.update(row.ciphertext), decipher.final()]).toString('utf8'),
+        expiresAt: row.expires_at, modelBudgetEnvelope };
     });
     await this.persistence.faults?.afterProviderDispatchReservation?.({ tenantId, runId, attemptId });
     const expiryMs = new Date(reservation.expiresAt).getTime();
@@ -1194,9 +1259,20 @@ export class PostgresSecretStore {
       if (containsSecret(output, reservation.credential)) throw failure(502, 'PROVIDER_OUTPUT_QUARANTINED', 'Provider output was quarantined by secret-leak detection.');
       await this.persistence.transaction(async (client) => {
         await this.#authorizeLease(client, { tenantId, reference, expectedVersion, runId, projectId, principal, workerId, authzGeneration, allowPauseRequested: true });
-        await client.query(`update orgward.provider_dispatch_attempts
-          set status='completed',finished_at=now(),updated_at=now()
-          where tenant_id=$1 and run_id=$2 and attempt_id=$3 and status='handed_off'`, [tenantId, runId, attemptId]);
+        if (reservation.modelBudgetEnvelope) {
+          const usage = boundedAttemptUsage(output?.modelUsage, reservation.modelBudgetEnvelope.requestedOutputTokens);
+          await client.query(`update orgward.provider_dispatch_attempts
+            set status='completed',finished_at=now(),updated_at=now(),usage_status=$4,
+              usage_input_tokens=$5,usage_output_tokens=$6,usage_total_tokens=$7,usage_reason=$8
+            where tenant_id=$1 and run_id=$2 and attempt_id=$3 and status='handed_off'`, [
+            tenantId, runId, attemptId, usage.status, usage.inputTokens ?? null,
+            usage.outputTokens ?? null, usage.totalTokens ?? null, usage.reason ?? null,
+          ]);
+        } else {
+          await client.query(`update orgward.provider_dispatch_attempts
+            set status='completed',finished_at=now(),updated_at=now()
+            where tenant_id=$1 and run_id=$2 and attempt_id=$3 and status='handed_off'`, [tenantId, runId, attemptId]);
+        }
       });
     } catch (error) {
       transport?.abort?.();
@@ -1204,9 +1280,20 @@ export class PostgresSecretStore {
         await client.query(`select 1 from orgward.execution_worker_leases
           where tenant_id=$1 and run_id=$2 and worker_id=$3 for update`, [tenantId, runId, workerId]);
         if (transportStarted) {
-          await client.query(`update orgward.provider_dispatch_attempts
-            set status='outcome_unknown',handed_off_at=coalesce(handed_off_at,now()),finished_at=now(),updated_at=now()
-            where tenant_id=$1 and run_id=$2 and attempt_id=$3 and status in ('reserved','handed_off','cancelled')`, [tenantId, runId, attemptId]);
+          if (error?.code === 'PROVIDER_OUTPUT_QUARANTINED' && reservation.modelBudgetEnvelope && output) {
+            const usage = boundedAttemptUsage(output?.modelUsage, reservation.modelBudgetEnvelope.requestedOutputTokens);
+            await client.query(`update orgward.provider_dispatch_attempts
+              set status='completed',handed_off_at=coalesce(handed_off_at,now()),finished_at=now(),updated_at=now(),
+                usage_status=$4,usage_input_tokens=$5,usage_output_tokens=$6,usage_total_tokens=$7,usage_reason=$8
+              where tenant_id=$1 and run_id=$2 and attempt_id=$3 and status='handed_off'`, [
+              tenantId, runId, attemptId, usage.status, usage.inputTokens ?? null,
+              usage.outputTokens ?? null, usage.totalTokens ?? null, usage.reason ?? null,
+            ]);
+          } else {
+            await client.query(`update orgward.provider_dispatch_attempts
+              set status='outcome_unknown',handed_off_at=coalesce(handed_off_at,now()),finished_at=now(),updated_at=now()
+              where tenant_id=$1 and run_id=$2 and attempt_id=$3 and status in ('reserved','handed_off','cancelled')`, [tenantId, runId, attemptId]);
+          }
         } else {
           await client.query(`update orgward.provider_dispatch_attempts
             set status='cancelled',finished_at=now(),updated_at=now()

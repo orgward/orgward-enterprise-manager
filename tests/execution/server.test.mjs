@@ -362,7 +362,7 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   const linkedTaskResultSource = await linkedTaskResultClient.text();
   assert.match(linkedTaskResultSource, /export function modelUsagePresentation\(usage\)/);
   assert.match(linkedTaskResultSource, /Reported model usage:/);
-  assert.match(linkedTaskResultSource, /Provider dispatch outcome is uncertain; token usage remains unreported/);
+  assert.match(linkedTaskResultSource, /Provider dispatch outcome is uncertain; token usage remains unreported and cost is unknown/);
   assert.match(linkedTaskResultSource, /Structured proposal unavailable\. Open the linked run for details\./);
   assert.match(linkedTaskResultSource, /Review-only proposed update\. Applying it is a separate versioned owner action\./);
   assert.match(linkedTaskResultSource, /project\?\.id === run\.projectId/);

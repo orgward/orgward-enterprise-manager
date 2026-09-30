@@ -52,7 +52,10 @@ async function setup(t, handler, { openAi = false, deepSeek = false, persistence
       providerEndpoint: `http://127.0.0.1:${fixture.address().port}/v1/execute`, timeoutMs: 5_000,
       credentialReference: 'secret-fixture', credentialVersion: 1,
     }, ...(openAi ? [{ id: 'openai-current', kind: 'provider-openai', version: '1.0.0', label: 'Validated OpenAI', credentialReference: 'secret-openai', model: 'gpt-fixture', openAiEndpoint: `http://127.0.0.1:${fixture.address().port}/v1/responses` }] : []),
-    ...(deepSeek ? [{ id: 'deepseek-current', kind: 'provider-deepseek', version: '1.0.0', label: 'DeepSeek · deepseek-fixture', credentialReference: 'secret-fixture', model: 'deepseek-fixture', deepSeekEndpoint: `http://127.0.0.1:${fixture.address().port}/responses`, deepSeekMaxOutputTokens: 128 }] : [])];
+    ...(deepSeek ? [
+      { id: 'deepseek-current', kind: 'provider-deepseek', version: '1.0.0', label: 'DeepSeek · deepseek-fixture', credentialReference: 'secret-fixture', model: 'deepseek-fixture', deepSeekEndpoint: `http://127.0.0.1:${fixture.address().port}/responses`, deepSeekMaxOutputTokens: 128 },
+      { id: 'deepseek-alternate', kind: 'provider-deepseek', version: '2.0.0', label: 'DeepSeek · alternate-fixture', credentialReference: 'secret-fixture', model: 'deepseek-alternate-fixture', deepSeekEndpoint: `http://127.0.0.1:${fixture.address().port}/responses`, deepSeekMaxOutputTokens: 96 },
+    ] : [])];
   const apps = [];
   const newApp = async () => {
     const instance = createApp({ databaseUrl: postgres.databaseUrl, oidcAuthenticator: authenticator(), secretEncryptionKey, executionProfiles, persistenceFaults,
@@ -627,6 +630,12 @@ test('DeepSeek uses its fixed Responses endpoint with a pinned generic credentia
   assert.equal(executed.body.status, 'SUCCEEDED');
   assert.equal(executed.body.execution.stdout, 'Bounded DeepSeek result');
   assert.deepEqual(executed.body.execution.modelUsage, { status: 'reported', inputTokens: 18, outputTokens: 7, totalTokens: 25 });
+  assert.deepEqual(executed.body.execution.modelAttemptEvidence, {
+    provider: 'deepseek', model: 'deepseek-fixture', profileRevision: '1.0.0',
+    promptBytes: Buffer.byteLength(providerCalls[0].body.input, 'utf8'), promptByteCeiling: 16_384,
+    requestedOutputTokens: 128, timeoutMs: 20_000, toolCount: 0,
+    usageStatus: 'reported', costStatus: 'unknown',
+  });
   assert.equal(providerCalls.length, 1);
   assert.equal(providerCalls[0].path, '/responses');
   assert.equal(providerCalls[0].credential, 'Bearer fixture-deepseek-rotated-credential');
@@ -643,7 +652,189 @@ test('DeepSeek uses its fixed Responses endpoint with a pinned generic credentia
   const restored = await api(restarted, `/api/execution/runs/${next.body.id}`, 'worker');
   assert.equal(restored.status, 200);
   assert.deepEqual(restored.body.execution.modelUsage, executed.body.execution.modelUsage);
+  assert.deepEqual(restored.body.execution.modelAttemptEvidence, executed.body.execution.modelAttemptEvidence);
+  assert.equal(JSON.stringify(restored.body.execution.modelAttemptEvidence).includes('fixture-deepseek-rotated-credential'), false);
   assert.equal(fixtureResult.getFixtureRequestCount(), 1);
+});
+
+test('DeepSeek secret-quarantined output keeps validated usage and completes the provider attempt', async (t) => {
+  const fixtureResult = await setup(t, async ({ response }) => {
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ status: 'completed', usage: { input_tokens: 13, output_tokens: 5, total_tokens: 18 },
+      output: [{ type: 'message', content: [{ type: 'output_text', text: 'fixture-secret-canary-8472' }] }] }));
+  }, { deepSeek: true });
+  const { app, projectId, canary, getFixtureRequestCount } = fixtureResult;
+  const run = await createApprovedRun(app, projectId, 'quarantine a secret-bearing model result', 'deepseek-current');
+  const failed = await api(app, `/api/execution/runs/${run.id}/execute`, 'worker', {
+    method: 'POST', body: { version: run.version },
+  });
+  assert.equal(failed.status, 200);
+  assert.equal(failed.body.status, 'FAILED');
+  assert.match(failed.body.execution.error, /quarantined/);
+  assert.equal(Object.hasOwn(failed.body.execution, 'stdout'), false);
+  assert.deepEqual(failed.body.execution.modelUsage, { status: 'reported', inputTokens: 13, outputTokens: 5, totalTokens: 18 });
+  assert.deepEqual(failed.body.execution.modelAttemptEvidence, {
+    provider: 'deepseek', model: 'deepseek-fixture', profileRevision: '1.0.0',
+    promptBytes: failed.body.execution.modelAttemptEvidence.promptBytes, promptByteCeiling: 16_384,
+    requestedOutputTokens: 128, timeoutMs: 20_000, toolCount: 0,
+    usageStatus: 'reported', costStatus: 'unknown',
+  });
+  assert.equal(JSON.stringify(failed.body).includes(canary), false);
+  assert.equal(getFixtureRequestCount(), 1);
+  const attempt = await app.persistence.query(`select status,usage_status,usage_input_tokens,usage_output_tokens,
+      usage_total_tokens,cost_status from orgward.provider_dispatch_attempts where tenant_id='tenant-a' and run_id=$1`, [run.id]);
+  assert.deepEqual(attempt.rows[0], {
+    status: 'completed', usage_status: 'reported', usage_input_tokens: 13, usage_output_tokens: 5,
+    usage_total_tokens: 18, cost_status: 'unknown',
+  });
+  const slot = await app.persistence.query(`select active_attempt_id from orgward.tenant_model_handoff_controls where tenant_id='tenant-a'`);
+  assert.equal(slot.rows[0].active_attempt_id, null, 'quarantined completed response releases the tenant slot');
+});
+
+test('tenant-wide model handoff is single-flight across projects and profile revisions with bounded restart evidence', async (t) => {
+  let providerCalls = 0;
+  let markFirstRequest;
+  let releaseFirstRequest;
+  const firstRequestSeen = new Promise((resolve) => { markFirstRequest = resolve; });
+  const firstRequestGate = new Promise((resolve) => { releaseFirstRequest = resolve; });
+  const fixtureResult = await setup(t, async ({ response }) => {
+    providerCalls += 1;
+    if (providerCalls === 1) { markFirstRequest(); await firstRequestGate; }
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ status: 'completed', usage: { input_tokens: 20, output_tokens: 8, total_tokens: 28 },
+      output: [{ type: 'message', content: [{ type: 'output_text', text: 'Local model result.' }] }] }));
+  }, { deepSeek: true });
+  let { app } = fixtureResult;
+  const { projectId, restart } = fixtureResult;
+  const otherProject = await api(app, '/api/v1/projects', 'admin', { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'provider-budget-second-project', payload: { name: 'Second tenant project' },
+  } });
+  assert.equal(otherProject.status, 201, JSON.stringify(otherProject.body));
+  await app.persistence.query(`insert into orgward.project_memberships (tenant_id,project_id,principal,access,granted_by)
+    values ('tenant-a',$1,$2,'editor',$3)`, [otherProject.body.data.id, principal('worker'), principal('admin')]);
+
+  const first = await createApprovedRun(app, projectId, 'first model handoff', 'deepseek-current');
+  const concurrent = await createApprovedRun(app, otherProject.body.data.id, 'cross-project competing handoff', 'deepseek-alternate');
+  const firstExecution = api(app, `/api/execution/runs/${first.id}/execute`, 'worker', {
+    method: 'POST', body: { version: first.version },
+  });
+  await firstRequestSeen;
+  const active = await app.persistence.query(`select c.active_run_id,c.active_attempt_id,c.active_status,
+      d.model_provider,d.model_id,d.profile_revision,d.prompt_bytes,d.prompt_byte_ceiling,
+      d.requested_output_tokens,d.timeout_ms,d.tool_count,d.usage_status,d.cost_status
+    from orgward.tenant_model_handoff_controls c
+    join orgward.provider_dispatch_attempts d on d.tenant_id=c.tenant_id
+      and d.run_id=c.active_run_id and d.attempt_id=c.active_attempt_id
+    where c.tenant_id='tenant-a'`);
+  assert.equal(active.rowCount, 1);
+  assert.equal(active.rows[0].active_run_id, first.id);
+  assert.equal(active.rows[0].active_status, 'handed_off');
+  assert.equal(active.rows[0].model_provider, 'deepseek');
+  assert.equal(active.rows[0].model_id, 'deepseek-fixture');
+  assert.equal(active.rows[0].profile_revision, '1.0.0');
+  assert.equal(active.rows[0].prompt_byte_ceiling, 16_384);
+  assert.equal(active.rows[0].prompt_bytes <= 16_384, true);
+  assert.equal(active.rows[0].requested_output_tokens, 128);
+  assert.equal(active.rows[0].timeout_ms <= 20_000, true);
+  assert.equal(active.rows[0].tool_count, 0);
+  assert.equal(active.rows[0].usage_status, 'reserved');
+  assert.equal(active.rows[0].cost_status, 'unknown');
+
+  const denied = await api(app, `/api/execution/runs/${concurrent.id}/execute`, 'worker', {
+    method: 'POST', body: { version: concurrent.version },
+  });
+  assert.equal(denied.status, 200);
+  assert.equal(denied.body.status, 'FAILED');
+  assert.match(denied.body.execution.error, /this run was stopped before provider dispatch/i);
+  assert.match(denied.body.execution.error, /request and approve a fresh run/i);
+  const deniedAttempt = await app.persistence.query(`select count(*)::int as count from orgward.provider_dispatch_attempts
+    where tenant_id='tenant-a' and run_id=$1`, [concurrent.id]);
+  assert.equal(deniedAttempt.rows[0].count, 0, 'tenant-wide reservation denial happens before a second attempt is inserted');
+  assert.equal(providerCalls, 1, 'the cross-project profile never reaches the loopback provider while the first handoff is active');
+
+  releaseFirstRequest();
+  const completed = await firstExecution;
+  assert.equal(completed.status, 200);
+  assert.equal(completed.body.status, 'SUCCEEDED');
+  const finished = await app.persistence.query(`select status,usage_status,usage_input_tokens,usage_output_tokens,
+      usage_total_tokens,cost_status,model_provider,model_id,profile_revision,prompt_bytes,prompt_byte_ceiling,
+      requested_output_tokens,timeout_ms,tool_count
+    from orgward.provider_dispatch_attempts where tenant_id='tenant-a' and run_id=$1`, [first.id]);
+  assert.deepEqual(finished.rows[0], {
+    status: 'completed', usage_status: 'reported', usage_input_tokens: 20, usage_output_tokens: 8,
+    usage_total_tokens: 28, cost_status: 'unknown', model_provider: 'deepseek', model_id: 'deepseek-fixture',
+    profile_revision: '1.0.0', prompt_bytes: finished.rows[0].prompt_bytes,
+    prompt_byte_ceiling: 16_384, requested_output_tokens: 128, timeout_ms: finished.rows[0].timeout_ms, tool_count: 0,
+  });
+  assert.equal(finished.rows[0].prompt_bytes, Buffer.byteLength(fixtureResult.getFixtureRequest().body.input, 'utf8'));
+  const released = await app.persistence.query(`select active_run_id,active_attempt_id,active_status
+    from orgward.tenant_model_handoff_controls where tenant_id='tenant-a'`);
+  assert.deepEqual(released.rows[0], { active_run_id: null, active_attempt_id: null, active_status: null });
+
+  const afterCompletion = await createApprovedRun(app, otherProject.body.data.id, 'new model request after completion', 'deepseek-alternate');
+  const nextExecution = await api(app, `/api/execution/runs/${afterCompletion.id}/execute`, 'worker', {
+    method: 'POST', body: { version: afterCompletion.version },
+  });
+  assert.equal(nextExecution.body.status, 'SUCCEEDED');
+  assert.equal(providerCalls, 2, 'a fresh approved run can use the released slot');
+  await new Promise((resolve) => app.server.close(resolve));
+  await app.close();
+  fixtureResult.apps.splice(fixtureResult.apps.indexOf(app), 1);
+  app = await restart();
+  const restored = await app.persistence.query(`select status,usage_status,usage_input_tokens,usage_output_tokens,
+      usage_total_tokens,cost_status,model_provider,model_id,profile_revision,prompt_bytes,prompt_byte_ceiling,
+      requested_output_tokens,timeout_ms,tool_count from orgward.provider_dispatch_attempts
+    where tenant_id='tenant-a' and run_id=$1`, [first.id]);
+  assert.deepEqual(restored.rows[0], finished.rows[0], 'the full bounded envelope and known token usage persist across restart');
+  const noRestartHandoff = await app.persistence.query(`select active_attempt_id from orgward.tenant_model_handoff_controls where tenant_id='tenant-a'`);
+  assert.equal(noRestartHandoff.rows[0].active_attempt_id, null);
+  assert.equal(providerCalls, 2, 'restart reads the persisted attempt without redispatch');
+});
+
+test('pre-handoff cancellation releases the tenant model slot without provider contact', async (t) => {
+  let providerCalls = 0;
+  let markReserved;
+  let releaseReservation;
+  let armed = false;
+  const reservationSeen = new Promise((resolve) => { markReserved = resolve; });
+  const reservationGate = new Promise((resolve) => { releaseReservation = resolve; });
+  const fixtureResult = await setup(t, async ({ response }) => {
+    providerCalls += 1;
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ status: 'completed', usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 },
+      output: [{ type: 'message', content: [{ type: 'output_text', text: 'Local result.' }] }] }));
+  }, { deepSeek: true, persistenceFaults: { afterProviderDispatchReservation: async () => {
+    if (!armed) return;
+    armed = false;
+    markReserved();
+    await reservationGate;
+  } } });
+  const { app, projectId } = fixtureResult;
+  const first = await createApprovedRun(app, projectId, 'cancel before model handoff', 'deepseek-current');
+  armed = true;
+  const firstExecution = api(app, `/api/execution/runs/${first.id}/execute`, 'worker', {
+    method: 'POST', body: { version: first.version },
+  });
+  await reservationSeen;
+  await app.persistence.query(`update orgward.execution_worker_leases
+    set cancel_requested_at=now(),cancel_reason='execution_cancelled'
+    where tenant_id='tenant-a' and run_id=$1`, [first.id]);
+  const cancelledAttempt = await app.persistence.query(`select status,usage_status from orgward.provider_dispatch_attempts
+    where tenant_id='tenant-a' and run_id=$1`, [first.id]);
+  assert.deepEqual(cancelledAttempt.rows[0], { status: 'cancelled', usage_status: 'dispatch_not_started' });
+  const released = await app.persistence.query(`select active_attempt_id from orgward.tenant_model_handoff_controls where tenant_id='tenant-a'`);
+  assert.equal(released.rows[0].active_attempt_id, null, 'pre-handoff cancellation releases the locked tenant slot');
+
+  const next = await createApprovedRun(app, projectId, 'fresh run after cancellation', 'deepseek-alternate');
+  const nextExecution = await api(app, `/api/execution/runs/${next.id}/execute`, 'worker', {
+    method: 'POST', body: { version: next.version },
+  });
+  assert.equal(nextExecution.body.status, 'SUCCEEDED');
+  assert.equal(providerCalls, 1, 'only the new run reaches the loopback provider');
+  releaseReservation();
+  const firstOutcome = await firstExecution;
+  assert.notEqual(firstOutcome.body.status, 'SUCCEEDED');
+  assert.equal(providerCalls, 1, 'the cancelled reservation never dispatches after its barrier releases');
 });
 
 test('DeepSeek denies oversized complete prompts before credential reservation or provider dispatch', async (t) => {
@@ -698,6 +889,16 @@ test('DeepSeek missing or malformed token usage is recorded as unreported', asyn
     });
     assert.equal(executed.body.status, 'SUCCEEDED');
     assert.deepEqual(executed.body.execution.modelUsage, { status: 'unreported', reason });
+    const ledger = await app.persistence.query(`select usage_status,usage_reason,cost_status,prompt_bytes,prompt_byte_ceiling,
+        requested_output_tokens,timeout_ms,tool_count from orgward.provider_dispatch_attempts
+      where tenant_id='tenant-a' and run_id=$1`, [created.body.id]);
+    assert.deepEqual(ledger.rows[0], {
+      usage_status: 'unreported', usage_reason: reason, cost_status: 'unknown',
+      prompt_bytes: ledger.rows[0].prompt_bytes, prompt_byte_ceiling: 16_384,
+      requested_output_tokens: 128, timeout_ms: ledger.rows[0].timeout_ms, tool_count: 0,
+    });
+    assert.ok(ledger.rows[0].prompt_bytes > 0 && ledger.rows[0].prompt_bytes <= 16_384);
+    assert.ok(ledger.rows[0].timeout_ms > 0 && ledger.rows[0].timeout_ms <= 20_000);
   }
   assert.equal(providerCalls, 2);
 });
@@ -727,24 +928,52 @@ test('DeepSeek outcome-unknown HTTP responses persist only a safe status and nev
   const diagnostic = { outcome: 'outcome_unknown', provider: 'deepseek', httpStatus: 503 };
   assert.deepEqual(failed.body.execution.providerDiagnostic, diagnostic);
   assert.deepEqual(failed.body.execution.modelUsage, { status: 'reserved' });
+  assert.deepEqual(failed.body.execution.modelAttemptEvidence, {
+    provider: 'deepseek', model: 'deepseek-fixture', profileRevision: '1.0.0',
+    promptBytes: failed.body.execution.modelAttemptEvidence.promptBytes, promptByteCeiling: 16_384,
+    requestedOutputTokens: 128, timeoutMs: 20_000, toolCount: 0,
+    usageStatus: 'outcome_unknown', costStatus: 'unknown',
+  });
   const failureEvent = failed.body.events.findLast((event) => event.type === 'ExecutionFailed');
   assert.deepEqual(failureEvent.data.providerDiagnostic, { provider: 'deepseek', httpStatus: 503 });
   assert.equal(JSON.stringify(failed.body).includes(bodyCanary), false);
   assert.equal(JSON.stringify(failed.body).includes(headerCanary), false);
   assert.equal(JSON.stringify(failed.body).includes(fixtureResult.canary), false);
   assert.equal(getFixtureRequestCount(), 1);
-  const attempt = await app.persistence.query(`select status from orgward.provider_dispatch_attempts
+  const attempt = await app.persistence.query(`select status,usage_status,usage_input_tokens,usage_output_tokens,
+      usage_total_tokens,cost_status,model_provider,model_id,profile_revision,prompt_bytes,prompt_byte_ceiling,
+      requested_output_tokens,timeout_ms,tool_count from orgward.provider_dispatch_attempts
     where tenant_id='tenant-a' and run_id=$1`, [created.body.id]);
   assert.equal(attempt.rows[0].status, 'outcome_unknown');
+  assert.equal(attempt.rows[0].usage_status, 'outcome_unknown');
+  assert.equal(attempt.rows[0].cost_status, 'unknown');
+  assert.equal(attempt.rows[0].model_provider, 'deepseek');
+  assert.equal(attempt.rows[0].model_id, 'deepseek-fixture');
+  assert.equal(attempt.rows[0].profile_revision, '1.0.0');
+  assert.ok(attempt.rows[0].prompt_bytes > 0 && attempt.rows[0].prompt_bytes <= 16_384);
+  assert.equal(attempt.rows[0].prompt_byte_ceiling, 16_384);
+  assert.equal(attempt.rows[0].requested_output_tokens, 128);
+  assert.ok(attempt.rows[0].timeout_ms > 0 && attempt.rows[0].timeout_ms <= 20_000);
+  assert.equal(attempt.rows[0].tool_count, 0);
+  const releasedSlot = await app.persistence.query(`select active_attempt_id from orgward.tenant_model_handoff_controls where tenant_id='tenant-a'`);
+  assert.equal(releasedSlot.rows[0].active_attempt_id, null, 'terminal unknown outcome releases single-flight but preserves the attempt record');
 
   await new Promise((resolve) => app.server.close(resolve));
   await app.close();
   fixtureResult.apps.splice(fixtureResult.apps.indexOf(app), 1);
   const restarted = await restart();
+  const persistedAttempt = await restarted.persistence.query(`select status,usage_status,usage_reason,cost_status,model_provider,
+      model_id,profile_revision,prompt_bytes,prompt_byte_ceiling,requested_output_tokens,timeout_ms,tool_count
+    from orgward.provider_dispatch_attempts where tenant_id='tenant-a' and run_id=$1`, [created.body.id]);
+  assert.equal(persistedAttempt.rows[0].status, 'outcome_unknown');
+  assert.equal(persistedAttempt.rows[0].usage_status, 'outcome_unknown');
+  assert.equal(persistedAttempt.rows[0].cost_status, 'unknown');
+  assert.equal(persistedAttempt.rows[0].prompt_bytes, attempt.rows[0].prompt_bytes);
   const recovered = await api(restarted, `/api/execution/runs/${created.body.id}`, 'worker');
   assert.equal(recovered.status, 200);
   assert.deepEqual(recovered.body.execution.providerDiagnostic, diagnostic);
   assert.deepEqual(recovered.body.execution.modelUsage, { status: 'reserved' });
+  assert.deepEqual(recovered.body.execution.modelAttemptEvidence, failed.body.execution.modelAttemptEvidence);
   assert.deepEqual(recovered.body.events.findLast((event) => event.type === 'ExecutionFailed').data.providerDiagnostic,
     { provider: 'deepseek', httpStatus: 503 });
   const retry = await api(restarted, `/api/execution/runs/${created.body.id}/execute`, 'worker', {

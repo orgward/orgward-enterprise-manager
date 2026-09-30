@@ -45,6 +45,17 @@ function buildModelPrompt(run) {
   }
   return prompt;
 }
+function modelAttemptEvidence(envelope, usage) {
+  if (!envelope || !usage) return null;
+  const summary = {
+    provider: envelope.provider, model: envelope.model, profileRevision: envelope.profileRevision,
+    promptBytes: envelope.promptBytes, promptByteCeiling: envelope.promptByteCeiling,
+    requestedOutputTokens: envelope.requestedOutputTokens, timeoutMs: envelope.timeoutMs,
+    toolCount: 0, usageStatus: usage.status, costStatus: 'unknown',
+  };
+  if (usage.status === 'unreported' && ['usage_missing', 'usage_invalid'].includes(usage.reason)) summary.usageReason = usage.reason;
+  return summary;
+}
 const WORKER_HEARTBEAT_MS = 1_000;
 const PROVIDER_LEASE_RENEWAL_MS = 15_000;
 const DISPATCH_ACK_WATCHDOG_MS = WORKER_LEASE_MS - WORKER_HEARTBEAT_MS;
@@ -1216,6 +1227,7 @@ export class ExecutionService {
       const execution = {
         ...result, stdout: redact(result.stdout), stderr: redact(result.stderr),
         ...(result.modelUsage ? { modelUsage: result.modelUsage } : {}),
+        ...(active.modelAttemptEvidence ? { modelAttemptEvidence: active.modelAttemptEvidence } : {}),
         ...(workspace ? { workspace } : {}), ...(generatedProposal ? { generatedProposal } : {}),
       };
       terminalRun = await this.#finalizeTerminal(run, {
@@ -1255,7 +1267,11 @@ export class ExecutionService {
           terminalRun = await this.#finalizeTerminal(run, {
             tenantId, principal: command.scopePrincipal, workerId: active.workerId,
             dispatchStarted: false, commandPrincipal: command.principal ?? 'execution-worker',
-            failure: error, modelUsage: active.modelUsage, reason: 'dispatch_commit_unknown',
+            failure: error, modelUsage: active.modelUsage,
+            modelAttemptEvidence: active.modelAttemptEvidence?.usageStatus === 'outcome_unknown'
+              || (error.code === 'PROVIDER_OUTPUT_QUARANTINED' && ['reported', 'unreported'].includes(active.modelAttemptEvidence?.usageStatus))
+              ? active.modelAttemptEvidence : null,
+            reason: 'dispatch_commit_unknown',
           });
         } catch (finalizeError) {
           preserveLeaseForRecovery = true;
@@ -1269,7 +1285,11 @@ export class ExecutionService {
           terminalRun = await this.#finalizeTerminal(run, {
             tenantId, principal: command.scopePrincipal ?? null, workerId: active.workerId,
             dispatchStarted, commandPrincipal: command.principal ?? 'execution-worker',
-            failure: error, modelUsage: active.modelUsage, reason: active.cancelReason ?? (error.code === 'EXECUTION_APPROVAL_STALE'
+            failure: error, modelUsage: active.modelUsage,
+            modelAttemptEvidence: active.modelAttemptEvidence?.usageStatus === 'outcome_unknown'
+              || (error.code === 'PROVIDER_OUTPUT_QUARANTINED' && ['reported', 'unreported'].includes(active.modelAttemptEvidence?.usageStatus))
+              ? active.modelAttemptEvidence : null,
+            reason: active.cancelReason ?? (error.code === 'EXECUTION_APPROVAL_STALE'
               ? 'execution_approval_stale' : interrupted ? 'authorization_revoked' : undefined),
           });
         } catch (finalizeError) {
@@ -1289,7 +1309,7 @@ export class ExecutionService {
     }
     return executionRunView(terminalRun);
   }
-  async useProviderCredential(id, { operation }) {
+  async useProviderCredential(id, { operation, modelBudgetEnvelope = null }) {
     const active = this.active.get(id);
     const run = active?.run;
     const binding = run?.profile?.credential;
@@ -1301,7 +1321,7 @@ export class ExecutionService {
       tenantId: active.tenantId, projectId: active.projectId, principal: active.principal,
       authzGeneration: active.authzGeneration, workerId: active.workerId, runId: id,
       reference: binding.reference, expectedVersion: binding.version, signal: active.controller.signal,
-      operation,
+      operation, modelBudgetEnvelope,
     });
   }
 
@@ -1315,12 +1335,23 @@ export class ExecutionService {
         ...(profile.dynamicDeepSeek ? { reasoning: { effort: 'none' } } : {}) }
       : { objective: instructions.objective, requirements: instructions.requirements };
     const serializedBody = JSON.stringify(requestBody);
+    const modelBudgetEnvelope = isModelProvider(profile) ? {
+      provider: profile.dynamicDeepSeek ? 'deepseek' : 'openai',
+      model: profile.model,
+      profileRevision: profile.version,
+      promptBytes: Buffer.byteLength(proposalInput, 'utf8'),
+      promptByteCeiling: MAX_BLUEPRINT_PROPOSAL_PROMPT_BYTES,
+      requestedOutputTokens: profile.maxOutputTokens,
+      timeoutMs: Math.min(profile.timeoutMs ?? 20_000, 20_000),
+      toolCount: 0,
+    } : null;
+    if (modelBudgetEnvelope) active.modelAttemptEvidence = modelAttemptEvidence(modelBudgetEnvelope, { status: 'reserved' });
     active.modelUsage = isModelProvider(profile) ? { status: 'unreported', reason: 'dispatch_not_started' } : null;
     let timedOut = false;
     const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, Math.min(profile.timeoutMs ?? 20_000, 20_000));
     timeout.unref?.();
     try {
-      const response = await this.useProviderCredential(run.id, { operation: ({ credential, signal }) => {
+      const response = await this.useProviderCredential(run.id, { modelBudgetEnvelope, operation: ({ credential, signal }) => {
         const transport = providerTransport(profile.providerEndpoint, {
           headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json', accept: 'application/json' },
           body: serializedBody, signal,
@@ -1343,6 +1374,7 @@ export class ExecutionService {
               ? { status: 'reported', inputTokens: usage.input_tokens, outputTokens: usage.output_tokens, totalTokens: usage.total_tokens }
               : { status: 'unreported', reason: usage == null ? 'usage_missing' : 'usage_invalid' };
             active.modelUsage = modelUsage;
+            active.modelAttemptEvidence = modelAttemptEvidence(modelBudgetEnvelope, modelUsage);
             return { output, modelUsage };
           },
         });
@@ -1355,7 +1387,9 @@ export class ExecutionService {
     } catch (error) {
       if (error?.code === 'PROVIDER_OUTPUT_QUARANTINED') throw error;
       if (['PROCESS_INSTANCE_PAUSED', 'PROVIDER_ATTEMPT_CANCELLED'].includes(error?.code)) throw error;
+      if (error?.code === 'TENANT_MODEL_HANDOFF_ACTIVE') throw error;
       if (error?.code === 'PROVIDER_OUTCOME_UNKNOWN') {
+        active.modelAttemptEvidence = modelAttemptEvidence(modelBudgetEnvelope, { status: 'outcome_unknown' });
         const upstreamHttpStatus = error.upstreamHttpStatus;
         const transportFailureClass = allowlistedProviderTransportFailureClass(
           classifyProviderTransportFailure(error, { timedOut }) ?? error.transportFailureClass);
@@ -1376,7 +1410,7 @@ export class ExecutionService {
     } finally { clearTimeout(timeout); }
   }
 
-  async #finalizeTerminal(run, { tenantId, principal, workerId, dispatchStarted, commandPrincipal, complete, failure, modelUsage, reason }) {
+  async #finalizeTerminal(run, { tenantId, principal, workerId, dispatchStarted, commandPrincipal, complete, failure, modelUsage, modelAttemptEvidence: attemptEvidence, reason }) {
     const diagnostic = run.profile?.kind === 'provider-deepseek' && failure?.code === 'PROVIDER_OUTCOME_UNKNOWN'
       && failure.providerDiagnostic?.provider === 'deepseek'
       && ((Number.isInteger(failure.providerDiagnostic?.httpStatus) && failure.providerDiagnostic.httpStatus >= 100 && failure.providerDiagnostic.httpStatus <= 599)
@@ -1395,6 +1429,7 @@ export class ExecutionService {
       status: 'FAILED', error: redact(failure?.message ?? 'Execution failed.'),
       completedAt: new Date().toISOString(), changedArtifacts: [],
       ...(modelUsage ? { modelUsage } : {}),
+      ...(attemptEvidence ? { modelAttemptEvidence: attemptEvidence } : {}),
       ...(diagnostic ? { providerDiagnostic: diagnostic } : {}),
     }, 'ExecutionFailed', {
       error: redact(failure?.message ?? 'Execution failed.'),

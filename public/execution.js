@@ -20,7 +20,7 @@ import { deepSeekOutcomeDiagnosticCopy } from './provider-outcome-diagnostic.mjs
 import { isCurrentProcessInstanceRefresh, processInstanceRefreshDisposition, processInstanceRefreshMessage,
   processInstanceStatusAnnouncement, updateProcessInstanceRefreshStatus } from './process-instance-refresh.mjs';
 import { isCurrentSelectedRunRefresh, selectedRunRefreshDisposition, selectedRunRefreshMessage, selectedRunStatusAnnouncement } from './selected-run-refresh.mjs';
-import { linkedProcessTaskResult, modelUsagePresentation } from './linked-process-task-result.mjs';
+import { linkedProcessTaskResult, modelAttemptEvidencePresentation, modelUsagePresentation } from './linked-process-task-result.mjs';
 import { linkedRunActivityLabel } from './linked-run-activity.mjs';
 import { captureExpandedSavedTaskResultKeys, captureFocusedSavedTaskResult, restoreFocusedSavedTaskResult,
   restoreSavedTaskResultOpen, savedTaskResultDisclosureKey } from './saved-task-result-disclosure.mjs';
@@ -2838,6 +2838,8 @@ function executionEvidence(execution, runId) {
   ]);
   const usage = modelUsagePresentation(execution.modelUsage);
   if (usage) wrap.append(el('p', { className: 'muted model-usage', text: usage.label }));
+  const modelAttempt = modelAttemptEvidencePresentation(execution.modelAttemptEvidence);
+  if (modelAttempt) wrap.append(el('p', { className: 'muted model-attempt-evidence', text: modelAttempt.label }));
   if (providerDiagnostic) wrap.append(el('p', { className: 'muted provider-outcome-diagnostic', text: providerDiagnostic }));
   if (execution.stdoutTruncated === true || execution.stderrTruncated === true) {
     const streams = [execution.stdoutTruncated ? 'stdout' : null, execution.stderrTruncated ? 'stderr' : null].filter(Boolean).join(' and ');

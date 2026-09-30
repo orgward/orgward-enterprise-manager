@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { linkedProcessTaskResult, modelUsagePresentation } from '../../public/linked-process-task-result.mjs';
+import { linkedProcessTaskResult, modelAttemptEvidencePresentation, modelUsagePresentation } from '../../public/linked-process-task-result.mjs';
 
 const projectId = 'project-01234567-89ab-cdef-0123-456789abcdef';
 const runtime = {
@@ -84,16 +84,16 @@ test('model usage presentation shows validated counts and truthful missing, inva
     status: 'reported', inputTokens: 128, outputTokens: 64, totalTokens: 192,
   }), {
     status: 'reported',
-    label: 'Reported model usage: 128 input tokens, 64 output tokens, 192 total tokens.',
+    label: 'Reported model usage: 128 input tokens, 64 output tokens, 192 total tokens. Cost is unknown; no tenant-budget compliance claim is made.',
   });
   assert.equal(modelUsagePresentation({ status: 'unreported', reason: 'usage_missing' }).label,
-    'The provider did not report token usage; input, output, and total counts are unavailable.');
+    'The provider did not report token usage; input, output, and total counts are unavailable. Cost is unknown; no tenant-budget compliance claim is made.');
   assert.equal(modelUsagePresentation({ status: 'unreported', reason: 'usage_invalid' }).label,
-    'The provider returned invalid usage metadata; token counts are unavailable.');
+    'The provider returned invalid usage metadata; token counts are unavailable. Cost is unknown; no tenant-budget compliance claim is made.');
   assert.equal(modelUsagePresentation({ status: 'unreported', reason: 'dispatch_not_started' }).label,
-    'Provider dispatch did not start; no model usage was reported.');
+    'Provider dispatch did not start; no model usage was reported. Cost is unknown; no tenant-budget compliance claim is made.');
   assert.equal(modelUsagePresentation({ status: 'reserved' }).label,
-    'Provider dispatch outcome is uncertain; token usage remains unreported. Reconcile this run before requesting more work.');
+    'Provider dispatch outcome is uncertain; token usage remains unreported and cost is unknown. This attempt remains recorded; no tenant-budget compliance claim is made.');
   for (const invalid of [
     { status: 'reported', inputTokens: 128, outputTokens: 64, totalTokens: 193 },
     { status: 'reported', inputTokens: -1, outputTokens: 64, totalTokens: 63 },
@@ -104,6 +104,33 @@ test('model usage presentation shows validated counts and truthful missing, inva
     assert.doesNotMatch(modelUsagePresentation(invalid).label, /provider-secret-detail/);
   }
   assert.equal(modelUsagePresentation(null), null);
+});
+
+test('model attempt evidence presentation exposes bounded secret-free limits and outcome', () => {
+  const evidence = {
+    provider: 'deepseek', model: 'fixture-model', profileRevision: 'tenant-deepseek-r2',
+    promptBytes: 1200, promptByteCeiling: 16_384, requestedOutputTokens: 128,
+    timeoutMs: 20_000, toolCount: 0, usageStatus: 'reported', costStatus: 'unknown',
+  };
+  assert.deepEqual(modelAttemptEvidencePresentation(evidence), {
+    status: 'reported',
+    label: 'Model request: deepseek/fixture-model · profile tenant-deepseek-r2 · prompt 1200/16384 bytes · output cap 128 tokens · timeout 20000 ms · tools 0 · token usage reported · cost unknown.',
+  });
+  assert.match(modelAttemptEvidencePresentation({ ...evidence, usageStatus: 'outcome_unknown' }).label,
+    /provider outcome unknown; usage unresolved/);
+  assert.match(modelAttemptEvidencePresentation({ ...evidence, usageStatus: 'unreported', usageReason: 'usage_missing' }).label,
+    /token usage unreported \(usage_missing\)/);
+  const openAiEvidence = { ...evidence, provider: 'openai', model: 'gpt-fixture', requestedOutputTokens: 2_000 };
+  assert.match(modelAttemptEvidencePresentation(openAiEvidence).label, /output cap 2000 tokens/);
+  for (const invalid of [
+    { ...evidence, promptBytes: 16_385 }, { ...evidence, toolCount: 1 },
+    { ...evidence, model: 'fixture-model', credential: 'secret-canary' },
+    { ...evidence, usageStatus: 'unreported', usageReason: 'secret-canary' },
+  ]) {
+    assert.equal(modelAttemptEvidencePresentation(invalid).status, 'unavailable');
+    assert.doesNotMatch(modelAttemptEvidencePresentation(invalid).label, /secret-canary/);
+  }
+  assert.equal(modelAttemptEvidencePresentation(null), null);
 });
 
 test('successful saved outputs are previewed within a bound and expose only artifact/evidence metadata', () => {
