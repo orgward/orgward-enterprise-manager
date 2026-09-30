@@ -45,9 +45,9 @@ the earlier PR; PR-11 closes their remaining standalone scope and qualification.
 Broader qualification remains mandatory before release; this ordering does not
 mark any P/E gate complete. Active section order below follows this list.
 
-Active cursor: PR-06. The active checkboxes below are the source of truth;
+Active cursor: PR-07. The active checkboxes below are the source of truth;
 `npm run task:next` checks that this cursor matches their first open PR in section
-order. PR-01 through PR-05 are complete, and PR-07 follows PR-06. A stale PR
+order. PR-01 through PR-06 are complete, and PR-07 is next. A stale PR
 number in a saved goal, dated receipt or older document does not reset the queue.
 Read this header and the active PR outcome at the line printed by
 `npm run task:next`; search receipts only for a concrete dependency.
@@ -2299,7 +2299,7 @@ repair check superseded it.
   claimed; those remain PR-11 qualification and PR-06 respectively. Release-gate
   statuses remain in their separate ledger and were not changed.
 
-- [ ] PR-06 — Durable human/agent work and private operating journey (T-19–T-24,
+- [x] PR-06 — Durable human/agent work and private operating journey (T-19–T-24,
   then T-11; P-07–P-10, P-12; E-07–E-08). Run process/task graphs through leased,
   crash-recoverable work with pause/resume/cancel, mandatory human checkpoints,
   isolated tools and one real bounded model provider. Then enable sourced proposal
@@ -2344,6 +2344,16 @@ repair check superseded it.
   keyboard evidence unverified. Receipt:
   `/tmp/orgward-pr06-human-review-rendered-proof.json`. PR-06, cursor and release
   gates remain open and unchanged.
+
+  PR-06 owner proposal-review browser fixture setup stop (2026-09-30): a
+  disposable local-only fixture reached API identity and secret-profile setup,
+  then the final focused run stopped before browser launch because the synthetic
+  owner lacked the required `tenant-admin` grant for encrypted secret setup
+  (`ACTION_FORBIDDEN`, 403). No provider dispatch occurred (0); no proposal,
+  browser, review, apply, restart or narrow evidence was produced, and no product
+  behavior was proved. The unproven fixture was removed; app and PostgreSQL
+  cleanup completed, and no browser or fixture process remained. PR-06, cursor
+  and release gates remain open and unchanged.
 
   Development provider authorization (2026-09-29): the user explicitly permits
   use of the exposed low-budget DeepSeek test key on this private VPS for bounded
@@ -2402,6 +2412,39 @@ repair check superseded it.
   failures, 0 skips; 0.31s TAP); log
   `/tmp/orgward-pr06-model-usage-validator-focused.log`. Syntax and
   `git diff --check` passed; PR-06 and release gates remain open.
+
+  PR-06 joined PostgreSQL saved-design-to-result assertions (2026-09-30):
+  extended the existing linked-task fixture without setup refactoring. The
+  joined scenario starts from a saved proposal-edited blueprint, pins assigned
+  human and agent work to that version, completes its evidence-bearing human
+  checkpoint, and asserts exactly one loopback dispatch for the dependent agent
+  task. The owner separately reviews and applies the resulting proposal. Focused
+  PostgreSQL test passed 1/1 (0 failures, 0 skips; 16.47s runner wall); TAP log
+  `/tmp/orgward-tests-Y87Xvk/node-test.tap.log`. Assertions cover source/design
+  binding, persisted checkpoint and review/apply evidence, usage summary and
+  tenant run denial after restart. Three preceding filtered invocations exposed
+  test assertion/setup-order issues (process-plan reference field, restart
+  readback declaration order, and 404 response shape); each was corrected before
+  the passing run. `git diff --check` passed. No browser, live provider,
+  credential or full `npm run check` was used; PR-06 and release gates remain
+  open.
+
+  PR-06 implementation acceptance complete (2026-09-30): reviewed the current
+  joined PostgreSQL path together with the existing rendered founder-to-result
+  journey and the authorized bounded-provider success receipt. The joined path
+  pins assigned human/agent work to a saved edited blueprint, completes a human
+  checkpoint with evidence, dispatches one bounded loopback model request, then
+  separately reviews/applies the proposal and reads back result, usage, and
+  audit evidence after restart; tenant isolation remains enforced. The frozen
+  source tree passed its single `npm run check`: 427 passed, 0 failed, 1 skipped
+  (optional PostgreSQL backup/restore journey because client tools are
+  unavailable), TAP duration 82.41s and wrapper elapsed 87s. Logs:
+  `/tmp/orgward-pr06-final-check-20260930.log` and
+  `/tmp/orgward-tests-mM5UKL/node-test.tap.log`. PR-06 is checked complete and
+  the cursor advances to PR-07. The skip is not passing backup/restore coverage;
+  release gates remain separate and unchanged. Rendered owner-review/apply
+  keyboard/screen-reader evidence and tenant dollar caps/pricing reconciliation
+  are not claimed here and remain incomplete for broader release qualification.
 
   PR-06 fully rendered founder-to-result journey (2026-09-29, revision
   `6823d08`): a fresh disposable app/PostgreSQL fixture used synthetic OIDC
@@ -5684,3 +5727,19 @@ projection-only focused run passed 9/9 (TAP 5908.911ms), log
 `/tmp/orgward-pr06-tenant-model-budget-projection-focused.tap.log`. Syntax checks
 and `git diff --check` passed. No provider, credential, browser or full check
 was used; PR-06/T-22 and release gates remain open.
+
+PR-06 final rendered owner review/apply proof attempt (2026-09-30): static
+preflight passed 8/8 role, loopback OIDC/Responses and pre-browser guard
+predicates. The disposable fixture used the full tenant-admin, workspace-read,
+workspace-write, execution-approver, release-approver and control-owner grants,
+completed one local Responses request, and restarted the app against its
+disposable database. It stopped before the browser when the fixture could not
+find its expected separate `task-process-review` runtime row in `PLANNED` state;
+the proposal assertion followed that failed row guard and was not reached.
+`agent-browser` was not invoked, so no owner UI review/apply, rendered viewport
+or keyboard evidence is claimed. App, database/PostgreSQL, local issuer and
+Responses fixture were cleaned; cookie state and temporary harness were removed,
+and process inspection found no attributable service/browser process. No product
+source/tests changed. Sanitized receipt:
+`/tmp/orgward-pr06-owner-review-proof-20260930/attempt-summary.json`. PR-06,
+cursor and release gates remain open and unchanged.

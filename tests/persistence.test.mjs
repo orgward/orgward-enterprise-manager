@@ -9358,6 +9358,9 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
       }, project.version),
     })).data;
   };
+  assert.ok(project.latestBlueprint.version > generatedProposal.blueprintVersion,
+    'the joined journey starts from a saved design version edited by the separately reviewed proposal');
+  assert.equal(project.latestBlueprint.edit.proposalProvenance.proposalHash, generatedProposal.proposalHash);
   await bindCurrentBlueprintActor({ actorId: 'actor-founder', roleId: 'role-founder', target: 'alice', label: 'human' });
   await bindCurrentBlueprintActor({ actorId: 'actor-design-assistant', roleId: 'role-design-assistant', target: 'servicebot', label: 'agent' });
   const freshPlanCreated = await request(app.base, plansRoute, {
@@ -9365,6 +9368,8 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   }, 201);
   const freshPlan = freshPlanCreated.data.processPlans.at(-1);
   assert.equal(freshPlan.source.blueprintVersion, project.latestBlueprint.version);
+  assert.equal(freshPlan.source.blueprintId, project.latestBlueprint.id,
+    'the assigned work plan is pinned to the saved, edited blueprint version');
   const freshAgentBaseTask = freshPlan.tasks.find((task) => task.dependencies.length > 0);
   assert.ok(freshAgentBaseTask, 'the current saved process includes its dependent agent work');
   const freshRevisionPayload = { tasks: freshPlan.tasks.map((task) => {
@@ -9417,6 +9422,9 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     }),
   }, 201);
   assert.equal(freshCheckpointCompleted.status, 'SUCCEEDED');
+  assert.deepEqual(freshCheckpointCompleted.evidence, ['Fresh source notes were verified before continuing.']);
+  assert.equal(freshCheckpointCompleted.events.filter((event) => event.type === 'HumanTaskCompleted').length, 1,
+    'the authorized human checkpoint records one completion before agent dispatch');
   const providerCallsBeforeFreshDependent = providerCallCount;
   const freshDependentRequest = await taskRequest('proposal-journey-dependent-agent-request', {
     projectId: project.id, planId: freshPlan.id, revision: freshRevision.revision,
@@ -9433,7 +9441,14 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(freshDependentRun.processTaskRef.planInstanceId, freshPlanInstanceId);
   assert.equal(providerCallCount, providerCallsBeforeFreshDependent + 1,
     'the refreshed dependent proposal uses only the loopback provider after the human checkpoint succeeds');
+  assert.deepEqual(freshDependentRun.execution.modelUsage,
+    { status: 'reported', inputTokens: 100, outputTokens: 60, totalTokens: 160 });
+  assert.deepEqual(freshDependentRun.execution.generatedProposal.modelUsage, freshDependentRun.execution.modelUsage);
   const freshDependentProposal = freshDependentRun.execution.generatedProposal;
+  assert.equal(freshDependentRun.processTaskRef.processPlanId, freshPlan.id);
+  assert.equal(freshDependentRun.processTaskRef.revision, freshRevision.revision);
+  assert.equal(freshDependentRun.processTaskRef.planInstanceId, freshPlanInstanceId);
+  assert.equal(freshDependentProposal.blueprintId, freshPlan.source.blueprintId);
   assert.equal(freshDependentProposal.blueprintVersion, freshPlan.source.blueprintVersion);
   assert.equal(freshDependentProposal.status, 'proposed');
   assert.deepEqual(freshDependentProposal.citations.map(({ id }) => id), [
@@ -9681,6 +9696,16 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   const restoredFreshDependentRun = restoredRuns.find((run) => run.id === freshDependentRun.id);
   assert.equal(restoredFreshDependentRun.status, 'SUCCEEDED');
   assert.deepEqual(restoredFreshDependentRun.execution.generatedProposal, freshDependentProposal);
+  assert.deepEqual(restoredFreshDependentRun.execution.modelUsage, freshDependentRun.execution.modelUsage,
+    'the single joined model dispatch usage summary survives PostgreSQL application restart');
+  assert.deepEqual(restoredFreshDependentRun.processTaskRef, freshDependentRun.processTaskRef,
+    'the joined agent result remains bound to its saved human/agent plan instance after restart');
+  const restoredFreshHumanCheckpoint = (await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances.find((runtime) =>
+    runtime.planInstanceId === freshPlanInstanceId && runtime.taskId === freshHumanCheckpoint.id);
+  assert.equal(restoredFreshHumanCheckpoint.status, 'SUCCEEDED');
+  assert.deepEqual(restoredFreshHumanCheckpoint.evidence, ['Fresh source notes were verified before continuing.']);
+  assert.equal(restoredFreshHumanCheckpoint.events.filter((event) => event.type === 'HumanTaskCompleted').length, 1);
   const restoredFreshApplyEvent = restoredProject.events.find((event) => event.type === 'BlueprintProposalApplied'
     && event.data?.proposalHash === freshDependentProposal.proposalHash);
   assert.ok(restoredFreshApplyEvent, 'the current-blueprint checkpoint-dependent proposal apply survives restart');
@@ -9692,6 +9717,12 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(restoredProject.latestBlueprint.edit.proposalProvenance.proposalHash, freshDependentProposal.proposalHash);
   assert.deepEqual(restoredProject.latestBlueprint.edit.proposalProvenance.citations,
     freshDependentProposal.citations.map(({ id, hash }) => ({ id, hash })));
+  assert.equal(restoredFreshApplyEvent.data.reviewEventId, freshProposalReview.event.eventId);
+  assert.equal(restoredFreshApplyEvent.data.reviewHash, freshProposalReview.event.data.reviewHash);
+  assert.equal(restoredProject.events.filter((event) => event.type === 'BlueprintProposalReviewed'
+    && event.data?.proposalHash === freshDependentProposal.proposalHash).length, 1,
+  'the owner review remains as distinct persisted evidence for the applied joined proposal');
+  await request(app.base, `/api/execution/runs/${freshDependentRun.id}`, as('tenant-b-admin'), 404);
   const freshProposalReplayAfterRestart = await request(app.base, freshProposalApplyPath, {
     ...as('alice'), method: 'POST', body: command('proposal-journey-apply', {
       proposalHash: freshDependentProposal.proposalHash, reviewEventId: freshProposalReview.event.eventId,
