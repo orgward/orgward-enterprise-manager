@@ -293,6 +293,7 @@ function renderStudio() {
   app.replaceChildren(document.querySelector('#studio-template').content.cloneNode(true));
   document.querySelector('.studio').classList.toggle('complete', state.project.phase !== 'discovery');
   document.querySelector('#project-title').textContent = state.project.name;
+  setupGitHubOnboarding();
   renderConversation();
   document.querySelector('#message-form').addEventListener('submit', sendMessage);
   const textarea = document.querySelector('#message-input');
@@ -314,6 +315,54 @@ function renderStudio() {
     setView(state.view, { history: null });
     setupMapControls();
   }
+}
+
+async function refreshGitHubSnapshots() {
+  const status = document.querySelector('#github-onboarding-status');
+  const list = document.querySelector('#github-onboarding-snapshots');
+  if (!status || !list || !state.project) return;
+  status.textContent = 'Loading captured snapshots…';
+  try {
+    const result = await api(`/api/execution/github-repositories?projectId=${encodeURIComponent(state.project.id)}`);
+    status.textContent = !result.available ? 'Repository snapshots require the PostgreSQL-backed installation.'
+      : !result.configured ? 'GitHub App onboarding is disabled until the server operator configures the GitHub App.' : '';
+    list.replaceChildren();
+    for (const repository of result.repositories ?? []) for (const snapshot of repository.snapshots ?? []) {
+      list.append(element('li', { text: `${repository.repositoryName} · ${repository.branchRef} · ${snapshot.commitOid} · ${snapshot.fileCount} files / ${snapshot.totalBytes} bytes · tree ${snapshot.treeDigest}` }));
+    }
+  } catch (error) {
+    status.textContent = error.message;
+    list.replaceChildren();
+  }
+}
+
+function setupGitHubOnboarding() {
+  const panel = document.querySelector('#github-onboarding');
+  if (!panel) return;
+  const allowed = state.projectAccess === 'owner' && state.sessionRoles.includes('tenant-admin');
+  panel.hidden = !allowed;
+  if (!allowed) return;
+  const form = document.querySelector('#github-onboarding-form');
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const button = form.querySelector('button[type="submit"]');
+    const status = document.querySelector('#github-onboarding-status');
+    button.disabled = true;
+    status.textContent = 'Checking installation access and capturing the pinned source…';
+    try {
+      await api('/api/execution/github-repositories', { method: 'POST', body: JSON.stringify({
+        projectId: state.project.id,
+        installationId: form.elements.installationId.value.trim(),
+        repositoryId: form.elements.repositoryId.value.trim(),
+        branchRef: form.elements.branchRef.value.trim(),
+      }) });
+      status.textContent = 'Immutable source snapshot captured and saved.';
+      await refreshGitHubSnapshots();
+    } catch (error) {
+      status.textContent = error.message;
+    } finally { button.disabled = false; }
+  });
+  void refreshGitHubSnapshots();
 }
 
 function renderConversation() {

@@ -5420,6 +5420,87 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   PR-08 remains open; this is truthful output disclosure, not reproducible-build
   evidence. PR-06 cursor, task checkboxes and release gates remain unchanged.
 
+  GitHub App repository onboarding and pinned capture slice (2026-09-30): added
+  an optional server-only GitHub App configuration and project-owner/tenant-admin
+  UI/API that binds a tenant/project, installation ID, immutable repository ID,
+  and one canonical full branch ref. Each capture rechecks that the installation
+  grants that repository, mints an installation token requested for that single
+  repository with metadata:read and contents:read, then resolves the ref to an
+  exact commit/tree and retrieves blobs by SHA. Tokens remain inside the ingestion
+  service and are absent from persistence, API responses, UI, subprocesses and
+  logs. Fixed-host HTTPS requests reject redirects; tree truncation, unsupported
+  entries, unsafe paths, and file-count/size bounds fail closed. PostgreSQL saves
+  the binding plus immutable commit/tree/manifest/policy snapshot; repeat captures
+  at the same commit reuse the snapshot record, while a moved ref gets a new one.
+  The served UI displays metadata only. No remote candidate execution or
+  write-back was added.
+
+  Static syntax checks and `git diff --check` passed. The first focused test run
+  found that the file-count overflow fixture reached a missing blob response
+  before the limit; capture now prevalidates the tree/count/declared byte budget
+  before fetching blobs. The single repair rerun passed 5/5 (0 failed, cancelled
+  or skipped; 2.23s wrapper), including loopback-only transport scope/token/ref/
+  redirect/truncation/file-count checks, optional configuration, and PostgreSQL
+  restart, replay, tenant-admin/project-owner authorization and ref-movement
+  records. Logs: `/tmp/orgward-tests-Zahls4/node-test.tap.log` (first run) and
+  `/tmp/orgward-tests-X02ArJ/node-test.tap.log` (passing rerun). No real GitHub,
+  credentials, browser, full check or external effect was used. PR-08 remains
+  open; the task checkbox, active cursor and release gates are unchanged.
+
+  GitHub capture review repairs (2026-09-30): provider JSON bodies are now read
+  as a stream and cancelled on declared or observed overflow at 10,000,000 bytes;
+  missing/false Content-Length cannot bypass the response cap. Per-binding history
+  is capped at 32 immutable snapshots with a PostgreSQL check constraint and a
+  conflict response at capacity. A retry for an existing snapshot remains
+  idempotent at capacity; new revisions are rejected without eviction or rewriting
+  retained bytes. UI, API and ingestion now accept GitHub installation/repository
+  IDs only from 1 through 9007199254740991, a documented exactly representable
+  numeric range used for provider token serialization. Server config accepts both
+  PKCS#8 and GitHub's RSA PKCS#1 PEM private-key form.
+
+  Static checks passed; focused config, loopback ingestion and PostgreSQL store
+  tests passed 7/7 (0 failures, cancellations or skips; 2.74s runner), covering
+  missing-Length streamed overflow/cancellation, maximum and rejected IDs, RSA
+  PKCS#1 parsing/signing, restart persistence, idempotent replay, ref movement,
+  snapshot-cap boundary, and immutable-byte retention. Log:
+  `/tmp/orgward-tests-vDrqqy/node-test.tap.log`. No full check, real GitHub,
+  browser, credential or external effect was used. PR-08 remains open; task
+  checkbox, cursor and release gates are unchanged.
+
+  GitHub project-wide snapshot retention follow-on (2026-09-30): the write path
+  now takes one tenant/project-scoped PostgreSQL advisory transaction lock before
+  reading project snapshot totals. It enforces a maximum of 32 snapshots and
+  64,000,000 captured content bytes across all repository/ref bindings in that
+  project. Existing snapshot replay remains allowed at either limit; a new
+  binding/revision returns a clear 409, and no saved bytes are evicted or rewritten.
+  Focused PostgreSQL coverage passed 1/1 (0 failed, cancelled or skipped; 2.09s
+  runner), including exact count/byte boundaries, concurrent captures on distinct
+  bindings, replay at capacity, and unchanged retained snapshot bytes. Syntax and
+  `git diff --check` passed. Log: `/tmp/orgward-tests-IeSWOa/node-test.tap.log`.
+  No full check or external access was used; PR-08, its task checkbox, cursor and
+  release gates remain unchanged.
+
+  Final GitHub token-scope and metadata review (2026-09-30): following the
+  official [GitHub App installation-token endpoint response](https://docs.github.com/en/rest/apps/apps),
+  capture now requires the minted response to report exactly metadata:read and
+  contents:read plus exactly one returned repository matching the selected
+  immutable ID. Missing, additional, or mismatched scope aborts before any GitHub
+  tree/blob read. Fake loopback fixtures cover missing permission/repository
+  fields, extra permissions and a wrong repository ID. Focused ingestion tests
+  passed 6/6 (0 failures, cancellations or skips; 1.75s runner), log
+  `/tmp/orgward-tests-MiRrrs/node-test.tap.log`.
+
+  Project snapshot listing now projects JSONB metadata in PostgreSQL, and capture
+  results omit file bytes; a direct database read confirms the exact persisted
+  bytes remain intact. The first focused PostgreSQL run failed because an older
+  cap assertion expected bytes in the now metadata-only list. After moving that
+  byte assertion to database readback, the focused PostgreSQL test passed 1/1
+  (0 failures, cancellations or skips; 2.18s runner). Logs:
+  `/tmp/orgward-tests-rpqnph/node-test.tap.log` (assertion mismatch) and
+  `/tmp/orgward-tests-s6aOyx/node-test.tap.log` (passing repair). Syntax and
+  `git diff --check` passed. No full check or live GitHub access was used; PR-08,
+  task checkbox, cursor and release gates remain open and unchanged.
+
 - [ ] PR-09 — Authorized environments, release and rollback (T-33–T-35; E-10).
   Let a user review an exact candidate, approve a protected environment action,
   observe its result and recover through rollback. Bind authority to principals,

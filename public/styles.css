@@ -119,6 +119,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .version-badge { flex: 0 0 auto; border: 1px solid var(--line); border-radius: 9px; padding: 9px 12px; color: var(--muted); font-size: 11px; }
 .version-badge span { color: var(--mint-2); margin-right: 8px; }.version-badge strong { color: var(--ink); }
 .view-tabs { display: flex; gap: 22px; margin-top: 28px; border-bottom: 1px solid var(--line); }
+.repository-onboarding { margin: 22px 0; padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: rgba(17, 28, 22, .78); }
+.repository-onboarding form { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.repository-onboarding label { display: grid; gap: 5px; color: var(--muted); font-size: 13px; }
+.repository-onboarding input { min-width: 190px; padding: 10px; color: var(--ink); background: #0f1612; border: 1px solid var(--line); border-radius: 7px; }
+.repository-onboarding li { overflow-wrap: anywhere; margin: 8px 0; }
 .view-tabs button { border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); padding: 0 2px 12px; cursor: pointer; }
 .view-tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--mint); }
 .coverage-heading { display: flex; justify-content: space-between; align-items: end; gap: 20px; margin: 24px 0 14px; }

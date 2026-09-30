@@ -18,8 +18,9 @@ import { PostgresPersistence } from './src/platform/postgres.mjs';
 import { OidcAuthenticator } from './src/platform/oidc.mjs';
 import { OidcLoginFlow } from './src/platform/oidc-login.mjs';
 import { PostgresOidcSessionStore } from './src/platform/oidc-sessions.mjs';
-import { hasVerifiedHumanTaskSuccess, LegacyImporter, PostgresChangeCaseStore, PostgresExecutionRunStore, PostgresProjectStore } from './src/platform/postgres-stores.mjs';
+import { hasVerifiedHumanTaskSuccess, LegacyImporter, PostgresChangeCaseStore, PostgresExecutionRunStore, PostgresGitHubSourceStore, PostgresProjectStore } from './src/platform/postgres-stores.mjs';
 import { PostgresSecretStore } from './src/platform/secrets.mjs';
+import { GitHubSourceIngestion } from './src/execution/github-source-ingestion.mjs';
 import { parseInstallConfig } from './src/platform/install-config.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -72,6 +73,10 @@ function apiFailure(statusCode, code, message, options = {}) {
   const error = new Error(message);
   Object.assign(error, { statusCode, code, ...options });
   return error;
+}
+
+function githubRepositoryView(repository) {
+  return { ...repository, snapshots: (repository.snapshots ?? []).map(({ files, ...snapshot }) => snapshot) };
 }
 
 function setSecurityHeaders(response) {
@@ -750,6 +755,8 @@ export function createApp({
   deepSeekValidationEndpoint = 'https://api.deepseek.com/responses',
   deepSeekValidationFetchImpl = fetch,
   deepSeekValidationCooldownMs = 60_000,
+  githubAppConfig = null,
+  githubFetchImpl = fetch,
   openAiAdminApiKey = null,
   openAiOrganizationId = null,
   openAiTenantProjects = null,
@@ -763,6 +770,8 @@ export function createApp({
     deepSeekValidationFetchImpl, deepSeekValidationCooldownMs, openAiAdminApiKey, openAiOrganizationId,
     openAiTenantProjects, openAiAdminEndpoint,
   }) : null;
+  const githubSourceStore = persistence ? new PostgresGitHubSourceStore(persistence) : null;
+  const githubSourceIngestion = new GitHubSourceIngestion({ config: githubAppConfig, fetchImpl: githubFetchImpl });
   const store = injectedProjectStore ?? (persistence ? new PostgresProjectStore(persistence) : new ProjectStore(dataDirectory));
   const sdlcStore = injectedChangeCaseStore ?? (persistence ? new PostgresChangeCaseStore(persistence) : new ChangeCaseStore(sdlcDirectory));
   const executionStore = persistence ? new PostgresExecutionRunStore(persistence) : null;
@@ -2076,6 +2085,44 @@ export function createApp({
           { ...result, profile: result.profile });
       }
 
+      if (pathname === '/api/execution/github-repositories' && request.method === 'GET') {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified tenant administrator identity is required.');
+        const projectId = url.searchParams.get('projectId');
+        if (!/^project-[0-9a-f-]{36}$/i.test(projectId ?? '')) throw apiFailure(400, 'INVALID_PROJECT', 'Choose a valid project.');
+        if (!githubSourceStore) return sendJson(response, 200, { configured: false, available: false, repositories: [] });
+        const repositories = await githubSourceStore.listForProject({ tenantId: requestTenant(request), projectId,
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration });
+        return sendJson(response, 200, { configured: githubSourceIngestion.configured, available: true, repositories: repositories.map(githubRepositoryView) });
+      }
+
+      if (pathname === '/api/execution/github-repositories' && request.method === 'POST') {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified tenant administrator identity is required.');
+        if (!githubSourceStore) throw apiFailure(503, 'GITHUB_SOURCE_PERSISTENCE_REQUIRED', 'GitHub repository onboarding requires PostgreSQL persistence.');
+        if (!githubSourceIngestion.configured) throw apiFailure(503, 'GITHUB_SOURCE_UNCONFIGURED', 'GitHub App repository onboarding is not configured.');
+        const body = await readJson(request);
+        const allowed = new Set(['projectId', 'installationId', 'repositoryId', 'branchRef']);
+        if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((field) => !allowed.has(field))
+          || !/^project-[0-9a-f-]{36}$/i.test(body.projectId ?? '')
+          || !/^[1-9][0-9]{0,15}$/.test(String(body.installationId ?? ''))
+          || !Number.isSafeInteger(Number(body.installationId)) || Number(body.installationId) > Number.MAX_SAFE_INTEGER
+          || !/^[1-9][0-9]{0,15}$/.test(String(body.repositoryId ?? ''))
+          || !Number.isSafeInteger(Number(body.repositoryId)) || Number(body.repositoryId) > Number.MAX_SAFE_INTEGER
+          || typeof body.branchRef !== 'string' || !body.branchRef.startsWith('refs/heads/') || body.branchRef.length > 255) {
+          throw apiFailure(400, 'INVALID_GITHUB_REPOSITORY_BINDING', 'Provide projectId, GitHub IDs from 1 through 9007199254740991, and one full refs/heads branchRef.');
+        }
+        await githubSourceStore.listForProject({ tenantId: requestTenant(request), projectId: body.projectId,
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration });
+        const captured = await githubSourceIngestion.capture({ installationId: body.installationId,
+          repositoryId: body.repositoryId, branchRef: body.branchRef });
+        const binding = { tenantId: requestTenant(request), projectId: body.projectId,
+          installationId: captured.installationId, repositoryId: captured.repositoryId,
+          repositoryName: captured.repositoryName, branchRef: captured.branchRef,
+          provider: 'github-app', credentialReference: `github-installation:${captured.installationId}` };
+        const result = await githubSourceStore.saveCapture({ tenantId: requestTenant(request), projectId: body.projectId,
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration, binding, snapshot: captured.snapshot });
+        return sendJson(response, 201, { repository: githubRepositoryView(result), capturedSnapshotId: captured.snapshot.id });
+      }
+
       if (request.method === 'GET' && pathname === '/api/execution/local-repositories') {
         if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified workspace identity is required to list local repositories.');
         const projectId = url.searchParams.get('projectId');
@@ -2982,6 +3029,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     enableLocalExecution, databaseUrl, secretEncryptionKey, openAiCredentialReference, openAiModel,
     deepSeekCredentialReference, deepSeekModel, deepSeekMaxOutputTokens,
     openAiAdminApiKey, openAiOrganizationId, openAiTenantProjects,
+    githubApp,
     legacyReadOnlyMode, oidc, roleMap, tenantBindings, bootstrapPrincipals } = config;
   const { issuer: oidcIssuer, audience: oidcAudience, jwksUri: oidcJwksUri, clientId: oidcClientId,
     redirectUri: oidcRedirectUri, authorizationEndpoint: oidcAuthorizationEndpoint, tokenEndpoint: oidcTokenEndpoint } = oidc;
@@ -3010,7 +3058,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   try { localRepositories = JSON.parse(process.env.ORGWARD_LOCAL_REPOSITORIES ?? '[]'); }
   catch { console.error('ORGWARD_LOCAL_REPOSITORIES must contain a JSON array of server-configured local repository bindings.'); process.exitCode = 1; process.exit(); }
   if (!Array.isArray(localRepositories)) { console.error('ORGWARD_LOCAL_REPOSITORIES must contain a JSON array of server-configured local repository bindings.'); process.exitCode = 1; process.exit(); }
-  const app = createApp({ dataDirectory, sdlcDirectory, executionDirectory, executionWorkspaceDirectory, enableLocalExecution, executionProfiles, localRepositories, databaseUrl, oidcAuthenticator, oidcLoginFlow, oidcBootstrapPrincipals: authMode === 'oidc' ? bootstrapPrincipals : [], secretEncryptionKey, openAiAdminApiKey, openAiOrganizationId, openAiTenantProjects, readOnly: legacyReadOnlyMode });
+  const app = createApp({ dataDirectory, sdlcDirectory, executionDirectory, executionWorkspaceDirectory, enableLocalExecution, executionProfiles, localRepositories, databaseUrl, oidcAuthenticator, oidcLoginFlow, oidcBootstrapPrincipals: authMode === 'oidc' ? bootstrapPrincipals : [], secretEncryptionKey, openAiAdminApiKey, openAiOrganizationId, openAiTenantProjects, githubAppConfig: githubApp, readOnly: legacyReadOnlyMode });
   const { server } = app;
   await app.init();
   let shuttingDown = false;

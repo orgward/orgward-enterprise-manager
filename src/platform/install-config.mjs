@@ -193,6 +193,15 @@ export function parseInstallConfig(env = process.env, nodeVersion = process.vers
     add(issues, 'openai-managed-prerequisites', 'Managed OpenAI provisioning requires an Admin API key file, organization ID, and tenant-to-project mapping together.', 'Configure ORGWARD_OPENAI_ADMIN_API_KEY_FILE, ORGWARD_OPENAI_ORGANIZATION_ID, and ORGWARD_OPENAI_TENANT_PROJECTS, or omit all three to disable managed provisioning.');
   }
 
+  const githubAppId = env.ORGWARD_GITHUB_APP_ID || null;
+  const githubAppPrivateKey = env.ORGWARD_GITHUB_APP_PRIVATE_KEY || null;
+  if (Boolean(githubAppId) !== Boolean(githubAppPrivateKey)) add(issues, 'github-app-prerequisites', 'GitHub App ID and private key must be configured together.', 'Set ORGWARD_GITHUB_APP_ID and ORGWARD_GITHUB_APP_PRIVATE_KEY as server environment settings, or omit both to disable repository onboarding.');
+  if (githubAppId && !/^[1-9][0-9]{0,19}$/.test(githubAppId)) add(issues, 'github-app-id', 'ORGWARD_GITHUB_APP_ID must be a numeric GitHub App ID.', 'Set it to the numeric App ID from GitHub App settings.');
+  if (githubAppPrivateKey && !((githubAppPrivateKey.includes('-----BEGIN PRIVATE KEY-----') && githubAppPrivateKey.includes('-----END PRIVATE KEY-----'))
+    || (githubAppPrivateKey.includes('-----BEGIN RSA PRIVATE KEY-----') && githubAppPrivateKey.includes('-----END RSA PRIVATE KEY-----')))) {
+    add(issues, 'github-app-private-key', 'ORGWARD_GITHUB_APP_PRIVATE_KEY must contain a PKCS#8 or RSA PKCS#1 PEM private key.', 'Set the GitHub App PEM private key in the server environment; it is never returned by the API or rendered in the UI.');
+  }
+
   const oidc = {
     issuer: env.ORGWARD_OIDC_ISSUER || null,
     audience: env.ORGWARD_OIDC_AUDIENCE || null,
@@ -241,6 +250,7 @@ export function parseInstallConfig(env = process.env, nodeVersion = process.vers
     openAiCredentialReference, openAiModel, deepSeekCredentialReference, deepSeekModel, deepSeekMaxOutputTokens,
     oidc, roleMap, tenantBindings, bootstrapPrincipals,
     openAiAdminApiKey, openAiOrganizationId, openAiTenantProjects,
+    githubApp: githubAppId && githubAppPrivateKey ? Object.freeze({ appId: githubAppId, privateKey: githubAppPrivateKey }) : null,
     legacyReadOnlyMode: allowLegacyJson,
   };
   if (openAiCredentialReference && (!databaseUrl || !secretEncryptionKey)) add(issues, 'openai-prerequisites', 'The OpenAI profile needs PostgreSQL and the secret encryption key.', 'Configure PostgreSQL and the secret encryption key through the inline or protected-file settings before opting in.');

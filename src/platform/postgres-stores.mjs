@@ -1789,6 +1789,74 @@ export class PostgresProjectStore extends PostgresDocumentStore {
   }
 }
 
+export class PostgresGitHubSourceStore {
+  static MAX_SNAPSHOTS_PER_BINDING = 32;
+  static MAX_SNAPSHOTS_PER_PROJECT = 32;
+  static MAX_SNAPSHOT_BYTES_PER_PROJECT = 64_000_000;
+  constructor(persistence) { this.persistence = persistence; }
+
+  async #authorize(client, { tenantId, projectId, principal, authzGeneration }) {
+    await requirePrincipalAuthority(client, { tenantId, principal, roles: ['tenant-admin'], authzGeneration, actorType: 'human' });
+    await lockProjectAccess(client, { tenantId, projectId, principal, minimum: 'owner' });
+  }
+
+  async listForProject({ tenantId, projectId, principal, authzGeneration }) {
+    return this.persistence.transaction(async (client) => {
+      await this.#authorize(client, { tenantId, projectId, principal, authzGeneration });
+      const result = await client.query(`select source.binding,
+          coalesce((select jsonb_agg(item.value - 'files' order by item.ordinality)
+            from jsonb_array_elements(source.snapshots) with ordinality as item(value, ordinality)), '[]'::jsonb) as snapshots
+        from orgward.github_repository_sources source
+        where tenant_id=$1 and project_id=$2 order by updated_at desc, repository_id, branch_ref`, [tenantId, projectId]);
+      return result.rows.map((row) => ({ ...row.binding, snapshots: row.snapshots }));
+    });
+  }
+
+  async saveCapture({ tenantId, projectId, principal, authzGeneration, binding, snapshot }) {
+    return this.persistence.transaction(async (client) => {
+      await this.#authorize(client, { tenantId, projectId, principal, authzGeneration });
+      await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`,
+        [`github-source-project:${tenantId}:${projectId}`]);
+      const projectTotals = await client.query(`
+        select count(*)::int as snapshot_count,
+          coalesce(sum((item.value->>'totalBytes')::bigint), 0)::bigint as snapshot_bytes
+        from orgward.github_repository_sources source
+        cross join lateral jsonb_array_elements(source.snapshots) item
+        where source.tenant_id=$1 and source.project_id=$2
+      `, [tenantId, projectId]);
+      const locked = await client.query(`select snapshots from orgward.github_repository_sources
+        where tenant_id=$1 and project_id=$2 and repository_id=$3 and branch_ref=$4 for update`,
+      [tenantId, projectId, binding.repositoryId, binding.branchRef]);
+      const snapshots = locked.rows[0]?.snapshots ?? [];
+      const replay = snapshots.some((entry) => entry.id === snapshot.id);
+      if (!replay && snapshots.length >= PostgresGitHubSourceStore.MAX_SNAPSHOTS_PER_BINDING) {
+        throw Object.assign(new Error('This repository ref has reached its 32-snapshot history limit. Existing immutable snapshots are retained; contact the installation operator before onboarding another revision.'), {
+          statusCode: 409, code: 'GITHUB_SNAPSHOT_HISTORY_LIMIT', retryable: false,
+        });
+      }
+      if (!replay && Number(projectTotals.rows[0].snapshot_count) >= PostgresGitHubSourceStore.MAX_SNAPSHOTS_PER_PROJECT) {
+        throw Object.assign(new Error('This project has reached its 32-snapshot GitHub source limit. Existing immutable snapshots are retained; contact the installation operator before onboarding another revision.'), {
+          statusCode: 409, code: 'GITHUB_PROJECT_SNAPSHOT_LIMIT', retryable: false,
+        });
+      }
+      if (!replay && Number(projectTotals.rows[0].snapshot_bytes) + Number(snapshot.totalBytes) > PostgresGitHubSourceStore.MAX_SNAPSHOT_BYTES_PER_PROJECT) {
+        throw Object.assign(new Error('This project has reached its 64,000,000-byte GitHub source snapshot limit. Existing immutable snapshots are retained; contact the installation operator before onboarding another revision.'), {
+          statusCode: 409, code: 'GITHUB_PROJECT_SNAPSHOT_BYTES_LIMIT', retryable: false,
+        });
+      }
+      const nextSnapshots = replay ? snapshots : [...snapshots, snapshot];
+      await client.query(`insert into orgward.github_repository_sources
+        (tenant_id, project_id, repository_id, installation_id, branch_ref, binding, snapshots)
+        values ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb)
+        on conflict (tenant_id, project_id, repository_id, branch_ref) do update set
+          installation_id=excluded.installation_id, binding=excluded.binding,
+          snapshots=excluded.snapshots, updated_at=now()`,
+      [tenantId, projectId, binding.repositoryId, binding.installationId, binding.branchRef, JSON.stringify(binding), JSON.stringify(nextSnapshots)]);
+      return { ...binding, snapshots: nextSnapshots.map(({ files, ...metadata }) => metadata) };
+    });
+  }
+}
+
 export class PostgresChangeCaseStore extends PostgresDocumentStore {
   constructor(persistence) { super(persistence, 'change_case'); }
   async saveForPrincipal(changeCase, {
