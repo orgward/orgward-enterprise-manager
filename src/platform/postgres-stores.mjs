@@ -1805,6 +1805,142 @@ export class PostgresGitHubSourceStore {
     await lockProjectAccess(client, { tenantId, projectId, principal, minimum: 'editor' });
   }
 
+  async createInstallationIntent({ tenantId, projectId, principal, authzGeneration, stateHash, expiresAt }) {
+    return this.persistence.transaction(async (client) => {
+      await this.#authorize(client, { tenantId, projectId, principal, authzGeneration });
+      await client.query(`delete from orgward.github_app_installation_intents where expires_at <= now()`);
+      const pending = await client.query(`select count(*)::int as count from orgward.github_app_installation_intents
+        where tenant_id=$1 and principal=$2 and consumed_at is null and expires_at > now()`, [tenantId, principal]);
+      if (Number(pending.rows[0].count) >= 10) throw Object.assign(new Error('Too many active GitHub installation flows. Wait for an existing flow to expire.'), {
+        statusCode: 429, code: 'GITHUB_INSTALLATION_FLOW_LIMIT', retryable: false,
+      });
+      await client.query(`insert into orgward.github_app_installation_intents
+        (state_hash,tenant_id,project_id,principal,authz_generation,expires_at)
+        values ($1,$2,$3,$4,$5,$6)`, [stateHash, tenantId, projectId, principal, authzGeneration, expiresAt]);
+    });
+  }
+
+  async validateInstallationIntent({ tenantId, principal, authzGeneration, stateHash }) {
+    return this.persistence.transaction(async (client) => {
+      await requirePrincipalAuthority(client, { tenantId, principal, roles: ['tenant-admin'], authzGeneration, actorType: 'human' });
+      const result = await client.query(`select project_id, provisional_installation_id as "installationId",
+          provisional_app_id as "appId", provisional_account_id as "accountId",
+          provisional_account_login as "accountLogin", provisional_account_type as "accountType"
+        from orgward.github_app_installation_intents
+        where state_hash=$1 and tenant_id=$2 and principal=$3 and authz_generation=$4
+          and consumed_at is null and expires_at > now()`, [stateHash, tenantId, principal, authzGeneration]);
+      if (!result.rowCount) return null;
+      await lockProjectAccess(client, { tenantId, projectId: result.rows[0].project_id, principal, minimum: 'owner' });
+      return { projectId: result.rows[0].project_id, provisionalInstallation: result.rows[0].installationId ? {
+        installationId: result.rows[0].installationId, appId: result.rows[0].appId,
+        accountId: result.rows[0].accountId, accountLogin: result.rows[0].accountLogin,
+        accountType: result.rows[0].accountType,
+      } : null };
+    });
+  }
+
+  async setProvisionalInstallationIntent({ tenantId, principal, authzGeneration, stateHash, installation }) {
+    return this.persistence.transaction(async (client) => {
+      const intent = await client.query(`select project_id, provisional_installation_id from orgward.github_app_installation_intents
+        where state_hash=$1 and tenant_id=$2 and principal=$3 and authz_generation=$4
+          and consumed_at is null and expires_at > now() for update`, [stateHash, tenantId, principal, authzGeneration]);
+      if (!intent.rowCount) return false;
+      await this.#authorize(client, { tenantId, projectId: intent.rows[0].project_id, principal, authzGeneration });
+      if (intent.rows[0].provisional_installation_id) return intent.rows[0].provisional_installation_id === installation.installationId;
+      await client.query(`update orgward.github_app_installation_intents set provisional_installation_id=$2,
+        provisional_app_id=$3, provisional_account_id=$4, provisional_account_login=$5, provisional_account_type=$6
+        where state_hash=$1`, [stateHash, installation.installationId, installation.appId,
+        installation.accountId, installation.accountLogin, installation.accountType]);
+      return true;
+    });
+  }
+
+  async completeInstallationIntent({ tenantId, principal, authzGeneration, stateHash, installation, githubUser }) {
+    return this.persistence.transaction(async (client) => {
+      const intent = await client.query(`select project_id, provisional_installation_id as "installationId",
+          provisional_app_id as "appId", provisional_account_id as "accountId",
+          provisional_account_login as "accountLogin", provisional_account_type as "accountType"
+        from orgward.github_app_installation_intents
+        where state_hash=$1 and tenant_id=$2 and principal=$3 and authz_generation=$4
+          and consumed_at is null and expires_at > now() for update`,
+      [stateHash, tenantId, principal, authzGeneration]);
+      if (!intent.rowCount) return null;
+      const provisional = intent.rows[0];
+      if (!githubUser || !/^[1-9][0-9]{0,15}$/.test(String(githubUser.githubUserId ?? ''))
+        || !/^[A-Za-z0-9_.-]{1,100}$/.test(githubUser.githubUserLogin ?? '')
+        || provisional.installationId !== installation.installationId || provisional.appId !== installation.appId
+        || provisional.accountId !== installation.accountId || provisional.accountLogin !== installation.accountLogin
+        || provisional.accountType !== installation.accountType) return null;
+      await this.#authorize(client, { tenantId, projectId: intent.rows[0].project_id, principal, authzGeneration });
+      await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [`github-installation:${installation.installationId}`]);
+      const existing = await client.query(`select tenant_id, connection_revision from orgward.github_app_installations
+        where installation_id=$1 for update`, [installation.installationId]);
+      if (existing.rowCount && existing.rows[0].tenant_id !== tenantId) {
+        throw Object.assign(new Error('This GitHub installation is already connected to another OrgWard tenant.'), {
+          statusCode: 409, code: 'GITHUB_INSTALLATION_BOUND_TO_OTHER_TENANT', retryable: false,
+        });
+      }
+      const revision = existing.rowCount ? Number(existing.rows[0].connection_revision) + 1 : 1;
+      const eventType = existing.rowCount ? 'GitHubAppInstallationReconnected' : 'GitHubAppInstallationConnected';
+      await client.query(`insert into orgward.github_app_installations
+        (installation_id,tenant_id,app_id,account_login,account_type,connected_by,verified_at,connection_revision,github_account_id,github_user_id,github_user_login)
+        values ($1,$2,$3,$4,$5,$6,now(),$7,$8,$9,$10)
+        on conflict (installation_id) do update set app_id=excluded.app_id, account_login=excluded.account_login,
+          account_type=excluded.account_type, connected_by=excluded.connected_by, verified_at=excluded.verified_at,
+          connection_revision=excluded.connection_revision, github_account_id=excluded.github_account_id,
+          github_user_id=excluded.github_user_id,
+          github_user_login=excluded.github_user_login,
+          updated_at=now()`, [installation.installationId, tenantId, installation.appId,
+        installation.accountLogin, installation.accountType, principal, revision, installation.accountId,
+        githubUser.githubUserId, githubUser.githubUserLogin]);
+      const event = { eventId: `event-${randomUUID()}`, schemaVersion: '1.0', tenantId,
+        aggregateId: installation.installationId, aggregateVersion: revision, type: eventType,
+        actor: principal, at: new Date().toISOString(), data: { installationId: installation.installationId,
+          appId: installation.appId, accountId: installation.accountId, accountLogin: installation.accountLogin, accountType: installation.accountType,
+          githubUserId: githubUser.githubUserId, githubUserLogin: githubUser.githubUserLogin,
+          authzGeneration } };
+      await client.query(`insert into orgward.audit_log
+        (tenant_id,aggregate_kind,aggregate_id,aggregate_version,event_type,actor,event,event_hash)
+        values ($1,'github_app_installation',$2,$3,$4,$5,$6::jsonb,$7)`,
+      [tenantId, installation.installationId, revision, eventType, principal, JSON.stringify(event), contentHash(event)]);
+      await client.query(`update orgward.github_app_installation_intents set consumed_at=now()
+        where state_hash=$1 and consumed_at is null`, [stateHash]);
+      return { projectId: intent.rows[0].project_id };
+    });
+  }
+
+  async listTenantInstallations({ tenantId, projectId, principal, authzGeneration }) {
+    return this.persistence.transaction(async (client) => {
+      await this.#authorize(client, { tenantId, projectId, principal, authzGeneration });
+      const result = await client.query(`select installation_id as "installationId", account_login as "accountLogin",
+        account_type as "accountType", verified_at as "verifiedAt"
+        from orgward.github_app_installations where tenant_id=$1 and github_account_id is not null
+          and github_user_id is not null order by account_login, installation_id`, [tenantId]);
+      return result.rows.map((row) => ({ ...row, verifiedAt: row.verifiedAt.toISOString() }));
+    });
+  }
+
+  async assertTenantInstallation({ tenantId, projectId, principal, authzGeneration, installationId }) {
+    return this.persistence.transaction(async (client) => {
+      await this.#authorize(client, { tenantId, projectId, principal, authzGeneration });
+      const result = await client.query(`select 1 from orgward.github_app_installations
+        where tenant_id=$1 and installation_id=$2`, [tenantId, installationId]);
+      return Boolean(result.rowCount);
+    });
+  }
+
+  async getTenantInstallation({ tenantId, projectId, principal, authzGeneration, installationId }) {
+    return this.persistence.transaction(async (client) => {
+      await this.#authorize(client, { tenantId, projectId, principal, authzGeneration });
+      const result = await client.query(`select installation_id as "installationId", app_id as "appId",
+          github_account_id as "accountId", account_login as "accountLogin", account_type as "accountType",
+          verified_at as "verifiedAt"
+        from orgward.github_app_installations where tenant_id=$1 and installation_id=$2
+          and github_account_id is not null and github_user_id is not null`, [tenantId, installationId]);
+      return result.rows[0] ? { ...result.rows[0], verifiedAt: result.rows[0].verifiedAt.toISOString() } : null;
+    });
+  }
+
   async listForProject({ tenantId, projectId, principal, authzGeneration }) {
     return this.persistence.transaction(async (client) => {
       await this.#authorize(client, { tenantId, projectId, principal, authzGeneration });
@@ -1812,7 +1948,10 @@ export class PostgresGitHubSourceStore {
           coalesce((select jsonb_agg(item.value - 'files' order by item.ordinality)
             from jsonb_array_elements(source.snapshots) with ordinality as item(value, ordinality)), '[]'::jsonb) as snapshots
         from orgward.github_repository_sources source
-        where tenant_id=$1 and project_id=$2 order by updated_at desc, repository_id, branch_ref`, [tenantId, projectId]);
+        join orgward.github_app_installations installation
+          on installation.tenant_id=source.tenant_id and installation.installation_id=source.installation_id::text
+            and installation.github_account_id is not null and installation.github_user_id is not null
+        where source.tenant_id=$1 and source.project_id=$2 order by source.updated_at desc, source.repository_id, source.branch_ref`, [tenantId, projectId]);
       return result.rows.map((row) => ({ ...row.binding, snapshots: row.snapshots }));
     });
   }
@@ -1824,7 +1963,10 @@ export class PostgresGitHubSourceStore {
           coalesce((select jsonb_agg(item.value - 'files' order by item.ordinality)
             from jsonb_array_elements(source.snapshots) with ordinality as item(value, ordinality)), '[]'::jsonb) as snapshots
         from orgward.github_repository_sources source
-        where tenant_id=$1 and project_id=$2 order by updated_at desc, repository_id, branch_ref`, [tenantId, projectId]);
+        join orgward.github_app_installations installation
+          on installation.tenant_id=source.tenant_id and installation.installation_id=source.installation_id::text
+            and installation.github_account_id is not null and installation.github_user_id is not null
+        where source.tenant_id=$1 and source.project_id=$2 order by source.updated_at desc, source.repository_id, source.branch_ref`, [tenantId, projectId]);
       return result.rows.flatMap((row) => (row.snapshots ?? []).map((snapshot) => ({ binding: row.binding, snapshot })));
     });
   }
@@ -1834,6 +1976,9 @@ export class PostgresGitHubSourceStore {
       await this.#authorizeExecution(client, { tenantId, projectId, principal, authzGeneration });
       const result = await client.query(`select source.binding, item.value as snapshot
         from orgward.github_repository_sources source
+        join orgward.github_app_installations installation
+          on installation.tenant_id=source.tenant_id and installation.installation_id=source.installation_id::text
+            and installation.github_account_id is not null and installation.github_user_id is not null
         cross join lateral jsonb_array_elements(source.snapshots) item(value)
         where source.tenant_id=$1 and source.project_id=$2 and item.value->>'id'=$3
         limit 1`, [tenantId, projectId, snapshotId]);
@@ -1850,6 +1995,9 @@ export class PostgresGitHubSourceStore {
               'contentHash', file.value->'contentHash', 'blobSha', file.value->'blobSha') order by file.ordinality)
             from jsonb_array_elements(coalesce(item.value->'files', '[]'::jsonb)) with ordinality as file(value, ordinality)), '[]'::jsonb) as files
         from orgward.github_repository_sources source
+        join orgward.github_app_installations installation
+          on installation.tenant_id=source.tenant_id and installation.installation_id=source.installation_id::text
+            and installation.github_account_id is not null and installation.github_user_id is not null
         cross join lateral jsonb_array_elements(source.snapshots) item(value)
         where source.tenant_id=$1 and source.project_id=$2 and item.value->>'id'=$3
         limit 1`, [tenantId, projectId, snapshotId]);
@@ -1861,6 +2009,11 @@ export class PostgresGitHubSourceStore {
   async saveCapture({ tenantId, projectId, principal, authzGeneration, binding, snapshot }) {
     return this.persistence.transaction(async (client) => {
       await this.#authorize(client, { tenantId, projectId, principal, authzGeneration });
+      const installed = await client.query(`select tenant_id from orgward.github_app_installations
+        where installation_id=$1 for key share`, [binding.installationId]);
+      if (!installed.rowCount || installed.rows[0].tenant_id !== tenantId) throw Object.assign(new Error('Connect this GitHub App installation to the current OrgWard tenant before capturing source.'), {
+        statusCode: 403, code: 'GITHUB_INSTALLATION_NOT_BOUND', retryable: false,
+      });
       await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`,
         [`github-source-project:${tenantId}:${projectId}`]);
       const projectTotals = await client.query(`

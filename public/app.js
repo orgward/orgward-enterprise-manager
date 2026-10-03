@@ -324,8 +324,28 @@ async function refreshGitHubSnapshots() {
   status.textContent = 'Loading captured snapshots…';
   try {
     const result = await api(`/api/execution/github-repositories?projectId=${encodeURIComponent(state.project.id)}`);
-    status.textContent = !result.available ? 'Repository snapshots require the PostgreSQL-backed installation.'
-      : !result.configured ? 'GitHub App onboarding is disabled until the server operator configures the GitHub App.' : '';
+    const form = document.querySelector('#github-onboarding-form');
+    const connect = document.querySelector('#github-installation-connect');
+    for (const control of form?.elements ?? []) control.disabled = !result.configured;
+    if (connect) connect.disabled = !result.configured;
+    const connected = new URLSearchParams(location.search).get('github_installation') === 'connected';
+    status.textContent = connected ? 'GitHub App installation connected to this tenant.'
+      : !result.available ? 'Repository snapshots require the PostgreSQL-backed installation.'
+      : !result.configured ? 'GitHub App onboarding is disabled until the server operator configures the App and user OAuth callback.' : '';
+    const installationSelect = document.querySelector('#github-onboarding-form select[name="installationId"]');
+    const repositorySelect = document.querySelector('#github-onboarding-form select[name="repositoryId"]');
+    const captureButton = document.querySelector('#github-onboarding-form button[type="submit"]');
+    if (installationSelect) {
+      installationSelect.replaceChildren(element('option', { text: result.installations?.length ? 'Choose a connected installation' : 'Connect an installation first', attrs: { value: '' } }));
+      for (const installation of result.installations ?? []) installationSelect.append(element('option', {
+        text: `${installation.accountLogin} · ${installation.accountType}`, attrs: { value: installation.installationId },
+      }));
+    }
+    if (repositorySelect) {
+      repositorySelect.replaceChildren(element('option', { text: 'Choose an installation first', attrs: { value: '' } }));
+      repositorySelect.disabled = true;
+    }
+    if (captureButton) captureButton.disabled = true;
     list.replaceChildren();
     for (const repository of result.repositories ?? []) for (const snapshot of repository.snapshots ?? []) {
       const useSnapshot = element('a', { text: 'Use this snapshot in an Execution task', attrs: {
@@ -353,6 +373,48 @@ function setupGitHubOnboarding() {
   panel.hidden = !allowed;
   if (!allowed) return;
   const form = document.querySelector('#github-onboarding-form');
+  const connect = document.querySelector('#github-installation-connect');
+  const installationSelect = form.elements.installationId;
+  const repositorySelect = form.elements.repositoryId;
+  const captureButton = form.querySelector('button[type="submit"]');
+  installationSelect.addEventListener('change', async () => {
+    const installationId = installationSelect.value;
+    repositorySelect.replaceChildren(element('option', { text: installationId ? 'Loading accessible repositories…' : 'Choose an installation first', attrs: { value: '' } }));
+    repositorySelect.disabled = true;
+    captureButton.disabled = true;
+    if (!installationId) return;
+    const status = document.querySelector('#github-onboarding-status');
+    status.textContent = 'Checking this installation and loading its accessible repositories…';
+    try {
+      const result = await api(`/api/execution/github-installations/${encodeURIComponent(installationId)}/repositories?projectId=${encodeURIComponent(state.project.id)}`);
+      if (installationSelect.value !== installationId) return;
+      repositorySelect.replaceChildren(element('option', { text: 'Choose an accessible repository', attrs: { value: '' } }));
+      for (const repository of result.repositories ?? []) {
+        const branch = repository.defaultBranch ? ` · default ${repository.defaultBranch}` : '';
+        repositorySelect.append(element('option', { text: `${repository.fullName}${branch}`, attrs: { value: repository.repositoryId } }));
+      }
+      repositorySelect.disabled = false;
+      status.textContent = result.repositories?.length ? 'Choose a repository currently accessible to this installation.'
+        : 'This installation currently has no accessible repositories.';
+    } catch (error) {
+      if (installationSelect.value === installationId) status.textContent = error.message;
+    }
+  });
+  repositorySelect.addEventListener('change', () => { captureButton.disabled = !repositorySelect.value; });
+  connect.addEventListener('click', async () => {
+    const status = document.querySelector('#github-onboarding-status');
+    connect.disabled = true;
+    status.textContent = 'Starting a one-time GitHub installation flow…';
+    try {
+      const result = await api('/api/execution/github-installation/start', { method: 'POST',
+        body: JSON.stringify({ projectId: state.project.id }) });
+      const continueLink = element('a', { text: 'Continue to GitHub in a new tab', attrs: {
+        href: result.authorizationUrl, target: '_blank', rel: 'noopener noreferrer',
+      } });
+      status.replaceChildren(document.createTextNode('One-time connection flow ready. '), continueLink);
+      connect.disabled = false;
+    } catch (error) { status.textContent = error.message; connect.disabled = false; }
+  });
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const button = form.querySelector('button[type="submit"]');
@@ -372,6 +434,9 @@ function setupGitHubOnboarding() {
       status.textContent = error.message;
     } finally { button.disabled = false; }
   });
+  if (new URLSearchParams(location.search).get('github_installation') === 'connected') {
+    document.querySelector('#github-onboarding-status').textContent = 'GitHub App installation connected to this tenant.';
+  }
   void refreshGitHubSnapshots();
 }
 

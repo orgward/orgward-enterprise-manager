@@ -1,6 +1,6 @@
 import { createServer as createHttpServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { addConversationTurn, applyBlueprintProposal, createProject, editBlueprintObject, editProcessTaskGraph, graphForBlueprint, latestBlueprint, planProcessTaskGraph, publishBlueprintInternally } from './src/model.mjs';
@@ -22,7 +22,8 @@ import { hasVerifiedHumanTaskSuccess, LegacyImporter, PostgresChangeCaseStore, P
 import { PostgresSecretStore } from './src/platform/secrets.mjs';
 import { GitHubSourceIngestion } from './src/execution/github-source-ingestion.mjs';
 import { parseInstallConfig } from './src/platform/install-config.mjs';
-import { parseGitHubVerifierProfile } from './src/execution/github-verifier-profile.mjs';
+import { parseGitHubCheckPlan } from './src/execution/github-verifier-profile.mjs';
+import { parseGitHubBuildPlan } from './src/execution/github-build-plan.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -77,7 +78,8 @@ function apiFailure(statusCode, code, message, options = {}) {
 }
 
 function githubRepositoryView(repository) {
-  return { ...repository, snapshots: (repository.snapshots ?? []).map(({ files, ...snapshot }) => snapshot) };
+  const { credentialReference, ...view } = repository;
+  return { ...view, snapshots: (repository.snapshots ?? []).map(({ files, ...snapshot }) => snapshot) };
 }
 
 function setSecurityHeaders(response) {
@@ -758,6 +760,7 @@ export function createApp({
   deepSeekValidationCooldownMs = 60_000,
   githubAppConfig = null,
   githubVerifierProfile = null,
+  githubBuildPlan = null,
   githubFetchImpl = fetch,
   openAiAdminApiKey = null,
   openAiOrganizationId = null,
@@ -789,7 +792,7 @@ export function createApp({
   };
   const executionService = new ExecutionService({ runDirectory: executionDirectory, store: executionStore, secretStore,
     profiles: [...executionProfiles, ...(enableLocalExecution ? [localProfile] : [])], localRepositories,
-    githubSourceStore, githubVerifierProfile });
+    githubSourceStore, githubVerifierProfile, githubBuildPlan });
   if (!persistence) {
     const resolveLocalProjectAccess = async ({ tenantId, projectId, principal, minimum = 'reader' }) => {
       const project = await store.getForPrincipal(projectId, tenantId, principal);
@@ -2095,7 +2098,128 @@ export function createApp({
         if (!githubSourceStore) return sendJson(response, 200, { configured: false, available: false, repositories: [] });
         const repositories = await githubSourceStore.listForProject({ tenantId: requestTenant(request), projectId,
           principal: requestActor(request), authzGeneration: request.identity.authzGeneration });
-        return sendJson(response, 200, { configured: githubSourceIngestion.configured, available: true, repositories: repositories.map(githubRepositoryView) });
+        const installations = await githubSourceStore.listTenantInstallations({ tenantId: requestTenant(request), projectId,
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration });
+        return sendJson(response, 200, { configured: githubSourceIngestion.installationFlowConfigured, available: true,
+          installations, repositories: repositories.map(githubRepositoryView) });
+      }
+
+      const githubInstallationRepositoriesMatch = pathname.match(/^\/api\/execution\/github-installations\/([1-9][0-9]{0,15})\/repositories$/);
+      if (githubInstallationRepositoriesMatch && request.method === 'GET') {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified tenant administrator identity is required.');
+        if (!githubSourceStore) throw apiFailure(503, 'GITHUB_SOURCE_PERSISTENCE_REQUIRED', 'GitHub repository discovery requires PostgreSQL installation storage.');
+        if (!githubSourceIngestion.configured) throw apiFailure(503, 'GITHUB_SOURCE_UNCONFIGURED', 'GitHub App repository onboarding is not configured.');
+        const projectId = url.searchParams.get('projectId');
+        const installationId = githubInstallationRepositoriesMatch[1];
+        if (!/^project-[0-9a-f-]{36}$/i.test(projectId ?? '') || !Number.isSafeInteger(Number(installationId))) {
+          throw apiFailure(400, 'INVALID_GITHUB_INSTALLATION', 'Provide one valid project and connected installation.');
+        }
+        const bound = await githubSourceStore.getTenantInstallation({ tenantId: requestTenant(request), projectId,
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration, installationId });
+        if (!bound) throw apiFailure(404, 'GITHUB_INSTALLATION_NOT_BOUND', 'This installation is not connected to the current OrgWard tenant.');
+        let current;
+        try { current = await githubSourceIngestion.verifyInstallation(installationId); }
+        catch (error) {
+          if (error.statusCode === 404) throw apiFailure(409, 'GITHUB_INSTALLATION_UNAVAILABLE', 'This GitHub installation is no longer available. Reconnect it before browsing repositories.');
+          throw error;
+        }
+        if (current.installationId !== bound.installationId || current.appId !== bound.appId
+          || current.accountId !== bound.accountId || current.accountLogin.toLowerCase() !== bound.accountLogin.toLowerCase()
+          || current.accountType !== bound.accountType) {
+          throw apiFailure(409, 'GITHUB_INSTALLATION_CHANGED', 'This GitHub installation identity changed. Reconnect it before browsing repositories.');
+        }
+        const repositories = await githubSourceIngestion.listInstallationRepositories(installationId);
+        return sendJson(response, 200, { installationId, repositories });
+      }
+
+      if (pathname === '/api/execution/github-installation/start' && request.method === 'POST') {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified project owner and tenant administrator identity is required.');
+        if (!githubSourceStore || !githubSourceIngestion.installationFlowConfigured) throw apiFailure(503,
+          'GITHUB_INSTALLATION_FLOW_UNAVAILABLE', 'The authenticated GitHub App installation flow is not configured for this server.');
+        const body = await readJson(request);
+        if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some((field) => field !== 'projectId')
+          || !/^project-[0-9a-f-]{36}$/i.test(body.projectId ?? '')) throw apiFailure(400, 'INVALID_GITHUB_INSTALLATION_FLOW', 'Provide one valid projectId.');
+        const rawState = randomBytes(32).toString('base64url');
+        const stateHash = createHash('sha256').update(rawState).digest('hex');
+        const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
+        await githubSourceStore.createInstallationIntent({ tenantId: requestTenant(request), projectId: body.projectId,
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration, stateHash, expiresAt });
+        const authorizationUrl = new URL(`https://github.com/apps/${githubSourceIngestion.config.appSlug}/installations/new`);
+        authorizationUrl.searchParams.set('state', rawState);
+        response.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store',
+          'referrer-policy': 'no-referrer' });
+        response.end(JSON.stringify({ authorizationUrl: authorizationUrl.href, expiresAt }));
+        return;
+      }
+
+      if (pathname === '/api/execution/github-installation/callback' && request.method === 'GET') {
+        response.setHeader('cache-control', 'no-store');
+        response.setHeader('referrer-policy', 'no-referrer');
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'Sign in again to complete the GitHub App connection.');
+        if (!githubSourceStore || !githubSourceIngestion.installationFlowConfigured) throw apiFailure(503,
+          'GITHUB_INSTALLATION_FLOW_UNAVAILABLE', 'The GitHub App installation flow is not configured for this server.');
+        const rawState = url.searchParams.get('state');
+        const installationId = url.searchParams.get('installation_id');
+        const setupAction = url.searchParams.get('setup_action');
+        if (url.searchParams.getAll('state').length !== 1 || url.searchParams.getAll('installation_id').length !== 1
+          || url.searchParams.getAll('setup_action').length > 1
+          || typeof rawState !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(rawState)
+          || typeof installationId !== 'string' || !/^[1-9][0-9]{0,15}$/.test(installationId)
+          || (setupAction !== null && !['install', 'update'].includes(setupAction))) {
+          throw apiFailure(400, 'INVALID_GITHUB_INSTALLATION_CALLBACK', 'The GitHub installation callback is invalid or expired. Start the connection again.');
+        }
+        const stateHash = createHash('sha256').update(rawState).digest('hex');
+        const actor = requestActor(request), tenantId = requestTenant(request), authzGeneration = request.identity.authzGeneration;
+        const pending = await githubSourceStore.validateInstallationIntent({ tenantId, principal: actor, authzGeneration, stateHash });
+        if (!pending) throw apiFailure(400, 'INVALID_GITHUB_INSTALLATION_CALLBACK', 'The GitHub installation callback is invalid or expired. Start the connection again.');
+        const installation = await githubSourceIngestion.verifyInstallation(installationId);
+        if (installation.accountType === 'Enterprise') throw apiFailure(403, 'GITHUB_INSTALLATION_ACCOUNT_UNSUPPORTED',
+          'GitHub Enterprise installations are not supported by this connection flow.');
+        const provisioned = await githubSourceStore.setProvisionalInstallationIntent({ tenantId, principal: actor,
+          authzGeneration, stateHash, installation });
+        if (!provisioned) throw apiFailure(400, 'INVALID_GITHUB_INSTALLATION_CALLBACK', 'The GitHub installation callback is invalid or expired. Start the connection again.');
+        const authorizationUrl = new URL('https://github.com/login/oauth/authorize');
+        authorizationUrl.searchParams.set('client_id', githubSourceIngestion.config.clientId);
+        authorizationUrl.searchParams.set('redirect_uri', githubSourceIngestion.config.oauthRedirectUri);
+        authorizationUrl.searchParams.set('state', rawState);
+        authorizationUrl.searchParams.set('allow_signup', 'false');
+        response.writeHead(303, { location: authorizationUrl.href,
+          'cache-control': 'no-store', 'referrer-policy': 'no-referrer' });
+        response.end();
+        return;
+      }
+
+      if (pathname === '/api/execution/github-installation/oauth-callback' && request.method === 'GET') {
+        response.setHeader('cache-control', 'no-store');
+        response.setHeader('referrer-policy', 'no-referrer');
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'Sign in again to complete the GitHub App connection.');
+        if (!githubSourceStore || !githubSourceIngestion.installationFlowConfigured) throw apiFailure(503,
+          'GITHUB_INSTALLATION_FLOW_UNAVAILABLE', 'The GitHub App user authorization flow is not configured for this server.');
+        const rawState = url.searchParams.get('state');
+        const code = url.searchParams.get('code');
+        if (url.searchParams.getAll('state').length !== 1 || url.searchParams.getAll('code').length !== 1
+          || url.searchParams.has('error') || typeof rawState !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(rawState)
+          || typeof code !== 'string' || !/^[A-Za-z0-9._-]{1,512}$/.test(code)) {
+          throw apiFailure(400, 'INVALID_GITHUB_INSTALLATION_OAUTH_CALLBACK', 'GitHub user authorization was denied or the callback expired. Start the connection again.');
+        }
+        const stateHash = createHash('sha256').update(rawState).digest('hex');
+        const actor = requestActor(request), tenantId = requestTenant(request), authzGeneration = request.identity.authzGeneration;
+        const pending = await githubSourceStore.validateInstallationIntent({ tenantId, principal: actor, authzGeneration, stateHash });
+        if (!pending?.provisionalInstallation) throw apiFailure(400, 'INVALID_GITHUB_INSTALLATION_OAUTH_CALLBACK',
+          'GitHub user authorization is not attached to a verified pending installation. Start the connection again.');
+        const installation = await githubSourceIngestion.verifyInstallation(pending.provisionalInstallation.installationId);
+        if (['installationId', 'appId', 'accountId', 'accountLogin', 'accountType']
+          .some((field) => installation[field] !== pending.provisionalInstallation[field])) {
+          throw apiFailure(403, 'GITHUB_INSTALLATION_CHANGED', 'The GitHub installation changed during authorization. Start the connection again.');
+        }
+        const githubUser = await githubSourceIngestion.verifyOAuthInstallationAccess({ code, installation });
+        const completed = await githubSourceStore.completeInstallationIntent({ tenantId, principal: actor,
+          authzGeneration, stateHash, installation, githubUser });
+        if (!completed) throw apiFailure(400, 'INVALID_GITHUB_INSTALLATION_OAUTH_CALLBACK', 'The GitHub authorization could not be bound to this pending connection. Start the connection again.');
+        response.writeHead(303, { location: `/?github_installation=connected&project=${encodeURIComponent(completed.projectId)}`,
+          'cache-control': 'no-store', 'referrer-policy': 'no-referrer' });
+        response.end();
+        return;
       }
 
       if (pathname === '/api/execution/github-repositories' && request.method === 'POST') {
@@ -2113,8 +2237,9 @@ export function createApp({
           || typeof body.branchRef !== 'string' || !body.branchRef.startsWith('refs/heads/') || body.branchRef.length > 255) {
           throw apiFailure(400, 'INVALID_GITHUB_REPOSITORY_BINDING', 'Provide projectId, GitHub IDs from 1 through 9007199254740991, and one full refs/heads branchRef.');
         }
-        await githubSourceStore.listForProject({ tenantId: requestTenant(request), projectId: body.projectId,
-          principal: requestActor(request), authzGeneration: request.identity.authzGeneration });
+        const authorizedInstallation = await githubSourceStore.assertTenantInstallation({ tenantId: requestTenant(request), projectId: body.projectId,
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration, installationId: body.installationId });
+        if (!authorizedInstallation) throw apiFailure(403, 'GITHUB_INSTALLATION_NOT_BOUND', 'Connect this GitHub App installation to the current OrgWard tenant before capturing source.');
         const captured = await githubSourceIngestion.capture({ installationId: body.installationId,
           repositoryId: body.repositoryId, branchRef: body.branchRef });
         const binding = { tenantId: requestTenant(request), projectId: body.projectId,
@@ -3057,6 +3182,7 @@ export function createApp({
     } catch (error) {
       if (pathname === '/auth/callback') return loginError(response, oidcLoginFlow ? new URL(oidcLoginFlow.redirectUri).protocol === 'https:' : false);
       if (pathname.startsWith('/api/v1/') || pathname.startsWith('/api/execution/process-task-')
+        || pathname.startsWith('/api/execution/github-')
         || pathname.startsWith('/api/execution/deepseek-profiles')
         || /^\/api\/sdlc\/cases\/change-case-[0-9a-f-]{36}\/(?:software-delivery-plans(?:\/|$)|compile-software-plan$)/.test(pathname)
         || /^\/api\/execution\/runs\/execution-run-[0-9a-f-]{36}\/(cancel|pause|resume|amend)$/.test(pathname)) {
@@ -3149,9 +3275,12 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   catch { console.error('ORGWARD_LOCAL_REPOSITORIES must contain a JSON array of server-configured local repository bindings.'); process.exitCode = 1; process.exit(); }
   if (!Array.isArray(localRepositories)) { console.error('ORGWARD_LOCAL_REPOSITORIES must contain a JSON array of server-configured local repository bindings.'); process.exitCode = 1; process.exit(); }
   let githubVerifierProfile = null;
-  try { githubVerifierProfile = parseGitHubVerifierProfile(process.env.ORGWARD_GITHUB_VERIFIER ?? null); }
+  try { githubVerifierProfile = parseGitHubCheckPlan(process.env.ORGWARD_GITHUB_VERIFIER ?? null); }
   catch (error) { console.error(error.message); process.exitCode = 1; process.exit(); }
-  const app = createApp({ dataDirectory, sdlcDirectory, executionDirectory, executionWorkspaceDirectory, enableLocalExecution, executionProfiles, localRepositories, databaseUrl, oidcAuthenticator, oidcLoginFlow, oidcBootstrapPrincipals: authMode === 'oidc' ? bootstrapPrincipals : [], secretEncryptionKey, openAiAdminApiKey, openAiOrganizationId, openAiTenantProjects, githubAppConfig: githubApp, githubVerifierProfile, readOnly: legacyReadOnlyMode });
+  let githubBuildPlan = null;
+  try { githubBuildPlan = parseGitHubBuildPlan(process.env.ORGWARD_GITHUB_BUILD_PLAN ?? null); }
+  catch (error) { console.error(error.message); process.exitCode = 1; process.exit(); }
+  const app = createApp({ dataDirectory, sdlcDirectory, executionDirectory, executionWorkspaceDirectory, enableLocalExecution, executionProfiles, localRepositories, databaseUrl, oidcAuthenticator, oidcLoginFlow, oidcBootstrapPrincipals: authMode === 'oidc' ? bootstrapPrincipals : [], secretEncryptionKey, openAiAdminApiKey, openAiOrganizationId, openAiTenantProjects, githubAppConfig: githubApp, githubVerifierProfile, githubBuildPlan, readOnly: legacyReadOnlyMode });
   const { server } = app;
   await app.init();
   let shuttingDown = false;

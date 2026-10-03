@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -68,6 +68,26 @@ test('command adapter isolates host files and networking and keeps approved cont
   const probe = JSON.parse(await readFile(path.join(workspace, 'sandbox-probe.json'), 'utf8'));
   assert.deepEqual(probe, { hostCanaryReadable: false, networkReachable: false, contextWritable: false, leakedEnvironment: null });
   assert.equal(await readFile(hostCanary, 'utf8'), 'host-only-canary');
+});
+
+test('command adapter keeps a build candidate read-only while exposing only its private output mount', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'orgward-build-sandbox-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const workspace = path.join(root, 'workspace');
+  const outputDirectory = await mkdtemp(path.join(root, 'output-'));
+  await mkdir(workspace, { mode: 0o700 });
+  await writeFile(path.join(workspace, 'README.md'), 'candidate bytes\n');
+  const adapter = new CommandExecutionAdapter({
+    executable: process.execPath,
+    args: ['-e', `const fs = require('node:fs'); let writable = true; try { fs.writeFileSync('/workspace/README.md', 'changed'); } catch { writable = false; } if (writable) process.exit(17); fs.mkdirSync('/build-output/dist', { recursive: true }); fs.writeFileSync('/build-output/dist/app.js', fs.readFileSync('/workspace/README.md'));`],
+    sandbox: { workspaceReadOnly: true, writableDirectories: [{ path: outputDirectory, target: '/build-output' }] },
+  });
+  const result = await adapter.execute({ id: 'WORK-BUILD-SANDBOX', objective: 'Keep source read-only and capture a build output.' }, {}, { workspace });
+  assert.equal(result.status, 'COMPLETED');
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(result.changedArtifacts, []);
+  assert.equal(await readFile(path.join(workspace, 'README.md'), 'utf8'), 'candidate bytes\n');
+  assert.equal(await readFile(path.join(outputDirectory, 'dist', 'app.js'), 'utf8'), 'candidate bytes\n');
 });
 
 test('command adapter stops the sandbox payload and its writes when the worker is revoked', async (t) => {

@@ -93,13 +93,14 @@
               <div class="version-badge"><span>Saved</span> Version <strong id="blueprint-version"></strong></div>
             </div>
             <section id="github-onboarding" class="repository-onboarding" hidden aria-labelledby="github-onboarding-title">
-              <h3 id="github-onboarding-title">Capture a GitHub repository snapshot</h3>
-              <p class="muted-copy">Enter the numeric GitHub installation ID, immutable repository ID (both supported from 1 through 9007199254740991), and exact full branch ref (for example, <code>refs/heads/main</code>). The server captures a read-only snapshot of the commit currently named by that ref. A later branch move creates another snapshot.</p>
+              <h3 id="github-onboarding-title">Connect GitHub and capture a repository snapshot</h3>
+              <p class="muted-copy">Connect a GitHub App installation to this OrgWard tenant. GitHub verifies the installation; an installation cannot belong to another tenant. Choose a repository currently accessible to that installation, then enter its exact full branch ref (for example, <code>refs/heads/main</code>). The server captures a read-only snapshot of the commit currently named by that ref. A later branch move creates another snapshot.</p>
+              <button id="github-installation-connect" class="button secondary" type="button" disabled>Connect a GitHub App installation</button>
               <form id="github-onboarding-form">
-                <label>Installation ID<input name="installationId" type="number" inputmode="numeric" min="1" max="9007199254740991" step="1" required></label>
-                <label>Repository ID<input name="repositoryId" type="number" inputmode="numeric" min="1" max="9007199254740991" step="1" required></label>
-                <label>Full branch ref<input name="branchRef" maxlength="255" value="refs/heads/main" required></label>
-                <button class="button primary" type="submit">Capture pinned snapshot</button>
+                <label>Tenant-bound GitHub installation<select name="installationId" required disabled><option value="">Connect an installation first</option></select></label>
+                <label>Accessible repository<select name="repositoryId" required disabled><option value="">Choose an installation first</option></select></label>
+                <label>Full branch ref<input name="branchRef" maxlength="255" value="refs/heads/main" required disabled></label>
+                <button class="button primary" type="submit" disabled>Capture pinned snapshot</button>
               </form>
               <p id="github-onboarding-status" role="status" aria-live="polite"></p>
               <ul id="github-onboarding-snapshots" aria-label="Captured GitHub repository snapshots"></ul>

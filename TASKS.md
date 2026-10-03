@@ -5752,6 +5752,180 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   `/tmp/orgward-tests-CZFxao/node-test.tap.log`. Client/test syntax checks and
   `git diff --check` passed. No API or persisted record behavior changed.
 
+  Authenticated GitHub App installation ownership proof (2026-09-30): the
+  project-owner/tenant-admin connection now has two callbacks. The Setup URL
+  callback verifies the installation ID and App ID with the server App JWT, then
+  stores its immutable installation/account identity only as provisional fields
+  on the one-time state intent. A separate configured HTTPS OAuth callback
+  exchanges GitHub's code server-side and verifies `/user`; personal installs
+  require exact account ID/login equality, while organization installs require
+  active `admin` membership and exact organization ID/login. Enterprise installs
+  are rejected. The provisional installation is re-fetched and compared before
+  OAuth proof; only then does one transaction recheck the same OrgWard principal,
+  tenant, project ownership and authorization generation, enforce global
+  installation-to-tenant uniqueness, append an audit event with OrgWard and
+  GitHub actor/account identifiers, and consume state. Tokens and OAuth codes
+  never enter persistence, API output, UI, logs or workers. GitHub App
+  configuration now includes server-only OAuth client ID/secret and a fixed
+  callback URI; operator setup documents repository metadata/contents read and
+  organization Members read permissions. Proxy access logs are instructed to
+  redact both callback query strings. PKCE is deferred: the flow uses confidential
+  server-side code exchange and the hashed, short-lived, actor/authz-bound one-time
+  state; durable encrypted verifier storage is not part of this slice.
+
+  The first pre-OAuth focused run was 6/10 with four failures: it inspected the
+  loopback fixture URL instead of the injected fixed API URL; a local snapshot
+  hash shadowed the imported helper; one served-client assertion expected an old
+  query-string literal; and the callback fixture had no OAuth configuration. Log:
+  `/tmp/orgward-github-installation-binding-focused.tap.log`. After implementing
+  OAuth, the combined focused run was 9/11 (two stale test fixtures: the hash
+  assertion and the app restart before onboarding dropped GitHub OAuth config),
+  log `/tmp/orgward-pr08-github-oauth-binding-focused-20260930.tap.log`. The
+  repair combined run was 10/11; the remaining assertion expected a string error
+  instead of the current structured `error.message` envelope, log
+  `/tmp/orgward-pr08-github-oauth-binding-focused-repair-20260930.tap.log`. The
+  isolated store-file run then exposed a second stale hash expectation (0/1),
+  log `/tmp/orgward-pr08-github-oauth-binding-store-repair-20260930.tap.log`.
+  After correcting those two expectations, the affected store/API/PostgreSQL
+  test passed 1/1 (0 failures/skips; 2.607s TAP), log
+  `/tmp/orgward-pr08-github-oauth-binding-store-final-20260930.tap.log`; the
+  other 10 cases had passed in the combined run. The loopback flow exercises
+  direct OAuth denial before provisional state, non-admin org-member denial with
+  no tenant binding, successful exact-org admin binding, state replay, audit
+  fields, and secret non-disclosure. No live GitHub or provider request occurred.
+  The single frozen-tree `npm run check` passed 452/453 (452 passed, 0 failed,
+  1 skipped: optional PostgreSQL backup/restore because client tools are absent;
+  83.76s runner, 82.68s TAP). Logs: `/tmp/orgward-pr08-github-installation-oauth-check-20260930.log`
+  and `/tmp/orgward-tests-eL56ch/node-test.tap.log`. No task checkbox, cursor or
+  release gate was changed; PR-08 remains open.
+
+  Tenant-bound GitHub repository picker (2026-09-30): the onboarding form now
+  selects an installation already bound to the active tenant, then requests its
+  currently accessible repositories from an authenticated server endpoint. The
+  endpoint rechecks project owner/tenant-admin authority and authz generation,
+  verifies the live installation/App/account identity against the durable
+  owner-proof binding, and returns only bounded repository ID, name/full name,
+  owner, default branch and visibility metadata. The App JWT stays inside the
+  server ingestion service and only mints a metadata-only installation token
+  for repository discovery; that token is revoked after listing and is never
+  persisted, returned or logged. Discovery is bounded to 1,000 unique
+  repositories; captures use the same strict grant-list validation and still
+  recheck repository scope. Repository-source reads and installation lists
+  require the saved GitHub account/user proof, so older unproved bindings remain
+  stored but hidden until reconnected. Focused coverage includes selector
+  serving, metadata, unbound and cross-tenant denial before provider requests,
+  unavailable installation, out-of-scope capture rejection and response
+  non-disclosure. Initial combined run passed 2/3 and failed only because the
+  fixture referenced a later `const otherProject` (TDZ), log
+  `/tmp/orgward-tests-qFWv7D/node-test.tap.log`. After the fixture repair, the
+  combined run passed 3/3 (0 failures/skips; 17.49s TAP; 18.59s runner), log
+  `/tmp/orgward-tests-YHJzVj/node-test.tap.log`. Added a route-level unbound-ID
+  assertion and the final same focused invocation passed 3/3 (0 failures/skips;
+  17.87s TAP; 19.03s runner), log `/tmp/orgward-tests-3yRxka/node-test.tap.log`.
+  Changed JavaScript syntax checks and `git diff --check` passed. No live GitHub
+  or provider request occurred, no schema/pointer/gate changed, and no full
+  check was repeated. Next PR-08 work remains the broader assurance path:
+  reproducible builds, security checks, SBOM, provenance, signatures and
+  release-level qualification.
+
+  Repository discovery provider-API correction (2026-09-30): review found that
+  GitHub lists installation repositories at `GET /installation/repositories`
+  with an installation access token, not the App-JWT `/app/installations/{id}/repositories`
+  endpoint. Discovery now mints a short-lived token with exactly `metadata:read`,
+  uses only that token for listing, revokes it after success or failure, and
+  rejects broader token permissions before making the list request. Capture
+  uses the same metadata-only list/revoke step before minting its existing
+  exact-repository `metadata:read` + `contents:read` token. Pagination uses
+  GitHub's `total_count`, accepts exactly 1,000 repositories across ten pages,
+  and rejects higher counts or incomplete/changed pages. Loopback tests assert
+  App-token-mint versus installation-token-list/revoke boundaries, permission
+  rejection, the exact 1,000/1,001 boundary and capture compatibility. The
+  earlier picker-focused run passed 3/3 but used the incorrect fixture endpoint;
+  it is superseded by the corrected provider-shape invocation, which passed
+  13/13 (0 failed, cancelled or skipped; 18.67s TAP, 19.87s runner), log
+  `/tmp/orgward-tests-6KH9ZN/node-test.tap.log`. Changed-file syntax checks and
+  `git diff --check` passed. No live GitHub/provider request or full check was
+  made. No task checkbox, cursor or release gate changed.
+
+  Required-check assurance slice (2026-10-03): GitHub candidate execution now
+  snapshots an operator-owned versioned required-check plan (ordered fixed argv,
+  unique IDs, bounded timeouts, sandbox policy, command hashes and streamed
+  executable and sandbox-tool byte digests when the configured files are
+  readable). Those digests are revalidated immediately before each initial and
+  repeat launch; replacement fails closed. Flat verifier configuration remains
+  readable but is marked legacy/incomplete in both saved status and review UI.
+  Every planned check runs against a freshly materialized exact candidate tree;
+  candidate mutation, timeout, launch failure and nonzero exit fail closed, and
+  checks after the first failure receive explicit skipped receipts. Candidate
+  evidence binds the plan and complete receipt metadata; repeat verification
+  reconstructs candidate bytes, validates the saved plan, reruns every pinned
+  check in fresh workspaces, and refuses plan drift before launching a tool.
+  Review UI labels status specifically as the required-check result, plan
+  identity and bounded receipt output; legacy plans remain explicitly incomplete
+  for T-31. Planned checks no longer show the compatibility summary as though
+  its aggregate output hash covered only the first check. README setup documents
+  the versioned JSON plan and both metadata-only discovery and scoped capture
+  installation tokens.
+  Loopback fixture coverage exercised two-check all-pass, failure plus skipped
+  receipt, mutation rejection, plan-drift refusal, idempotent repeat, and saved
+  repeat history after app restart. A temporary executable replacement after
+  plan creation is rejected by the pinned tool-digest check. Focused commands
+  passed: `npm test -- tests/execution/github-verifier-profile.test.mjs
+  tests/execution/service.test.mjs tests/execution/server.test.mjs` (15/15,
+  0 failed, 0 skipped; 1.01s; TAP
+  `/tmp/orgward-tests-BgLpMX/node-test.tap.log`) and `npm test --
+  tests/persistence.test.mjs --test-name-pattern=GitHub` (1/1, 0 failed,
+  0 skipped; 1.43s; TAP `/tmp/orgward-tests-q0mgt8/node-test.tap.log`).
+  `node --check` on changed JavaScript and `git diff --check` passed. No full
+  `npm run check`, live GitHub/provider call, browser, commit, push or deploy was
+  run. This slice does not qualify reproducible builds (T-31 AC3), SBOM,
+  provenance, signatures or T-32 artifact signing; PR-08 and all release gates
+  remain open.
+
+  Required-check status wording follow-on (2026-10-03): renamed the persisted
+  result field to `requiredChecksStatus` and the UI label to “Required-check
+  status,” so a green configured-check result does not read as overall T-31 or
+  T-32 completion. Legacy single-check status remains explicitly incomplete.
+  Focused tests passed: `npm test -- tests/execution/server.test.mjs
+  tests/execution/github-verifier-profile.test.mjs` (5/5, 0 failed/skipped,
+  0.71s; TAP `/tmp/orgward-tests-xDytQe/node-test.tap.log`) and `npm test --
+  tests/persistence.test.mjs --test-name-pattern=GitHub` (1/1, 0 failed/skipped,
+  1.35s; TAP `/tmp/orgward-tests-KuWuKb/node-test.tap.log`). Changed-file syntax
+  checks and `git diff --check` passed; no full check was run.
+
+  Candidate build reproducibility increment (2026-10-03): added optional
+  operator-owned `ORGWARD_GITHUB_BUILD_PLAN` configuration with a fixed
+  executable/argv and a nonempty exact output-path allowlist. Each candidate is
+  built twice in fresh sandboxes with the exact source tree mounted read-only
+  and a separate `/build-output` writable directory. Both manifests include
+  path, mode, size and SHA-256; the runner compares manifest metadata and raw
+  output bytes, rehashes the candidate tree after each build, and fails on
+  missing/extra outputs, candidate mutation, tool drift, execution failure, or
+  output persistence failure. Candidate evidence binds the pinned build plan,
+  receipt, bounded logs and manifests; hash-verified output artifacts are
+  tenant/run-authorized and remain available after app restart. The review UI
+  shows `NOT_CONFIGURED`, `REPRODUCIBLE`, `MISMATCH` or `FAILED` with repair
+  guidance. README documents the plan and sandbox paths. Focused tests passed:
+  `node --test tests/execution/github-build-plan.test.mjs` (2/2, 0 failed,
+  cancelled or skipped; TAP 451ms; `/tmp/orgward-pr08-build-plan-20261003.tap.log`),
+  `npm test -- tests/sdlc/execution-adapter.test.mjs
+  tests/execution/server.test.mjs` (8/8, 0 failed, cancelled or skipped; TAP
+  1.10s; `/tmp/orgward-tests-Y0gYlR/node-test.tap.log`). The real bubblewrap
+  adapter fixture verifies candidate reads, source write denial and successful
+  output writes through only the separate build mount. The GitHub persistence
+  journey passed `npm test -- tests/persistence.test.mjs --test-name-pattern=GitHub` (1/1,
+  0 failed, cancelled or skipped; runner 1.53s;
+  `/tmp/orgward-tests-YTNRWH/node-test.tap.log`). The persistence journey covers
+  matching outputs, authorized downloads, rejection of unlisted/cross-tenant
+  paths, saved artifact retrieval after restart, and repeat verification of the
+  original candidate. Unit fixtures cover mismatch, command failure, missing
+  and extra outputs, and candidate mutation. Changed-file syntax checks and
+  `git diff --check` passed. No full check, browser, live GitHub/provider call,
+  commit, push or deploy was run. This is candidate-specific build comparison;
+  it does not complete the remaining T-31 reproducible-build acceptance or
+  qualify build-environment independence, security checks, SBOM, provenance,
+  signatures or T-32 artifact signing. PR-08 and all release gates remain open.
+
 - [ ] PR-09 — Authorized environments, release and rollback (T-33–T-35; E-10).
   Let a user review an exact candidate, approve a protected environment action,
   observe its result and recover through rollback. Bind authority to principals,

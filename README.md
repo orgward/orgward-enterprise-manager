@@ -147,6 +147,101 @@ plus the exact-tree verification receipt. It never writes the candidate back
 to the configured source directory or pushes it. Remote clone/push, applying a
 candidate, and CI attestations remain out of scope.
 
+GitHub App onboarding is optional and disabled unless the server operator sets
+`ORGWARD_GITHUB_APP_ID`, `ORGWARD_GITHUB_APP_SLUG`, and
+`ORGWARD_GITHUB_APP_PRIVATE_KEY`, plus the App's `ORGWARD_GITHUB_APP_CLIENT_ID`
+and `ORGWARD_GITHUB_APP_CLIENT_SECRET`. Set
+`ORGWARD_GITHUB_APP_OAUTH_REDIRECT_URI` to the exact registered HTTPS callback;
+when `ORGWARD_PUBLIC_URL` is set, its OAuth callback path is derived as
+`/api/execution/github-installation/oauth-callback`. Configure the GitHub App
+Setup URL separately to the absolute OrgWard URL ending in
+`/api/execution/github-installation/callback`, and do not enable GitHub's
+“Request user authorization (OAuth) during installation” option because OrgWard
+runs its own second authorization step. Grant repository metadata and contents
+read, and organization Members read permissions in GitHub App settings. OrgWard
+first verifies the installation belongs to the configured App, stores it only
+as provisional state, and then requires GitHub user OAuth: a personal install
+must match the user's account ID/login; an organization install requires the
+user to be an active organization admin for that exact organization ID.
+Enterprise installations are not supported. A short-lived
+principal/project/authz-bound state is consumed only after both proofs, and the
+installation is permanently bound to one tenant; the UI never accepts an
+installation ID as ownership proof. Installation connections and reconnections
+append a tenant audit event. OAuth tokens and App credentials remain in server
+memory/config only. Installation tokens are minted briefly with `metadata:read`
+for repository discovery and are revoked afterward. Source capture mints a
+separate token scoped to the selected repository with `metadata:read` and
+`contents:read`, then revokes it. Both callback paths carry one-time state and, for OAuth, the
+authorization code in query parameters; configure the reverse proxy to redact
+query strings from access logs for
+`/api/execution/github-installation/callback` and
+`/api/execution/github-installation/oauth-callback`. The Node application does
+not log callback URLs.
+
+Set `ORGWARD_GITHUB_VERIFIER` in the server environment to an operator-owned
+JSON check plan. The ordered `requiredChecks` array is snapshotted into each
+approved candidate and every check must pass against the same candidate tree.
+Executables and arguments are fixed server configuration; requests cannot supply
+or change this plan. For example:
+
+```json
+{
+  "id": "orgward-node-ci",
+  "version": "1.0.0",
+  "requiredChecks": [
+    {
+      "id": "unit-tests",
+      "version": "1.0.0",
+      "executable": "/usr/bin/node",
+      "args": ["/workspace/scripts/unit-tests.mjs"],
+      "timeoutMs": 60000
+    },
+    {
+      "id": "contract-tests",
+      "version": "1.0.0",
+      "executable": "/usr/bin/node",
+      "args": ["/workspace/scripts/contract-tests.mjs"],
+      "timeoutMs": 60000
+    }
+  ]
+}
+```
+
+Each check uses the configured sandbox policy (bubblewrap by default). The
+check scripts must be part of the captured candidate tree (available under
+`/workspace` inside the sandbox) or otherwise already available in the sandbox
+namespace. Host paths outside its configured mounts are not visible to checks.
+The older flat `{ "id", "version", "executable", "args" }` value remains accepted
+for compatibility, but its candidate result is marked as legacy and incomplete;
+it does not establish full T-31 required-check coverage. This configuration does not
+provide reproducible-build evidence or T-32 SBOM, provenance, or artifact
+signatures.
+
+For candidate-specific build reproducibility, optionally set
+`ORGWARD_GITHUB_BUILD_PLAN` to a separate operator-owned JSON plan. It uses one
+fixed executable and argv plus an exact, nonempty `requiredOutputs` list:
+
+```json
+{
+  "id": "orgward-production-build",
+  "version": "1.0.0",
+  "executable": "/usr/bin/node",
+  "args": ["/workspace/scripts/build.mjs", "--output=/build-output"],
+  "timeoutMs": 120000,
+  "requiredOutputs": ["dist/app.js", "dist/app.css"]
+}
+```
+
+The build script must be in the captured candidate tree under `/workspace` (or
+otherwise available inside the sandbox namespace). OrgWard runs it twice in
+fresh isolated workspaces, with candidate source mounted read-only and
+`/build-output` as the separate writable output mount. The script must write
+only the listed relative output paths there; missing or extra files fail the
+result. Bounded logs, manifests, and hash-verified output bytes are retained
+with the candidate. Without a plan, the UI reports `NOT_CONFIGURED`; matching
+build outputs describe this candidate only and do not close T-31 or establish
+T-32 signing, SBOM, or provenance.
+
 ## Run privately
 
 Node 22 or newer is required. Install the PostgreSQL driver and test tools with `npm ci`.

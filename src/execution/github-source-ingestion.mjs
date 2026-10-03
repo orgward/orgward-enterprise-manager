@@ -1,6 +1,7 @@
 import { createHash, createSign } from 'node:crypto';
 
 const API = 'https://api.github.com';
+const OAUTH = 'https://github.com';
 const POLICY_VERSION = 'github-read-snapshot-v1';
 const MAX_FILES = 500;
 const MAX_FILE_BYTES = 1_000_000;
@@ -48,26 +49,208 @@ export class GitHubSourceIngestion {
   }
 
   get configured() { return Boolean(this.config?.appId && this.config?.privateKey); }
+  get installationFlowConfigured() {
+    return Boolean(this.configured && /^[a-z0-9-]{1,39}$/.test(this.config?.appSlug ?? '')
+      && this.config?.clientId && this.config?.clientSecret && this.config?.oauthRedirectUri);
+  }
+
+  async verifyInstallation(installationId) {
+    if (!this.configured) throw Object.assign(new Error('GitHub App repository onboarding is not configured.'), { statusCode: 503, code: 'GITHUB_SOURCE_UNCONFIGURED', retryable: false });
+    if (!/^[1-9][0-9]{0,15}$/.test(String(installationId)) || !Number.isSafeInteger(Number(installationId))) {
+      invalid('Provide a supported numeric GitHub installation ID.');
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), MAX_JOB_MS);
+    try {
+      const token = appJwt({ appId: this.config.appId, privateKey: this.config.privateKey, now: this.now() });
+      const installation = await this.#json(`/app/installations/${encoded(installationId)}`, { token, signal: controller.signal });
+      if (String(installation.id) !== String(installationId)
+        || !Number.isSafeInteger(installation.app_id) || String(installation.app_id) !== String(this.config.appId)
+        || !Number.isSafeInteger(installation.account?.id) || installation.account.id < 1
+        || !/^[A-Za-z0-9_.-]{1,100}$/.test(installation.account?.login ?? '')
+        || !['User', 'Organization', 'Enterprise'].includes(installation.account?.type)) {
+        throw Object.assign(new Error('The returned GitHub installation is not owned by the configured GitHub App.'), {
+          statusCode: 403, code: 'GITHUB_INSTALLATION_APP_MISMATCH', retryable: false,
+        });
+      }
+      return { installationId: String(installation.id), appId: String(installation.app_id),
+        accountId: String(installation.account.id), accountLogin: installation.account.login, accountType: installation.account.type };
+    } finally { clearTimeout(timer); }
+  }
+
+  async listInstallationRepositories(installationId) {
+    if (!this.configured) throw Object.assign(new Error('GitHub App repository onboarding is not configured.'), {
+      statusCode: 503, code: 'GITHUB_SOURCE_UNCONFIGURED', retryable: false,
+    });
+    if (!/^[1-9][0-9]{0,15}$/.test(String(installationId))
+      || !Number.isSafeInteger(Number(installationId)) || Number(installationId) > MAX_EXACT_GITHUB_ID) {
+      invalid(`Provide a GitHub installation ID from 1 through ${MAX_EXACT_GITHUB_ID}.`);
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), MAX_JOB_MS);
+    let installationToken = null;
+    try {
+      const appToken = appJwt({ appId: this.config.appId, privateKey: this.config.privateKey, now: this.now() });
+      installationToken = await this.#mintInstallationToken(installationId, appToken, { permissions: { metadata: 'read' }, signal: controller.signal });
+      const repositories = await this.#listInstallationRepositories(installationToken, controller.signal);
+      return repositories.map((repository) => ({
+        repositoryId: String(repository.id), name: repository.name,
+        fullName: `${repository.owner.login}/${repository.name}`, ownerLogin: repository.owner.login,
+        defaultBranch: repository.default_branch ?? null, private: repository.private === true,
+      }));
+    } finally {
+      if (installationToken) await this.#revokeInstallationToken(installationToken);
+      installationToken = null;
+      clearTimeout(timer);
+    }
+  }
+
+  async #mintInstallationToken(installationId, appToken, { permissions, repositoryId, signal }) {
+    const body = { permissions, ...(repositoryId ? { repository_ids: [Number(repositoryId)] } : {}) };
+    const minted = await this.#json(`/app/installations/${encoded(installationId)}/access_tokens`, {
+      method: 'POST', token: appToken, body, signal,
+    });
+    const token = typeof minted.token === 'string' && minted.token.length <= 4096 ? minted.token : null;
+    const expectedPermissions = permissions;
+    const actualPermissions = minted.permissions;
+    const exactPermissions = actualPermissions && Object.keys(actualPermissions).length === Object.keys(expectedPermissions).length
+      && Object.entries(expectedPermissions).every(([name, value]) => actualPermissions[name] === value);
+    const exactRepository = !repositoryId || (Array.isArray(minted.repositories) && minted.repositories.length === 1
+      && String(minted.repositories[0]?.id) === String(repositoryId));
+    if (!token || !exactPermissions || !exactRepository) {
+      if (token) await this.#revokeInstallationToken(token);
+      invalid('GitHub returned an installation token without exactly the requested repository and read permissions.');
+    }
+    return token;
+  }
+
+  async #revokeInstallationToken(token) {
+    const url = new URL('/installation/token', API);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5_000);
+    try {
+      const response = await this.fetchImpl(url, { method: 'DELETE', redirect: 'manual', signal: controller.signal,
+        headers: { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', authorization: `Bearer ${token}` } });
+      if ((response.url && new URL(response.url).origin !== API) || (response.status >= 300 && response.status < 400)) {
+        await response.body?.cancel?.().catch(() => {});
+        return;
+      }
+      await response.body?.cancel?.().catch(() => {});
+    } catch { /* Token revocation is best-effort; the short-lived token remains scoped and is discarded. */ }
+    finally { clearTimeout(timer); }
+  }
+
+  async #listInstallationRepositories(installationToken, signal) {
+    const repositories = [];
+    const seen = new Set();
+    let expectedTotal = null;
+    for (let page = 1; page <= 10; page += 1) {
+      const result = await this.#json(`/installation/repositories?per_page=100&page=${page}`, { token: installationToken, signal });
+      if (!Number.isSafeInteger(result.total_count) || result.total_count < 0 || result.total_count > 1000
+        || !Array.isArray(result.repositories) || result.repositories.length > 100) invalid('GitHub installation repository list is malformed or exceeded the 1,000 repository limit.');
+      if (expectedTotal === null) expectedTotal = result.total_count;
+      if (result.total_count !== expectedTotal || repositories.length + result.repositories.length > expectedTotal) {
+        invalid('GitHub installation repository list changed during pagination.');
+      }
+      for (const repository of result.repositories) {
+        const id = String(repository?.id ?? '');
+        const ownerLogin = repository?.owner?.login;
+        if (!/^[1-9][0-9]{0,15}$/.test(id) || !Number.isSafeInteger(Number(id)) || Number(id) > MAX_EXACT_GITHUB_ID
+          || seen.has(id) || !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37})$/.test(ownerLogin ?? '')
+          || !/^[A-Za-z0-9_.-]{1,100}$/.test(repository?.name ?? '')
+          || (repository.default_branch !== undefined && repository.default_branch !== null
+            && (typeof repository.default_branch !== 'string' || repository.default_branch.length > 255 || /[\x00-\x1f\x7f]/.test(repository.default_branch)))) {
+          invalid('GitHub installation repository list contains an invalid or duplicate repository.');
+        }
+        seen.add(id);
+        repositories.push(repository);
+        if (repositories.length > 1000) invalid('GitHub installation repository list exceeded the bounded repository limit.');
+      }
+      if (repositories.length === expectedTotal) return repositories;
+      if (result.repositories.length < 100) invalid('GitHub installation repository list was incomplete.');
+    }
+    invalid('GitHub installation repository list exceeded the bounded page limit.');
+  }
+
+  async verifyOAuthInstallationAccess({ code, installation }) {
+    if (!this.installationFlowConfigured) throw Object.assign(new Error('GitHub App user authorization is not configured.'), {
+      statusCode: 503, code: 'GITHUB_INSTALLATION_FLOW_UNAVAILABLE', retryable: false,
+    });
+    if (typeof code !== 'string' || !/^[A-Za-z0-9._-]{1,512}$/.test(code)
+      || !installation || !['User', 'Organization'].includes(installation.accountType)
+      || !/^[1-9][0-9]{0,15}$/.test(String(installation.accountId ?? ''))
+      || !/^[A-Za-z0-9_.-]{1,100}$/.test(installation.accountLogin ?? '')) {
+      throw Object.assign(new Error('GitHub user authorization could not verify this installation.'), {
+        statusCode: 403, code: 'GITHUB_INSTALLATION_USER_AUTHORIZATION_DENIED', retryable: false,
+      });
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), MAX_JOB_MS);
+    try {
+      const tokenResponse = await this.#requestJson(new URL('/login/oauth/access_token', OAUTH), {
+        method: 'POST', oauth: true,
+        body: new URLSearchParams({ client_id: this.config.clientId, client_secret: this.config.clientSecret,
+          code, redirect_uri: this.config.oauthRedirectUri }), signal: controller.signal,
+      });
+      const userToken = tokenResponse.access_token;
+      if (typeof userToken !== 'string' || !userToken || userToken.length > 4096
+        || tokenResponse.error || tokenResponse.token_type !== 'bearer') {
+        throw Object.assign(new Error('GitHub user authorization was not granted.'), {
+          statusCode: 403, code: 'GITHUB_INSTALLATION_USER_AUTHORIZATION_DENIED', retryable: false,
+        });
+      }
+      const user = await this.#json('/user', { token: userToken, signal: controller.signal });
+      if (!Number.isSafeInteger(user.id) || user.id < 1 || !/^[A-Za-z0-9_.-]{1,100}$/.test(user.login ?? '')) {
+        throw Object.assign(new Error('GitHub user authorization returned an invalid identity.'), {
+          statusCode: 403, code: 'GITHUB_INSTALLATION_USER_AUTHORIZATION_DENIED', retryable: false,
+        });
+      }
+      let authorized = false;
+      if (installation.accountType === 'User') {
+        authorized = String(user.id) === String(installation.accountId)
+          && user.login.toLowerCase() === installation.accountLogin.toLowerCase();
+      } else {
+        const membership = await this.#json(`/user/memberships/orgs/${encoded(installation.accountLogin)}`, {
+          token: userToken, signal: controller.signal,
+        });
+        authorized = membership.state === 'active' && membership.role === 'admin'
+          && String(membership.organization?.id) === String(installation.accountId)
+          && String(membership.organization?.login ?? '').toLowerCase() === installation.accountLogin.toLowerCase();
+      }
+      if (!authorized) throw Object.assign(new Error('The GitHub user is not an owner of this installation account.'), {
+        statusCode: 403, code: 'GITHUB_INSTALLATION_USER_AUTHORIZATION_DENIED', retryable: false,
+      });
+      return { githubUserId: String(user.id), githubUserLogin: user.login };
+    } finally { clearTimeout(timer); }
+  }
 
   async #json(path, { method = 'GET', token, body, signal } = {}) {
     const url = new URL(path, API);
     if (url.origin !== API || !url.pathname.startsWith('/')) invalid('GitHub API host is fixed.', 'GITHUB_SOURCE_TRANSPORT_REJECTED');
+    return this.#requestJson(url, { method, token, body, signal });
+  }
+
+  async #requestJson(url, { method = 'GET', token, body, signal, oauth = false } = {}) {
+    const expectedOrigin = oauth ? OAUTH : API;
+    if (!(url instanceof URL) || url.origin !== expectedOrigin || !url.pathname.startsWith('/')) {
+      invalid('GitHub API host is fixed.', 'GITHUB_SOURCE_TRANSPORT_REJECTED');
+    }
     let response;
     try {
       response = await this.fetchImpl(url, {
         method, redirect: 'manual', signal,
         headers: {
-          accept: 'application/vnd.github+json',
-          'x-github-api-version': '2022-11-28',
+          accept: oauth ? 'application/json' : 'application/vnd.github+json',
+          ...(!oauth ? { 'x-github-api-version': '2022-11-28' } : {}),
           ...(token ? { authorization: `Bearer ${token}` } : {}),
-          ...(body ? { 'content-type': 'application/json' } : {}),
+          ...(body ? { 'content-type': body instanceof URLSearchParams ? 'application/x-www-form-urlencoded' : 'application/json' } : {}),
         },
-        ...(body ? { body: JSON.stringify(body) } : {}),
+        ...(body ? { body: body instanceof URLSearchParams ? body.toString() : JSON.stringify(body) } : {}),
       });
     } catch {
       throw Object.assign(new Error('GitHub source request failed.'), { statusCode: 502, code: 'GITHUB_SOURCE_REQUEST_FAILED', retryable: true });
     }
-    if (response.url && new URL(response.url).origin !== API) invalid('GitHub API redirects or host changes are rejected.', 'GITHUB_SOURCE_TRANSPORT_REJECTED');
+    if (response.url && new URL(response.url).origin !== expectedOrigin) invalid('GitHub API redirects or host changes are rejected.', 'GITHUB_SOURCE_TRANSPORT_REJECTED');
     if (response.status >= 300 && response.status < 400) invalid('GitHub API redirects are rejected.', 'GITHUB_SOURCE_TRANSPORT_REJECTED');
     const declared = Number(response.headers?.get?.('content-length') ?? 0);
     if (declared > MAX_RESPONSE_BYTES) {
@@ -121,32 +304,23 @@ export class GitHubSourceIngestion {
     let installationToken = null;
     try {
       const appToken = appJwt({ appId: this.config.appId, privateKey: this.config.privateKey, now: this.now() });
-      let repositories = [];
-      for (let page = 1; page <= 10; page += 1) {
-        const result = await this.#json(`/app/installations/${encoded(installationId)}/repositories?per_page=100&page=${page}`, { token: appToken, signal: controller.signal });
-        if (!Array.isArray(result.repositories)) invalid('GitHub installation repository list is malformed.');
-        repositories.push(...result.repositories);
-        if (result.repositories.length < 100) break;
-        if (page === 10) invalid('GitHub installation repository list exceeded the bounded page limit.');
+      let discoveryToken = null;
+      let repositories;
+      try {
+        discoveryToken = await this.#mintInstallationToken(installationId, appToken,
+          { permissions: { metadata: 'read' }, signal: controller.signal });
+        repositories = await this.#listInstallationRepositories(discoveryToken, controller.signal);
+      } finally {
+        if (discoveryToken) await this.#revokeInstallationToken(discoveryToken);
+        discoveryToken = null;
       }
       const repository = repositories.find((item) => String(item.id) === String(repositoryId));
       if (!repository || !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37})$/.test(repository.owner?.login ?? '')
         || !/^[A-Za-z0-9_.-]{1,100}$/.test(repository.name ?? '')) {
         throw Object.assign(new Error('The GitHub installation does not currently grant this exact repository.'), { statusCode: 403, code: 'GITHUB_REPOSITORY_NOT_GRANTED', retryable: false });
       }
-      const minted = await this.#json(`/app/installations/${encoded(installationId)}/access_tokens`, {
-        method: 'POST', token: appToken,
-        body: { repository_ids: [Number(repositoryId)], permissions: { metadata: 'read', contents: 'read' } }, signal: controller.signal,
-      });
-      if (typeof minted.token !== 'string' || minted.token.length > 4096 || !minted.token) invalid('GitHub installation token response is malformed.');
-      if (!minted.permissions || minted.permissions.metadata !== 'read' || minted.permissions.contents !== 'read'
-        || Object.keys(minted.permissions).length !== 2 || Object.keys(minted.permissions).some((name) => !['metadata', 'contents'].includes(name))) {
-        invalid('GitHub returned an installation token without exactly the requested read permissions.');
-      }
-      if (!Array.isArray(minted.repositories) || minted.repositories.length !== 1 || String(minted.repositories[0]?.id) !== String(repositoryId)) {
-        invalid('GitHub returned an installation token scoped to a different repository.');
-      }
-      installationToken = minted.token;
+      installationToken = await this.#mintInstallationToken(installationId, appToken,
+        { repositoryId, permissions: { metadata: 'read', contents: 'read' }, signal: controller.signal });
       const [owner, repo] = [repository.owner.login, repository.name].map(encoded);
       const refPath = branchRef.slice('refs/heads/'.length).split('/').map(encoded).join('/');
       const ref = await this.#json(`/repos/${owner}/${repo}/git/ref/heads/${refPath}`, { token: installationToken, signal: controller.signal });
@@ -195,6 +369,7 @@ export class GitHubSourceIngestion {
       };
       return { installationId: String(installationId), repositoryId: String(repositoryId), branchRef, repositoryName: `${repository.owner.login}/${repository.name}`, snapshot };
     } finally {
+      if (installationToken) await this.#revokeInstallationToken(installationToken);
       installationToken = null;
       clearTimeout(timer);
     }

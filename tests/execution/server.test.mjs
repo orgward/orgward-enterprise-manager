@@ -100,6 +100,28 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.ok(executionMainClose >= 0 && processAnnouncement > executionMainClose && detachedAnnouncement > processAnnouncement,
     'both process and selected-run live regions are outside the aria-live=off Execution main');
   assert.match(executionHtml, /id="execution-skip-link"[^>]*href="#execution-main"/);
+  const onboardingHtmlResponse = await fetch(`${base}/index.html`);
+  assert.equal(onboardingHtmlResponse.status, 200);
+  const onboardingHtml = await onboardingHtmlResponse.text();
+  assert.match(onboardingHtml, /id="github-installation-connect"/);
+  assert.match(onboardingHtml, /Tenant-bound GitHub installation<select name="installationId"/,
+    'the served onboarding UI selects installations already bound to the active tenant');
+  assert.match(onboardingHtml, /Accessible repository<select name="repositoryId"[^>]*disabled/,
+    'the served onboarding UI selects from installation-authorized repository metadata');
+  assert.match(onboardingHtml, /id="github-installation-connect"[^>]*disabled/,
+    'the served onboarding UI starts disabled until the server reports GitHub App configuration');
+  const studioClient = await fetch(`${base}/app.js`);
+  assert.equal(studioClient.status, 200);
+  const studioSource = await studioClient.text();
+  assert.match(studioSource, /github-installation\/start/);
+  assert.match(studioSource, /github-installations\/\$\{encodeURIComponent\(installationId\)\}\/repositories\?projectId=/,
+    'the served client loads repository choices for the selected tenant-bound installation');
+  assert.match(studioSource, /repository\.fullName\}/,
+    'repository options show the safe full name returned by the server');
+  assert.match(studioSource, /new URLSearchParams\(location\.search\)\.get\('github_installation'\) === 'connected'/,
+    'the served project return path detects a completed tenant-bound GitHub OAuth flow');
+  assert.match(studioSource, /target: '_blank', rel: 'noopener noreferrer'/,
+    'the GitHub flow opens separately and preserves unsent Studio work');
   const savedTaskPanel = executionHtml.indexOf('<div id="process-plans" aria-live="off"></div>');
   const graphCreationForm = executionHtml.indexOf('<form id="process-plan-form"');
   const standaloneRunForm = executionHtml.indexOf('<form id="run-form"');
@@ -114,14 +136,28 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
     'the served candidate review keeps a matched failing verifier visibly failed');
   assert.match(executionSource, /github-candidate-verification-repeats/,
     'repeat history and actions use the authenticated candidate-specific API');
+  assert.match(executionSource, /Required-check status: \$\{statusLabel\}/,
+    'the candidate panel scopes the displayed status to configured required checks');
+  assert.match(executionSource, /receipt\.status === 'NOT_CONFIGURED'/,
+    'candidates without an operator-owned build plan remain visibly unconfigured');
+  assert.match(executionSource, /Build status: \$\{receipt\.status\}/,
+    'build results use a scoped status instead of implying full T-31 completion');
+  assert.match(executionSource, /two clean build output byte sets differ[\s\S]*Review both manifests and logs/,
+    'a mismatched build gives the customer a concrete review and repair action');
+  assert.match(executionSource, /builds\/\$\{buildRun\.artifactSetId\}/,
+    'the review panel links to hash-checked output from each isolated build');
+  assert.match(executionSource, /LEGACY INCOMPLETE T-31 COVERAGE/,
+    'one-check legacy configuration cannot be presented as full T-31 coverage');
+  assert.match(executionSource, /if \(candidate\.verification && !candidate\.checkPlan\)/,
+    'planned checks hide the compatibility verifier summary that could mislabel aggregate output hashes');
   assert.match(executionSource, /Original verifier observation[\s\S]*Original result: \$\{originalOutcome\}[\s\S]*output hash \$\{verification\.outputHash\}/,
     'the candidate panel labels the original verifier status, exit code and output hash');
   assert.match(executionSource, /github-candidate-repeat-history[\s\S]*github-candidate-repeat-action-status/,
     'repeat action feedback and saved observation history use separate regions');
   assert.match(executionSource, /repeatActionStatus\.replaceChildren\(el\('p', \{ className: 'muted', text: 'Repeating[\s\S]*appendAttempt\(attempt\);[\s\S]*await loadAttempts\(\)/,
     'starting or completing a repeat updates action feedback and refreshes append-only history');
-  assert.match(executionSource, /Comparison with original: \$\{comparison\}[\s\S]*Verifier result: \$\{outcome\}[\s\S]*Output hash: \$\{verification\.outputHash/,
-    'each repeat shows comparison, verifier outcome, exit code and output hash');
+  assert.match(executionSource, /Comparison with original: \$\{comparison\}[\s\S]*Verifier result: \$\{outcome\}[\s\S]*Aggregate check output hash: \$\{verification\.outputHash/,
+    'each repeat labels the aggregate hash for all check outputs');
   assert.doesNotMatch(executionSource, /repeatHistory\.replaceChildren\(/,
     'repeat actions never clear already loaded history');
   const instanceOptionLabelClient = await fetch(`${base}/process-instance-option-label.mjs`);

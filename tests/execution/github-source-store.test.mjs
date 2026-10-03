@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { PostgresPersistence } from '../../src/platform/postgres.mjs';
+import { contentHash, PostgresPersistence } from '../../src/platform/postgres.mjs';
 import { PostgresGitHubSourceStore } from '../../src/platform/postgres-stores.mjs';
 import { ExecutionService } from '../../src/execution/service.mjs';
 import { executionRunView } from '../../src/execution/contracts.mjs';
@@ -34,6 +34,9 @@ test('GitHub bindings and snapshots survive store restart and require tenant-adm
       values ($1,'project',$2,0,$3::jsonb,$4,$5)`, [tenantId, projectId, JSON.stringify(projectState), stateHash, now]);
     await persistence.query(`insert into orgward.project_memberships (tenant_id,project_id,principal,access,granted_by)
       values ($1,$2,$3,'owner',$3),($1,$2,$4,'editor',$3),($1,$2,$5,'reader',$3)`, [tenantId, projectId, principal, editor, reader]);
+    await persistence.query(`insert into orgward.github_app_installations
+      (installation_id,tenant_id,app_id,account_login,account_type,connected_by,verified_at)
+      values ('123',$1,'456','fixture-account','Organization',$2,now())`, [tenantId, principal]);
     const byteProjectState = { ...projectState, id: byteProjectId, name: 'Byte bound fixture' };
     await persistence.query(`insert into orgward.aggregates (tenant_id,aggregate_kind,aggregate_id,version,state,state_hash,updated_at)
       values ($1,'project',$2,0,$3::jsonb,$4,$5)`, [tenantId, byteProjectId, JSON.stringify(byteProjectState), 'b'.repeat(64), now]);
@@ -44,19 +47,72 @@ test('GitHub bindings and snapshots survive store restart and require tenant-adm
     const binding = { tenantId, projectId, installationId: '123', repositoryId: '987654',
       repositoryName: 'fixture-org/service', branchRef: 'refs/heads/main', provider: 'github-app', credentialReference: 'github-installation:123' };
     const sourceBytes = Buffer.from('fix');
-    const contentHash = createHash('sha256').update(sourceBytes).digest('hex');
+    const sourceContentHash = createHash('sha256').update(sourceBytes).digest('hex');
     const blobSha = createHash('sha1').update(`blob ${sourceBytes.length}\0`).update(sourceBytes).digest('hex');
-    const manifestDigest = createHash('sha256').update(JSON.stringify([{ path: 'README.md', mode: '100644', contentHash,
+    const manifestDigest = createHash('sha256').update(JSON.stringify([{ path: 'README.md', mode: '100644', contentHash: sourceContentHash,
       size: sourceBytes.length, blobSha }])).digest('hex');
     const snapshot = { id: createHash('sha256').update(`987654\0refs/heads/main\0${'c'.repeat(40)}\0github-read-snapshot-v1`).digest('hex'),
       repositoryId: '987654', branchRef: 'refs/heads/main', commitOid: 'c'.repeat(40), treeOid: 'd'.repeat(40),
       treeDigest: manifestDigest, manifestDigest, policyVersion: 'github-read-snapshot-v1',
       fileCount: 1, totalBytes: sourceBytes.length,
-      files: [{ path: 'README.md', mode: '100644', size: sourceBytes.length, contentHash, blobSha, contentBase64: sourceBytes.toString('base64') }] };
+      files: [{ path: 'README.md', mode: '100644', size: sourceBytes.length, contentHash: sourceContentHash, blobSha, contentBase64: sourceBytes.toString('base64') }] };
     const savedCapture = await initial.saveCapture({ tenantId, projectId, principal, authzGeneration: 1, binding, snapshot });
     assert.equal(Object.hasOwn(savedCapture.snapshots[0], 'files'), false, 'save response contains snapshot metadata only');
 
     const restartedStore = new PostgresGitHubSourceStore(persistence);
+    await assert.rejects(restartedStore.createInstallationIntent({ tenantId, projectId, principal: editor, authzGeneration: 1,
+      stateHash: '7'.repeat(64), expiresAt: new Date(Date.now() + 60_000).toISOString() }),
+    { code: 'ACTION_FORBIDDEN' }, 'project editors without tenant-admin authority cannot start an installation flow');
+    const validStateHash = 'e'.repeat(64);
+    await restartedStore.createInstallationIntent({ tenantId, projectId, principal, authzGeneration: 1,
+      stateHash: validStateHash, expiresAt: new Date(Date.now() + 60_000).toISOString() });
+    assert.equal(await restartedStore.validateInstallationIntent({ tenantId, principal, authzGeneration: 1,
+      stateHash: 'd'.repeat(64) }), null, 'an unknown state cannot resolve an installation intent');
+    await assert.rejects(restartedStore.validateInstallationIntent({ tenantId, principal, authzGeneration: 2,
+      stateHash: validStateHash }), { code: 'AUTHORITY_GENERATION_STALE' }, 'a flow is invalidated when authority generation changes');
+    const expiredStateHash = 'f'.repeat(64);
+    await restartedStore.createInstallationIntent({ tenantId, projectId, principal, authzGeneration: 1,
+      stateHash: expiredStateHash, expiresAt: new Date(Date.now() - 1_000).toISOString() });
+    assert.equal(await restartedStore.validateInstallationIntent({ tenantId, principal, authzGeneration: 1,
+      stateHash: expiredStateHash }), null, 'expired one-time state is rejected');
+    const verifiedInstallation = { installationId: '124', appId: '456', accountId: '789',
+      accountLogin: 'new-fixture-account', accountType: 'Organization' };
+    assert.equal(await restartedStore.setProvisionalInstallationIntent({ tenantId, principal, authzGeneration: 1,
+      stateHash: validStateHash, installation: verifiedInstallation }), true);
+    assert.equal(await restartedStore.setProvisionalInstallationIntent({ tenantId, principal, authzGeneration: 1,
+      stateHash: validStateHash, installation: { ...verifiedInstallation, installationId: '125' } }), false,
+    'a repeated setup callback cannot replace the provisional installation bound to one-time state');
+    const githubUser = { githubUserId: '987', githubUserLogin: 'fixture-admin' };
+    assert.equal(await restartedStore.completeInstallationIntent({ tenantId, principal, authzGeneration: 1,
+      stateHash: validStateHash, installation: verifiedInstallation }), null,
+    'the installation is not bound until a GitHub user-authorization proof is supplied');
+    assert.deepEqual(await restartedStore.completeInstallationIntent({ tenantId, principal, authzGeneration: 1,
+      stateHash: validStateHash, installation: verifiedInstallation, githubUser }), { projectId });
+    assert.equal(await restartedStore.completeInstallationIntent({ tenantId, principal, authzGeneration: 1,
+      stateHash: validStateHash, installation: verifiedInstallation, githubUser }), null, 'consumed state cannot be replayed');
+    await restartedStore.createInstallationIntent({ tenantId, projectId, principal, authzGeneration: 1,
+      stateHash: '6'.repeat(64), expiresAt: new Date(Date.now() + 60_000).toISOString() });
+    assert.equal(await restartedStore.setProvisionalInstallationIntent({ tenantId, principal, authzGeneration: 1,
+      stateHash: '6'.repeat(64), installation: verifiedInstallation }), true);
+    await restartedStore.completeInstallationIntent({ tenantId, principal, authzGeneration: 1,
+      stateHash: '6'.repeat(64), installation: verifiedInstallation, githubUser });
+    const installationEvents = await persistence.query(`select event_type,event,event_hash from orgward.audit_log
+      where tenant_id=$1 and aggregate_kind='github_app_installation' and aggregate_id='124' order by aggregate_version`, [tenantId]);
+    assert.deepEqual(installationEvents.rows.map((row) => row.event_type), [
+      'GitHubAppInstallationConnected', 'GitHubAppInstallationReconnected',
+    ]);
+    for (const row of installationEvents.rows) {
+      assert.equal(row.event_hash, contentHash(row.event));
+      assert.equal(row.event.data.accountId, verifiedInstallation.accountId);
+      assert.equal(row.event.data.accountLogin, 'new-fixture-account');
+      assert.equal(row.event.data.githubUserId, githubUser.githubUserId);
+      assert.equal(JSON.stringify(row.event).includes(validStateHash), false);
+      assert.equal(JSON.stringify(row.event).includes('token'), false);
+    }
+    const connectedInstallations = await new PostgresGitHubSourceStore(persistence)
+      .listTenantInstallations({ tenantId, projectId, principal, authzGeneration: 1 });
+    assert.deepEqual(connectedInstallations.map(({ installationId }) => installationId), ['123', '124'],
+      'installation ownership survives store reconstruction');
     const saved = await restartedStore.listForProject({ tenantId, projectId, principal, authzGeneration: 1 });
     assert.equal(Object.hasOwn(saved[0].snapshots[0], 'files'), false, 'project listing returns metadata only');
     assert.deepEqual(saved[0].snapshots[0], (({ files, ...metadata }) => metadata)(snapshot));
@@ -117,7 +173,7 @@ test('GitHub bindings and snapshots survive store restart and require tenant-adm
     } finally { await rm(runDirectory, { recursive: true, force: true }); }
     const selectableFiles = await new ExecutionService({ runDirectory: '/tmp/github-source-selection-test', githubSourceStore: restartedStore })
       .listGitHubSnapshotFiles({ tenantId, projectId, principal: editor, authzGeneration: 1, snapshotId: snapshot.id });
-    assert.deepEqual(selectableFiles.files, [{ path: 'README.md', mode: '100644', size: 3, contentHash }]);
+    assert.deepEqual(selectableFiles.files, [{ path: 'README.md', mode: '100644', size: 3, contentHash: sourceContentHash }]);
     assert.equal(JSON.stringify(selectableFiles).includes('contentBase64'), false, 'file selection never returns source bytes');
     assert.equal(JSON.stringify(selectableFiles).includes('credentialReference'), false);
     await assert.rejects(new ExecutionService({ runDirectory: '/tmp/github-source-selection-test', githubSourceStore: restartedStore })
@@ -165,7 +221,7 @@ test('GitHub bindings and snapshots survive store restart and require tenant-adm
       const filesResponse = await fetch(`${apiBase}/api/execution/github-snapshots/${snapshot.id}/files?projectId=${encodeURIComponent(projectId)}`, auth('editor'));
       assert.equal(filesResponse.status, 200);
       const filesPayload = await filesResponse.json();
-      assert.deepEqual(filesPayload.files, [{ path: 'README.md', mode: '100644', size: 3, contentHash }]);
+      assert.deepEqual(filesPayload.files, [{ path: 'README.md', mode: '100644', size: 3, contentHash: sourceContentHash }]);
       assert.equal(JSON.stringify(filesPayload).includes('contentBase64'), false);
       const invalidGitHubRequest = await fetch(`${apiBase}/api/execution/process-task-runs`, {
         ...auth('editor'), method: 'POST', headers: { ...auth('editor').headers, 'content-type': 'application/json' },
@@ -180,13 +236,13 @@ test('GitHub bindings and snapshots survive store restart and require tenant-adm
       const deniedFiles = await fetch(`${apiBase}/api/execution/github-snapshots/${snapshot.id}/files?projectId=${encodeURIComponent(projectId)}`, auth('reader'));
       assert.equal(deniedFiles.status, 403, 'file metadata API enforces project-editor authority');
       const deniedBody = await deniedFiles.json();
-      assert.equal(typeof deniedBody.error, 'string', 'the current execution route error envelope exposes a string message');
+      assert.equal(typeof deniedBody.error.message, 'string', 'the current execution route error envelope exposes a string message');
       const validated = await validateSelection(snapshot.id, 'editor', { projectId, selectedPaths: ['README.md'] });
       assert.equal(validated.status, 200);
       const validatedBody = await validated.json();
       assert.equal(validatedBody.validationOnly, true);
       assert.equal(validatedBody.sourceSnapshot.snapshotId, snapshot.id);
-      assert.deepEqual(validatedBody.files, [{ path: 'README.md', mode: '100644', size: 3, contentHash }]);
+      assert.deepEqual(validatedBody.files, [{ path: 'README.md', mode: '100644', size: 3, contentHash: sourceContentHash }]);
       assert.equal(JSON.stringify(validatedBody).includes('contentBase64'), false);
       assert.equal(JSON.stringify(validatedBody).includes('credentialReference'), false);
       assert.equal(JSON.stringify(validatedBody).includes('"text"'), false, 'selected UTF-8 text never leaves the server');
@@ -277,6 +333,41 @@ test('GitHub bindings and snapshots survive store restart and require tenant-adm
       snapshot: { ...snapshot, id: 'byte-overflow', commitOid: '9'.padStart(40, '0'), totalBytes: 1 } }), { code: 'GITHUB_PROJECT_SNAPSHOT_BYTES_LIMIT' });
     assert.deepEqual(await restartedStore.listForProject({ tenantId, projectId: byteProjectId, principal, authzGeneration: 1 }), atByteLimit,
       'byte-limit rejection preserves all saved snapshots');
+
+    const otherTenant = 'github-other-tenant';
+    const otherPrincipal = `oidc:${'d'.repeat(64)}`;
+    const otherProjectId = 'project-32345678-1234-4234-8234-123456789012';
+    const otherProjectState = { ...projectState, id: otherProjectId, tenantId: otherTenant, createdBy: otherPrincipal, updatedBy: otherPrincipal };
+    await persistence.query(`insert into orgward.oidc_principals (principal,issuer,tenant_id,actor_type,display_name,roles)
+      values ($1,'https://identity.example.test',$2,'human','Other tenant owner',array['tenant-admin'])`, [otherPrincipal, otherTenant]);
+    await persistence.query(`insert into orgward.aggregates (tenant_id,aggregate_kind,aggregate_id,version,state,state_hash,updated_at)
+      values ($1,'project',$2,0,$3::jsonb,$4,$5)`, [otherTenant, otherProjectId, JSON.stringify(otherProjectState), '9'.repeat(64), now]);
+    await persistence.query(`insert into orgward.project_memberships (tenant_id,project_id,principal,access,granted_by)
+      values ($1,$2,$3,'owner',$3)`, [otherTenant, otherProjectId, otherPrincipal]);
+    assert.deepEqual(await restartedStore.listTenantInstallations({ tenantId: otherTenant, projectId: otherProjectId,
+      principal: otherPrincipal, authzGeneration: 1 }), [], 'tenant installation inventory excludes installations bound to another tenant');
+    await persistence.query(`insert into orgward.github_repository_sources
+      (tenant_id,project_id,repository_id,installation_id,branch_ref,binding,snapshots)
+      values ($1,$2,987658,999,'refs/heads/main',$3::jsonb,$4::jsonb)`, [otherTenant, otherProjectId,
+      JSON.stringify({ tenantId: otherTenant, projectId: otherProjectId, installationId: '999', repositoryId: '987658',
+        repositoryName: 'legacy-org/legacy-repo', branchRef: 'refs/heads/main', provider: 'github-app', credentialReference: 'github-installation:999' }),
+      JSON.stringify([snapshot])]);
+    await restartedStore.createInstallationIntent({ tenantId: otherTenant, projectId: otherProjectId, principal: otherPrincipal,
+      authzGeneration: 1, stateHash: '8'.repeat(64), expiresAt: new Date(Date.now() + 60_000).toISOString() });
+    assert.equal(await restartedStore.setProvisionalInstallationIntent({ tenantId: otherTenant, principal: otherPrincipal,
+      authzGeneration: 1, stateHash: '8'.repeat(64), installation: verifiedInstallation }), true);
+    await assert.rejects(restartedStore.completeInstallationIntent({ tenantId: otherTenant, principal: otherPrincipal,
+      authzGeneration: 1, stateHash: '8'.repeat(64), installation: verifiedInstallation, githubUser }), { code: 'GITHUB_INSTALLATION_BOUND_TO_OTHER_TENANT' },
+    'a globally connected installation cannot be rebound to a different tenant');
+    const otherTenantBinding = { ...binding, tenantId: otherTenant, projectId: otherProjectId };
+    await assert.rejects(restartedStore.saveCapture({ tenantId: otherTenant, projectId: otherProjectId,
+      principal: otherPrincipal, authzGeneration: 1, binding: otherTenantBinding, snapshot }),
+    { code: 'GITHUB_INSTALLATION_NOT_BOUND' }, 'another tenant cannot capture using the first tenant installation ID');
+    assert.deepEqual(await restartedStore.listForProject({ tenantId: otherTenant, projectId: otherProjectId,
+      principal: otherPrincipal, authzGeneration: 1 }), [], 'legacy unbound installation snapshots remain hidden until a verified reconnect');
+    assert.equal(await restartedStore.resolveSnapshotForExecution({ tenantId: otherTenant, projectId: otherProjectId,
+      principal: otherPrincipal, authzGeneration: 1, snapshotId: snapshot.id }), null,
+    'an unbound legacy snapshot cannot be selected for execution before installation reconnection');
   } finally {
     await persistence.close();
     await postgres.close();

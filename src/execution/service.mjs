@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import http from 'node:http';
 import https from 'node:https';
 import { digest } from '../sdlc/contracts.mjs';
@@ -9,7 +9,8 @@ import { captureLocalRepositorySnapshot, localRepositoryDiff, materializeLocalRe
 import { captureGitRepositorySnapshot } from './git-repository-snapshot.mjs';
 import { buildGitHubSnapshotTextContext } from './github-snapshot-context.mjs';
 import { applyGitHubPatchUpdates, buildGitHubPatchPrompt, parseGitHubPatchOutput } from './github-patch.mjs';
-import { parseGitHubVerifierProfile } from './github-verifier-profile.mjs';
+import { githubCheckToolDigestsMatch, parseGitHubCheckPlan, parseGitHubVerifierProfile } from './github-verifier-profile.mjs';
+import { parseGitHubBuildPlan } from './github-build-plan.mjs';
 import { readWorkspaceArtifact } from './artifact-file.mjs';
 import { linkedRunOutcomeCategory } from './linked-run-outcome-category.mjs';
 import { allowlistedProviderTransportFailureClass, classifyProviderTransportFailure } from './provider-transport-diagnostic.mjs';
@@ -272,20 +273,125 @@ function githubCandidateTreeDigest(files) {
   })))).digest('hex');
 }
 
-function githubCandidateEvidenceHash({ sourceSnapshot, sourceTreeDigest, selectedFileHashes, candidateTreeDigest, diffMetadata, verifierReceipt }) {
+function githubCandidateEvidenceHash({ sourceSnapshot, sourceTreeDigest, selectedFileHashes, candidateTreeDigest, diffMetadata, verifierReceipt,
+  checkPlan = null, checkReceipts = null, buildPlan = undefined, buildReceipt = undefined }) {
   return digest({ version: 'github-candidate-evidence-v1', sourceSnapshot, sourceTreeDigest,
-    selectedFileHashes, candidateTreeDigest, diffMetadata, verifierReceipt });
+    selectedFileHashes, candidateTreeDigest, diffMetadata, verifierReceipt,
+    ...(checkPlan ? { checkPlan, checkReceipts } : {}),
+    ...(buildReceipt !== undefined ? { buildPlan, buildReceipt } : {}) });
+}
+
+export async function runGitHubReproducibleBuilds({ plan, candidateSnapshot, runId, candidateRoot, artifactRoot, commandAdapterFactory, signal }) {
+  const expected = [...plan.requiredOutputs].sort();
+  const runs = [];
+  for (let index = 1; index <= 2; index += 1) {
+    const candidateWorkspace = await mkdtemp(path.join(candidateRoot, `${runId}-build-${index}-candidate-`));
+    const outputDirectory = await mkdtemp(path.join(candidateRoot, `${runId}-build-${index}-output-`));
+    let result = null;
+    let candidateAfter = null;
+    let outputSnapshot = null;
+    let reason = null;
+    try {
+      await materializeLocalRepositorySnapshot(candidateSnapshot, candidateWorkspace);
+      const before = await captureLocalRepositorySnapshot(candidateWorkspace, { excludeGitDirectory: false });
+      if (before.treeDigest !== candidateSnapshot.treeDigest) throw new Error('build_candidate_workspace_digest_mismatch');
+      if (!githubCheckToolDigestsMatch({ executable: plan.executable, toolDigest: plan.toolDigest,
+        bubblewrapExecutable: plan.bubblewrapExecutable, sandboxToolDigest: plan.sandboxToolDigest })) {
+        throw Object.assign(new Error('The pinned build or sandbox executable changed.'), { code: 'GITHUB_BUILD_TOOL_DRIFT' });
+      }
+      const adapter = commandAdapterFactory({ executable: plan.executable, args: plan.args, timeoutMs: plan.timeoutMs,
+        name: plan.id, version: plan.version, environment: {},
+        sandbox: { executable: plan.bubblewrapExecutable, readOnlyFiles: [], allowedEnvironment: [],
+          workspaceReadOnly: true, writableDirectories: [{ path: outputDirectory, target: plan.outputMount }] } });
+      result = await adapter.execute({ id: `build-${runId}-${index}`, objective: 'Build the exact pinned candidate in an isolated clean workspace.' },
+        { runId, candidateTreeDigest: candidateSnapshot.treeDigest, buildPlanHash: plan.planHash,
+          outputDirectory: plan.outputMount }, { workspace: candidateWorkspace, signal });
+    } catch (error) { reason = error?.code === 'EXECUTION_TIMEOUT' ? 'build_timed_out'
+      : error?.code === 'GITHUB_BUILD_TOOL_DRIFT' ? 'build_tool_drift' : 'build_launch_or_workspace_error'; }
+    try { candidateAfter = await captureLocalRepositorySnapshot(candidateWorkspace, { excludeGitDirectory: false }); }
+    catch { reason ??= 'build_candidate_after_digest_unavailable'; }
+    try { outputSnapshot = await captureLocalRepositorySnapshot(outputDirectory, { excludeGitDirectory: false }); }
+    catch { reason ??= 'build_output_manifest_invalid_or_over_limit'; }
+
+    const files = outputSnapshot?.files ?? [];
+    const observed = files.map((file) => file.path).sort();
+    if (!reason && (observed.length !== expected.length || observed.some((file, position) => file !== expected[position]))) {
+      reason = 'build_outputs_do_not_match_required_manifest';
+    }
+    const manifest = files.map(({ path: relativePath, mode, size, contentHash }) => ({
+      path: relativePath, mode, size, sha256: contentHash,
+    }));
+    const outputManifestHash = digest(manifest);
+    const attemptStatus = !reason && result?.status === 'COMPLETED' && result.exitCode === 0
+      && candidateAfter?.treeDigest === candidateSnapshot.treeDigest ? 'BUILT' : 'FAILED';
+    const artifactSetId = `build-${index}`;
+    let artifactsPersisted = false;
+    if (outputSnapshot && files.length) {
+      const durablePath = path.join(artifactRoot, runId, artifactSetId);
+      try {
+        await mkdir(path.dirname(durablePath), { recursive: true, mode: 0o700 });
+        await mkdir(durablePath, { mode: 0o700 });
+        await materializeLocalRepositorySnapshot(outputSnapshot, durablePath);
+        artifactsPersisted = true;
+      } catch {
+        reason = 'build_output_persistence_failed';
+        await rm(durablePath, { recursive: true, force: true });
+      }
+    }
+    const stdoutFull = String(result?.stdout ?? '').replace(/(bearer\s+)[a-z0-9._~+\/-]+/gi, '$1[REDACTED]')
+      .replace(/(api[_-]?key|token|secret|password)\s*[=:]\s*\S+/gi, '$1=[REDACTED]');
+    const stderrFull = String(result?.stderr ?? '').replace(/(bearer\s+)[a-z0-9._~+\/-]+/gi, '$1[REDACTED]')
+      .replace(/(api[_-]?key|token|secret|password)\s*[=:]\s*\S+/gi, '$1=[REDACTED]');
+    runs.push({ attempt: index, status: reason ? 'FAILED' : attemptStatus, exitCode: result?.exitCode ?? null,
+      timedOut: reason === 'build_timed_out', reason,
+      candidateTreeDigestBefore: candidateSnapshot.treeDigest, candidateTreeDigestAfter: candidateAfter?.treeDigest ?? null,
+      outputManifest: manifest, outputManifestHash,
+      outputBytes: files.reduce((total, file) => total + file.size, 0), artifactSetId: artifactsPersisted ? artifactSetId : null,
+      stdout: stdoutFull.slice(0, 20_000), stderr: stderrFull.slice(0, 20_000),
+      stdoutTruncated: result?.stdoutTruncated === true || stdoutFull.length > 20_000,
+      stderrTruncated: result?.stderrTruncated === true || stderrFull.length > 20_000,
+      outputHash: digest({ stdout: stdoutFull, stderr: stderrFull }) });
+    await Promise.all([rm(candidateWorkspace, { recursive: true, force: true }), rm(outputDirectory, { recursive: true, force: true })]);
+  }
+  let bytesEqual = runs.every((run) => run.status === 'BUILT');
+  const firstManifest = runs[0]?.outputManifest ?? [];
+  const secondManifest = runs[1]?.outputManifest ?? [];
+  if (bytesEqual && (firstManifest.length !== secondManifest.length || digest(firstManifest) !== digest(secondManifest))) bytesEqual = false;
+  if (bytesEqual) {
+    for (const entry of firstManifest) {
+      try {
+        const first = await readFile(path.join(artifactRoot, runId, 'build-1', ...entry.path.split('/')));
+        const second = await readFile(path.join(artifactRoot, runId, 'build-2', ...entry.path.split('/')));
+        if (!first.equals(second)) { bytesEqual = false; break; }
+      } catch { bytesEqual = false; break; }
+    }
+  }
+  return { version: 'github-reproducible-build-receipt-v1', planHash: plan.planHash,
+    candidateTreeDigest: candidateSnapshot.treeDigest, runs,
+    outputBytesEqual: bytesEqual,
+    status: runs.some((run) => run.status !== 'BUILT') ? 'FAILED' : bytesEqual ? 'REPRODUCIBLE' : 'MISMATCH' };
+}
+
+function evidencePlanHash(plan) {
+  if (!plan || !Array.isArray(plan.requiredChecks)) return null;
+  const { planHash, ...canonical } = plan;
+  return digest(canonical) === planHash ? planHash : null;
 }
 
 export class ExecutionService {
   constructor({ runDirectory, store = null, profiles = [], secretStore = null, localRepositories = [], githubSourceStore = null,
-    githubVerifierProfile = null, commandAdapterFactory = (options) => new CommandExecutionAdapter(options) }) {
+    githubVerifierProfile = null, githubBuildPlan = null, commandAdapterFactory = (options) => new CommandExecutionAdapter(options) }) {
     this.store = store ?? new ExecutionRunStore(runDirectory);
     this.githubCandidateWorkspaceRoot = path.resolve(runDirectory, 'github-candidate-workspaces');
+    this.githubBuildArtifactRoot = path.resolve(runDirectory, 'github-build-artifacts');
     this.secretStore = secretStore;
     this.commandAdapterFactory = commandAdapterFactory;
     this.githubSourceStore = githubSourceStore;
-    this.githubVerifierProfile = parseGitHubVerifierProfile(githubVerifierProfile);
+    this.githubCheckPlan = parseGitHubCheckPlan(githubVerifierProfile);
+    this.githubBuildPlan = parseGitHubBuildPlan(githubBuildPlan);
+    this.githubVerifierProfile = this.githubCheckPlan ? {
+      ...this.githubCheckPlan.requiredChecks[0], profileHash: this.githubCheckPlan.requiredChecks[0].commandHash,
+    } : parseGitHubVerifierProfile(githubVerifierProfile);
     this.githubPatchExecutionReady = false;
     this.localRepositories = new Map();
     for (const repository of localRepositories) {
@@ -525,7 +631,8 @@ export class ExecutionService {
     const expectedRepository = { id: `github-${selection.sourceSnapshot?.repositoryId}`, kind: 'github-app',
       snapshotId: selection.sourceSnapshot?.snapshotId, treeDigest: selection.repositoryTreeDigest,
       source: { type: 'github-app', ...selection.sourceSnapshot }, selectedFiles: selection.selectedFiles,
-      verification: selection.verifier };
+      verification: selection.verifier, ...(selection.checkPlan ? { checkPlan: selection.checkPlan } : {}),
+      ...(Object.hasOwn(selection, 'buildPlan') ? { buildPlan: selection.buildPlan } : {}) };
     if (!selection.sourceSnapshot || !Array.isArray(selection.selectedFiles) || !selection.verifier
       || digest(pinnedRepository) !== digest(expectedRepository)) {
       throw Object.assign(new Error('The GitHub source, selected-file hashes, or verifier do not match the approved immutable task binding.'), {
@@ -536,7 +643,9 @@ export class ExecutionService {
     const verifier = this.githubVerifierProfile;
     const verifierMatches = verifier && verifier.id === selection.verifier.id
       && verifier.version === selection.verifier.version && verifier.profileHash === selection.verifier.profileHash
-      && verifier.profileHash === originalVerification?.commandHash;
+      && verifier.profileHash === originalVerification?.commandHash
+      && (!selection.checkPlan || this.githubCheckPlan?.planHash === selection.checkPlan.planHash)
+      && (!selection.buildPlan || this.githubBuildPlan?.planHash === selection.buildPlan.planHash);
     const sourceRecord = await this.githubSourceStore?.resolveSnapshotForExecution?.({ tenantId,
       projectId: run.projectId, principal, authzGeneration, snapshotId: selection.sourceSnapshot.snapshotId });
     if (!sourceRecord) throw Object.assign(new Error('The pinned source snapshot is unavailable in this project.'), {
@@ -611,9 +720,58 @@ export class ExecutionService {
       status: originalVerification.status, exitCode: originalVerification.exitCode, outputHash: originalVerification.outputHash,
       stdoutTruncated: originalVerification.stdoutTruncated, stderrTruncated: originalVerification.stderrTruncated,
     } : null;
+    const savedCheckReceipts = candidate.checkReceipts?.map(({ stdout, stderr, ...receipt }) => receipt) ?? null;
+    if (candidate.buildReceipt) {
+      const { receiptHash, ...buildReceiptCore } = candidate.buildReceipt;
+      if (digest(buildReceiptCore) !== receiptHash || candidate.buildReceipt.candidateTreeDigest !== candidate.treeDigest) {
+        throw Object.assign(new Error('The saved build receipt failed its candidate or receipt hash check.'), {
+          statusCode: 409, code: 'GITHUB_CANDIDATE_EVIDENCE_INVALID',
+        });
+      }
+      for (const buildRun of candidate.buildReceipt.runs ?? []) {
+        if (!Array.isArray(buildRun.outputManifest) || digest(buildRun.outputManifest) !== buildRun.outputManifestHash) {
+          throw Object.assign(new Error('A saved build output manifest failed its hash check.'), {
+            statusCode: 409, code: 'GITHUB_CANDIDATE_EVIDENCE_INVALID',
+          });
+        }
+        if (buildRun.status === 'BUILT' && !buildRun.artifactSetId) {
+          throw Object.assign(new Error('A successful build output set is unavailable for later artifact handling.'), {
+            statusCode: 409, code: 'GITHUB_CANDIDATE_EVIDENCE_INVALID',
+          });
+        }
+        for (const output of buildRun.outputManifest) {
+          const bytes = buildRun.artifactSetId && await readWorkspaceArtifact({ configuredRoot: this.githubBuildArtifactRoot,
+            runId: run.id, segments: [buildRun.artifactSetId, ...output.path.split('/')],
+            expectedHash: output.sha256, hashAlgorithm: 'sha256-raw' });
+          if (!bytes || bytes.length !== output.size) throw Object.assign(new Error('A saved reproducible-build output failed its content hash check.'), {
+            statusCode: 409, code: 'GITHUB_CANDIDATE_EVIDENCE_INVALID',
+          });
+        }
+      }
+      if (candidate.buildReceipt.status === 'REPRODUCIBLE') {
+        const [firstBuild, secondBuild] = candidate.buildReceipt.runs;
+        if (candidate.buildReceipt.outputBytesEqual !== true || !firstBuild || !secondBuild
+          || digest(firstBuild.outputManifest) !== digest(secondBuild.outputManifest)) {
+          throw Object.assign(new Error('The reproducible-build byte comparison evidence is invalid.'), {
+            statusCode: 409, code: 'GITHUB_CANDIDATE_EVIDENCE_INVALID',
+          });
+        }
+        for (const output of firstBuild.outputManifest) {
+          const firstBytes = await readWorkspaceArtifact({ configuredRoot: this.githubBuildArtifactRoot, runId: run.id,
+            segments: [firstBuild.artifactSetId, ...output.path.split('/')], expectedHash: output.sha256, hashAlgorithm: 'sha256-raw' });
+          const secondBytes = await readWorkspaceArtifact({ configuredRoot: this.githubBuildArtifactRoot, runId: run.id,
+            segments: [secondBuild.artifactSetId, ...output.path.split('/')], expectedHash: output.sha256, hashAlgorithm: 'sha256-raw' });
+          if (!firstBytes || !secondBytes || !firstBytes.equals(secondBytes)) throw Object.assign(new Error('Saved repeated build output bytes no longer match.'), {
+            statusCode: 409, code: 'GITHUB_CANDIDATE_EVIDENCE_INVALID',
+          });
+        }
+      }
+    }
     if (githubCandidateEvidenceHash({ sourceSnapshot: pinnedRepository.source, sourceTreeDigest: candidate.sourceTreeDigest,
       selectedFileHashes, candidateTreeDigest: candidate.treeDigest, diffMetadata: diffMetadata(candidate.changes ?? []),
-      verifierReceipt: savedVerifierReceipt }) !== evidence.hash) {
+      verifierReceipt: savedVerifierReceipt,
+      ...(candidate.checkPlan ? { checkPlan: candidate.checkPlan, checkReceipts: savedCheckReceipts } : {}),
+      ...(Object.hasOwn(candidate, 'buildReceipt') ? { buildPlan: candidate.buildPlan, buildReceipt: candidate.buildReceipt } : {}) }) !== evidence.hash) {
       throw Object.assign(new Error('The candidate evidence receipt failed its canonical hash check.'), {
         statusCode: 409, code: 'GITHUB_CANDIDATE_EVIDENCE_INVALID',
       });
@@ -625,32 +783,61 @@ export class ExecutionService {
       profileHash: selection.verifier.profileHash, commandHash: originalVerification?.commandHash ?? selection.verifier.profileHash,
       treeDigest: candidate.treeDigest, status: 'INCONCLUSIVE', exitCode: null, outputHash: digest({ launch: 'inconclusive' }),
       stdoutTruncated: false, stderrTruncated: false };
+    let checkReceipts = [];
     let launchError = null;
     if (verifierMatches) {
-      let workspace = null;
-      try {
+      const plan = selection.checkPlan;
+      if (!plan || plan.planHash !== evidencePlanHash(candidate.checkPlan) || !Array.isArray(plan.requiredChecks)) {
+        launchError = 'original_check_plan_missing_or_invalid';
+      } else {
         await mkdir(this.githubCandidateWorkspaceRoot, { recursive: true, mode: 0o700 });
-        workspace = await mkdtemp(path.join(this.githubCandidateWorkspaceRoot, `${run.id}-repeat-`));
-        await materializeLocalRepositorySnapshot({ ...sourceSnapshot, files: candidateFiles, treeDigest: reconstructedTreeDigest }, workspace);
-        const beforeVerify = await captureLocalRepositorySnapshot(workspace, { excludeGitDirectory: false });
-        if (beforeVerify.treeDigest !== candidate.treeDigest) throw new Error('The fresh candidate workspace failed its tree check.');
-        const adapter = this.commandAdapterFactory({ executable: verifier.executable, args: verifier.args,
-          timeoutMs: verifier.timeoutMs, name: verifier.id, version: verifier.version, environment: {},
-          sandbox: { executable: verifier.bubblewrapExecutable, readOnlyFiles: [], allowedEnvironment: [] } });
-        const checked = await adapter.execute({ id: `repeat-${run.id}`, objective: 'Repeat the fixed verifier against the exact saved candidate.' },
-          { id: run.id, candidateTreeDigest: candidate.treeDigest, repositoryId: pinnedRepository.id }, { workspace });
-        const stdout = redact(checked.stdout).slice(0, 20_000);
-        const stderr = redact(checked.stderr).slice(0, 20_000);
-        const afterVerify = await captureLocalRepositorySnapshot(workspace, { excludeGitDirectory: false });
-        verification = { ...verification, status: typeof checked.status === 'string' ? checked.status : 'FAILED', exitCode: checked.exitCode,
-          stdoutTruncated: checked.stdoutTruncated === true || redact(checked.stdout).length > 20_000,
-          stderrTruncated: checked.stderrTruncated === true || redact(checked.stderr).length > 20_000,
-          outputHash: digest({ stdout, stderr }) };
-        if (afterVerify.treeDigest !== candidate.treeDigest) verification.status = 'FAILED';
-      } catch {
-        launchError = 'verifier_launch_failed';
-      } finally {
-        if (workspace) await rm(workspace, { recursive: true, force: true });
+        for (const check of plan.requiredChecks) {
+          let workspace = null;
+          try {
+            if (!githubCheckToolDigestsMatch(check)) throw Object.assign(new Error('The pinned check or sandbox executable changed.'), {
+              code: 'GITHUB_CHECK_TOOL_DRIFT',
+            });
+            workspace = await mkdtemp(path.join(this.githubCandidateWorkspaceRoot, `${run.id}-repeat-`));
+            await materializeLocalRepositorySnapshot({ ...sourceSnapshot, files: candidateFiles, treeDigest: reconstructedTreeDigest }, workspace);
+            const before = await captureLocalRepositorySnapshot(workspace, { excludeGitDirectory: false });
+            if (before.treeDigest !== candidate.treeDigest) throw new Error('fresh_candidate_digest_mismatch');
+            const adapter = this.commandAdapterFactory({ executable: check.executable, args: check.args,
+              timeoutMs: check.timeoutMs, name: check.id, version: check.version, environment: {},
+              sandbox: { executable: check.bubblewrapExecutable, readOnlyFiles: [], allowedEnvironment: [] } });
+            const checked = await adapter.execute({ id: `repeat-${check.id}`, objective: 'Repeat the pinned check against the exact saved candidate.' },
+              { id: run.id, candidateTreeDigest: candidate.treeDigest, repositoryId: pinnedRepository.id }, { workspace });
+            const fullOut = redact(checked.stdout); const fullErr = redact(checked.stderr);
+            const after = await captureLocalRepositorySnapshot(workspace, { excludeGitDirectory: false });
+            checkReceipts.push({ checkId: check.id, checkVersion: check.version, commandHash: check.commandHash, planHash: plan.planHash,
+              candidateTreeDigest: candidate.treeDigest, candidateTreeDigestAfter: after.treeDigest,
+              status: checked.status === 'COMPLETED' && checked.exitCode === 0 && after.treeDigest === candidate.treeDigest ? 'PASSED' : 'FAILED',
+              executionStatus: checked.status, exitCode: checked.exitCode, timedOut: checked.status === 'TIMED_OUT',
+              stdout: fullOut.slice(0, 20_000), stderr: fullErr.slice(0, 20_000),
+              stdoutTruncated: checked.stdoutTruncated === true || fullOut.length > 20_000,
+              stderrTruncated: checked.stderrTruncated === true || fullErr.length > 20_000,
+              outputHash: digest({ stdout: fullOut, stderr: fullErr }) });
+          } catch (error) {
+            checkReceipts.push({ checkId: check.id, checkVersion: check.version, commandHash: check.commandHash, planHash: plan.planHash,
+              candidateTreeDigest: candidate.treeDigest, candidateTreeDigestAfter: null, status: 'FAILED',
+              executionStatus: error?.code === 'EXECUTION_TIMEOUT' ? 'TIMED_OUT'
+                : error?.code === 'GITHUB_CHECK_TOOL_DRIFT' ? 'TOOL_DRIFT' : 'LAUNCH_ERROR',
+              exitCode: null, timedOut: error?.code === 'EXECUTION_TIMEOUT',
+              reason: redact(error?.message ?? 'check_launch_failed').slice(0, 240),
+              outputHash: digest({ error: error?.code === 'EXECUTION_TIMEOUT' ? 'check_timeout' : 'check_launch_failed' }) });
+          } finally { if (workspace) await rm(workspace, { recursive: true, force: true }); }
+          if (checkReceipts.at(-1).status !== 'PASSED') {
+            for (const remaining of plan.requiredChecks.slice(checkReceipts.length)) checkReceipts.push({ checkId: remaining.id,
+              checkVersion: remaining.version, commandHash: remaining.commandHash, planHash: plan.planHash,
+              candidateTreeDigest: candidate.treeDigest, candidateTreeDigestAfter: null, status: 'SKIPPED',
+              reason: 'prior_required_check_failed', outputHash: digest({ skipped: 'prior_required_check_failed' }) });
+            break;
+          }
+        }
+        const allPassed = checkReceipts.length === plan.requiredChecks.length && checkReceipts.every((receipt) => receipt.status === 'PASSED');
+        const first = checkReceipts[0];
+        verification = { ...verification, id: first.checkId, version: first.checkVersion, commandHash: first.commandHash,
+          status: allPassed ? 'COMPLETED' : 'FAILED', exitCode: allPassed ? 0 : (first.exitCode ?? 1),
+          outputHash: digest(checkReceipts.map((receipt) => receipt.outputHash)) };
       }
     } else launchError = 'verifier_profile_unavailable_or_changed';
     const comparison = launchError ? 'inconclusive'
@@ -661,7 +848,8 @@ export class ExecutionService {
       sourceSnapshotId: selection.sourceSnapshot.snapshotId, sourceTreeDigest: candidate.sourceTreeDigest,
       candidateTreeDigest: candidate.treeDigest, verifier: { id: selection.verifier.id, version: selection.verifier.version,
         profileHash: selection.verifier.profileHash, commandHash: verification.commandHash }, comparison,
-      ...(launchError ? { inconclusiveReason: launchError } : {}), verification, createdAt };
+      ...(launchError ? { inconclusiveReason: launchError } : {}), verification, checkPlan: selection.checkPlan,
+      checkReceipts, createdAt };
     const saved = await this.store.appendGitHubCandidateVerificationRepeat({ tenantId, runId: id, principal, authzGeneration,
       commandId, requestHash, expectedCandidateEvidenceHash: evidence.hash, attempt });
     return saved ? { ...saved.attempt, replayed: saved.replayed } : null;
@@ -679,15 +867,32 @@ export class ExecutionService {
     const segments = relativePath.split('/');
     if (segments.some((segment) => !segment || segment === '.' || segment === '..')) return null;
     const readAndDeliver = async (run) => {
-      if (!run || run.tenantId !== tenantId || !Array.isArray(run.execution?.changedArtifacts)) return null;
-      const record = run.execution.changedArtifacts.find((entry) => entry.path === relativePath);
+      if (!run || run.tenantId !== tenantId) return null;
       const profile = this.profiles.get(run.profile?.id);
-      if (!record || !/^[a-f0-9]{64}$/.test(record.contentHash ?? '') || (!profile && !run.githubPatchSelection)) return null;
-      const configuredRoot = path.resolve(run.githubPatchSelection ? this.githubCandidateWorkspaceRoot : profile.workspaceRoot);
+      let record;
+      let configuredRoot;
+      let readSegments = segments;
+      if (segments[0] === 'builds') {
+        if (!run.githubPatchSelection || !Array.isArray(run.execution?.repositoryCandidate?.buildReceipt?.runs)
+          || segments.length < 3) return null;
+        const [, artifactSetId, ...artifactPath] = segments;
+        const buildRun = run.execution.repositoryCandidate.buildReceipt.runs.find((entry) => entry.artifactSetId === artifactSetId);
+        record = buildRun?.outputManifest?.find((entry) => entry.path === artifactPath.join('/'));
+        if (!buildRun || !record) return null;
+        configuredRoot = this.githubBuildArtifactRoot;
+        readSegments = [artifactSetId, ...artifactPath];
+      } else {
+        if (!Array.isArray(run.execution?.changedArtifacts)) return null;
+        record = run.execution.changedArtifacts.find((entry) => entry.path === relativePath);
+        configuredRoot = path.resolve(run.githubPatchSelection ? this.githubCandidateWorkspaceRoot : profile?.workspaceRoot ?? '');
+      }
+      if (!record || !/^[a-f0-9]{64}$/.test((segments[0] === 'builds' ? record.sha256 : record.contentHash) ?? '')
+        || (!profile && !run.githubPatchSelection)) return null;
+      const digestForRead = segments[0] === 'builds' ? record.sha256 : record.contentHash;
       const workspace = path.resolve(configuredRoot, run.id);
       if (path.dirname(workspace) !== configuredRoot) return null;
       const contents = await readWorkspaceArtifact({
-        configuredRoot, runId: run.id, segments, expectedHash: record.contentHash, hashAlgorithm: record.hashAlgorithm,
+        configuredRoot, runId: run.id, segments: readSegments, expectedHash: digestForRead, hashAlgorithm: 'sha256-raw',
       });
       if (!contents) return null;
       const artifact = { contents, fileName: path.posix.basename(relativePath), contentHash: createHash('sha256').update(contents).digest('hex') };
@@ -845,6 +1050,8 @@ export class ExecutionService {
         selectedFiles,
         verification: { id: this.githubVerifierProfile.id, version: this.githubVerifierProfile.version,
           profileHash: this.githubVerifierProfile.profileHash },
+        checkPlan: structuredClone(this.githubCheckPlan),
+        buildPlan: structuredClone(this.githubBuildPlan),
       };
     }
     const repository = input.repositoryId
@@ -964,6 +1171,8 @@ export class ExecutionService {
           sourceSnapshot: structuredClone(githubPatchContext.sourceSnapshot),
           selectedFiles: structuredClone(githubRepositoryRef.selectedFiles),
           verifier: structuredClone(githubRepositoryRef.verification),
+          checkPlan: structuredClone(githubRepositoryRef.checkPlan),
+          buildPlan: structuredClone(githubRepositoryRef.buildPlan),
           repositoryTreeDigest: githubRepositoryRef.treeDigest,
         };
         if (githubPatchContext) {
@@ -1366,7 +1575,8 @@ export class ExecutionService {
           treeDigest: selection.repositoryTreeDigest,
           source: { type: 'github-app', ...sourceSnapshot },
           selectedFiles: selection.selectedFiles,
-          verification: selection.verifier }
+          verification: selection.verifier, ...(selection.checkPlan ? { checkPlan: selection.checkPlan } : {}),
+          ...(Object.hasOwn(selection, 'buildPlan') ? { buildPlan: selection.buildPlan } : {}) }
         : null;
       if (!expectedRepository || digest(pinnedRepository) !== digest(expectedRepository)) {
         throw Object.assign(new Error('The GitHub snapshot, selected-file hashes, or verifier do not match the immutable approved repository binding.'), {
@@ -1375,6 +1585,8 @@ export class ExecutionService {
       }
       if (!verifier || verifier.profileHash !== run.githubPatchSelection.verifier?.profileHash
         || verifier.id !== run.githubPatchSelection.verifier?.id || verifier.version !== run.githubPatchSelection.verifier?.version
+        || (run.githubPatchSelection.checkPlan && this.githubCheckPlan?.planHash !== run.githubPatchSelection.checkPlan.planHash)
+        || (run.githubPatchSelection.buildPlan && this.githubBuildPlan?.planHash !== run.githubPatchSelection.buildPlan.planHash)
         || !isModelProvider(profile) || !this.githubSourceStore?.resolveSnapshotForExecution) {
         throw Object.assign(new Error('The fixed GitHub verifier or brokered patch profile changed after approval.'), {
           statusCode: 409, code: 'GITHUB_CANDIDATE_PROFILE_STALE', retryable: false,
@@ -1633,8 +1845,86 @@ export class ExecutionService {
           });
         }
         let verification = null;
+        let checkReceipts = null;
+        let buildReceipt = null;
         const candidateTreeDigest = repositoryAfter.treeDigest;
         if (verificationConfig) {
+          if (run.githubPatchSelection) {
+            const checkPlan = run.githubPatchSelection.checkPlan;
+            const plannedChecks = checkPlan?.requiredChecks;
+            if (!checkPlan || checkPlan.planHash !== this.githubCheckPlan?.planHash
+              || !Array.isArray(plannedChecks) || plannedChecks.length < 1) {
+              throw Object.assign(new Error('The approved required-check plan is missing or changed.'), {
+                code: 'GITHUB_CHECK_PLAN_STALE', statusCode: 409, retryable: false,
+              });
+            }
+            checkReceipts = [];
+            await mkdir(this.githubCandidateWorkspaceRoot, { recursive: true, mode: 0o700 });
+            for (const check of plannedChecks) {
+              let checkWorkspace = null;
+              let receipt;
+              try {
+                if (!githubCheckToolDigestsMatch(check)) throw Object.assign(new Error('The pinned check or sandbox executable changed.'), {
+                  code: 'GITHUB_CHECK_TOOL_DRIFT',
+                });
+                checkWorkspace = await mkdtemp(path.join(this.githubCandidateWorkspaceRoot, `${run.id}-check-`));
+                await materializeLocalRepositorySnapshot(repositoryAfter, checkWorkspace);
+                const before = await captureLocalRepositorySnapshot(checkWorkspace, { excludeGitDirectory: false });
+                if (before.treeDigest !== candidateTreeDigest) throw new Error('fresh_workspace_digest_mismatch');
+                const adapter = this.commandAdapterFactory({ executable: check.executable, args: check.args,
+                  timeoutMs: check.timeoutMs, name: check.id, version: check.version, environment: {},
+                  sandbox: { executable: check.bubblewrapExecutable, readOnlyFiles: [], allowedEnvironment: [] } });
+                const checked = await adapter.execute({ id: `verify-${check.id}`, objective: 'Verify the exact captured candidate tree.' },
+                  { id: run.id, candidateTreeDigest, repositoryId: run.processTaskRef.repository.id }, { workspace: checkWorkspace, signal: active.controller.signal });
+                const stdoutFull = redact(checked.stdout);
+                const stderrFull = redact(checked.stderr);
+                const after = await captureLocalRepositorySnapshot(checkWorkspace, { excludeGitDirectory: false });
+                const mutated = after.treeDigest !== candidateTreeDigest;
+                const stdout = stdoutFull.slice(0, 20_000);
+                const stderr = stderrFull.slice(0, 20_000);
+                const passed = !mutated && checked.status === 'COMPLETED' && checked.exitCode === 0;
+                receipt = { checkId: check.id, checkVersion: check.version, commandHash: check.commandHash,
+                  planHash: checkPlan.planHash, candidateTreeDigest, candidateTreeDigestAfter: after.treeDigest,
+                  status: passed ? 'PASSED' : 'FAILED', executionStatus: checked.status, exitCode: checked.exitCode,
+                  timedOut: checked.status === 'TIMED_OUT', stdout, stderr,
+                  stdoutTruncated: checked.stdoutTruncated === true || stdoutFull.length > 20_000,
+                  stderrTruncated: checked.stderrTruncated === true || stderrFull.length > 20_000,
+                  outputHash: digest({ stdout: stdoutFull, stderr: stderrFull }) };
+              } catch (error) {
+                let afterDigest = null;
+                if (checkWorkspace) {
+                  try { afterDigest = (await captureLocalRepositorySnapshot(checkWorkspace, { excludeGitDirectory: false })).treeDigest; }
+                  catch { /* retain an unavailable after digest when the workspace cannot be read safely */ }
+                }
+                receipt = { checkId: check.id, checkVersion: check.version, commandHash: check.commandHash,
+                  planHash: checkPlan.planHash, candidateTreeDigest, candidateTreeDigestAfter: afterDigest,
+                  status: 'FAILED', executionStatus: error?.code === 'EXECUTION_TIMEOUT' ? 'TIMED_OUT'
+                    : error?.code === 'GITHUB_CHECK_TOOL_DRIFT' ? 'TOOL_DRIFT' : 'LAUNCH_ERROR',
+                  exitCode: null, timedOut: error?.code === 'EXECUTION_TIMEOUT',
+                  reason: redact(error?.message ?? 'check_launch_failed').slice(0, 240), outputHash: digest({ error: 'check_launch_failed' }) };
+              } finally {
+                if (checkWorkspace) await rm(checkWorkspace, { recursive: true, force: true });
+              }
+              checkReceipts.push(receipt);
+              if (receipt.status !== 'PASSED') {
+                for (const remaining of plannedChecks.slice(checkReceipts.length)) checkReceipts.push({
+                  checkId: remaining.id, checkVersion: remaining.version, commandHash: remaining.commandHash,
+                  planHash: checkPlan.planHash, candidateTreeDigest, candidateTreeDigestAfter: null,
+                  status: 'SKIPPED', reason: 'prior_required_check_failed', outputHash: digest({ skipped: 'prior_required_check_failed' }),
+                });
+                break;
+              }
+            }
+            const allPassed = checkReceipts.length === plannedChecks.length
+              && checkReceipts.every((receipt) => receipt.status === 'PASSED'
+                && receipt.candidateTreeDigest === candidateTreeDigest && receipt.planHash === checkPlan.planHash);
+            const first = checkReceipts[0];
+            verification = { id: first.checkId, version: first.checkVersion, commandHash: first.commandHash,
+              treeDigest: candidateTreeDigest, status: allPassed ? 'COMPLETED' : 'FAILED', exitCode: allPassed ? 0 : (first.exitCode ?? 1),
+              stdout: first.stdout ?? '', stderr: first.stderr ?? '', stdoutTruncated: first.stdoutTruncated ?? false,
+              stderrTruncated: first.stderrTruncated ?? false, outputHash: digest(checkReceipts.map((receipt) => receipt.outputHash)) };
+            if (!allPassed) result = { ...result, status: 'FAILED', exitCode: verification.exitCode };
+          } else {
           const verificationAdapter = this.commandAdapterFactory({ executable: verificationConfig.executable,
             args: verificationConfig.args, timeoutMs: verificationConfig.timeoutMs ?? profile.timeoutMs,
             name: verificationConfig.id, version: verificationConfig.version ?? '1.0.0',
@@ -1661,6 +1951,21 @@ export class ExecutionService {
             verification.error = 'Verification modified the immutable candidate tree.';
             result = { ...result, status: 'FAILED', exitCode: verification.exitCode ?? 1 };
           }
+          }
+        }
+        if (run.githubPatchSelection) {
+          const buildPlan = run.githubPatchSelection.buildPlan ?? null;
+          buildReceipt = buildPlan
+            ? await runGitHubReproducibleBuilds({ plan: buildPlan, candidateSnapshot: repositoryAfter,
+              runId: run.id, candidateRoot: this.githubCandidateWorkspaceRoot,
+              artifactRoot: this.githubBuildArtifactRoot, commandAdapterFactory: this.commandAdapterFactory,
+              signal: active.controller.signal })
+            : { version: 'github-reproducible-build-receipt-v1', status: 'NOT_CONFIGURED',
+              planHash: null, candidateTreeDigest, runs: [], outputBytesEqual: false };
+          buildReceipt.receiptHash = digest(buildReceipt);
+          if (buildPlan && buildReceipt.status !== 'REPRODUCIBLE') {
+            result = { ...result, status: 'FAILED', exitCode: 1 };
+          }
         }
         const changes = localRepositoryDiff(repositoryBefore, repositoryAfter);
         const repositoryCandidate = {
@@ -1668,6 +1973,12 @@ export class ExecutionService {
           sourceTreeDigest: repositoryBefore.treeDigest, treeDigest: candidateTreeDigest,
           ...(repositoryBefore.repositorySource ? { source: repositoryBefore.repositorySource } : {}),
           changes, verification,
+          ...(checkReceipts ? { checkPlan: structuredClone(run.githubPatchSelection.checkPlan), checkReceipts,
+            requiredChecksStatus: checkReceipts.every((receipt) => receipt.status === 'PASSED')
+              ? run.githubPatchSelection.checkPlan.legacySingleCheck ? 'LEGACY_INCOMPLETE' : 'PASSED'
+              : 'FAILED' } : {}),
+          ...(buildReceipt ? { buildPlan: run.githubPatchSelection.buildPlan,
+            buildReceipt, buildStatus: buildReceipt.status } : {}),
         };
         if (run.githubPatchSelection) {
           const version = 'github-candidate-evidence-v1';
@@ -1686,7 +1997,10 @@ export class ExecutionService {
           const candidateEvidenceHash = githubCandidateEvidenceHash({
             sourceSnapshot: run.processTaskRef.repository.source,
             sourceTreeDigest: repositoryBefore.treeDigest, selectedFileHashes,
-            candidateTreeDigest, diffMetadata, verifierReceipt });
+            candidateTreeDigest, diffMetadata, verifierReceipt,
+            ...(checkReceipts ? { checkPlan: run.githubPatchSelection.checkPlan,
+              checkReceipts: checkReceipts.map(({ stdout, stderr, ...receipt }) => receipt) } : {}),
+            ...(buildReceipt ? { buildPlan: run.githubPatchSelection.buildPlan, buildReceipt } : {}) });
           repositoryCandidate.candidateEvidence = { version, hash: candidateEvidenceHash };
           result.evidenceHash = candidateEvidenceHash;
         }

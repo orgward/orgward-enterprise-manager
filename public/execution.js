@@ -2805,7 +2805,64 @@ function renderRepositoryCandidate(candidate) {
     }
     content.push(list);
   } else content.push(el('p', { className: 'muted', text: 'The candidate contains no file changes.' }));
-  if (candidate.verification) {
+  if (candidate.checkPlan && Array.isArray(candidate.checkReceipts)) {
+    content.push(el('h4', { text: 'Required checks' }));
+    const legacyPlan = candidate.checkPlan.legacySingleCheck === true;
+    const checkStatus = candidate.requiredChecksStatus ?? 'UNKNOWN';
+    const statusLabel = legacyPlan ? `LEGACY INCOMPLETE T-31 COVERAGE · ${checkStatus}` : checkStatus;
+    content.push(el('p', { text: `Required-check status: ${statusLabel} · plan ${candidate.checkPlan.id} v${candidate.checkPlan.version} · ${candidate.checkReceipts.length}/${candidate.checkPlan.requiredChecks?.length ?? 0} receipts · plan hash ${candidate.checkPlan.planHash}` }));
+    const checks = el('ul', { className: 'github-candidate-required-checks' });
+    for (const receipt of candidate.checkReceipts) {
+      const item = el('li', {}, [
+        el('strong', { text: `${receipt.checkId} v${receipt.checkVersion}: ${receipt.status}` }),
+        el('span', { className: 'muted', text: ` · exit ${receipt.exitCode ?? 'unavailable'} · candidate ${receipt.candidateTreeDigestAfter ?? receipt.candidateTreeDigest ?? 'unavailable'} · output ${receipt.outputHash}` }),
+      ]);
+      if (receipt.reason) item.append(el('p', { className: 'muted', text: receipt.reason }));
+      if (receipt.stdout) item.append(el('pre', { className: 'execution-output', text: receipt.stdout }));
+      if (receipt.stderr) item.append(el('pre', { className: 'execution-output execution-error', text: receipt.stderr }));
+      checks.append(item);
+    }
+    content.push(checks);
+  } else if (candidate.source?.type === 'github-app') {
+    content.push(el('p', { className: 'muted', text: 'Legacy single-verifier evidence has no persisted required-check plan and does not establish T-31 full required-check coverage.' }));
+  }
+  if (candidate.buildReceipt) {
+    const receipt = candidate.buildReceipt;
+    content.push(el('h4', { text: 'Reproducible build' }));
+    const guidance = receipt.status === 'NOT_CONFIGURED'
+      ? 'No operator build plan is configured; this candidate has no reproducible-build result.'
+      : receipt.status === 'MISMATCH'
+        ? 'The two clean build output byte sets differ. Review both manifests and logs, then create a new candidate after repairing the build.'
+        : receipt.status === 'FAILED'
+          ? 'At least one build failed, changed the pinned source tree, or missed the required outputs. Review the saved logs and create a new candidate after repair.'
+          : 'Both clean builds emitted byte-identical required outputs. This is build reproducibility evidence for this pinned candidate only.';
+    content.push(el('p', { text: `Build status: ${receipt.status} · ${guidance}` }));
+    if (receipt.planHash) content.push(el('p', { className: 'muted', text: `Build plan ${candidate.buildPlan?.id} v${candidate.buildPlan?.version} · plan hash ${receipt.planHash} · receipt hash ${receipt.receiptHash}` }));
+    const builds = el('ul', { className: 'github-candidate-build-runs' });
+    for (const buildRun of receipt.runs ?? []) {
+      const item = el('li', {}, [
+        el('strong', { text: `Build ${buildRun.attempt}: ${buildRun.status}` }),
+        el('span', { className: 'muted', text: ` · exit ${buildRun.exitCode ?? 'unavailable'} · manifest ${buildRun.outputManifestHash} · ${buildRun.outputBytes} bytes` }),
+      ]);
+      if (buildRun.reason) item.append(el('p', { className: 'muted', text: buildRun.reason }));
+      const outputs = el('ul');
+      for (const output of buildRun.outputManifest ?? []) {
+        const outputItem = el('li', { text: `${output.path} · ${output.size} bytes · SHA-256 ${output.sha256}` });
+        if (buildRun.artifactSetId && candidate.runId) outputItem.append(el('a', { text: 'Download build output', attrs: {
+          href: `/api/execution/runs/${encodeURIComponent(candidate.runId)}/artifact?path=${encodeURIComponent(`builds/${buildRun.artifactSetId}/${output.path}`)}`,
+        } }));
+        outputs.append(outputItem);
+      }
+      item.append(outputs);
+      if (buildRun.stdout) item.append(el('pre', { className: 'execution-output', text: buildRun.stdout }));
+      if (buildRun.stderr) item.append(el('pre', { className: 'execution-output execution-error', text: buildRun.stderr }));
+      builds.append(item);
+    }
+    content.push(builds);
+  } else if (candidate.source?.type === 'github-app') {
+    content.push(el('p', { className: 'muted', text: 'No reproducible-build receipt exists for this candidate.' }));
+  }
+  if (candidate.verification && !candidate.checkPlan) {
     const verification = candidate.verification;
     const originalOutcome = verification.status === 'COMPLETED' && verification.exitCode === 0 ? 'PASSED'
       : verification.status === 'INCONCLUSIVE' ? 'INCONCLUSIVE' : 'FAILED';
@@ -2851,8 +2908,11 @@ function renderRepositoryCandidate(candidate) {
         el('h5', { text: `Repeat observation · ${attempt.attemptId}` }),
         el('p', { text: `Comparison with original: ${comparison}` }),
         el('p', { text: `Verifier result: ${outcome} · status ${verification.status ?? 'INCONCLUSIVE'} · exit code ${verification.exitCode ?? 'not available'}` }),
-        el('p', { text: `Output hash: ${verification.outputHash ?? 'not available'}` }),
+        el('p', { text: `Aggregate check output hash: ${verification.outputHash ?? 'not available'}` }),
       ]);
+      if (Array.isArray(attempt.checkReceipts)) {
+        row.append(el('p', { text: `Pinned plan checks: ${attempt.checkReceipts.map((receipt) => `${receipt.checkId}: ${receipt.status}`).join(' · ')}` }));
+      }
       repeatHistory.append(row);
     };
     repeatButton.addEventListener('click', async () => {

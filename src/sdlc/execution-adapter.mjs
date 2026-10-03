@@ -101,8 +101,12 @@ export class CommandExecutionAdapter {
     this.snapshotFileSystem = snapshotFileSystem;
     this.bwrapExecutable = sandbox.executable ?? DEFAULT_BWRAP;
     this.readOnlyFiles = [...new Set(sandbox.readOnlyFiles ?? [])];
+    this.writableDirectories = [...(sandbox.writableDirectories ?? [])];
+    this.workspaceReadOnly = sandbox.workspaceReadOnly === true;
     this.allowedEnvironment = new Set(sandbox.allowedEnvironment ?? []);
-    if (!path.isAbsolute(this.bwrapExecutable) || this.readOnlyFiles.some((file) => !path.isAbsolute(file))) {
+    if (!path.isAbsolute(this.bwrapExecutable) || this.readOnlyFiles.some((file) => !path.isAbsolute(file))
+      || this.writableDirectories.some((mount) => !mount || !path.isAbsolute(mount.path)
+        || mount.target !== '/build-output')) {
       throw new Error('Execution sandbox paths must be absolute.');
     }
     const unapprovedEnvironment = Object.keys(this.environment).filter((key) => !this.allowedEnvironment.has(key));
@@ -142,7 +146,9 @@ export class CommandExecutionAdapter {
     const executableInfo = await lstat(executable);
     if (!executableInfo.isFile()) throw new Error('Execution adapter executable is not a regular file.');
     const fileHandles = [];
+    const writableHandles = [];
     const mountedFiles = [];
+    const writableTargets = [];
     const openReadOnlyFile = async (file) => {
       const resolved = await realpath(file);
       if (isVisibleRuntimePath(resolved)) return;
@@ -154,12 +160,25 @@ export class CommandExecutionAdapter {
     try {
       if (!isVisibleRuntimePath(executable)) await openReadOnlyFile(executable);
       for (const file of this.readOnlyFiles) await openReadOnlyFile(file);
+      for (const mount of this.writableDirectories) {
+        const resolved = await realpath(mount.path);
+        const handle = await open(resolved, fsConstants.O_RDONLY | (fsConstants.O_DIRECTORY ?? 0) | (fsConstants.O_NOFOLLOW ?? 0));
+        const info = await handle.stat();
+        if (!info.isDirectory() || info.uid !== process.getuid() || (info.mode & 0o077) !== 0) {
+          await handle.close();
+          throw new Error('Sandbox writable output directory must be an owned private directory.');
+        }
+        writableHandles.push(handle);
+        writableTargets.push(mount.target);
+      }
     } catch (error) {
-      await Promise.allSettled([workspaceHandle.close(), contextHandle.close(), ...fileHandles.map((handle) => handle.close()), rm(contextDirectory, { recursive: true, force: true })]);
+      await Promise.allSettled([workspaceHandle.close(), contextHandle.close(), ...fileHandles.map((handle) => handle.close()),
+        ...writableHandles.map((handle) => handle.close()), rm(contextDirectory, { recursive: true, force: true })]);
       throw error;
     }
     if (signal?.aborted) {
-      await Promise.all([workspaceHandle.close(), contextHandle.close(), ...fileHandles.map((handle) => handle.close())]);
+      await Promise.all([workspaceHandle.close(), contextHandle.close(), ...fileHandles.map((handle) => handle.close()),
+        ...writableHandles.map((handle) => handle.close())]);
       await rm(contextDirectory, { recursive: true, force: true });
       throw Object.assign(new Error('Execution dispatch was cancelled before start.'), { code: 'EXECUTION_REVOKED' });
     }
@@ -169,16 +188,18 @@ export class CommandExecutionAdapter {
       '--ro-bind', '/usr', '/usr', '--ro-bind', '/lib', '/lib', '--ro-bind', '/lib64', '/lib64',
       '--proc', '/proc', '--dev', '/dev', '--size', '268435456', '--tmpfs', '/tmp',
     ];
-    addSandboxDirectories(args, ['/workspace', contextTarget, executable, ...mountedFiles]);
-    args.push('--bind-fd', String(3), '/workspace');
+    addSandboxDirectories(args, ['/workspace', contextTarget, executable, ...mountedFiles, ...writableTargets]);
+    args.push(this.workspaceReadOnly ? '--ro-bind-fd' : '--bind-fd', String(3), '/workspace');
     let nextFd = 5;
     args.push('--ro-bind-fd', String(4), contextTarget);
     for (const file of mountedFiles) args.push('--ro-bind-fd', String(nextFd++), file);
+    for (const target of writableTargets) args.push('--bind-fd', String(nextFd++), target);
     args.push('--chdir', '/workspace', '--clearenv', '--setenv', 'PATH', '', '--setenv', 'HOME', '/workspace', '--setenv', 'TMPDIR', '/tmp', '--setenv', 'ORGWARD_CONTEXT_PATH', contextTarget, '--uid', String(process.getuid()), '--gid', String(process.getgid()), '--cap-drop', 'ALL');
     for (const [key, value] of Object.entries(this.environment)) args.push('--setenv', key, value);
     args.push('--', executable, ...this.args);
     const startedAt = now();
-    const stdio = ['ignore', 'pipe', 'pipe', workspaceHandle.fd, contextHandle.fd, ...fileHandles.map((handle) => handle.fd)];
+    const stdio = ['ignore', 'pipe', 'pipe', workspaceHandle.fd, contextHandle.fd,
+      ...fileHandles.map((handle) => handle.fd), ...writableHandles.map((handle) => handle.fd)];
     const child = spawn(this.bwrapExecutable, args, {
       cwd: root, shell: false, detached: true, stdio, env: {},
     });
@@ -221,7 +242,8 @@ export class CommandExecutionAdapter {
         if (!settled) {
           settled = true; clearTimeout(timer); clearTimeout(killTimer);
           signal?.removeEventListener('abort', onAbort);
-          void Promise.all([closeWorkspace(), contextHandle.close(), ...fileHandles.map((handle) => handle.close()), rm(contextDirectory, { recursive: true, force: true })]);
+          void Promise.all([closeWorkspace(), contextHandle.close(), ...fileHandles.map((handle) => handle.close()),
+            ...writableHandles.map((handle) => handle.close()), rm(contextDirectory, { recursive: true, force: true })]);
           reject(error);
         }
       });
@@ -229,7 +251,8 @@ export class CommandExecutionAdapter {
         if (settled) return;
         settled = true; clearTimeout(timer); clearTimeout(killTimer);
         signal?.removeEventListener('abort', onAbort);
-        void Promise.all([contextHandle.close(), ...fileHandles.map((handle) => handle.close()), rm(contextDirectory, { recursive: true, force: true })]);
+        void Promise.all([contextHandle.close(), ...fileHandles.map((handle) => handle.close()),
+          ...writableHandles.map((handle) => handle.close()), rm(contextDirectory, { recursive: true, force: true })]);
         if (termination) {
           const error = new Error(termination === 'revoked' ? 'Execution stopped because project access was revoked.' : `Execution adapter timed out after ${this.timeoutMs}ms.`);
           error.code = termination === 'revoked' ? 'EXECUTION_REVOKED' : 'EXECUTION_TIMEOUT';

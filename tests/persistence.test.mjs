@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomUUID } from 'node:crypto';
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, watch, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import http from 'node:http';
@@ -21,6 +21,8 @@ import { createChangeCase } from '../src/sdlc/engine.mjs';
 import { digest } from '../src/sdlc/contracts.mjs';
 import { createExecutionRun, executionApprovalRequestHash, executionEvent } from '../src/execution/contracts.mjs';
 import { buildBlueprintProposalPrompt } from '../src/execution/proposals.mjs';
+import { parseGitHubCheckPlan } from '../src/execution/github-verifier-profile.mjs';
+import { parseGitHubBuildPlan } from '../src/execution/github-build-plan.mjs';
 import { PostgresOidcSessionStore } from '../src/platform/oidc-sessions.mjs';
 import { contentHash } from '../src/platform/postgres.mjs';
 import {
@@ -6501,11 +6503,67 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
       providerEndpoint: `${providerOrigin}/v1/execute`,
     },
   ];
-  const fixedGithubVerifierProfile = { id: 'github-fixture-verifier', version: '1.0.0', executable: '/usr/bin/node',
-    args: ['/opt/orgward/github-fixture-verifier.mjs'], timeoutMs: 5_000 };
+  const fixedGithubVerifierProfile = { id: 'github-fixture-plan', version: '1.0.0', requiredChecks: [
+    { id: 'unit-check', version: '1.0.0', executable: '/usr/bin/node', args: ['/opt/orgward/github-fixture-verifier.mjs'], timeoutMs: 5_000 },
+    { id: 'contract-check', version: '2.0.0', executable: '/usr/bin/node', args: ['/opt/orgward/github-contract-check.mjs'], timeoutMs: 5_000 },
+  ] };
+  const fixedGithubBuildPlan = { id: 'github-fixture-build', version: '1.0.0', executable: '/usr/bin/node',
+    args: ['/workspace/scripts/build.mjs', '--output=/build-output'], timeoutMs: 5_000, requiredOutputs: ['dist/app.js'] };
+  const { privateKey: githubFixturePrivateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const githubFixturePem = githubFixturePrivateKey.export({ type: 'pkcs8', format: 'pem' });
+  const githubFixtureCalls = [];
+  let githubInstallationAvailable = true;
+  const githubFetchImpl = async (url, options) => {
+    assert.equal(options.redirect, 'manual');
+    if (url.origin === 'https://github.com' && url.pathname === '/login/oauth/access_token') {
+      assert.equal(options.headers.accept, 'application/json', 'the GitHub OAuth exchange requests a JSON token response');
+      assert.equal(options.headers['content-type'], 'application/x-www-form-urlencoded');
+      const authCode = new URLSearchParams(options.body).get('code');
+      return new Response(JSON.stringify({ access_token: authCode === 'not-owner-code'
+        ? 'fixture-nonowner-access-token' : 'fixture-user-access-token', token_type: 'bearer', scope: '' }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      });
+    }
+    assert.equal(url.origin, 'https://api.github.com');
+    githubFixtureCalls.push(url.pathname);
+    let payload;
+    if (url.pathname === '/app/installations/123456789' && !githubInstallationAvailable) {
+      return new Response(JSON.stringify({ message: 'Not Found' }), { status: 404, headers: { 'content-type': 'application/json' } });
+    }
+    if (url.pathname === '/app/installations/123456789') payload = {
+      id: 123456789, app_id: 123, account: { id: 24680, login: 'fixture-account', type: 'Organization' },
+    };
+    else if (url.pathname === '/app/installations/123456789/access_tokens' && options.method === 'POST') {
+      const tokenRequest = JSON.parse(options.body);
+      const discovery = tokenRequest.repository_ids === undefined;
+      payload = discovery ? { token: 'fixture-discovery-token', permissions: { metadata: 'read' } }
+        : { token: 'fixture-installation-token', permissions: { metadata: 'read', contents: 'read' },
+          repositories: [{ id: tokenRequest.repository_ids[0] }] };
+      return new Response(JSON.stringify(payload), { status: 201, headers: { 'content-type': 'application/json' } });
+    } else if (url.pathname === '/installation/repositories') {
+      assert.equal(options.headers.authorization, 'Bearer fixture-discovery-token');
+      payload = { total_count: 1, repositories: [
+        { id: 987654321, name: 'fixture-repo', full_name: 'fixture-org/fixture-repo', default_branch: 'main',
+          private: true, owner: { login: 'fixture-org' } },
+      ] };
+    } else if (url.pathname === '/installation/token' && options.method === 'DELETE') {
+      assert.ok(['Bearer fixture-discovery-token', 'Bearer fixture-installation-token'].includes(options.headers.authorization));
+      return new Response(null, { status: 204 });
+    }
+    else if (url.pathname === '/user') payload = { id: 13579, login: 'fixture-admin' };
+    else if (url.pathname === '/user/memberships/orgs/fixture-account') payload = {
+      state: 'active', role: options.headers.authorization === 'Bearer fixture-user-access-token' ? 'admin' : 'member',
+      organization: { id: 24680, login: 'fixture-account' },
+    };
+    else throw new Error('Unexpected fixture GitHub URL.');
+    return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
   let app = await start(postgres.databaseUrl, {
     executionProfiles: profiles, oidcAuthenticator, secretEncryptionKey: Buffer.alloc(32, 0x5c),
     openAiValidationEndpoint: `${providerOrigin}/v1/models`, githubVerifierProfile: fixedGithubVerifierProfile,
+    githubAppConfig: { appId: '123', privateKey: githubFixturePem, appSlug: 'orgward-fixture',
+      clientId: 'Iv1.fixture-client', clientSecret: 'fixture-oauth-client-secret',
+      oauthRedirectUri: 'https://orgward.example/api/execution/github-installation/oauth-callback' }, githubFetchImpl,
   });
   const as = (subject) => ({ headers: { authorization: `Bearer ${subject}` } });
   const principal = (subject) => `oidc:${createHash('sha256').update(`https://persistence-identity.example.test\n${subject}`).digest('hex')}`;
@@ -7683,7 +7741,10 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(deepSeekAbandonReplay.replayed, true);
   await close(app);
   app = await start(postgres.databaseUrl, { executionProfiles: profiles, oidcAuthenticator, secretEncryptionKey: Buffer.alloc(32, 0x5c),
-    openAiValidationEndpoint: `${providerOrigin}/v1/models`, githubVerifierProfile: fixedGithubVerifierProfile });
+    openAiValidationEndpoint: `${providerOrigin}/v1/models`, githubVerifierProfile: fixedGithubVerifierProfile,
+    githubAppConfig: { appId: '123', privateKey: githubFixturePem, appSlug: 'orgward-fixture',
+      clientId: 'Iv1.fixture-client', clientSecret: 'fixture-oauth-client-secret',
+      oauthRedirectUri: 'https://orgward.example/api/execution/github-installation/oauth-callback' }, githubFetchImpl });
   const deepSeekAfterRestart = await instanceControlForRun(deepSeekUnknownRun);
   assert.equal(deepSeekAfterRestart.status, 'ABANDONED_UNVERIFIED');
   assert.deepEqual(deepSeekAfterRestart.events.at(-1).data.evidence, deepSeekAbandonPayload.evidence);
@@ -9237,6 +9298,127 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   const githubRepositoryId = '987654321';
   const githubInstallationId = '123456789';
   const githubBranchRef = 'refs/heads/main';
+  const installationStart = await request(app.base, '/api/execution/github-installation/start', {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ projectId: project.id }),
+  });
+  const installUrl = new URL(installationStart.authorizationUrl);
+  assert.equal(installUrl.origin, 'https://github.com');
+  assert.equal(installUrl.pathname, '/apps/orgward-fixture/installations/new');
+  assert.equal(installUrl.searchParams.get('state')?.length, 43);
+  assert.equal(JSON.stringify(installationStart).includes(githubFixturePem), false);
+  const installationCallbackPath = `/api/execution/github-installation/callback?state=${encodeURIComponent(installUrl.searchParams.get('state'))}&installation_id=${githubInstallationId}`;
+  const unsupportedSetupAction = await fetch(`${app.base}${installationCallbackPath}&setup_action=delete`, {
+    ...as('alice'), redirect: 'manual',
+  });
+  assert.equal(unsupportedSetupAction.status, 400, 'only GitHub install/update setup callbacks are accepted');
+  const oauthBeforeInstallation = await fetch(`${app.base}/api/execution/github-installation/oauth-callback?state=${encodeURIComponent(installUrl.searchParams.get('state'))}&code=owner-code`, {
+    ...as('alice'), redirect: 'manual',
+  });
+  assert.equal(oauthBeforeInstallation.status, 400, 'OAuth state cannot bind an installation without the provisional App-owned installation step');
+  const installationCallback = await fetch(`${app.base}${installationCallbackPath}`, {
+    ...as('alice'), redirect: 'manual',
+  });
+  assert.equal(installationCallback.status, 303);
+  assert.equal(installationCallback.headers.get('cache-control'), 'no-store');
+  assert.equal(installationCallback.headers.get('referrer-policy'), 'no-referrer');
+  const oauthAuthorization = new URL(installationCallback.headers.get('location'));
+  assert.equal(oauthAuthorization.origin, 'https://github.com');
+  assert.equal(oauthAuthorization.pathname, '/login/oauth/authorize');
+  assert.equal(oauthAuthorization.searchParams.get('client_id'), 'Iv1.fixture-client');
+  assert.equal(oauthAuthorization.searchParams.get('redirect_uri'), 'https://orgward.example/api/execution/github-installation/oauth-callback');
+  assert.equal(oauthAuthorization.searchParams.get('state'), installUrl.searchParams.get('state'));
+  assert.equal(oauthAuthorization.searchParams.get('allow_signup'), 'false');
+  assert.equal(oauthAuthorization.href.includes('fixture-oauth-client-secret'), false);
+  const notOwnerCallback = await fetch(`${app.base}/api/execution/github-installation/oauth-callback?state=${encodeURIComponent(installUrl.searchParams.get('state'))}&code=not-owner-code`, {
+    ...as('alice'), redirect: 'manual',
+  });
+  assert.equal(notOwnerCallback.status, 403, 'a guessed App-owned installation ID cannot bind without matching GitHub org-admin proof');
+  assert.equal(notOwnerCallback.headers.get('cache-control'), 'no-store');
+  assert.equal(notOwnerCallback.headers.get('referrer-policy'), 'no-referrer');
+  const notOwnerBody = await notOwnerCallback.json();
+  assert.equal(JSON.stringify(notOwnerBody).includes('not-owner-code'), false);
+  assert.equal(JSON.stringify(notOwnerBody).includes('fixture-user-access-token'), false);
+  const notBoundBeforeProof = await app.persistence.query(`select count(*)::int as count from orgward.github_app_installations where installation_id=$1`,
+    [githubInstallationId]);
+  assert.equal(notBoundBeforeProof.rows[0].count, 0, 'an App-owned but user-unverified installation creates no tenant binding');
+  const intentBeforeProof = await app.persistence.query(`select consumed_at,provisional_installation_id from orgward.github_app_installation_intents where state_hash=$1`,
+    [createHash('sha256').update(installUrl.searchParams.get('state')).digest('hex')]);
+  assert.equal(intentBeforeProof.rows[0].consumed_at, null);
+  assert.equal(intentBeforeProof.rows[0].provisional_installation_id, githubInstallationId,
+    'the App-owned installation is only provisional until GitHub user authority is proven');
+  const oauthCallback = await fetch(`${app.base}/api/execution/github-installation/oauth-callback?state=${encodeURIComponent(installUrl.searchParams.get('state'))}&code=owner-code`, {
+    ...as('alice'), redirect: 'manual',
+  });
+  assert.equal(oauthCallback.status, 303);
+  assert.equal(oauthCallback.headers.get('cache-control'), 'no-store');
+  assert.equal(oauthCallback.headers.get('referrer-policy'), 'no-referrer');
+  const callbackLocation = oauthCallback.headers.get('location');
+  assert.match(callbackLocation, /github_installation=connected/);
+  assert.equal(callbackLocation.includes(installUrl.searchParams.get('state')), false);
+  assert.equal(new URL(callbackLocation, app.base).searchParams.get('project'), project.id,
+    'the fully authorized callback returns to the exact active project in the Studio route');
+  const callbackReplay = await fetch(`${app.base}/api/execution/github-installation/oauth-callback?state=${encodeURIComponent(installUrl.searchParams.get('state'))}&code=owner-code`, {
+    ...as('alice'), redirect: 'manual',
+  });
+  assert.equal(callbackReplay.status, 400, 'the state is consumed transactionally after the GitHub user proof');
+  const callbackReplayBody = await callbackReplay.json();
+  assert.equal(JSON.stringify(callbackReplayBody).includes(installUrl.searchParams.get('state')), false);
+  assert.equal(JSON.stringify(callbackReplayBody).includes(githubFixturePem), false);
+  const connectedInstallations = await request(app.base,
+    `/api/execution/github-repositories?projectId=${encodeURIComponent(project.id)}`, as('alice'));
+  assert.deepEqual(connectedInstallations.installations.map(({ installationId, accountLogin }) => ({ installationId, accountLogin })),
+    [{ installationId: githubInstallationId, accountLogin: 'fixture-account' }]);
+  assert.equal(JSON.stringify(connectedInstallations).includes(githubFixturePem), false);
+  assert.equal(JSON.stringify(connectedInstallations).includes('github-installation:'), false,
+    'tenant onboarding API does not disclose internal credential references');
+  const listedRepositories = await request(app.base,
+    `/api/execution/github-installations/${githubInstallationId}/repositories?projectId=${encodeURIComponent(project.id)}`, as('alice'));
+  assert.deepEqual(listedRepositories.repositories, [{ repositoryId: githubRepositoryId, name: 'fixture-repo',
+    fullName: 'fixture-org/fixture-repo', ownerLogin: 'fixture-org', defaultBranch: 'main', private: true }],
+  'the project owner can choose from current installation repositories by safe identity');
+  assert.equal(JSON.stringify(listedRepositories).includes(githubFixturePem), false);
+  assert.equal(JSON.stringify(listedRepositories).includes('fixture-installation-token'), false);
+  assert.equal(JSON.stringify(listedRepositories).includes('fixture-user-access-token'), false);
+  const callsBeforeUnboundList = githubFixtureCalls.length;
+  await request(app.base,
+    `/api/execution/github-installations/123456788/repositories?projectId=${encodeURIComponent(project.id)}`, as('alice'), 404);
+  assert.equal(githubFixtureCalls.length, callsBeforeUnboundList,
+    'an unbound installation ID is rejected before the server contacts GitHub');
+  const callsBeforeCrossTenantList = githubFixtureCalls.length;
+  const githubCrossTenantProject = await request(app.base, '/api/v1/projects', {
+    ...as('tenant-b-admin'), method: 'POST',
+    body: command('github-repository-list-cross-tenant-project', { name: 'Isolated GitHub repository listing project' }),
+  }, 201);
+  await request(app.base,
+    `/api/execution/github-installations/${githubInstallationId}/repositories?projectId=${encodeURIComponent(githubCrossTenantProject.data.id)}`, as('tenant-b-admin'), 404);
+  assert.equal(githubFixtureCalls.length, callsBeforeCrossTenantList,
+    'a different tenant is denied before server GitHub credentials are used');
+  const outOfScopeCapture = await request(app.base, '/api/execution/github-repositories', {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ projectId: project.id, installationId: githubInstallationId,
+      repositoryId: '987654322', branchRef: 'refs/heads/main' }),
+  }, 403);
+  assert.equal(outOfScopeCapture.error.code, 'GITHUB_REPOSITORY_NOT_GRANTED',
+    'capture rechecks installation access instead of trusting a client-supplied ID');
+  githubInstallationAvailable = false;
+  const revokedList = await request(app.base,
+    `/api/execution/github-installations/${githubInstallationId}/repositories?projectId=${encodeURIComponent(project.id)}`, as('alice'), 409);
+  assert.equal(revokedList.error.code, 'GITHUB_INSTALLATION_UNAVAILABLE');
+  githubInstallationAvailable = true;
+  const installationAudit = await app.persistence.query(`select event_type,event,event_hash from orgward.audit_log
+    where tenant_id='tenant-a' and aggregate_kind='github_app_installation' and aggregate_id=$1`, [githubInstallationId]);
+  assert.equal(installationAudit.rowCount, 1);
+  assert.equal(installationAudit.rows[0].event_type, 'GitHubAppInstallationConnected');
+  assert.equal(installationAudit.rows[0].event.data.accountLogin, 'fixture-account');
+  assert.equal(installationAudit.rows[0].event.data.accountId, '24680');
+  assert.equal(installationAudit.rows[0].event.data.installationId, githubInstallationId);
+  assert.equal(installationAudit.rows[0].event.data.githubUserId, '13579');
+  assert.equal(installationAudit.rows[0].event.data.githubUserLogin, 'fixture-admin');
+  assert.equal(installationAudit.rows[0].event_hash, contentHash(installationAudit.rows[0].event));
+  assert.equal(JSON.stringify(installationAudit.rows[0].event).includes(installUrl.searchParams.get('state')), false);
+  assert.equal(JSON.stringify(installationAudit.rows[0].event).includes('owner-code'), false);
+  assert.equal(JSON.stringify(installationAudit.rows[0].event).includes(githubFixturePem), false);
+  assert.equal(JSON.stringify(installationAudit.rows[0].event).includes('fixture-installation-token'), false);
+  assert.equal(JSON.stringify(installationAudit.rows[0].event).includes('fixture-user-access-token'), false);
   const githubCommitOid = 'c'.repeat(40);
   const githubManifest = [{ path: 'README.md', mode: '100644', contentHash: githubContentHash,
     size: githubSourceBytes.length, blobSha: githubBlobSha }];
@@ -9259,6 +9441,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     `/api/execution/local-repositories?projectId=${encodeURIComponent(project.id)}`, as('alice'));
   assert.equal(githubRepositoryInventory.githubExecutionAvailable, true,
     'a fixed verifier, PostgreSQL snapshot store, broker and model profile make the GitHub task selector available');
+  app.executionService.githubBuildPlan = parseGitHubBuildPlan(fixedGithubBuildPlan);
   const githubRequest = await taskRequest('process-task-github-candidate-integration', {
     ...planInput, revision: 3, profileId: 'process-task-openai', githubSnapshotId: handedOffSnapshotId, githubSelectedPaths: ['README.md'],
   });
@@ -9277,7 +9460,26 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   });
   assert.equal(githubApproval.status, 'APPROVED');
   const verifierObservations = [];
+  let verifierScenario = 'pass';
+  let verifierScenarioCall = 0;
+  let buildObservations = 0;
+  let buildScenario = 'match';
   app.executionService.commandAdapterFactory = (options) => {
+    if (options.name === fixedGithubBuildPlan.id) {
+      return { execute: async (_workItem, context, { workspace }) => {
+        buildObservations += 1;
+        assert.equal(options.sandbox.workspaceReadOnly, true, 'build commands receive the candidate through a read-only workspace mount');
+        assert.deepEqual(options.sandbox.writableDirectories.map(({ target }) => target), ['/build-output']);
+        assert.match(context.candidateTreeDigest, /^[a-f0-9]{64}$/);
+        assert.equal(await readFile(path.join(workspace, 'README.md'), 'utf8'), 'after\n');
+        const outputDirectory = options.sandbox.writableDirectories[0].path;
+        await mkdir(path.join(outputDirectory, 'dist'), { recursive: true });
+        const output = buildScenario === 'mismatch' && buildObservations % 2 === 0 ? 'different bundle\n' : 'stable bundle\n';
+        await writeFile(path.join(outputDirectory, 'dist', 'app.js'), output);
+        return { status: 'COMPLETED', exitCode: 0, stdout: 'build completed', stderr: '',
+          stdoutTruncated: false, stderrTruncated: false };
+      } };
+    }
     verifierObservations.push(options);
     return { execute: async (_workItem, _contextPackage, { workspace }) => {
       const names = await readdir(workspace);
@@ -9288,7 +9490,10 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
       assert.deepEqual(options.environment, {}, 'the isolated verifier receives an empty custom environment');
       assert.deepEqual(options.sandbox.readOnlyFiles, [], 'the verifier has no extra host-file mounts');
       assert.deepEqual(options.sandbox.allowedEnvironment, []);
-      return { status: 'COMPLETED', exitCode: 0, stdout: 'verified pinned candidate', stderr: '',
+      verifierScenarioCall += 1;
+      if (verifierScenario === 'mutate' && verifierScenarioCall === 1) await writeFile(path.join(workspace, 'check-output.txt'), 'unexpected candidate write');
+      return { status: 'COMPLETED', exitCode: verifierScenario === 'fail-first' && verifierScenarioCall === 1 ? 1 : 0,
+        stdout: `verified pinned candidate ${options.name}`, stderr: '',
         stdoutTruncated: false, stderrTruncated: false };
     } };
   };
@@ -9296,9 +9501,10 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     ...as('alice'), method: 'POST', body: JSON.stringify({ version: githubApproval.version }),
   });
   assert.equal(githubCandidate.status, 'SUCCEEDED', JSON.stringify(githubCandidate));
-  assert.equal(verifierObservations.length, 1, 'the approved GitHub run dispatched one fixed verifier');
-  assert.equal(verifierObservations[0].executable, fixedGithubVerifierProfile.executable);
-  assert.deepEqual(verifierObservations[0].args, fixedGithubVerifierProfile.args);
+  assert.equal(verifierObservations.length, 2, 'the approved GitHub run dispatched every fixed required check');
+  assert.deepEqual(verifierObservations.map((observation) => observation.name), ['unit-check', 'contract-check']);
+  assert.equal(verifierObservations[0].executable, fixedGithubVerifierProfile.requiredChecks[0].executable);
+  assert.deepEqual(verifierObservations[0].args, fixedGithubVerifierProfile.requiredChecks[0].args);
   assert.equal(githubCandidate.execution.repositoryCandidate.verification.status, 'COMPLETED');
   assert.equal(githubCandidate.execution.repositoryCandidate.source.snapshotId, handedOffSnapshotId,
     'the candidate remains pinned to the handed-off snapshot after approval and execution');
@@ -9330,7 +9536,17 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
       outputHash: candidateVerification.outputHash, stdoutTruncated: candidateVerification.stdoutTruncated,
       stderrTruncated: candidateVerification.stderrTruncated,
     },
+    checkPlan: githubCandidate.execution.repositoryCandidate.checkPlan,
+    checkReceipts: githubCandidate.execution.repositoryCandidate.checkReceipts.map(({ stdout, stderr, ...receipt }) => receipt),
+    buildPlan: githubCandidate.execution.repositoryCandidate.buildPlan,
+    buildReceipt: githubCandidate.execution.repositoryCandidate.buildReceipt,
   }), 'the receipt commits to the exact pinned source, selected files, candidate tree/diff and verifier result');
+  assert.equal(githubCandidate.execution.repositoryCandidate.requiredChecksStatus, 'PASSED');
+  assert.deepEqual(githubCandidate.execution.repositoryCandidate.checkReceipts.map((receipt) => receipt.status), ['PASSED', 'PASSED']);
+  assert.equal(githubCandidate.execution.repositoryCandidate.buildStatus, 'REPRODUCIBLE');
+  assert.equal(githubCandidate.execution.repositoryCandidate.buildReceipt.outputBytesEqual, true);
+  assert.deepEqual(githubCandidate.execution.repositoryCandidate.buildReceipt.runs.map((run) => run.status), ['BUILT', 'BUILT']);
+  assert.equal(buildObservations, 2, 'the candidate executes the fixed build twice in fresh isolated workspaces');
   assert.equal(githubCandidate.execution.evidenceHash, githubCandidateReceipt.hash,
     'execution evidence carries the candidate receipt hash');
   const githubTerminalEvent = githubCandidate.events.at(-1);
@@ -9350,6 +9566,12 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(Buffer.from(await githubSourceResponse.arrayBuffer()).toString(), 'before\n');
   const githubArtifactResponse = await fetch(`${app.base}/api/execution/runs/${githubRequest.id}/artifact?path=README.md`, as('alice'));
   assert.equal(Buffer.from(await githubArtifactResponse.arrayBuffer()).toString(), 'after\n');
+  const buildArtifactResponse = await fetch(`${app.base}/api/execution/runs/${githubRequest.id}/artifact?path=${encodeURIComponent('builds/build-1/dist/app.js')}`, as('alice'));
+  assert.equal(buildArtifactResponse.status, 200);
+  assert.equal(Buffer.from(await buildArtifactResponse.arrayBuffer()).toString(), 'stable bundle\n',
+    'build output bytes are durable and delivered through the tenant-authorized artifact route');
+  await request(app.base, `/api/execution/runs/${githubRequest.id}/artifact?path=${encodeURIComponent('builds/build-1/dist/unlisted.js')}`, as('alice'), 404);
+  await request(app.base, `/api/execution/runs/${githubRequest.id}/artifact?path=${encodeURIComponent('builds/build-1/dist/app.js')}`, as('tenant-b-admin'), 404);
   assert.equal(providerCallCount > 0, true);
   const githubCandidateWorkspace = path.join(app.executionService.githubCandidateWorkspaceRoot, githubRequest.id);
   const persistedGithubCandidate = await request(app.base, `/api/execution/runs/${githubRequest.id}`, as('alice'));
@@ -9370,23 +9592,46 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     'repeat records expose a bounded output hash without returning verifier output');
   assert.equal(JSON.stringify(firstRepeat).includes(openAiFixtureSecret), false,
     'repeat responses never disclose the model broker credential');
-  assert.equal(verifierObservations.length, 2, 'a deliberate repeat invokes the fixed verifier exactly once');
+  assert.equal(verifierObservations.length, 4, 'a deliberate repeat invokes every check from the saved plan');
   const repeatReplay = await request(app.base, repeatRoute, { ...as('alice'), method: 'POST',
     body: JSON.stringify({ commandId: 'github-repeat-first' }) });
   assert.equal(repeatReplay.replayed, true);
   assert.equal(repeatReplay.attemptId, firstRepeat.attemptId);
-  assert.equal(verifierObservations.length, 2, 'idempotent replay does not invoke the verifier again');
+  assert.equal(verifierObservations.length, 4, 'idempotent replay does not invoke any check again');
   const secondRepeat = await request(app.base, repeatRoute, { ...as('alice'), method: 'POST',
     body: JSON.stringify({ commandId: 'github-repeat-second' }) }, 201);
   assert.notEqual(secondRepeat.attemptId, firstRepeat.attemptId,
     'a new command ID creates a distinct append-only repeat attempt');
-  assert.equal(verifierObservations.length, 3);
+  assert.equal(verifierObservations.length, 6);
+  assert.deepEqual(secondRepeat.checkReceipts.map((receipt) => receipt.status), ['PASSED', 'PASSED'],
+    'repeat verification reruns every check from the pinned plan');
+  verifierScenario = 'fail-first'; verifierScenarioCall = 0;
+  const failedRepeat = await request(app.base, repeatRoute, { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ commandId: 'github-repeat-failed-check' }) }, 201);
+  assert.equal(failedRepeat.verification.status, 'FAILED');
+  assert.deepEqual(failedRepeat.checkReceipts.map((receipt) => receipt.status), ['FAILED', 'SKIPPED'],
+    'a failed required check blocks aggregate assurance and records the unrun check as skipped');
+  verifierScenario = 'mutate'; verifierScenarioCall = 0;
+  const mutatedRepeat = await request(app.base, repeatRoute, { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ commandId: 'github-repeat-mutated-candidate' }) }, 201);
+  assert.deepEqual(mutatedRepeat.checkReceipts.map((receipt) => receipt.status), ['FAILED', 'SKIPPED'],
+    'candidate writes during a check fail closed and skip remaining checks');
+  const observationsBeforeDrift = verifierObservations.length;
+  app.executionService.githubCheckPlan = { ...app.executionService.githubCheckPlan, planHash: 'f'.repeat(64) };
+  const driftedRepeat = await request(app.base, repeatRoute, { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ commandId: 'github-repeat-plan-drift' }) }, 201);
+  assert.equal(driftedRepeat.comparison, 'inconclusive');
+  assert.equal(verifierObservations.length, observationsBeforeDrift,
+    'plan drift is detected before any verifier executable runs');
+  app.executionService.githubCheckPlan = parseGitHubCheckPlan(fixedGithubVerifierProfile);
+  verifierScenario = 'pass'; verifierScenarioCall = 0;
   const repeatsBeforeRestart = await request(app.base, repeatRoute, as('alice'));
-  assert.deepEqual(repeatsBeforeRestart.attempts.map((attempt) => attempt.attemptId), [firstRepeat.attemptId, secondRepeat.attemptId]);
+  assert.deepEqual(repeatsBeforeRestart.attempts.map((attempt) => attempt.attemptId), [firstRepeat.attemptId, secondRepeat.attemptId,
+    failedRepeat.attemptId, mutatedRepeat.attemptId, driftedRepeat.attemptId]);
   await close(app);
   app = await start(postgres.databaseUrl, { executionProfiles: profiles, oidcAuthenticator,
     secretEncryptionKey: Buffer.alloc(32, 0x5c), openAiValidationEndpoint: `${providerOrigin}/v1/models`,
-    githubVerifierProfile: fixedGithubVerifierProfile });
+    githubVerifierProfile: fixedGithubVerifierProfile, githubBuildPlan: fixedGithubBuildPlan });
   const repeatsAfterRestart = await request(app.base, repeatRoute, as('alice'));
   assert.deepEqual(repeatsAfterRestart.attempts, repeatsBeforeRestart.attempts,
     'append-only verifier observations and comparison evidence survive PostgreSQL application restart');
@@ -9395,6 +9640,10 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   'repeat verification leaves the original candidate receipt unchanged');
   assert.deepEqual(githubCandidateAfterRepeat.events.at(-1), githubTerminalEvent,
     'repeat observations leave the original terminal event byte-for-byte unchanged');
+  const buildArtifactAfterRestart = await fetch(`${app.base}/api/execution/runs/${githubRequest.id}/artifact?path=${encodeURIComponent('builds/build-2/dist/app.js')}`, as('alice'));
+  assert.equal(buildArtifactAfterRestart.status, 200);
+  assert.equal(Buffer.from(await buildArtifactAfterRestart.arrayBuffer()).toString(), 'stable bundle\n',
+    'both captured build artifact sets remain available after application restart');
   await rm(githubCandidateWorkspace, { recursive: true, force: true });
 
   const staleAgentPauseRequest = await taskRequest('process-task-pause-stale-agent-request', {

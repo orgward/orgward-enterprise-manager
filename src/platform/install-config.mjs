@@ -195,11 +195,32 @@ export function parseInstallConfig(env = process.env, nodeVersion = process.vers
 
   const githubAppId = env.ORGWARD_GITHUB_APP_ID || null;
   const githubAppPrivateKey = env.ORGWARD_GITHUB_APP_PRIVATE_KEY || null;
+  const githubAppSlug = env.ORGWARD_GITHUB_APP_SLUG || null;
+  const githubAppClientId = env.ORGWARD_GITHUB_APP_CLIENT_ID || null;
+  const githubAppClientSecret = env.ORGWARD_GITHUB_APP_CLIENT_SECRET || null;
+  const githubAppOAuthRedirectUri = env.ORGWARD_GITHUB_APP_OAUTH_REDIRECT_URI
+    || (env.ORGWARD_PUBLIC_URL ? `${env.ORGWARD_PUBLIC_URL.replace(/\/$/, '')}/api/execution/github-installation/oauth-callback` : null);
   if (Boolean(githubAppId) !== Boolean(githubAppPrivateKey)) add(issues, 'github-app-prerequisites', 'GitHub App ID and private key must be configured together.', 'Set ORGWARD_GITHUB_APP_ID and ORGWARD_GITHUB_APP_PRIVATE_KEY as server environment settings, or omit both to disable repository onboarding.');
-  if (githubAppId && !/^[1-9][0-9]{0,19}$/.test(githubAppId)) add(issues, 'github-app-id', 'ORGWARD_GITHUB_APP_ID must be a numeric GitHub App ID.', 'Set it to the numeric App ID from GitHub App settings.');
+  if (githubAppId && (!/^[1-9][0-9]{0,15}$/.test(githubAppId) || !Number.isSafeInteger(Number(githubAppId)))) add(issues, 'github-app-id', 'ORGWARD_GITHUB_APP_ID must be a numeric GitHub App ID in the supported exact range.', 'Set it to a numeric App ID no greater than 9007199254740991 from GitHub App settings.');
   if (githubAppPrivateKey && !((githubAppPrivateKey.includes('-----BEGIN PRIVATE KEY-----') && githubAppPrivateKey.includes('-----END PRIVATE KEY-----'))
     || (githubAppPrivateKey.includes('-----BEGIN RSA PRIVATE KEY-----') && githubAppPrivateKey.includes('-----END RSA PRIVATE KEY-----')))) {
     add(issues, 'github-app-private-key', 'ORGWARD_GITHUB_APP_PRIVATE_KEY must contain a PKCS#8 or RSA PKCS#1 PEM private key.', 'Set the GitHub App PEM private key in the server environment; it is never returned by the API or rendered in the UI.');
+  }
+  if (githubAppSlug && !/^[a-z0-9-]{1,39}$/.test(githubAppSlug)) add(issues, 'github-app-slug', 'ORGWARD_GITHUB_APP_SLUG must be a canonical GitHub App slug.', 'Set it to the lowercase slug from the GitHub App installation URL.');
+  if (githubAppId && !githubAppSlug) add(issues, 'github-app-slug-required', 'GitHub App installation onboarding requires ORGWARD_GITHUB_APP_SLUG.', 'Set the GitHub App slug in the server environment to enable the authenticated installation flow.');
+  if (Boolean(githubAppClientId) !== Boolean(githubAppClientSecret)) add(issues, 'github-app-oauth-prerequisites', 'GitHub App OAuth requires client ID and client secret together.', 'Set ORGWARD_GITHUB_APP_CLIENT_ID and ORGWARD_GITHUB_APP_CLIENT_SECRET on the server, or omit both to disable installation ownership verification.');
+  if (githubAppClientId && !/^[A-Za-z0-9_.-]{1,100}$/.test(githubAppClientId)) add(issues, 'github-app-oauth-client-id', 'ORGWARD_GITHUB_APP_CLIENT_ID is invalid.', 'Use the client ID shown in GitHub App settings.');
+  if (githubAppClientSecret && (githubAppClientSecret.length < 8 || githubAppClientSecret.length > 512)) add(issues, 'github-app-oauth-client-secret', 'ORGWARD_GITHUB_APP_CLIENT_SECRET must be between 8 and 512 characters.', 'Set the GitHub App client secret in server configuration; it is never returned by the API or rendered in the UI.');
+  if (githubAppClientId && !githubAppOAuthRedirectUri) add(issues, 'github-app-oauth-redirect-required', 'GitHub App OAuth requires a configured public callback URL.', 'Set ORGWARD_PUBLIC_URL or ORGWARD_GITHUB_APP_OAUTH_REDIRECT_URI to the HTTPS OrgWard origin/callback.');
+  if (githubAppOAuthRedirectUri) {
+    try {
+      const redirect = new URL(githubAppOAuthRedirectUri);
+      const loopbackHttp = redirect.protocol === 'http:' && LOOPBACK.has(redirect.hostname);
+      if ((!loopbackHttp && redirect.protocol !== 'https:') || redirect.username || redirect.password
+        || redirect.pathname !== '/api/execution/github-installation/oauth-callback' || redirect.search || redirect.hash) {
+        add(issues, 'github-app-oauth-redirect-uri', 'The GitHub App OAuth callback must be an HTTPS callback URL with no query or fragment.', 'Set ORGWARD_GITHUB_APP_OAUTH_REDIRECT_URI to the exact registered OrgWard callback URL.');
+      }
+    } catch { add(issues, 'github-app-oauth-redirect-uri', 'The GitHub App OAuth callback URL is invalid.', 'Set ORGWARD_GITHUB_APP_OAUTH_REDIRECT_URI to the exact registered OrgWard callback URL.'); }
   }
 
   const oidc = {
@@ -250,7 +271,9 @@ export function parseInstallConfig(env = process.env, nodeVersion = process.vers
     openAiCredentialReference, openAiModel, deepSeekCredentialReference, deepSeekModel, deepSeekMaxOutputTokens,
     oidc, roleMap, tenantBindings, bootstrapPrincipals,
     openAiAdminApiKey, openAiOrganizationId, openAiTenantProjects,
-    githubApp: githubAppId && githubAppPrivateKey ? Object.freeze({ appId: githubAppId, privateKey: githubAppPrivateKey }) : null,
+    githubApp: githubAppId && githubAppPrivateKey ? Object.freeze({ appId: githubAppId, privateKey: githubAppPrivateKey,
+      appSlug: githubAppSlug, clientId: githubAppClientId, clientSecret: githubAppClientSecret,
+      oauthRedirectUri: githubAppOAuthRedirectUri }) : null,
     legacyReadOnlyMode: allowLegacyJson,
   };
   if (openAiCredentialReference && (!databaseUrl || !secretEncryptionKey)) add(issues, 'openai-prerequisites', 'The OpenAI profile needs PostgreSQL and the secret encryption key.', 'Configure PostgreSQL and the secret encryption key through the inline or protected-file settings before opting in.');
