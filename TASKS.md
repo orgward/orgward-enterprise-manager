@@ -5996,6 +5996,34 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   act on those outcomes. Broad operations qualification remains deferred to
   `HARDENING-TASKS.md`.
 
+  Implementation checkpoint (2026-10-03, quota stop): migration 045 and the
+  outcome store/service/API now capture project-scoped release/task/manual sources,
+  dated human-reported measures with explicit unknowns, versioned owner assignment
+  and status, immutable learning proposals/reviews, and an atomic source-pinned
+  follow-up change case. Follow-up checks current item-owner eligibility and
+  requires reassignment after revocation. Export and owner preview/import retain
+  quoted evidence lineage while creating a new OPEN item without transferring
+  approvals or case authority. Studio/Execution inbox UI includes saved-command
+  recovery, import/export and stale-observation guidance; the SDLC startup helper
+  selects the exact linked case or reports it unavailable. These are implemented
+  source changes, not passing behavior evidence.
+  Luna drafted `tests/outcomes/server.test.mjs` and `view.test.mjs` for scoped
+  sources, reported comparisons/unknowns, stale review/design, owner revocation,
+  actual case operation, restart/replay, evidence import/export, pending-command
+  recovery and exact case routing. No PR-10 focused tests or parent check ran.
+  GPT-6.1 Sol backend/UI agents and the Luna verifier all returned the usage-limit
+  error; its reported retry time was "9:19 AM" without a date/time-zone basis.
+  Per AGENTS.md, checkpoint and wait without model/billing fallback or busy retries.
+  Resume PR-10: inspect this checkpoint's source diff, finish UI import/export and
+  stale-proposal DOM coverage, review any remaining findings, then have Luna run
+  the focused outcomes tests. Freeze the parent source and run one `npm run check`
+  only after focused behavior and implementation review pass. Keep PR-10 open and
+  advance checkbox/cursor together only after its complete functionality passes.
+  The active cursor remains PR-10; PR-01–PR-09 remain complete (9/17 functionality).
+  PR-12 gap planning may resume read-only during verification; no PR-12 product
+  implementation has started. No P/E gate, production qualification, provider
+  call, rendered browser proof or live business effect is claimed here.
+
 ## Complete enterprise portfolio
 
 - [ ] PR-12 — Canonical enterprise model and synchronized perspectives (T-49–T-64).

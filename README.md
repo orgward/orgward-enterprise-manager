@@ -312,6 +312,51 @@ approvals, dispatch claims, observations, recovery and environment history survi
 restart. Loopback test receipts verify the product path; production controller
 qualification and progressive delivery remain separate work.
 
+## Customer outcomes and next actions
+
+Each saved project's **Outcome and next-action inbox** connects a protected
+release, task run or explicit human-reported context to an owned improvement,
+incident or support item. The inbox requires PostgreSQL and a verified identity.
+Project editors with `workspace-write` can create items, record observations and
+propose learning. A current human project owner reviews proposals and assigns
+responsibility; the item owner or project owner can change its status with a
+recorded reason.
+
+Observations contain explicit technical, control or business measures, numeric
+actuals and targets, comparison, observation time and evidence summary. Missing
+values, targets, evidence or time remain `UNKNOWN`. `MET` and `NOT_MET` describe
+the reported comparison; they do not verify business facts. The source binding,
+dated observations, proposal content, owner review and activity survive restart.
+
+After accepting the exact current proposal, the project owner separately selects
+an object from the current saved blueprint and creates a linked custom change
+case. Its intent uses the reviewed recommendation and recorded targets, and its
+lineage retains the original outcome, observation and review. **Open linked
+change case** opens that exact case in the existing SDLC workspace, where the
+user can edit intent and progress through its governed stages. Creating a case
+does not apply a blueprint change, dispatch work or release software. The
+existing SDLC reference stages continue to identify synthetic reference analysis.
+
+Commands use the current outcome version and a stable command ID. After an
+uncertain response, the inbox retains the exact command for recovery before a
+new action; replay rechecks current authority and returns the saved result.
+Conflicting content or stale versions require a refresh. The project inbox
+retains up to 200 items, each with a bounded activity history. A current reader
+can download a hash-bound record at
+`GET /api/v1/projects/:projectId/outcomes/:outcomeId/export`.
+
+A human project owner can preview an exported JSON record and import it into
+the current project's inbox with a chosen eligible owner. Imports are limited
+to one megabyte and validate the export and observation hashes. The new item
+starts `OPEN`, records its original project/item/export lineage and retains
+the reported observations as `HUMAN_REPORTED`. The hash establishes file
+consistency, not the truth of imported claims or the identity of their original
+reporter. Imported evidence needs a new proposal, owner review and current
+saved-design selection before follow-up work. Previous approvals, status and
+case links grant no authority in the new project. Import commands recover their
+saved result after an uncertain response. Whole-database backup/restore remains
+the operator path for exact workspace recovery, including outcome records.
+
 ## Run privately
 
 Node 22 or newer is required. Install the PostgreSQL driver and test tools with `npm ci`.

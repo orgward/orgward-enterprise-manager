@@ -2,6 +2,7 @@ import { connectedNodeIds, filterGraph, focusFirstMapResult, focusSelectedMapCon
 import { apiErrorFrom, decodeStudioRoute, encodeExecutionRoute, encodeStudioRoute, fieldErrorsFor, founderConversationAnnouncement } from './shared-interactions.mjs';
 import { coverageAreaStateLabel, coverageForBlueprint } from './coverage-dashboard.mjs';
 import { compareBlueprintObjectVersions } from './blueprint-comparison.mjs';
+import { renderOutcomeInbox } from './outcomes.mjs';
 
 const state = {
   projects: [],
@@ -71,7 +72,7 @@ async function api(path, options = {}) {
   let result;
   try { result = await response.json(); }
   catch { throw apiErrorFrom(null, 'The server returned an unreadable response.'); }
-  if (!response.ok) throw apiErrorFrom(result);
+  if (!response.ok) throw Object.assign(apiErrorFrom(result), { status: response.status });
   return result;
 }
 
@@ -294,6 +295,7 @@ function renderStudio() {
   document.querySelector('.studio').classList.toggle('complete', state.project.phase !== 'discovery');
   document.querySelector('#project-title').textContent = state.project.name;
   setupGitHubOnboarding();
+  app.append(renderOutcomeInbox({ projectId: state.project.id, principal: state.sessionPrincipal, el: element, api }));
   renderConversation();
   document.querySelector('#message-form').addEventListener('submit', sendMessage);
   const textarea = document.querySelector('#message-input');

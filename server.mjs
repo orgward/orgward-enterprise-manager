@@ -27,6 +27,8 @@ import { parseGitHubBuildPlan } from './src/execution/github-build-plan.mjs';
 import { ReleaseService } from './src/release/service.mjs';
 import { PostgresReleaseStore } from './src/release/postgres-store.mjs';
 import { parseReleaseEnvironments } from './src/release/contracts.mjs';
+import { OutcomeService } from './src/outcomes/service.mjs';
+import { PostgresOutcomeStore } from './src/outcomes/postgres-store.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -170,12 +172,12 @@ async function assertCurrentEnabledPlanActorBindings(client, { tenantId, project
   }
 }
 
-async function readJson(request) {
+async function readJson(request, maximumBytes = 1_000_000) {
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 1_000_000) throw apiFailure(400, 'INVALID_JSON', 'Request body is too large.');
+    if (size > maximumBytes) throw apiFailure(400, 'INVALID_JSON', 'Request body is too large.');
     chunks.push(chunk);
   }
   try {
@@ -800,6 +802,7 @@ export function createApp({
     githubSourceStore, githubVerifierProfile, githubBuildPlan });
   const releaseService = new ReleaseService({ store: persistence ? new PostgresReleaseStore(persistence) : null,
     executionService, environments: releaseEnvironments, fetchImpl: releaseFetchImpl });
+  const outcomeService = new OutcomeService(persistence ? new PostgresOutcomeStore(persistence, sdlcStore) : null);
   if (!persistence) {
     const resolveLocalProjectAccess = async ({ tenantId, projectId, principal, minimum = 'reader' }) => {
       const project = await store.getForPrincipal(projectId, tenantId, principal);
@@ -2040,6 +2043,47 @@ export function createApp({
           principal: requestActor(request), authzGeneration: request.identity.authzGeneration }, protectedReleaseActionMatch[2],
         protectedReleaseActionMatch[3], body);
         return sendJson(response, 200, result);
+      }
+
+      const outcomesMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/outcomes$/);
+      if (outcomesMatch && ['GET', 'POST'].includes(request.method)) {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified project identity is required to operate the outcome inbox.');
+        const context = { tenantId: requestTenant(request), projectId: outcomesMatch[1],
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration };
+        if (request.method === 'GET') return sendJson(response, 200, await outcomeService.list(context));
+        const body = await readJson(request); rejectAuthorityClaims(body);
+        const result = await outcomeService.create(context, body);
+        return sendJson(response, result.replayed ? 200 : 201, result);
+      }
+      const outcomeImportMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/outcomes\/(import-preview|import)$/);
+      if (outcomeImportMatch && request.method === 'POST') {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified project owner is required to import outcome evidence.');
+        const context = { tenantId: requestTenant(request), projectId: outcomeImportMatch[1],
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration };
+        const body = await readJson(request, 1_010_000); rejectAuthorityClaims(body);
+        if (outcomeImportMatch[2] === 'import-preview') return sendJson(response, 200, await outcomeService.previewImport(context, body));
+        const result = await outcomeService.import(context, body);
+        return sendJson(response, result.replayed ? 200 : 201, result);
+      }
+      const outcomeActionMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/outcomes\/(outcome-[0-9a-f-]{36})(?:\/(observe|propose|review|assign|status|follow-up|export))?$/);
+      if (outcomeActionMatch && ['GET', 'POST'].includes(request.method)) {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified project identity is required to review customer outcomes.');
+        const context = { tenantId: requestTenant(request), projectId: outcomeActionMatch[1],
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration };
+        const operation = outcomeActionMatch[3];
+        if (request.method === 'GET' && !operation) return sendJson(response, 200, { outcome: await outcomeService.read(context, outcomeActionMatch[2]) });
+        if (request.method === 'GET' && operation === 'export') {
+          const bundle = await outcomeService.export(context, outcomeActionMatch[2]);
+          const contents = Buffer.from(JSON.stringify(bundle, null, 2));
+          response.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'content-length': contents.length,
+            'content-disposition': `attachment; filename="${outcomeActionMatch[2]}.json"`, 'cache-control': 'private, no-store' });
+          response.end(contents); return;
+        }
+        if (request.method === 'POST' && operation && operation !== 'export') {
+          const body = await readJson(request); rejectAuthorityClaims(body);
+          const result = await outcomeService.command(context, outcomeActionMatch[2], operation, body);
+          return sendJson(response, 200, result);
+        }
       }
 
       if (pathname.startsWith('/api/v1/')) {

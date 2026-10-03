@@ -20,6 +20,7 @@ const files = [
   ...readdirSync('tests/sdlc').filter((file) => file.endsWith('.test.mjs')).sort().map((file) => `tests/sdlc/${file}`),
   ...readdirSync('tests/execution').filter((file) => file.endsWith('.test.mjs')).sort().map((file) => `tests/execution/${file}`),
   ...readdirSync('tests/release').filter((file) => file.endsWith('.test.mjs')).sort().map((file) => `tests/release/${file}`),
+  ...readdirSync('tests/outcomes').filter((file) => file.endsWith('.test.mjs')).sort().map((file) => `tests/outcomes/${file}`),
   ...readdirSync('tests/helpers').filter((file) => file.endsWith('.test.mjs')).sort().map((file) => `tests/helpers/${file}`),
 ];
 

@@ -1,9 +1,16 @@
 import { caseUiModel, createSourceSelectionGuard, eligibleActorBindings } from './sdlc-view.mjs';
 import { encodeExecutionRoute, encodeStudioRoute } from './shared-interactions.mjs';
 import { clearPendingSoftwareStart, createSoftwareStartFlightGuard, pendingSoftwareStartKey } from './software-runtime-start.mjs';
+import { openInitialCase } from './sdlc-routing.mjs';
 
 const state = { meta: null, projects: [], sourceProject: null, activeSourceProject: null, sourceSelectionGuard: createSourceSelectionGuard(), cases: [], changeCase: null, softwareDeliveryPlans: [], actorBindings: [], tab: 'overview', authenticated: false, principal: null, tenantId: '', sessionId: '' };
 const softwareStartFlights = createSoftwareStartFlightGuard();
+let caseSelectionId = 0;
+function syncCaseRoute(id = null) {
+  const route = new URL(window.location.href);
+  if (id) route.searchParams.set('case', id); else route.searchParams.delete('case');
+  history.replaceState(null, '', `${route.pathname}${route.search}${route.hash}`);
+}
 const app = document.querySelector('#sdlc-app');
 const list = document.querySelector('#case-list');
 const toast = document.querySelector('#sdlc-toast');
@@ -51,6 +58,8 @@ function renderCaseList() {
 }
 
 function showWelcome() {
+  caseSelectionId += 1;
+  syncCaseRoute();
   state.changeCase = null; state.tab = 'overview';
   app.replaceChildren(document.querySelector('#sdlc-welcome').content.cloneNode(true));
   const select = document.querySelector('#mutation-select');
@@ -133,6 +142,7 @@ async function createCase(event) {
       mutation: form.elements.mutation.value,
     }) });
     state.activeSourceProject = project;
+    syncCaseRoute(state.changeCase.id);
     await refreshCases(); renderCase(); notify('Governed change case created.');
   } catch (error) {
     notify(error.message);
@@ -143,23 +153,29 @@ async function createCase(event) {
 }
 
 async function loadCase(id) {
+  if (!state.cases.some((entry) => entry.id === id)) { notify('This change case is unavailable to your current identity. Choose an available case.'); return; }
+  const selectionId = ++caseSelectionId;
   try {
     const [changeCase, projectResult] = await Promise.all([api(`/api/sdlc/cases/${id}`), api('/api/v1/projects')]);
-    state.changeCase = changeCase; state.projects = projectResult.data; state.activeSourceProject = null; state.softwareDeliveryPlans = []; state.actorBindings = []; state.tab = 'overview';
+    if (selectionId !== caseSelectionId) return;
+    let activeSourceProject = null; let softwareDeliveryPlans = []; let actorBindings = [];
     if (changeCase.sourceBinding) {
       try {
         const detail = await api(`/api/v1/projects/${encodeURIComponent(changeCase.projectId)}`);
-        if (detail.data?.id === changeCase.projectId) state.activeSourceProject = detail.data;
-      } catch { state.activeSourceProject = null; }
+        if (detail.data?.id === changeCase.projectId) activeSourceProject = detail.data;
+      } catch { activeSourceProject = null; }
     }
     if (state.authenticated && changeCase.sourceBinding && changeCase.artifacts.plan) {
-      try { state.softwareDeliveryPlans = (await api(`/api/sdlc/cases/${id}/software-delivery-plans`)).plans; }
-      catch { state.softwareDeliveryPlans = []; }
+      try { softwareDeliveryPlans = (await api(`/api/sdlc/cases/${id}/software-delivery-plans`)).plans; }
+      catch { softwareDeliveryPlans = []; }
       try {
         const bindings = await api(`/api/v1/projects/${encodeURIComponent(changeCase.projectId)}/actor-bindings/proposals`);
-        state.actorBindings = eligibleActorBindings(bindings, changeCase.sourceBinding.blueprintVersion);
-      } catch { state.actorBindings = []; }
+        actorBindings = eligibleActorBindings(bindings, changeCase.sourceBinding.blueprintVersion);
+      } catch { actorBindings = []; }
     }
+    if (selectionId !== caseSelectionId) return;
+    state.changeCase = changeCase; state.projects = projectResult.data; state.activeSourceProject = activeSourceProject; state.softwareDeliveryPlans = softwareDeliveryPlans; state.actorBindings = actorBindings; state.tab = 'overview';
+    syncCaseRoute(id);
     renderCase(); renderCaseList();
   }
   catch (error) { notify(error.message); }
@@ -885,5 +901,5 @@ try {
   state.meta = meta; state.projects = projectResult.data; state.authenticated = session.authenticated; state.principal = session.principal ?? null;
   state.tenantId = session.tenantId ?? session.tenant ?? ''; state.sessionId = session.sessionId ?? '';
   await refreshCases();
-  if (state.cases.length) await loadCase(state.cases[0].id); else showWelcome();
+  await openInitialCase({ search: window.location.search, cases: state.cases, loadCase, showWelcome, notify });
 } catch (error) { notify(error.message); }
