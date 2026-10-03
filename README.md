@@ -133,17 +133,46 @@ Scope changes also appear in the existing version history and remain intact
 through ordinary blueprint edits and internal publication.
 
 The API is `GET /api/v1/projects/:projectId/enterprise` with optional `lensId`,
-`scopeId`, `blueprintVersion` and `selectedId`. The default `lensId=all` preserves
+`scopeId`, `blueprintVersion`, `selectedId`, `proposalId`, `effectiveAt` and
+`recordedAt`. The default `lensId=all` preserves
 the complete map; `L-01` through `L-16` select named perspectives. Mutations use
 `POST /api/v1/projects/:projectId/enterprise/commands` with the existing
 `schemaVersion: "1.0"`, `commandId`, project `expectedVersion`, and a payload
 containing `create-scope`, `rename-scope` or `assign-object-scope` plus the current
 blueprint ID/version and a change reason.
 
-This first portfolio slice projects design records. Effective-date queries,
-alternative branches, semantic merge, advanced process decisions, quantitative
-economic/capacity scenarios, refinement and simulation remain visible gaps.
-The design projections do not establish operational or verified outcome coverage.
+Selected objects also expose four independent dimensions: lifecycle, review,
+implementation and observation. `record-state` binds the selected object ID and
+its returned `states.basisHash`. A current human editor can record reports; design
+review requires a current human project owner. Reported implementation and
+observation use `IMPLEMENTED_UNVERIFIED` and `OBSERVED_UNVERIFIED`. They do not
+enable work or establish verified outcomes. Evidence summaries are required for
+active, retired, implemented or observed reports. A later change to the object's
+meaning makes an older report stale and displays its state as unknown or
+unreviewed while preserving the original report.
+
+A current human owner can use `set-validity` to declare a main design interval.
+Dates are UTC ISO instants, the start is inclusive and the optional end is
+exclusive. Explicit null dates mean unknown applicability. `effectiveAt` queries
+select only saved main versions with a declared matching interval; missing dates
+remain unknown and do not fall back to the current design. `recordedAt` is an
+inclusive cutoff on when a snapshot was saved. Explicit versions can still be
+inspected outside their declared interval. All dated views are read-only; an
+independent command explicitly naming the current main blueprint retains the
+principal's normal edit authority.
+
+`propose-future-design` captures a meaningful name/description change to one
+selected object, a future validity interval, and an immutable copy of the saved
+base design. The proposal retains canonical object IDs, exact base and snapshot
+hashes, and a before/after diff. It is stored outside the main version sequence
+and can be opened by `proposalId`. Future proposals remain read-only even after
+their declared start passes. Work and publication continue using main; later
+main edits mark a proposal's base stale without altering it.
+
+Alternative branches, semantic merge and promotion, advanced process decisions,
+quantitative economic/capacity scenarios, refinement and simulation remain
+visible gaps. These projections and human reports describe organizational
+design rather than operational or verified outcome coverage.
 
 ## Financial SDLC reference
 
@@ -581,6 +610,16 @@ Every generated version covers the fixed product areas:
 
 Objects retain status, confidence, and provenance. Integrity checks reject missing areas, invalid status, duplicate IDs, and dangling graph links. They surface incomplete ownership, role authority, process inputs/outputs, and missing provenance as actionable gaps. Generated content is explicitly a proposed design, not an enabled assignment or evidence of business readiness.
 
-## Enterprise-design increment boundary
+## Current functional boundary
 
-This increment stops after chat → saved blueprint → interactive map. Editing and version comparison, enabled human/agent assignments, runnable processes, intervention controls, real LLM-backed work, the full readiness dashboard, and the complete end-to-end release demo remain for later bounded increments under the unchanged 12 release gates.
+The saved workspace now includes editing and version comparison, controlled
+human/agent assignments, runnable work and intervention, configured model work,
+candidate review, protected release/rollback, and outcome review with linked
+follow-up cases. [TASKS.md](TASKS.md) records the completed PR-01–PR-10 journeys
+and the active PR-12 enterprise portfolio work. Later functionality remains open;
+broad hardening and qualification are tracked in
+[HARDENING-TASKS.md](HARDENING-TASKS.md).
+
+Functional checks do not promote the original twelve release gates. Their
+qualification remains pending in the release ledgers; no production readiness
+or live operational coverage is inferred from these implemented journeys.

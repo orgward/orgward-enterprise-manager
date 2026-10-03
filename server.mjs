@@ -1567,9 +1567,10 @@ export function createApp({
         const body = validateCommand(await readJson(request));
         rejectAuthorityClaims(body); rejectAuthorityClaims(body.payload);
         const payload = normalizeEnterpriseCommand(body.payload);
-        const administrative = ['create-scope', 'rename-scope'].includes(payload.kind);
-        if (administrative && request.identity.actorType !== 'human') {
-          throw apiFailure(403, 'ENTERPRISE_HUMAN_OWNER_REQUIRED', 'A current human project owner must define or rename an organizational scope.');
+        const administrative = ['create-scope', 'rename-scope', 'set-validity', 'propose-future-design'].includes(payload.kind)
+          || (payload.kind === 'record-state' && payload.dimension === 'review');
+        if ((administrative || payload.kind === 'record-state') && request.identity.actorType !== 'human') {
+          throw apiFailure(403, 'ENTERPRISE_HUMAN_OWNER_REQUIRED', 'A current human project member must report state; a human project owner must review design or define scopes, validity and future proposals.');
         }
         const actor = requestActor(request);
         const result = await store.updateWithCommandForPrincipal(enterpriseMatch[1], requestTenant(request), {
@@ -1578,17 +1579,19 @@ export function createApp({
           expectedVersion: body.expectedVersion,
           apply(project) {
             const changed = applyEnterpriseCommand(project, payload, actor);
-            project.version += 1; project.updatedAt = changed.blueprint.createdAt; project.updatedBy = actor;
-            project.events.push(projectEvent(project, { type: 'EnterpriseScopeChanged', actor, commandId: body.commandId, correlationId,
+            project.version += 1; project.updatedAt = changed.recordedAt ?? changed.blueprint.createdAt; project.updatedBy = actor;
+            project.events.push(projectEvent(project, { type: ['record-state', 'set-validity', 'propose-future-design'].includes(payload.kind)
+              ? 'EnterpriseDesignChanged' : 'EnterpriseScopeChanged', actor, commandId: body.commandId, correlationId,
               data: { kind: payload.kind, blueprintId: changed.blueprint.id, blueprintVersion: changed.blueprint.version,
-                objectId: changed.affectedObjectId, reason: payload.reason } }));
+                objectId: changed.affectedObjectId, proposalId: changed.proposalId ?? null, reason: payload.reason } }));
           },
         }, actor, { requiredPrincipalRoles: ['workspace-write'], authzGeneration: request.identity.authzGeneration,
           ...(administrative ? { minimumProjectAccess: 'owner' } : {}) });
         if (!result) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
         const blueprint = latestBlueprint(result.project);
+        const receipt = result.project.events.at(-1).data;
         return sendApi(response, 200, { projectVersion: result.project.version, blueprintId: blueprint.id,
-          blueprintVersion: blueprint.version, affectedObjectId: blueprint.edit.objectId },
+          blueprintVersion: blueprint.version, affectedObjectId: receipt.objectId, proposalId: receipt.proposalId ?? null },
         { correlationId, event: result.project.events.at(-1), meta: { replayed: result.replayed } });
       }
 

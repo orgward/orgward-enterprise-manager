@@ -6061,6 +6061,44 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   economics/resources/value lifecycles, simulation, bulk collaboration and
   explainable multi-axis completeness.
 
+  Current slice: branches and reviewed conflict-aware merge. Scope/lens and
+  independent state/time slices below are implemented and focused checks passed.
+  Keep the parent open until its remaining functionality and one frozen parent
+  full check pass; the active cursor remains PR-12.
+
+  State/time slice verified (2026-10-03, scope/lens base `5d065d3`): Sol added four
+  independent item dimensions with exact-content basis, current human reports and
+  owner design review. Implementation and observation reports stay unverified;
+  changed content makes old reports stale. UTC effective/recorded-time contexts
+  retain exact snapshots, explicit UNKNOWN dates and read-only controls. Meaningful
+  immutable future proposals retain their base identity/hash, proposed changes and
+  canonical object IDs outside the main version sequence. Their dates never
+  activate work or publication. The UI shows differences, stale bases, exact
+  pending-command recovery and a direct return from empty historical contexts.
+  Review repaired empty date/proposal fallback, duplicate future role names,
+  missing proposal audit, empty-view escape and a real DOM NodeList compatibility
+  issue before verification. Commands remain stateless exact-current-main edits;
+  a read-only time projection does not revoke independent main edit authority.
+  Luna's six distinct new focused tests passed: initial 5 passed/1 failed
+  (3.38s runner, 2.17s TAP), followed by affected-only PostgreSQL repairs and a
+  final 1/1 pass (3.86s runner, 2.69s TAP). Three failed PostgreSQL attempts were
+  fixture/receipt-field errors, repaired only in tests; product source stayed
+  frozen. No passing first-slice cases were rerun and there were no skips.
+  Coverage includes independent states/evidence, stale reports, invalid intervals
+  and empty times, UNKNOWN selection, read-only future/time contexts, immutable
+  proposal/base identity, process-plan/internal-publication sources staying main,
+  restart and exact original command replay after a later main edit. TAP logs:
+  `/tmp/orgward-tests-oCtUHQ/node-test.tap.log`,
+  `/tmp/orgward-tests-cN8mEI/node-test.tap.log`,
+  `/tmp/orgward-tests-1IUKUY/node-test.tap.log`,
+  `/tmp/orgward-tests-jMji6u/node-test.tap.log`.
+  Syntax checks for the changed source files and `git diff --check` passed.
+  No full parent check, rendered browser proof, provider call, live effect or
+  release-gate promotion occurred. Actual branch merge/promotion follows next;
+  advanced processes/decisions, simulation, economics/resources/capacity/value,
+  refinement/reverse trace, interchange/bulk collaboration and scoped multi-axis
+  completeness remain in this parent.
+
   Scope/lens slice verified (2026-10-03, PR-10 base `5958fd3`): Sol added canonical
   organization/legal-entity/unit records and explicit object scopes in the existing
   blueprint model, with all-object and sixteen consistent lens projections, exact
@@ -6086,8 +6124,8 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   `node --check public/app.js` and `git diff --check` passed. No full parent check,
   rendered browser proof, provider call, live effect or release-gate promotion
   occurred. This bounded slice leaves PR-12 open; the verified parent full check
-  remains PR-10. Next implementation slice: independent state/time dimensions.
-  Remaining functionality in this same parent: independent state/time dimensions;
+  remains PR-10. The then-next state/time slice is recorded above.
+  Remaining functionality at that checkpoint included independent state/time dimensions;
   branches and reviewed conflict-aware merge; advanced processes/decisions and
   simulation; typed economics, resources, capacity and value lifecycles; refinement
   and reverse trace; loss-aware interchange/atomic bulk collaboration; and scoped

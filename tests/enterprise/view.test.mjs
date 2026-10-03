@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { enterpriseCommandStorageKey, enterpriseContextFailure, enterpriseQuery, enterpriseRequestPath, enterpriseSourceAligned, hasEnterpriseContext,
+import { enterpriseCommandStorageKey, enterpriseContextFailure, enterpriseContextReadOnly, enterpriseQuery, enterpriseRequestPath, enterpriseSourceAligned, hasEnterpriseContext,
   persistEnterpriseCommand, renderEnterpriseContext,
   renderEnterpriseObject, restoreEnterpriseCommand, submitEnterpriseCommand } from '../../public/enterprise.mjs';
+
+class NodeListFixture extends Array {
+  constructor(entries) { super(...entries); this.at = undefined; }
+  item(index) { return this[index] ?? null; }
+}
 
 class NodeFixture {
   constructor(tagName, options = {}) {
@@ -23,10 +28,10 @@ class NodeFixture {
   addEventListener(type, handler) { this.listeners.set(type, handler); }
   querySelectorAll(selector) {
     const tags = selector.split(',').map((part) => part.trim());
-    return this.children.flatMap((child) => [
+    return new NodeListFixture(this.children.flatMap((child) => [
       ...(tags.includes(child.tagName) ? [child] : []),
       ...child.querySelectorAll(selector),
-    ]);
+    ]));
   }
   reportValidity() { return true; }
   get firstChild() {
@@ -67,8 +72,20 @@ test('enterprise route preserves the exact perspective, optional scope, history,
     '/api/v1/projects/project-one/enterprise?lensId=all&scopeId=organization-one');
   assert.equal(enterpriseRequestPath('project-one', enterpriseQuery({ lensId: 'L-05', blueprintVersion: 2 }), 'unit-child'),
     '/api/v1/projects/project-one/enterprise?lensId=L-05&blueprintVersion=2&selectedId=unit-child');
+  assert.equal(enterpriseContextReadOnly({ isCurrent: true }), false);
   assert.equal(enterpriseCommandStorageKey('oidc:owner', 'project-one'),
     'orgward:enterprise-command:oidc%3Aowner:project-one');
+});
+
+test('enterprise temporal routes preserve exact proposal and effective/recorded dates', () => {
+  const temporal = enterpriseQuery({ proposalId: 'proposal-one', effectiveAt: '2026-10-04T00:00:00.000Z', recordedAt: '2026-10-03T12:00:00.000Z' });
+  assert.deepEqual(temporal, { lensId: 'all', scopeId: null, blueprintVersion: null, proposalId: 'proposal-one',
+    effectiveAt: '2026-10-04T00:00:00.000Z', recordedAt: '2026-10-03T12:00:00.000Z' });
+  assert.equal(enterpriseRequestPath('project-one', temporal, 'process-deliver'),
+    '/api/v1/projects/project-one/enterprise?lensId=all&proposalId=proposal-one&effectiveAt=2026-10-04T00%3A00%3A00.000Z&recordedAt=2026-10-03T12%3A00%3A00.000Z&selectedId=process-deliver');
+  assert.equal(enterpriseContextReadOnly({ isCurrent: true, effectiveAt: temporal.effectiveAt }), true);
+  assert.equal(enterpriseContextReadOnly({ isCurrent: true, proposalId: temporal.proposalId }), true);
+  assert.equal(enterpriseContextReadOnly({ isCurrent: true, recordedAtCutoff: temporal.recordedAt }), true);
 });
 
 test('an unavailable requested enterprise context stays explicit and offers an intentional reset', () => {
@@ -110,6 +127,56 @@ test('enterprise API source must align with the loaded project while historical 
     blueprint: { id: 'blueprint-history' } }), true);
   assert.equal(enterpriseSourceAligned(project, { context: { projectVersion: 7, blueprintId: 'blueprint-history', blueprintVersion: 2, isCurrent: false },
     blueprint: { id: 'blueprint-history' } }), false);
+});
+
+test('dated and future enterprise contexts show human-report provenance and disable mutation controls', () => {
+  const selected = { ...object };
+  const states = { basisHash: 'a'.repeat(64),
+    lifecycle: { value: 'ACTIVE', evidenceKind: 'HUMAN_REPORTED', recordedBy: 'oidc:owner', recordedAt: '2026-10-03T10:00:00.000Z',
+      reason: 'Owner report.', evidenceSummary: 'Reported active use.', stale: false },
+    review: { value: 'UNREVIEWED', evidenceKind: 'UNKNOWN', stale: false },
+    implementation: { value: 'UNKNOWN', evidenceKind: 'UNKNOWN', stale: false },
+    observation: { value: 'UNKNOWN', evidenceKind: 'UNKNOWN', stale: false } };
+  const datedModel = model({ context: { projectVersion: 8, blueprintId: 'blueprint-current', blueprintVersion: 4,
+    isCurrent: false, lensId: 'all', scopeId: null, branch: 'main', effectiveAt: '2026-10-04T00:00:00.000Z',
+    effectiveStatus: 'IN_RANGE' }, selection: { object: selected, states, visible: true, hiddenBy: [] },
+  permissions: { write: true, scopeAdmin: true } });
+  const root = renderEnterpriseObject({ model: datedModel, object: selected, el, onCommand: () => {} });
+  assert.match(root.textContent, /Human reported/);
+  assert.match(root.textContent, /Reported evidence: Reported active use/);
+  for (const action of ['record-state', 'propose-future-design', 'assign-object-scope']) {
+    const form = root.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === action);
+    assert.ok(form, `${action} remains visible for explanation`);
+    assert.ok(form.querySelectorAll('input,select,textarea,button').every((control) => control.disabled), `${action} is read-only`);
+  }
+  assert.equal(enterpriseContextReadOnly({ isCurrent: true, recordedAtCutoff: '2026-10-03T10:00:00.000Z' }), true);
+});
+
+test('future proposal remains visibly proposed after its effective date and has no context mutation authority', () => {
+  const proposalId = 'enterprise-proposal-00000000-0000-4000-8000-000000000001';
+  const futureModel = model({
+    context: { projectVersion: 9, blueprintId: 'blueprint-future', blueprintVersion: 5, isCurrent: false,
+      lensId: 'all', scopeId: null, branch: 'main', proposalId, sourceKind: 'FUTURE_PROPOSAL',
+      effectiveAt: '2030-01-02T00:00:00.000Z', effectiveStatus: 'IN_RANGE',
+      validity: { effectiveFrom: '2030-01-01T00:00:00.000Z', effectiveTo: null } },
+    blueprint: { id: 'blueprint-future', areas: { responsibilityAuthority: { items: [object] } } },
+    versions: [{ id: 'blueprint-main', version: 4, createdAt: '2026-10-01T00:00:00.000Z' }],
+    proposals: [{ id: proposalId, title: 'Future service design', baseBlueprintVersion: 4, effectiveFrom: '2030-01-01T00:00:00.000Z' }],
+    proposal: { id: proposalId, title: 'Future service design', status: 'PROPOSED', baseBlueprintId: 'blueprint-main',
+      baseBlueprintVersion: 4, baseSnapshotHash: 'b'.repeat(64), proposalHash: 'c'.repeat(64), baseStale: false,
+      diff: { before: { name: object.name }, after: { name: 'Future service' }, changedFields: ['name'] } },
+    permissions: { write: false, scopeAdmin: false },
+  });
+  const root = renderEnterpriseContext({ model: futureModel, query: { lensId: 'all', scopeId: null, blueprintVersion: null,
+    proposalId, effectiveAt: futureModel.context.effectiveAt }, el, onContext: () => {}, onCommand: () => {}, onRetry: () => {} });
+  assert.match(root.textContent, /proposed future draft · read only/);
+  assert.match(root.textContent, /The draft stays proposed after its effective date/);
+  assert.match(root.textContent, /within the declared interval/);
+  for (const action of ['create-scope', 'set-validity']) {
+    const form = root.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === action);
+    assert.ok(form, `${action} remains visible as a disabled explanation`);
+    assert.ok(form.querySelectorAll('input,select,textarea,button').every((control) => control.disabled));
+  }
 });
 
 test('a filtered selection remains inspectable with a clear lens and scope explanation', () => {

@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { buildRelations, latestBlueprint, validateBlueprint } from '../model.mjs';
 import { ENTERPRISE_SCOPE_TYPES, blueprintObjects, enterpriseFailure, enterpriseText } from './types.mjs';
+import { digest } from '../sdlc/contracts.mjs';
+import { ENTERPRISE_STATE_VALUES, enterpriseInterval, objectBasisHash } from './state.mjs';
 
 const base = ['kind', 'blueprintId', 'blueprintVersion', 'reason'];
 function reference(value, field, { nullable = false } = {}) {
@@ -12,7 +14,7 @@ function reference(value, field, { nullable = false } = {}) {
 }
 export function normalizeEnterpriseCommand(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)
-    || !['create-scope', 'rename-scope', 'assign-object-scope'].includes(input.kind)
+    || !['create-scope', 'rename-scope', 'assign-object-scope', 'record-state', 'set-validity', 'propose-future-design'].includes(input.kind)
     || !/^blueprint-[0-9a-f-]{36}$/.test(input.blueprintId ?? '')
     || !Number.isSafeInteger(input.blueprintVersion) || input.blueprintVersion < 1) {
     throw enterpriseFailure('INVALID_ENTERPRISE_COMMAND', 'Choose an available enterprise command and bind it to the saved blueprint.');
@@ -20,7 +22,26 @@ export function normalizeEnterpriseCommand(input) {
   const normalized = { kind: input.kind, blueprintId: input.blueprintId, blueprintVersion: input.blueprintVersion,
     reason: enterpriseText(input.reason, 'Change reason', 500) };
   let allowed;
-  if (input.kind === 'create-scope') {
+  if (input.kind === 'record-state') {
+    allowed = [...base, 'objectId', 'dimension', 'value', 'basisHash', 'evidenceSummary'];
+    if (!Object.hasOwn(ENTERPRISE_STATE_VALUES, input.dimension)
+      || !ENTERPRISE_STATE_VALUES[input.dimension].includes(input.value) || !/^[a-f0-9]{64}$/.test(input.basisHash ?? '')) {
+      throw enterpriseFailure('INVALID_ENTERPRISE_STATE', 'Choose an available independent state value and the exact selected object basis hash.');
+    }
+    const evidenceSummary = input.evidenceSummary ?? '';
+    if (typeof evidenceSummary !== 'string' || evidenceSummary.length > 1000
+      || (['ACTIVE', 'RETIRED', 'IMPLEMENTED_UNVERIFIED', 'OBSERVED_UNVERIFIED'].includes(input.value) && !evidenceSummary.trim())) {
+      throw enterpriseFailure('ENTERPRISE_STATE_EVIDENCE_REQUIRED', 'Reported active, retired, implemented or observed states need a bounded evidence summary.');
+    }
+    Object.assign(normalized, { objectId: reference(input.objectId, 'Design object'), dimension: input.dimension,
+      value: input.value, basisHash: input.basisHash, evidenceSummary: evidenceSummary.trim() });
+  } else if (input.kind === 'set-validity' || input.kind === 'propose-future-design') {
+    allowed = [...base, 'effectiveFrom', 'effectiveTo', ...(input.kind === 'propose-future-design' ? ['objectId', 'title', 'name', 'detail'] : [])];
+    Object.assign(normalized, enterpriseInterval(input.effectiveFrom, input.effectiveTo));
+    if (input.kind === 'propose-future-design') Object.assign(normalized, {
+      objectId: reference(input.objectId, 'Design object'), title: enterpriseText(input.title, 'Future design title', 160),
+      name: enterpriseText(input.name, 'Proposed name', 120), detail: enterpriseText(input.detail, 'Proposed description', 700) });
+  } else if (input.kind === 'create-scope') {
     if (!ENTERPRISE_SCOPE_TYPES.includes(input.scopeType)) throw enterpriseFailure('INVALID_ENTERPRISE_COMMAND', 'Choose organization, legal-entity or unit.');
     allowed = [...base, 'scopeType', 'name', 'detail', 'ownerRoleId',
       ...(input.scopeType === 'legal-entity' ? ['organizationId', 'jurisdiction']
@@ -52,6 +73,9 @@ export function applyEnterpriseCommand(project, command, actor) {
   if (!previous) throw enterpriseFailure('BLUEPRINT_NOT_FOUND', 'Save the initial blueprint before defining enterprise scopes.', 409);
   if (previous.id !== command.blueprintId || previous.version !== command.blueprintVersion) {
     throw enterpriseFailure('ENTERPRISE_BLUEPRINT_STALE', 'This command names a historical or changed blueprint. Reload the current design before editing.', 409);
+  }
+  if (['record-state', 'set-validity', 'propose-future-design'].includes(command.kind)) {
+    return applyStateTimeCommand(project, previous, command, actor);
   }
   const next = structuredClone(previous);
   const objects = blueprintObjects(next);
@@ -111,4 +135,76 @@ export function applyEnterpriseCommand(project, command, actor) {
   project.audit ??= [];
   project.audit.push({ at, action: `enterprise.${command.kind}`, actor, detail: `Updated ${affected.type} “${affected.name}” in blueprint v${next.version}.` });
   return { blueprint: next, affectedObjectId: affected.id };
+}
+
+function applyStateTimeCommand(project, previous, command, actor) {
+  const next = structuredClone(previous);
+  const at = new Date().toISOString();
+  const affected = command.objectId ? blueprintObjects(next).find((object) => object.id === command.objectId) : null;
+  if (command.objectId && !affected) throw enterpriseFailure('ENTERPRISE_OBJECT_NOT_FOUND', 'The selected object is not present in the current main design.', 404);
+  const before = affected ? structuredClone(affected) : structuredClone(previous.enterpriseValidity ?? {});
+  if (command.kind === 'record-state') {
+    if (objectBasisHash(affected) !== command.basisHash) throw enterpriseFailure('ENTERPRISE_STATE_BASIS_STALE', 'The object meaning changed. Reload before reporting or reviewing its state.', 409);
+    affected.enterpriseStates ??= {};
+    affected.enterpriseStates[command.dimension] = { value: command.value, basisHash: command.basisHash,
+      evidenceKind: command.dimension === 'review' ? 'HUMAN_REVIEW' : 'HUMAN_REPORTED',
+      recordedBy: actor, recordedAt: at, reason: command.reason, evidenceSummary: command.evidenceSummary };
+    affected.provenance ??= [];
+    affected.provenance.push({ source: 'workspace:enterprise-state', actor, at, reason: command.reason,
+      note: 'An independent design review or human-reported state; no execution or verified outcome authority is granted.' });
+  } else {
+    if (command.kind === 'set-validity' && command.effectiveFrom
+      && (command.effectiveFrom > at || (command.effectiveTo && command.effectiveTo <= at))) {
+      throw enterpriseFailure('ENTERPRISE_CURRENT_VALIDITY_REQUIRED', 'The current design interval must contain now. Use a future proposal for a later design.', 409);
+    }
+    if (command.kind === 'propose-future-design' && (!command.effectiveFrom || command.effectiveFrom <= at)) {
+      throw enterpriseFailure('ENTERPRISE_FUTURE_DATE_REQUIRED', 'A new future proposal needs a declared start after now.', 409);
+    }
+    next.enterpriseValidity = { effectiveFrom: command.effectiveFrom, effectiveTo: command.effectiveTo,
+      evidenceKind: 'HUMAN_PROPOSED', recordedBy: actor, recordedAt: at, reason: command.reason };
+  }
+  next.id = `blueprint-${randomUUID()}`;
+  next.createdAt = at; next.epistemicStatus = 'proposed-design';
+  if (command.kind === 'propose-future-design') {
+    if (['actor-human', 'actor-agent'].includes(affected.type)) throw enterpriseFailure('ENTERPRISE_ACTOR_IDENTITY_FIXED', 'Actor identity labels cannot be changed by a future design proposal.');
+    if (affected.name === command.name && affected.detail === command.detail) throw enterpriseFailure('ENTERPRISE_NO_CHANGE', 'Propose a change to the selected object.', 409);
+    if (affected.type === 'role' && blueprintObjects(next).some((object) => object.type === 'role' && object.id !== affected.id
+      && object.name.toLocaleLowerCase() === command.name.toLocaleLowerCase())) {
+      throw enterpriseFailure('INVALID_BLUEPRINT_RELATION', 'Role names must remain unique so design ownership remains unambiguous.', 409);
+    }
+    affected.name = command.name; affected.detail = command.detail;
+    affected.enterpriseStates ??= {};
+    affected.enterpriseStates.lifecycle = { value: 'PLANNED', basisHash: objectBasisHash(affected),
+      evidenceKind: 'HUMAN_REPORTED', recordedBy: actor, recordedAt: at, reason: command.reason, evidenceSummary: '' };
+    affected.provenance ??= [];
+    affected.provenance.push({ source: 'workspace:future-design', actor, at, reason: command.reason, note: 'An immutable future proposal; not current or operational.' });
+  }
+  next.relations = buildRelations(next.areas);
+  next.integrity = validateBlueprint(next);
+  if (!next.integrity.valid) throw enterpriseFailure('INVALID_ENTERPRISE_SCOPE', 'The proposed state or date change would invalidate the saved design.', 409);
+  const changedFields = command.kind === 'record-state' ? ['enterpriseStates']
+    : command.kind === 'set-validity' ? ['enterpriseValidity'] : ['name', 'detail', 'enterpriseStates', 'enterpriseValidity'];
+  next.edit = { actor, at, objectId: affected?.id ?? null, objectType: affected?.type ?? 'blueprint', changedFields, reason: command.reason,
+    before, after: affected ? structuredClone(affected) : structuredClone(next.enterpriseValidity),
+    relationsBefore: affected ? previous.relations.filter((relation) => relation.source === affected.id || relation.target === affected.id) : [],
+    relationsAfter: affected ? next.relations.filter((relation) => relation.source === affected.id || relation.target === affected.id) : [] };
+  if (command.kind === 'propose-future-design') {
+    project.enterpriseProposals ??= [];
+    if (project.enterpriseProposals.length >= 100) throw enterpriseFailure('ENTERPRISE_PROPOSAL_LIMIT', 'This project reached its 100-proposal history limit.', 409);
+    const core = { id: `enterprise-proposal-${randomUUID()}`, title: command.title, objectId: affected.id,
+      recordedAt: at, createdBy: actor, status: 'PROPOSED', effectiveFrom: command.effectiveFrom, effectiveTo: command.effectiveTo,
+      baseBlueprintId: previous.id, baseBlueprintVersion: previous.version, baseSnapshotHash: digest(previous),
+      snapshot: next, snapshotHash: digest(next) };
+    const proposal = { ...core, proposalHash: digest(core) };
+    project.enterpriseProposals.push(proposal);
+    project.audit ??= [];
+    project.audit.push({ at, action: 'enterprise.propose-future-design', actor,
+      detail: `Proposed “${command.title}” for ${command.effectiveFrom}; current design remains unchanged.` });
+    return { blueprint: previous, affectedObjectId: affected.id, proposalId: proposal.id, recordedAt: at };
+  }
+  next.version = Math.max(...project.blueprintVersions.map((blueprint) => blueprint.version)) + 1;
+  project.blueprintVersions.push(next);
+  project.audit ??= [];
+  project.audit.push({ at, action: `enterprise.${command.kind}`, actor, detail: 'Recorded an independent reported design state or declared validity interval.' });
+  return { blueprint: next, affectedObjectId: affected?.id ?? null, proposalId: null, recordedAt: at };
 }

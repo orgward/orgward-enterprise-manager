@@ -1,8 +1,10 @@
 import { graphForBlueprint, latestBlueprint } from '../model.mjs';
 import { ENTERPRISE_LENSES, ENTERPRISE_SCOPE_TYPES, blueprintObjects, enterpriseFailure, enterpriseScopeErrors, scopeState } from './types.mjs';
+import { digest } from '../sdlc/contracts.mjs';
+import { effectiveStatus, enterpriseInstant, objectStates } from './state.mjs';
 
 export function normalizeEnterpriseQuery(input = {}) {
-  const accepted = ['lensId', 'scopeId', 'blueprintVersion', 'selectedId'];
+  const accepted = ['lensId', 'scopeId', 'blueprintVersion', 'selectedId', 'proposalId', 'effectiveAt', 'recordedAt'];
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !accepted.includes(key))) {
     throw enterpriseFailure('INVALID_ENTERPRISE_CONTEXT', 'Choose a supported lens, scope, saved blueprint version and selection.');
   }
@@ -10,7 +12,10 @@ export function normalizeEnterpriseQuery(input = {}) {
   if (lensId !== 'all' && !ENTERPRISE_LENSES.some((lens) => lens.id === lensId)) {
     throw enterpriseFailure('ENTERPRISE_LENS_NOT_FOUND', 'Choose all objects or one of the sixteen named perspectives.');
   }
-  const query = { lensId, scopeId: input.scopeId || null, selectedId: input.selectedId || null, blueprintVersion: null };
+  const query = { lensId, scopeId: input.scopeId || null, selectedId: input.selectedId || null, blueprintVersion: null,
+    proposalId: input.proposalId ?? null, effectiveAt: input.effectiveAt == null ? null : enterpriseInstant(input.effectiveAt, 'Effective time'),
+    recordedAt: input.recordedAt == null ? null : enterpriseInstant(input.recordedAt, 'Recorded-time cutoff') };
+  if (query.proposalId !== null && !/^enterprise-proposal-[0-9a-f-]{36}$/.test(query.proposalId)) throw enterpriseFailure('INVALID_ENTERPRISE_CONTEXT', 'Choose a saved future proposal identifier.');
   for (const field of ['scopeId', 'selectedId']) {
     if (query[field] !== null && (typeof query[field] !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,119}$/i.test(query[field]))) {
       throw enterpriseFailure('INVALID_ENTERPRISE_CONTEXT', `${field} must identify a saved design record.`);
@@ -23,20 +28,42 @@ export function normalizeEnterpriseQuery(input = {}) {
     }
     query.blueprintVersion = Number(value);
   }
+  if (query.proposalId && query.blueprintVersion !== null) throw enterpriseFailure('INVALID_ENTERPRISE_CONTEXT', 'Choose a main version or a future proposal, rather than both.');
   return query;
 }
 export function projectEnterprise(project, query = {}, authority = {}) {
   const context = normalizeEnterpriseQuery(query);
   const current = latestBlueprint(project);
-  const blueprint = context.blueprintVersion === null ? current
-    : project.blueprintVersions.find((entry) => entry.version === context.blueprintVersion);
+  const savedBy = (at) => !context.recordedAt || (typeof at === 'string' && Number.isFinite(Date.parse(at)) && Date.parse(at) <= Date.parse(context.recordedAt));
+  const recorded = project.blueprintVersions.filter((entry) => savedBy(entry.createdAt));
+  const proposals = (project.enterpriseProposals ?? []).map((proposal) => {
+    const { proposalHash, ...core } = proposal;
+    const base = project.blueprintVersions.find((entry) => entry.id === proposal.baseBlueprintId && entry.version === proposal.baseBlueprintVersion);
+    if (digest(core) !== proposalHash || digest(proposal.snapshot) !== proposal.snapshotHash || !base || digest(base) !== proposal.baseSnapshotHash) {
+      throw enterpriseFailure('ENTERPRISE_PROPOSAL_INTEGRITY', 'A saved future proposal failed its immutable source or snapshot checks.', 409);
+    }
+    return { ...proposal, baseStale: current?.id !== proposal.baseBlueprintId || digest(current) !== proposal.baseSnapshotHash };
+  });
+  const proposal = context.proposalId ? proposals.find((entry) => entry.id === context.proposalId) : null;
+  if (context.proposalId && !proposal) throw enterpriseFailure('ENTERPRISE_PROPOSAL_NOT_FOUND', 'The future proposal was not found in this project.', 404);
+  let blueprint = proposal?.snapshot ?? (context.blueprintVersion === null
+    ? recorded.at(-1) ?? null : project.blueprintVersions.find((entry) => entry.version === context.blueprintVersion));
   if (!blueprint && context.blueprintVersion !== null) throw enterpriseFailure('ENTERPRISE_BLUEPRINT_NOT_FOUND', 'The saved blueprint version was not found in this project.', 404);
+  if (blueprint && !savedBy(proposal?.recordedAt ?? blueprint.createdAt)) {
+    throw enterpriseFailure('ENTERPRISE_CONTEXT_NOT_RECORDED', 'This snapshot was not yet saved at the selected recorded-time cutoff.', 404);
+  }
+  let applicability = context.effectiveAt ? effectiveStatus(blueprint, context.effectiveAt) : 'UNKNOWN';
+  if (context.effectiveAt && !proposal && context.blueprintVersion === null) {
+    const matching = recorded.filter((entry) => effectiveStatus(entry, context.effectiveAt) === 'IN_RANGE');
+    blueprint = matching.at(-1) ?? null;
+    applicability = blueprint ? 'IN_RANGE' : recorded.some((entry) => !entry.enterpriseValidity?.effectiveFrom) ? 'UNKNOWN' : 'OUT_OF_RANGE';
+  }
   const objects = blueprintObjects(blueprint);
   const scopeErrors = enterpriseScopeErrors(objects);
   if (scopeErrors.length) throw enterpriseFailure('INVALID_ENTERPRISE_SCOPE', 'The saved blueprint has invalid organizational scope references. Repair its design before exploring these perspectives.', 409);
   const byId = new Map(objects.map((object) => [object.id, object]));
   const scope = context.scopeId ? byId.get(context.scopeId) : null;
-  if (context.scopeId && !ENTERPRISE_SCOPE_TYPES.includes(scope?.type)) {
+  if (blueprint && context.scopeId && !ENTERPRISE_SCOPE_TYPES.includes(scope?.type)) {
     throw enterpriseFailure('ENTERPRISE_SCOPE_NOT_FOUND', 'The selected scope is not present in this saved blueprint.', 404);
   }
   const inScope = (object) => !scope || (scope.type === 'organization' ? object.enterpriseScope?.organizationId === scope.id
@@ -46,19 +73,24 @@ export function projectEnterprise(project, query = {}, authority = {}) {
   const visible = new Set(objects.filter((object) => inScope(object) && inLens(object)).map((object) => object.id));
   const canonicalGraph = graphForBlueprint(blueprint);
   const graph = { nodes: canonicalGraph.nodes.filter((node) => visible.has(node.id)).map((node) => ({ ...structuredClone(node),
-    enterpriseScope: structuredClone(byId.get(node.id).enterpriseScope ?? null), scopeState: scopeState(byId.get(node.id)) })),
+    enterpriseScope: structuredClone(byId.get(node.id).enterpriseScope ?? null), scopeState: scopeState(byId.get(node.id)),
+    states: objectStates(byId.get(node.id)) })),
   links: structuredClone(canonicalGraph.links.filter((relation) => visible.has(relation.source) && visible.has(relation.target))),
   types: [...new Set(objects.filter((object) => visible.has(object.id)).map((object) => object.type))].sort() };
   const selected = context.selectedId ? byId.get(context.selectedId) : null;
-  if (context.selectedId && !selected) throw enterpriseFailure('ENTERPRISE_OBJECT_NOT_FOUND', 'The selected object is not present in this saved blueprint.', 404);
+  if (blueprint && context.selectedId && !selected) throw enterpriseFailure('ENTERPRISE_OBJECT_NOT_FOUND', 'The selected object is not present in this saved blueprint.', 404);
   const hiddenBy = selected ? [...(!inScope(selected) ? ['scope'] : []), ...(!inLens(selected) ? ['lens'] : [])] : [];
-  const isCurrent = Boolean(blueprint && current?.id === blueprint.id);
+  const isCurrent = Boolean(blueprint && current?.id === blueprint.id && !proposal && !context.effectiveAt && !context.recordedAt);
   const gaps = [
     { code: 'PROPOSED_DESIGN_ONLY', message: 'These perspectives show saved organizational design. They do not establish enabled operations or verified outcomes.' },
-    { code: 'TEMPORAL_CONTEXT_UNAVAILABLE', message: 'Effective dates, recorded-time queries and alternative branches are not available in this view.' },
+    { code: 'BRANCH_PROMOTION_UNAVAILABLE', message: 'Future proposals remain design contexts. Branch merge and explicit promotion are not yet available.' },
     { code: 'DOMAIN_DETAILS_PARTIAL', message: 'Advanced process decisions, economic scenarios, capacity calendars, refinement and simulations need further modeling.' },
   ];
-  if (!blueprint) gaps.unshift({ code: 'BLUEPRINT_REQUIRED', message: 'Save the initial blueprint to explore and define enterprise scopes.' });
+  if (!blueprint) gaps.unshift({ code: current ? 'TEMPORAL_CONTEXT_UNKNOWN' : 'BLUEPRINT_REQUIRED',
+    message: current ? 'No saved main snapshot has known applicability at these dates. Missing effective dates remain unknown; no current-design fallback was used.'
+      : 'Save the initial blueprint to explore and define enterprise scopes.' });
+  if (!blueprint && context.selectedId) gaps.push({ code: 'TEMPORAL_SELECTION_UNAVAILABLE', message: 'The retained selection is unavailable in this dated context.' });
+  if (proposal?.baseStale) gaps.push({ code: 'ENTERPRISE_PROPOSAL_BASE_STALE', message: 'The current main design changed after this proposal. Its saved base and proposal remain immutable.' });
   const unknownCount = objects.filter((object) => scopeState(object) === 'UNKNOWN').length;
   if (unknownCount) gaps.push({ code: 'LEGACY_SCOPE_UNKNOWN', message: `${unknownCount} design objects have no recorded organizational scope.`, count: unknownCount });
   const runtimeLensGap = { code: 'DESIGN_EVIDENCE_ONLY', message: 'This perspective includes design records. Case, run, release and independently verified evidence are not included in its graph.' };
@@ -66,14 +98,25 @@ export function projectEnterprise(project, query = {}, authority = {}) {
     gaps: ['L-11', 'L-12', 'L-13', 'L-16'].includes(entry.id) ? [{ ...runtimeLensGap }] : [] }));
   if (lens) gaps.push(...lenses.find((entry) => entry.id === lens.id).gaps.map((gap) => ({ ...gap, lensId: lens.id })));
   return { context: { projectVersion: project.version, blueprintId: blueprint?.id ?? null, blueprintVersion: blueprint?.version ?? null,
-    isCurrent, lensId: context.lensId, scopeId: context.scopeId, branch: 'main' }, graph,
+    isCurrent, lensId: context.lensId, scopeId: context.scopeId, branch: 'main', proposalId: proposal?.id ?? null,
+    sourceKind: proposal ? 'FUTURE_PROPOSAL' : 'MAIN_DESIGN', recordedAt: proposal?.recordedAt ?? blueprint?.createdAt ?? null,
+    recordedAtCutoff: context.recordedAt, effectiveAt: context.effectiveAt, effectiveStatus: applicability,
+    validity: blueprint?.enterpriseValidity ? structuredClone(blueprint.enterpriseValidity) : null,
+    selectionUnavailable: !blueprint && Boolean(context.selectedId) }, graph,
     blueprint: blueprint ? structuredClone(blueprint) : null,
-    selection: selected ? { object: structuredClone(selected), visible: visible.has(selected.id), hiddenBy } : null,
+    selection: selected ? { object: structuredClone(selected), states: objectStates(selected), visible: visible.has(selected.id), hiddenBy } : null,
     lenses, scopes: objects.filter((object) => ENTERPRISE_SCOPE_TYPES.includes(object.type)).map((object) => ({
       id: object.id, type: object.type, name: object.name, detail: object.detail,
       organizationId: object.enterpriseScope.organizationId, legalEntityId: object.enterpriseScope.legalEntityId,
       parentUnitId: object.parentUnitId ?? null, jurisdiction: object.jurisdiction ?? null, ownerRoleId: object.owner ?? null })),
-    versions: project.blueprintVersions.map(({ id, version, createdAt }) => ({ id, version, createdAt })),
+    versions: recorded.map(({ id, version, createdAt }) => ({ id, version, createdAt })),
+    proposals: proposals.filter((entry) => savedBy(entry.recordedAt) && (!context.effectiveAt || effectiveStatus(entry.snapshot, context.effectiveAt) === 'IN_RANGE'))
+      .map(({ id, title, objectId, recordedAt, effectiveFrom, effectiveTo, baseBlueprintId, baseBlueprintVersion, baseSnapshotHash, snapshotHash, proposalHash, status, baseStale }) =>
+        ({ id, title, objectId, recordedAt, effectiveFrom, effectiveTo, baseBlueprintId, baseBlueprintVersion, baseSnapshotHash, snapshotHash, proposalHash, status, baseStale })),
+    proposal: proposal ? { id: proposal.id, title: proposal.title, status: proposal.status, proposalHash: proposal.proposalHash,
+      baseBlueprintId: proposal.baseBlueprintId, baseBlueprintVersion: proposal.baseBlueprintVersion, baseSnapshotHash: proposal.baseSnapshotHash,
+      snapshotHash: proposal.snapshotHash, baseStale: proposal.baseStale,
+      diff: { before: structuredClone(proposal.snapshot.edit.before), after: structuredClone(proposal.snapshot.edit.after), changedFields: proposal.snapshot.edit.changedFields } } : null,
     permissions: { write: isCurrent && Boolean(authority.write), scopeAdmin: isCurrent && Boolean(authority.scopeAdmin) },
     exclusions: { totalObjects: objects.length, visibleObjects: visible.size,
       scopeUnknownCount: unknownCount, unscopedCount: objects.filter((object) => scopeState(object) === 'UNSCOPED').length,

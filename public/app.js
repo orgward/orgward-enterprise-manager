@@ -3,7 +3,7 @@ import { apiErrorFrom, decodeStudioRoute, encodeExecutionRoute, encodeStudioRout
 import { coverageAreaStateLabel, coverageForBlueprint } from './coverage-dashboard.mjs';
 import { compareBlueprintObjectVersions } from './blueprint-comparison.mjs';
 import { renderOutcomeInbox } from './outcomes.mjs';
-import { enterpriseContextFailure, enterpriseSourceAligned, hasEnterpriseContext, enterpriseQuery, enterpriseRequestPath, persistEnterpriseCommand, restoreEnterpriseCommand, submitEnterpriseCommand, renderEnterpriseContext, renderEnterpriseObject } from './enterprise.mjs';
+import { enterpriseContextFailure, enterpriseContextReadOnly, enterpriseStateSummary, enterpriseSourceAligned, hasEnterpriseContext, enterpriseQuery, enterpriseRequestPath, persistEnterpriseCommand, restoreEnterpriseCommand, submitEnterpriseCommand, renderEnterpriseContext, renderEnterpriseObject } from './enterprise.mjs';
 
 const state = {
   projects: [],
@@ -173,16 +173,16 @@ function currentRoute() {
 
 function viewedBlueprint() {
   if (state.enterpriseLoading || state.enterpriseError) return null;
-  return state.enterpriseModel?.blueprint ?? state.project?.latestBlueprint;
+  return state.enterpriseModel ? state.enterpriseModel.blueprint : state.project?.latestBlueprint;
 }
 
 function viewedGraph() {
   if (state.enterpriseLoading || state.enterpriseError) return { nodes: [], links: [], types: [] };
-  return state.enterpriseModel?.graph ?? state.project?.graph ?? { nodes: [], links: [], types: [] };
+  return state.enterpriseModel ? state.enterpriseModel.graph : state.project?.graph ?? { nodes: [], links: [], types: [] };
 }
 
 function enterpriseReadOnly() {
-  return Boolean(state.enterpriseLoading || state.enterpriseError || state.enterpriseBusy || state.pendingEnterprise || state.enterpriseModel?.context.isCurrent === false);
+  return Boolean(state.enterpriseLoading || state.enterpriseError || state.enterpriseBusy || state.pendingEnterprise || enterpriseContextReadOnly(state.enterpriseModel?.context));
 }
 
 function retainEnterprise(value) {
@@ -251,7 +251,8 @@ async function saveEnterpriseCommand(payload = null) {
   if (!state.pendingEnterprise) {
     const model = state.enterpriseModel;
     if (!payload || enterpriseReadOnly() || !model?.permissions?.write
-      || (['create-scope', 'rename-scope'].includes(payload.kind) && !model.permissions.scopeAdmin)) return;
+      || ((['create-scope', 'rename-scope', 'set-validity', 'propose-future-design'].includes(payload.kind)
+        || (payload.kind === 'record-state' && payload.dimension === 'review')) && !model.permissions.scopeAdmin)) return;
     retainEnterprise({ projectId, envelope: command({ ...payload, blueprintId: model.context.blueprintId, blueprintVersion: model.context.blueprintVersion }, model.context.projectVersion, `enterprise:${crypto.randomUUID()}`) });
   }
   const saved = state.pendingEnterprise;
@@ -263,7 +264,8 @@ async function saveEnterpriseCommand(payload = null) {
     result = await submitEnterpriseCommand(api, projectId, saved);
     if (state.project?.id !== projectId) return;
     retainEnterprise(null);
-    state.enterpriseStatus = 'Saved. The canonical record and its new design version are shown below.';
+    state.enterpriseStatus = result.data.proposalId ? 'Future design draft saved. Inspect the proposed snapshot below; the current main design remains its original source.'
+      : 'Saved. The canonical record and its new design version are shown below.';
   } catch (error) {
     if (state.project?.id !== projectId) return;
     definitive = error.status >= 400 && error.status < 500 && error.status !== 408;
@@ -275,6 +277,7 @@ async function saveEnterpriseCommand(payload = null) {
   if (result || definitive) {
     const created = result && saved.envelope.payload.kind === 'create-scope';
     await loadProject(projectId, { history: 'replace', route: { ...currentRoute(), blueprintVersion: null,
+      proposalId: result?.data.proposalId ?? null, effectiveAt: null, recordedAt: null,
       ...(created ? { lensId: 'all', scopeId: null, types: [] } : {}),
       selectedId: result?.data.affectedObjectId ?? state.selectedId, view: 'map' } });
   } else renderStudio();
@@ -1032,7 +1035,7 @@ function renderGraph() {
     const group = svgElement('g', { transform: `translate(${position.x} ${position.y})`, class: `graph-node${node.id === selected ? ' selected' : ''}${selected && !neighbors.has(node.id) ? ' dimmed' : ''}`, tabindex: '0', role: 'button', 'aria-label': `${node.type}: ${node.name}`, 'aria-pressed': mapControlPressed(node.id, selected) });
     group.append(svgElement('circle', { r: node.id === selected ? 12 : 9, fill: typeColors[node.type] ?? '#9daaa2' }));
     const label = svgElement('text', { x: '14', y: '4' }); label.textContent = node.name; group.append(label);
-    const title = svgElement('title'); title.textContent = `${node.name} — ${node.detail}`; group.append(title);
+    const title = svgElement('title'); title.textContent = `${node.name} — ${node.detail} · ${enterpriseStateSummary(node.states)}`; group.append(title);
     group.addEventListener('click', (event) => { event.stopPropagation(); selectNode(node.id); });
     group.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectNode(node.id); } });
     world.append(group);
@@ -1089,9 +1092,9 @@ function renderList() {
   for (const [area, areaNodes] of groups) {
     const section = element('section', { className: 'list-area' }, [element('h3', { text: area })]);
     for (const node of areaNodes) {
-      const row = element('button', { className: `list-row${node.id === state.selectedId ? ' selected' : ''}`, attrs: { type: 'button', 'aria-pressed': mapControlPressed(node.id, state.selectedId) } }, [
+      const row = element('button', { className: `list-row${node.id === state.selectedId ? ' selected' : ''}`, attrs: { type: 'button', 'aria-pressed': mapControlPressed(node.id, state.selectedId), title: enterpriseStateSummary(node.states) } }, [
         element('i', { className: `type-dot type-${node.type}` }), element('span', { text: node.type.replaceAll('-', ' ') }),
-        element('strong', { text: node.name }), element('small', { text: node.status }),
+        element('strong', { text: node.name }), element('small', { text: `Design: ${node.status}` }),
       ]);
       row.addEventListener('click', () => selectNode(node.id)); section.append(row);
     }
@@ -1101,16 +1104,21 @@ function renderList() {
 
 function selectNode(id) {
   state.selectedId = id;
+  let needsStateProjection = false;
   if (state.enterpriseModel) {
-    const visible = state.enterpriseModel.graph.nodes.some((node) => node.id === id);
-    state.enterpriseModel.selection = { object: blueprintItem(state.enterpriseModel.blueprint, id), visible,
+    const projected = state.enterpriseModel.graph.nodes.find((node) => node.id === id);
+    const visible = Boolean(projected);
+    const states = projected?.states ?? (state.enterpriseModel.selection?.object?.id === id ? state.enterpriseModel.selection.states : null);
+    state.enterpriseModel.selection = { object: blueprintItem(state.enterpriseModel.blueprint, id), states, visible,
       hiddenBy: visible ? [] : ['current lens or design scope'] };
+    needsStateProjection = Boolean(id && !states && state.enterpriseModel.selection.object);
   }
   if (state.mapMode === 'graph') renderGraph(); else renderList();
   renderDetail();
   const mapCanvas = document.querySelector(state.mapMode === 'graph' ? '#graph-canvas' : '#list-canvas');
   focusSelectedMapControl(mapCanvas, state.mapMode, id);
   syncRoute('push');
+  if (needsStateProjection) loadEnterpriseContext();
 }
 
 function blueprintItem(blueprint, id) {
@@ -2000,7 +2008,7 @@ function renderDetail() {
   }
   const type = element('span', { className: `type type-${node.type}`, text: node.type.replaceAll('-', ' ') });
   const meta = element('div', { className: 'detail-meta' }, [
-    element('div', {}, [element('b', { text: 'Status' }), element('span', { text: node.status })]),
+    element('div', {}, [element('b', { text: 'Design status' }), element('span', { text: node.status })]),
     element('div', {}, [element('b', { text: 'Confidence' }), element('span', { text: node.confidence })]),
   ]);
   const connections = element('div', { className: 'connections' }, [element('h4', { text: 'Connections' })]);

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { verifyBlueprintProposalEvaluation } from './execution/proposals.mjs';
 import { enterpriseScopeErrors, enterpriseScopeRelations } from './enterprise/types.mjs';
+import { enterpriseStateErrors } from './enterprise/state.mjs';
 
 export const AREA_DEFINITIONS = [
   ['purposeStrategy', 'Purpose & strategy'],
@@ -1187,6 +1188,7 @@ export function validateBlueprint(blueprint) {
     if (!ids.has(relation.target)) errors.push({ code: 'DANGLING_REFERENCE', path: relation.id, message: `Missing relation target ${relation.target}.` });
   }
   errors.push(...enterpriseScopeErrors(objects));
+  errors.push(...enterpriseStateErrors(objects));
 
   return {
     valid: errors.length === 0,
