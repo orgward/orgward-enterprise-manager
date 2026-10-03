@@ -242,6 +242,76 @@ with the candidate. Without a plan, the UI reports `NOT_CONFIGURED`; matching
 build outputs describe this candidate only and do not close T-31 or establish
 T-32 signing, SBOM, or provenance.
 
+## Protected release and rollback
+
+Protected releases are disabled until an operator configures
+`ORGWARD_RELEASE_ENVIRONMENTS`. Each binding names one tenant, project,
+environment, affected assets, risk class, allowed actions and exact OIDC
+principals. The configured HTTP deployment controller performs the effect;
+OrgWard does not deploy by starting the application or approving a request.
+
+```json
+[
+  {
+    "id": "private-staging",
+    "tenantId": "your-tenant",
+    "projectId": "project-00000000-0000-4000-8000-000000000001",
+    "label": "Private staging",
+    "assetIds": ["service-api"],
+    "riskClass": "moderate",
+    "actions": ["release", "rollback"],
+    "authority": {
+      "requesters": ["oidc:REPLACE_WITH_REQUESTER_SHA256"],
+      "approvers": ["oidc:REPLACE_WITH_DIFFERENT_HUMAN_SHA256"],
+      "executors": ["oidc:REPLACE_WITH_EXECUTOR_SHA256"]
+    },
+    "adapter": {
+      "kind": "http-release-v1",
+      "endpoint": "https://private-deployment-controller.example",
+      "authorizationToken": "SERVER_SIDE_CONTROLLER_TOKEN",
+      "timeoutMs": 30000
+    }
+  }
+]
+```
+
+Replace principal placeholders with `oidc:` followed by the identity's 64 hex
+characters. Requesters and executors also need current `workspace-write` and
+project editor membership; approval requires a different current human with
+`release-approver`, workspace read access (`workspace-read`, `workspace-write`
+or `tenant-admin`) and project editor membership. Store the configuration and
+controller credential privately on the server. HTTPS requires a controller
+token; HTTP is accepted only for a loopback fixture.
+
+In a GitHub candidate's Execution view, select the configured environment,
+review the exact candidate evidence, output manifest, assets and risk, then
+request the action. Release accepts only a successful candidate with a complete
+passed required-check plan and two byte-identical build outputs. A different
+configured human approves its immutable request hash, and an authorized executor
+explicitly dispatches it. Approval does not dispatch. Rollback requests bind the
+previous successful candidate; a confirmed unhealthy application can instead be
+rolled back to the last healthy candidate. Both require fresh independent approval.
+
+The controller implements `POST /actions` and `GET /actions/:actionId` below its
+configured endpoint. POST receives `protected-release-dispatch-v1`, `actionId`,
+`requestHash`, the immutable `request` and an `outputs` array containing each
+output's path, mode, size, SHA-256 and base64 bytes. OrgWard rehashes and compares
+both saved build sets before saving the dispatch claim. The controller must
+deduplicate `actionId`; OrgWard sends one POST for that saved action.
+
+A controller response uses `version: "protected-release-result-v1"` and echoes
+`actionId`, `requestHash`, `environmentId`, `configurationHash`,
+`candidateEvidenceHash` and `outputManifestHash`. `status: "APPLIED"` must include
+`health: "healthy"` or `"unhealthy"`, a `healthCheckId` and an ISO `observedAt`
+after dispatch. Only an exact matching healthy receipt changes the saved current
+candidate. `status: "REJECTED", noEffect: true` records a confirmed failure.
+Transport failures, missing or mismatched receipts and unverified health keep
+the environment fenced. The user must explicitly reconcile through the GET
+endpoint, which observes the saved action without applying it again. Requests,
+approvals, dispatch claims, observations, recovery and environment history survive
+restart. Loopback test receipts verify the product path; production controller
+qualification and progressive delivery remain separate work.
+
 ## Run privately
 
 Node 22 or newer is required. Install the PostgreSQL driver and test tools with `npm ci`.

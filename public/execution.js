@@ -37,6 +37,7 @@ import { acceptHumanTaskStart, clearHumanTaskStart, humanTaskStartCommandKey, hu
   saveHumanTaskStart } from './human-task-start-recovery.mjs';
 import { setDomAttributes } from './dom-attributes.mjs';
 import { boundedLineDiff, readBoundedUtf8Response } from './repository-text-diff.mjs';
+import { renderProtectedRelease } from './protected-release.mjs';
 import { encodeExecutionRoute, encodeStudioRoute, executionProcessTarget, executionProjectContext, executionRunRouteTarget } from './shared-interactions.mjs';
 import { currentProcessPlanFocusTarget, linkedPlanInstanceRouteTarget, linkedProcessPlanTarget, processPlanFreshness, processPlanRevisionFocusTarget, selectLinkedProcessPlanInstance, sourceProcessDesignLink } from './process-plan-navigation.mjs';
 
@@ -2975,7 +2976,12 @@ function renderRun() {
   panel.append(section('Requirements', effectiveInstructions.requirements.length ? el('ul', { className: 'requirements' }, effectiveInstructions.requirements.map((entry) => el('li', { text: entry }))) : el('p', { className: 'muted', text: 'No acceptance requirements supplied.' })));
   if (run.execution) panel.append(section('Execution evidence', executionEvidence(run.execution, run.id)));
   if (run.execution?.generatedProposal) panel.append(renderGeneratedProposal(run.execution.generatedProposal, run.proposalApplication));
-  if (run.execution?.repositoryCandidate) panel.append(renderRepositoryCandidate({ ...run.execution.repositoryCandidate, runId: run.id }));
+  if (run.execution?.repositoryCandidate) {
+    panel.append(renderRepositoryCandidate({ ...run.execution.repositoryCandidate, runId: run.id }));
+    if (run.execution.repositoryCandidate.source?.type === 'github-app') {
+      panel.append(renderProtectedRelease({ run, principal: state.currentPrincipal, el, api }));
+    }
+  }
   panel.append(section('Append-only activity', el('div', { className: 'run-events' }, run.events.slice().reverse().map((entry) => {
     const details = [el('b', { text: entry.type }), el('span', { text: `${new Date(entry.at).toLocaleString()} · ${entry.actor}` })];
     if (entry.type === 'ExecutionInstructionsAmended') {

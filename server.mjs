@@ -24,6 +24,9 @@ import { GitHubSourceIngestion } from './src/execution/github-source-ingestion.m
 import { parseInstallConfig } from './src/platform/install-config.mjs';
 import { parseGitHubCheckPlan } from './src/execution/github-verifier-profile.mjs';
 import { parseGitHubBuildPlan } from './src/execution/github-build-plan.mjs';
+import { ReleaseService } from './src/release/service.mjs';
+import { PostgresReleaseStore } from './src/release/postgres-store.mjs';
+import { parseReleaseEnvironments } from './src/release/contracts.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -762,6 +765,8 @@ export function createApp({
   githubVerifierProfile = null,
   githubBuildPlan = null,
   githubFetchImpl = fetch,
+  releaseEnvironments = [],
+  releaseFetchImpl = fetch,
   openAiAdminApiKey = null,
   openAiOrganizationId = null,
   openAiTenantProjects = null,
@@ -793,6 +798,8 @@ export function createApp({
   const executionService = new ExecutionService({ runDirectory: executionDirectory, store: executionStore, secretStore,
     profiles: [...executionProfiles, ...(enableLocalExecution ? [localProfile] : [])], localRepositories,
     githubSourceStore, githubVerifierProfile, githubBuildPlan });
+  const releaseService = new ReleaseService({ store: persistence ? new PostgresReleaseStore(persistence) : null,
+    executionService, environments: releaseEnvironments, fetchImpl: releaseFetchImpl });
   if (!persistence) {
     const resolveLocalProjectAccess = async ({ tenantId, projectId, principal, minimum = 'reader' }) => {
       const project = await store.getForPrincipal(projectId, tenantId, principal);
@@ -919,6 +926,8 @@ export function createApp({
             ? ['execution-approver']
             : pathname.includes('/sdlc/cases/') && pathname.endsWith('/approve')
               ? ['release-approver', 'control-owner']
+              : pathname.includes('/release-actions/') && pathname.endsWith('/approve')
+                ? ['release-approver']
               : ['workspace-write'];
           const roles = requestRoles(request);
           if (!required.every((role) => roles.includes(role))) {
@@ -2004,6 +2013,33 @@ export function createApp({
         return sendApi(response, 200, projectView(result.project), {
           correlationId, event: result.project.events.at(-1), meta: { replayed: result.replayed },
         });
+      }
+
+      const releaseEnvironmentMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/release-environments$/);
+      if (request.method === 'GET' && releaseEnvironmentMatch) {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified project identity is required to review protected release environments.');
+        const result = await releaseService.list({ tenantId: requestTenant(request), projectId: releaseEnvironmentMatch[1],
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration }, requestRoles(request));
+        return sendJson(response, 200, result);
+      }
+      const releaseRequestMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/release-actions$/);
+      if (request.method === 'POST' && releaseRequestMatch) {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified configured requester identity is required.');
+        const body = await readJson(request);
+        rejectAuthorityClaims(body);
+        const result = await releaseService.create({ tenantId: requestTenant(request), projectId: releaseRequestMatch[1],
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration }, body);
+        return sendJson(response, result.replayed ? 200 : 201, result);
+      }
+      const protectedReleaseActionMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/release-actions\/(release-action-[0-9a-f-]{36})\/(approve|execute|reconcile)$/);
+      if (request.method === 'POST' && protectedReleaseActionMatch) {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified configured release identity is required.');
+        const body = await readJson(request);
+        rejectAuthorityClaims(body);
+        const result = await releaseService.command({ tenantId: requestTenant(request), projectId: protectedReleaseActionMatch[1],
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration }, protectedReleaseActionMatch[2],
+        protectedReleaseActionMatch[3], body);
+        return sendJson(response, 200, result);
       }
 
       if (pathname.startsWith('/api/v1/')) {
@@ -3280,7 +3316,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   let githubBuildPlan = null;
   try { githubBuildPlan = parseGitHubBuildPlan(process.env.ORGWARD_GITHUB_BUILD_PLAN ?? null); }
   catch (error) { console.error(error.message); process.exitCode = 1; process.exit(); }
-  const app = createApp({ dataDirectory, sdlcDirectory, executionDirectory, executionWorkspaceDirectory, enableLocalExecution, executionProfiles, localRepositories, databaseUrl, oidcAuthenticator, oidcLoginFlow, oidcBootstrapPrincipals: authMode === 'oidc' ? bootstrapPrincipals : [], secretEncryptionKey, openAiAdminApiKey, openAiOrganizationId, openAiTenantProjects, githubAppConfig: githubApp, githubVerifierProfile, githubBuildPlan, readOnly: legacyReadOnlyMode });
+  let releaseEnvironments = [];
+  try {
+    releaseEnvironments = process.env.ORGWARD_RELEASE_ENVIRONMENTS ?? [];
+    parseReleaseEnvironments(releaseEnvironments);
+  }
+  catch (error) { console.error(error.message); process.exitCode = 1; process.exit(); }
+  const app = createApp({ dataDirectory, sdlcDirectory, executionDirectory, executionWorkspaceDirectory, enableLocalExecution, executionProfiles, localRepositories, databaseUrl, oidcAuthenticator, oidcLoginFlow, oidcBootstrapPrincipals: authMode === 'oidc' ? bootstrapPrincipals : [], secretEncryptionKey, openAiAdminApiKey, openAiOrganizationId, openAiTenantProjects, githubAppConfig: githubApp, githubVerifierProfile, githubBuildPlan, releaseEnvironments, readOnly: legacyReadOnlyMode });
   const { server } = app;
   await app.init();
   let shuttingDown = false;

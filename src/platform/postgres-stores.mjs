@@ -195,7 +195,7 @@ async function verifyProcessRuntimeTaskDefinition(client, { tenantId, projectId,
   return { plan, task };
 }
 
-async function lockProjectAccess(client, { tenantId, projectId, principal, minimum = 'reader' }) {
+export async function lockProjectAccess(client, { tenantId, projectId, principal, minimum = 'reader' }) {
   if (!principal || !projectId) throw projectAccessDenied();
   const identity = await client.query(`
     select principal from orgward.oidc_principals
@@ -274,7 +274,7 @@ async function lockIdentityRows(client, tenantId, principals) {
   return new Map(result.rows.map((row) => [row.principal, row]));
 }
 
-async function requirePrincipalAuthority(client, {
+export async function requirePrincipalAuthority(client, {
   tenantId, principal, roles = [], anyRoleGroups = [], authzGeneration, actorType = null,
 }) {
   const identity = await client.query(`

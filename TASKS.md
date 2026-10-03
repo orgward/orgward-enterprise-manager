@@ -44,9 +44,9 @@ effects, durable audit and operational actions needed by that path. PR-11 and
 PR-19 remain pending in the separate future backlog. No P/E release gate is
 closed by this queue; active section order follows the functionality work order.
 
-Active cursor: PR-09. The active checkboxes below are the source of truth;
+Active cursor: PR-10. The active checkboxes below are the source of truth;
 `npm run task:next` checks that this cursor matches their first open PR in section
-order. PR-01 through PR-08 are functionally complete, and PR-09 is next. A stale PR
+order. PR-01 through PR-09 are functionally complete, and PR-10 is next. A stale PR
 number in a saved goal, dated receipt or older document does not reset the queue.
 Read this header and the active PR outcome at the line printed by
 `npm run task:next`; search receipts only for a concrete dependency.
@@ -5949,13 +5949,45 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   `HARDENING-TASKS.md`. No live GitHub/provider call, rendered browser proof,
   deployment or release-gate promotion occurred. The cursor advances to PR-09.
 
-- [ ] PR-09 — Authorized environments, release and rollback (T-33–T-35; E-10).
+- [x] PR-09 — Authorized environments, release and rollback (T-33–T-35; E-10).
   Let a user review an exact candidate, approve a protected environment action,
   observe its result and recover through rollback. Bind authority to principals,
   actions, assets, risks and environments; reconcile ambiguous effects and provide
   restart-safe idempotency plus the health signal needed to operate this release
   flow. Broad progressive-delivery, health and resilience qualification remains
   deferred to `HARDENING-TASKS.md`.
+
+  Functionality closure (2026-10-03): configured private environment bindings now
+  name the exact tenant/project/assets/risk/actions and permitted principals.
+  A request binds immutable candidate/check/build/output receipts and environment
+  generation; a different current human approves it. A transactional dispatch
+  claim precedes one HTTP adapter POST carrying the hash-checked build bytes.
+  Uncertain effects and unverified health remain fenced for explicit observation
+  through GET reconciliation. Successful releases retain current/previous healthy
+  candidates; rollback requires a fresh exact approval. Confirmed unhealthy
+  releases can recover to the last healthy candidate, with the failed action
+  durably linked to its recovery. Authorized command replay recovers the original
+  result before mutable rollback/output checks, and bounded history retains its
+  pending action. The Execution UI exposes these operations, statuses, reasons,
+  hashes, authority, history and saved-command recovery; README documents setup
+  and the controller contract. No configuration enables a default deployment.
+  Luna's contracts checks passed 5/5 (0.22s). The first API/UI run passed both UI
+  cases and exposed misplaced v1 routes (2 passed, 1 failed); moving them before
+  the v1 catch-all repaired the real 404. The affected PostgreSQL/API journey then
+  passed 1/1 (3.32s runner), exercising exact output bytes, authority denials,
+  independent approval, restart/readback, duplicate commands, second release,
+  rollback, unknown reconciliation and unhealthy recovery with a loopback
+  controller. The frozen-tree parent check passed 468 tests, 0 failed and 1 skipped
+  (91.92s runner, TAP 90.80s). Logs:
+  `/tmp/orgward-pr09-release-server-focused-20261003-r2.log`,
+  `/tmp/orgward-pr09-parent-check-20261003.log`,
+  `/tmp/orgward-tests-aWoNdP/node-test.tap.log`. The skip remains PostgreSQL backup/
+  restore qualification with client tools unavailable; it is not passing coverage.
+  This closes configured-adapter functionality, with controller observations
+  tested through loopback fixtures. No live deployment, production controller
+  qualification, rendered browser proof or release-gate promotion occurred.
+  Broad progressive/health/resilience qualification remains pending separately.
+  The cursor advances to PR-10.
 
 - [ ] PR-10 — Outcomes and customer next actions (T-36–T-38). Connect
   technical/control/business observations to reviewed learning in a usable customer
