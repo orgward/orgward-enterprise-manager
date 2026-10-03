@@ -2,9 +2,10 @@ import { graphForBlueprint, latestBlueprint } from '../model.mjs';
 import { ENTERPRISE_LENSES, ENTERPRISE_SCOPE_TYPES, blueprintObjects, enterpriseFailure, enterpriseScopeErrors, scopeState } from './types.mjs';
 import { digest } from '../sdlc/contracts.mjs';
 import { effectiveStatus, enterpriseInstant, objectStates } from './state.mjs';
+import { projectEnterpriseBranches } from './branches.mjs';
 
 export function normalizeEnterpriseQuery(input = {}) {
-  const accepted = ['lensId', 'scopeId', 'blueprintVersion', 'selectedId', 'proposalId', 'effectiveAt', 'recordedAt'];
+  const accepted = ['lensId', 'scopeId', 'blueprintVersion', 'selectedId', 'proposalId', 'effectiveAt', 'recordedAt', 'branchId', 'branchRevision'];
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !accepted.includes(key))) {
     throw enterpriseFailure('INVALID_ENTERPRISE_CONTEXT', 'Choose a supported lens, scope, saved blueprint version and selection.');
   }
@@ -14,8 +15,16 @@ export function normalizeEnterpriseQuery(input = {}) {
   }
   const query = { lensId, scopeId: input.scopeId || null, selectedId: input.selectedId || null, blueprintVersion: null,
     proposalId: input.proposalId ?? null, effectiveAt: input.effectiveAt == null ? null : enterpriseInstant(input.effectiveAt, 'Effective time'),
-    recordedAt: input.recordedAt == null ? null : enterpriseInstant(input.recordedAt, 'Recorded-time cutoff') };
+    recordedAt: input.recordedAt == null ? null : enterpriseInstant(input.recordedAt, 'Recorded-time cutoff'),
+    branchId: input.branchId ?? null, branchRevision: null };
   if (query.proposalId !== null && !/^enterprise-proposal-[0-9a-f-]{36}$/.test(query.proposalId)) throw enterpriseFailure('INVALID_ENTERPRISE_CONTEXT', 'Choose a saved future proposal identifier.');
+  if (query.branchId !== null && !/^enterprise-branch-[0-9a-f-]{36}$/.test(query.branchId)) throw enterpriseFailure('INVALID_ENTERPRISE_CONTEXT', 'Choose a saved branch identifier.');
+  if (input.branchRevision != null) {
+    if (!query.branchId || !/^[1-9][0-9]*$/.test(String(input.branchRevision)) || !Number.isSafeInteger(Number(input.branchRevision))) {
+      throw enterpriseFailure('INVALID_ENTERPRISE_CONTEXT', 'Choose a positive saved revision within the selected branch.');
+    }
+    query.branchRevision = Number(input.branchRevision);
+  }
   for (const field of ['scopeId', 'selectedId']) {
     if (query[field] !== null && (typeof query[field] !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,119}$/i.test(query[field]))) {
       throw enterpriseFailure('INVALID_ENTERPRISE_CONTEXT', `${field} must identify a saved design record.`);
@@ -29,11 +38,13 @@ export function normalizeEnterpriseQuery(input = {}) {
     query.blueprintVersion = Number(value);
   }
   if (query.proposalId && query.blueprintVersion !== null) throw enterpriseFailure('INVALID_ENTERPRISE_CONTEXT', 'Choose a main version or a future proposal, rather than both.');
+  if (query.branchId && (query.proposalId || query.blueprintVersion !== null)) throw enterpriseFailure('INVALID_ENTERPRISE_CONTEXT', 'Choose a branch, main version or future proposal as the source context.');
   return query;
 }
 export function projectEnterprise(project, query = {}, authority = {}) {
   const context = normalizeEnterpriseQuery(query);
   const current = latestBlueprint(project);
+  const branchContext = projectEnterpriseBranches(project, context);
   const savedBy = (at) => !context.recordedAt || (typeof at === 'string' && Number.isFinite(Date.parse(at)) && Date.parse(at) <= Date.parse(context.recordedAt));
   const recorded = project.blueprintVersions.filter((entry) => savedBy(entry.createdAt));
   const proposals = (project.enterpriseProposals ?? []).map((proposal) => {
@@ -46,14 +57,14 @@ export function projectEnterprise(project, query = {}, authority = {}) {
   });
   const proposal = context.proposalId ? proposals.find((entry) => entry.id === context.proposalId) : null;
   if (context.proposalId && !proposal) throw enterpriseFailure('ENTERPRISE_PROPOSAL_NOT_FOUND', 'The future proposal was not found in this project.', 404);
-  let blueprint = proposal?.snapshot ?? (context.blueprintVersion === null
+  let blueprint = context.branchId ? branchContext.blueprint : proposal?.snapshot ?? (context.blueprintVersion === null
     ? recorded.at(-1) ?? null : project.blueprintVersions.find((entry) => entry.version === context.blueprintVersion));
   if (!blueprint && context.blueprintVersion !== null) throw enterpriseFailure('ENTERPRISE_BLUEPRINT_NOT_FOUND', 'The saved blueprint version was not found in this project.', 404);
-  if (blueprint && !savedBy(proposal?.recordedAt ?? blueprint.createdAt)) {
+  if (blueprint && !savedBy(context.branchId ? branchContext.recordedAt : proposal?.recordedAt ?? blueprint.createdAt)) {
     throw enterpriseFailure('ENTERPRISE_CONTEXT_NOT_RECORDED', 'This snapshot was not yet saved at the selected recorded-time cutoff.', 404);
   }
   let applicability = context.effectiveAt ? effectiveStatus(blueprint, context.effectiveAt) : 'UNKNOWN';
-  if (context.effectiveAt && !proposal && context.blueprintVersion === null) {
+  if (context.effectiveAt && !proposal && !context.branchId && context.blueprintVersion === null) {
     const matching = recorded.filter((entry) => effectiveStatus(entry, context.effectiveAt) === 'IN_RANGE');
     blueprint = matching.at(-1) ?? null;
     applicability = blueprint ? 'IN_RANGE' : recorded.some((entry) => !entry.enterpriseValidity?.effectiveFrom) ? 'UNKNOWN' : 'OUT_OF_RANGE';
@@ -80,10 +91,10 @@ export function projectEnterprise(project, query = {}, authority = {}) {
   const selected = context.selectedId ? byId.get(context.selectedId) : null;
   if (blueprint && context.selectedId && !selected) throw enterpriseFailure('ENTERPRISE_OBJECT_NOT_FOUND', 'The selected object is not present in this saved blueprint.', 404);
   const hiddenBy = selected ? [...(!inScope(selected) ? ['scope'] : []), ...(!inLens(selected) ? ['lens'] : [])] : [];
-  const isCurrent = Boolean(blueprint && current?.id === blueprint.id && !proposal && !context.effectiveAt && !context.recordedAt);
+  const isCurrent = Boolean(blueprint && current?.id === blueprint.id && !proposal && !context.branchId && !context.effectiveAt && !context.recordedAt);
   const gaps = [
     { code: 'PROPOSED_DESIGN_ONLY', message: 'These perspectives show saved organizational design. They do not establish enabled operations or verified outcomes.' },
-    { code: 'BRANCH_PROMOTION_UNAVAILABLE', message: 'Future proposals remain design contexts. Branch merge and explicit promotion are not yet available.' },
+    { code: 'PROPOSED_MERGE_ONLY', message: 'Reviewed branch merges change current proposed design. Internal publication and work or effect approvals remain separate.' },
     { code: 'DOMAIN_DETAILS_PARTIAL', message: 'Advanced process decisions, economic scenarios, capacity calendars, refinement and simulations need further modeling.' },
   ];
   if (!blueprint) gaps.unshift({ code: current ? 'TEMPORAL_CONTEXT_UNKNOWN' : 'BLUEPRINT_REQUIRED',
@@ -98,8 +109,10 @@ export function projectEnterprise(project, query = {}, authority = {}) {
     gaps: ['L-11', 'L-12', 'L-13', 'L-16'].includes(entry.id) ? [{ ...runtimeLensGap }] : [] }));
   if (lens) gaps.push(...lenses.find((entry) => entry.id === lens.id).gaps.map((gap) => ({ ...gap, lensId: lens.id })));
   return { context: { projectVersion: project.version, blueprintId: blueprint?.id ?? null, blueprintVersion: blueprint?.version ?? null,
-    isCurrent, lensId: context.lensId, scopeId: context.scopeId, branch: 'main', proposalId: proposal?.id ?? null,
-    sourceKind: proposal ? 'FUTURE_PROPOSAL' : 'MAIN_DESIGN', recordedAt: proposal?.recordedAt ?? blueprint?.createdAt ?? null,
+    isCurrent, lensId: context.lensId, scopeId: context.scopeId, branch: context.branchId ?? 'main', proposalId: proposal?.id ?? null,
+    branchId: context.branchId, branchRevision: branchContext.revision,
+    sourceKind: context.branchId ? 'BRANCH_DRAFT' : proposal ? 'FUTURE_PROPOSAL' : 'MAIN_DESIGN',
+    recordedAt: context.branchId ? branchContext.recordedAt : proposal?.recordedAt ?? blueprint?.createdAt ?? null,
     recordedAtCutoff: context.recordedAt, effectiveAt: context.effectiveAt, effectiveStatus: applicability,
     validity: blueprint?.enterpriseValidity ? structuredClone(blueprint.enterpriseValidity) : null,
     selectionUnavailable: !blueprint && Boolean(context.selectedId) }, graph,
@@ -117,7 +130,11 @@ export function projectEnterprise(project, query = {}, authority = {}) {
       baseBlueprintId: proposal.baseBlueprintId, baseBlueprintVersion: proposal.baseBlueprintVersion, baseSnapshotHash: proposal.baseSnapshotHash,
       snapshotHash: proposal.snapshotHash, baseStale: proposal.baseStale,
       diff: { before: structuredClone(proposal.snapshot.edit.before), after: structuredClone(proposal.snapshot.edit.after), changedFields: proposal.snapshot.edit.changedFields } } : null,
-    permissions: { write: isCurrent && Boolean(authority.write), scopeAdmin: isCurrent && Boolean(authority.scopeAdmin) },
+    branches: branchContext.branches, branch: branchContext.branch,
+    permissions: { write: isCurrent && Boolean(authority.write), scopeAdmin: isCurrent && Boolean(authority.scopeAdmin),
+      branchCreate: Boolean(blueprint && !context.branchId && authority.write && authority.human),
+      branchWrite: Boolean(branchContext.writable && authority.write && authority.human),
+      branchAdmin: Boolean(branchContext.writable && authority.scopeAdmin && authority.human) },
     exclusions: { totalObjects: objects.length, visibleObjects: visible.size,
       scopeUnknownCount: unknownCount, unscopedCount: objects.filter((object) => scopeState(object) === 'UNSCOPED').length,
       filteredByScope: objects.filter((object) => !inScope(object)).length,

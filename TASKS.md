@@ -6061,10 +6061,51 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   economics/resources/value lifecycles, simulation, bulk collaboration and
   explainable multi-axis completeness.
 
-  Current slice: branches and reviewed conflict-aware merge. Scope/lens and
-  independent state/time slices below are implemented and focused checks passed.
+  Current slice: advanced processes/decisions, deterministic simulation and
+  actual bounded manual-flow runtime. Scope/lens, independent state/time and
+  reviewed branch/merge slices below are implemented and focused checks passed.
   Keep the parent open until its remaining functionality and one frozen parent
   full check pass; the active cursor remains PR-12.
+
+  Branch/merge slice verified (2026-10-03, state/time base `a65352a`): Sol added
+  immutable-base branches with typed draft editing, exact saved revisions,
+  three-way comparison, explicit field/reference/scope conflict choices and
+  hash-bound merge candidates. Current owners review the exact candidate;
+  revoked/regranted reviewer membership cannot revive a saved approval. Applying
+  an eligible accepted candidate creates one new proposed main design revision,
+  never publication, work or an external effect. Main/draft changes stale the
+  candidate; future intervals do not activate it. Abandoned branches and saved
+  recorded-time contexts remain inspectable. UI commands retain exact pending
+  envelopes and source/revision routes. Comparison and candidate labels use
+  names from their respective pinned snapshots, including main-only scopes and
+  renamed roles, rather than borrowing draft labels.
+  Luna verified four distinct new cases: the grouped PostgreSQL branch journey,
+  two UI route/recovery/render cases and one source-specific label regression.
+  The final affected PostgreSQL run passed 1/1 (11.45s runner, 10.06s Node), and
+  the new label case passed 1/1 (0.48s runner, 0.137s Node). Fixture-only repairs
+  corrected role/source/version assumptions and reviewer membership setup.
+  An incorrectly quoted pattern also selected older cases: its run was 1 passed,
+  2 failed (10.07s Node), including an old time journey with PostgreSQL 57P01.
+  One older scope pass and one new UI comparison pass were avoidably repeated;
+  this receipt does not claim zero duplicate checks. The three enterprise
+  fixtures now close the app/pool before dropping their database in one ordered
+  teardown hook. The affected time journey passed 1/1 after that repair and the
+  additive-permissions expectation update (3.58s runner, 2.46s Node), with no
+  57P01. This supports the teardown-order explanation; a single rerun does not
+  independently establish the original cause. No skips occurred in these runs.
+  Logs: `/tmp/orgward-tests-w45n29/node-test.tap.log`,
+  `/tmp/orgward-tests-QAd8UP/node-test.tap.log`,
+  `/tmp/orgward-tests-lFdTxi/node-test.tap.log`,
+  `/tmp/orgward-tests-NIZEop/node-test.tap.log`,
+  `/tmp/orgward-tests-uNfb7r/node-test.tap.log`,
+  `/tmp/orgward-tests-cy4cNI/node-test.tap.log`,
+  `/tmp/orgward-tests-pYeFxr/node-test.tap.log`,
+  `/tmp/orgward-tests-J7Y0Of/node-test.tap.log`.
+  Changed-source syntax checks and `git diff --check` passed. No full parent
+  check, rendered browser proof, provider call, live effect or release-gate
+  promotion occurred. PR-12 remains open for process/decision runtime and
+  simulation, economics/resources/value, refinement/reverse trace, interchange/
+  bulk collaboration and scoped multi-axis completeness.
 
   State/time slice verified (2026-10-03, scope/lens base `5d065d3`): Sol added four
   independent item dimensions with exact-content basis, current human reports and

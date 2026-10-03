@@ -3,6 +3,9 @@ import test from 'node:test';
 import { enterpriseCommandStorageKey, enterpriseContextFailure, enterpriseContextReadOnly, enterpriseQuery, enterpriseRequestPath, enterpriseSourceAligned, hasEnterpriseContext,
   persistEnterpriseCommand, renderEnterpriseContext,
   renderEnterpriseObject, restoreEnterpriseCommand, submitEnterpriseCommand } from '../../public/enterprise.mjs';
+import { enterpriseBranchCommandPayload, enterpriseBranchWritable, enterpriseCandidateCurrent, enterpriseCommandResultRoute,
+  renderEnterpriseBranches } from '../../public/enterprise-branches.mjs';
+import { decodeStudioRoute, encodeStudioRoute } from '../../public/shared-interactions.mjs';
 
 class NodeListFixture extends Array {
   constructor(entries) { super(...entries); this.at = undefined; }
@@ -50,6 +53,21 @@ const el = (tag, options = {}, children = []) => {
   node.append(...children);
   return node;
 };
+const branchUi = {
+  field(name, label, { entries = null, value = '', required = true, multiline = false } = {}) {
+    const control = el(entries ? 'select' : multiline ? 'textarea' : 'input', { attrs: { name } },
+      entries ? entries.map(([optionValue, text]) => el('option', { text, attrs: { value: optionValue } })) : []);
+    control.value = value ?? ''; control.required = required;
+    return { control, node: el('label', { text: label }, [control]) };
+  },
+  form(kind, label, controls, submit, disabled) {
+    const node = el('form', { attrs: { 'data-enterprise-action': kind, 'aria-label': label } }, controls);
+    const save = el('button', { text: label }); node.append(save);
+    if (disabled) for (const control of node.querySelectorAll('input,select,textarea,button')) control.disabled = true;
+    node.addEventListener('submit', submit);
+    return node;
+  },
+};
 function storageFixture(values = new Map()) {
   return { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, String(value)),
     removeItem: (key) => values.delete(key), values };
@@ -86,6 +104,149 @@ test('enterprise temporal routes preserve exact proposal and effective/recorded 
   assert.equal(enterpriseContextReadOnly({ isCurrent: true, effectiveAt: temporal.effectiveAt }), true);
   assert.equal(enterpriseContextReadOnly({ isCurrent: true, proposalId: temporal.proposalId }), true);
   assert.equal(enterpriseContextReadOnly({ isCurrent: true, recordedAtCutoff: temporal.recordedAt }), true);
+});
+
+test('branch context route and command helpers retain exact draft revision, source, candidate and recovery destination', async () => {
+  const projectId = 'project-00000000-0000-4000-8000-000000000001';
+  const branchId = 'enterprise-branch-00000000-0000-4000-8000-000000000002';
+  const mainId = 'blueprint-00000000-0000-4000-8000-000000000003';
+  const draftId = 'blueprint-00000000-0000-4000-8000-000000000004';
+  const candidateId = 'enterprise-merge-00000000-0000-4000-8000-000000000005';
+  const candidateHash = 'd'.repeat(64);
+  const route = { projectId, view: 'map', selectedId: 'process-deliver', branchId, branchRevision: 2 };
+  const decoded = decodeStudioRoute(encodeStudioRoute(route));
+  assert.equal(decoded.projectId, projectId);
+  assert.equal(decoded.branchId, branchId);
+  assert.equal(decoded.branchRevision, 2);
+  assert.equal(decoded.selectedId, 'process-deliver');
+  assert.equal(encodeStudioRoute(decoded), encodeStudioRoute(route));
+  const query = enterpriseQuery({ branchId, branchRevision: 2 });
+  assert.deepEqual(query, { lensId: 'all', scopeId: null, blueprintVersion: null, branchId, branchRevision: 2 });
+  assert.equal(enterpriseRequestPath(projectId, query, 'process-deliver'),
+    `/api/v1/projects/${projectId}/enterprise?lensId=all&branchId=${branchId}&branchRevision=2&selectedId=process-deliver`);
+
+  const createSource = { permissions: { branchCreate: true }, context: { blueprintId: mainId, blueprintVersion: 7,
+    branchId: null, proposalId: 'enterprise-proposal-00000000-0000-4000-8000-000000000006' }, blueprint: { id: mainId } };
+  assert.deepEqual(enterpriseBranchCommandPayload(createSource, { kind: 'create-branch', title: 'Draft from future source', reason: 'Compare exact proposal.' }), {
+    kind: 'create-branch', title: 'Draft from future source', reason: 'Compare exact proposal.', blueprintId: mainId, blueprintVersion: 7,
+    proposalId: createSource.context.proposalId,
+  });
+
+  const comparison = { mainBlueprintId: mainId, mainBlueprintVersion: 7, mainSnapshotHash: 'a'.repeat(64), conflicts: [] };
+  const branchModel = { permissions: { branchCreate: true, branchWrite: true, branchAdmin: true },
+    context: { branchId, branchRevision: 2, blueprintId: draftId, blueprintVersion: 3 },
+    blueprint: { id: draftId }, branch: { id: branchId, status: 'DRAFT', revision: 2, isHead: true, comparison,
+      candidate: { id: candidateId, hash: candidateHash, status: 'PENDING', branchRevision: 2,
+        mainBlueprintId: mainId, mainBlueprintVersion: 7, eligibility: { status: 'UNKNOWN' } } } };
+  assert.equal(enterpriseBranchWritable(branchModel), true);
+  assert.equal(enterpriseCandidateCurrent(branchModel), true);
+  assert.equal(enterpriseBranchWritable({ ...branchModel, context: { ...branchModel.context, effectiveAt: '2030-01-01T00:00:00.000Z' } }), false);
+  assert.equal(enterpriseBranchWritable({ ...branchModel, context: { ...branchModel.context, branchRevision: 1 } }), false);
+  assert.equal(enterpriseCandidateCurrent({ ...branchModel,
+    branch: { ...branchModel.branch, revision: 3, candidate: { ...branchModel.branch.candidate, branchRevision: 2 } } }), false);
+  assert.equal(enterpriseCandidateCurrent({ ...branchModel, branch: { ...branchModel.branch,
+    comparison: { ...comparison, mainBlueprintVersion: 8 } } }), false);
+  assert.deepEqual(enterpriseBranchCommandPayload(branchModel, { kind: 'edit-branch-object', edit: { objectId: 'process-deliver' }, reason: 'Draft change.' }), {
+    kind: 'edit-branch-object', edit: { objectId: 'process-deliver' }, reason: 'Draft change.', branchId, branchRevision: 2,
+    blueprintId: draftId, blueprintVersion: 3,
+  });
+  assert.deepEqual(enterpriseBranchCommandPayload(branchModel, { kind: 'prepare-merge', resolutions: [], reason: 'Prepare exact candidate.' }), {
+    kind: 'prepare-merge', resolutions: [], reason: 'Prepare exact candidate.', branchId, branchRevision: 2,
+    blueprintId: mainId, blueprintVersion: 7,
+  });
+  const reviewPayload = { kind: 'review-merge', candidateId, candidateHash, decision: 'ACCEPT', reason: 'Review.' };
+  assert.equal(enterpriseBranchCommandPayload(branchModel, reviewPayload).blueprintId, mainId);
+  assert.equal(enterpriseBranchCommandPayload({ ...branchModel, permissions: { ...branchModel.permissions, branchAdmin: false } }, reviewPayload), null);
+  for (const status of ['ACCEPTED', 'REJECTED']) assert.equal(enterpriseBranchCommandPayload({ ...branchModel,
+    branch: { ...branchModel.branch, candidate: { ...branchModel.branch.candidate, status } } }, reviewPayload), null,
+  `${status} is immutable and cannot receive a second review`);
+  const failed = enterpriseCommandResultRoute(route, { kind: 'edit-branch-object' }, null);
+  assert.deepEqual(failed, route, 'an uncertain or failed command leaves the exact branch route available for recovery');
+  assert.deepEqual(enterpriseCommandResultRoute(route, { kind: 'edit-branch-object' }, { branchId, branchRevision: 3, affectedObjectId: 'process-deliver' }),
+    { ...route, blueprintVersion: null, proposalId: null, effectiveAt: null, recordedAt: null,
+      branchRevision: 3, selectedId: 'process-deliver' });
+  const applied = enterpriseCommandResultRoute(route, { kind: 'apply-reviewed-merge' }, { affectedObjectId: 'process-deliver' });
+  assert.equal(applied.branchId, null);
+  assert.equal(applied.branchRevision, null);
+  assert.equal(applied.selectedId, 'process-deliver');
+
+  const storage = storageFixture();
+  const saved = { projectId, envelope: { schemaVersion: '1.0', commandId: 'uncertain-branch-command', expectedVersion: 20,
+    payload: { kind: 'edit-branch-object', blueprintId: draftId, blueprintVersion: 3, branchId, branchRevision: 2,
+      reason: 'Recover this exact draft change.', edit: { objectId: 'process-deliver', name: 'Delivery branch' } } } };
+  persistEnterpriseCommand(storage, 'oidc:owner', projectId, saved);
+  const restored = restoreEnterpriseCommand(storage, 'oidc:owner', projectId);
+  assert.deepEqual(restored, saved);
+  const calls = [];
+  await submitEnterpriseCommand(async (...args) => { calls.push(args); return { data: {} }; }, projectId, restored);
+  assert.deepEqual(calls, [[`/api/v1/projects/${projectId}/enterprise/commands`, { method: 'POST', body: JSON.stringify(saved.envelope) }]]);
+});
+
+test('branch review UI compares main and draft fields and keeps unresolved choices explicit', () => {
+  const branchId = 'enterprise-branch-00000000-0000-4000-8000-000000000002';
+  const mainId = 'blueprint-00000000-0000-4000-8000-000000000003';
+  const draftId = 'blueprint-00000000-0000-4000-8000-000000000004';
+  const conflicts = [
+    { conflictId: `conflict-${'1'.repeat(64)}`, objectId: 'process-deliver', objectName: 'Delivery', field: 'name', kind: 'CONTENT', base: 'Base', current: 'Main', proposed: 'Draft' },
+    { conflictId: `conflict-${'2'.repeat(64)}`, objectId: 'process-deliver', objectName: 'Delivery', field: 'inputs', kind: 'REFERENCE', base: ['information-customer-signal'], current: ['information-prioritised-need'], proposed: ['information-delivery-result'] },
+    { conflictId: `conflict-${'3'.repeat(64)}`, objectId: 'process-deliver', objectName: 'Delivery', field: 'enterpriseScope', kind: 'SCOPE', base: { organizationId: 'org-base' }, current: { organizationId: 'org-main' }, proposed: { organizationId: 'org-draft' } },
+  ];
+  const comparison = { mainBlueprintId: mainId, mainBlueprintVersion: 7, conflicts, changes: conflicts,
+    relations: { currentAdded: [], currentRemoved: [], branchAdded: [{ source: 'process-deliver', target: 'org-draft', type: 'within-organization' }], branchRemoved: [] } };
+  const modelValue = { context: { branchId, branchRevision: 2, blueprintId: draftId, blueprintVersion: 3, validity: null },
+    permissions: { branchCreate: true, branchWrite: true, branchAdmin: false },
+    blueprint: { areas: { capabilitiesProcesses: { items: [object] } } },
+    branches: [], branch: { id: branchId, title: 'Delivery branch', status: 'DRAFT', revision: 2, headRevision: 2,
+      baseBlueprintId: mainId, baseBlueprintVersion: 6, baseSnapshotHash: 'a'.repeat(64), isHead: true,
+      revisions: [{ revision: 1, recordedAt: '2026-10-03T00:00:00.000Z' }, { revision: 2, recordedAt: '2026-10-03T01:00:00.000Z' }],
+      comparison, candidate: { id: 'enterprise-merge-00000000-0000-4000-8000-000000000005', hash: 'b'.repeat(64), status: 'PENDING', branchRevision: 2,
+        mainBlueprintId: mainId, mainBlueprintVersion: 7, changes: conflicts, eligibility: { status: 'UNKNOWN' } } } };
+  const root = renderEnterpriseBranches({ model: modelValue, query: { branchId, branchRevision: 2 }, el, ui: branchUi,
+    onContext: () => {}, onCommand: () => {}, utcTime: (value) => value || null });
+  assert.equal(root.attrs['aria-label'], 'Design branches and reviewed merge');
+  assert.match(root.textContent, /Both main and draft changed this field/);
+  assert.match(root.textContent, /Main added/);
+  assert.match(root.textContent, /Draft added/);
+  const resolve = root.querySelectorAll('form').find((form) => form.attrs['data-enterprise-action'] === 'prepare-merge');
+  assert.ok(resolve);
+  assert.equal(resolve.querySelectorAll('select').length, 3);
+  assert.ok(resolve.querySelectorAll('select').every((control) => control.children.some((entry) => entry.textContent.startsWith('Keep main:'))
+    && control.children.some((entry) => entry.textContent.startsWith('Use draft:'))));
+  const apply = root.querySelectorAll('form').find((form) => form.attrs['data-enterprise-action'] === 'apply-reviewed-merge');
+  assert.ok(apply.querySelectorAll('button').every((button) => button.disabled), 'pending candidates cannot be applied');
+});
+
+test('branch conflict labels use names from the matching base, current, and draft snapshots', () => {
+  const branchId = 'enterprise-branch-00000000-0000-4000-8000-000000000012';
+  const conflictId = `conflict-${'4'.repeat(64)}`;
+  const conflict = { conflictId, objectId: 'process-deliver', objectName: 'Delivery', field: 'enterpriseScope', kind: 'SCOPE',
+    base: { organizationId: 'org-base-only' }, current: { organizationId: 'org-current-only' }, proposed: { organizationId: 'org-draft-only' } };
+  const referenceNames = { base: { 'org-base-only': 'Base Commerce Group' },
+    current: { 'org-current-only': 'Northstar Services' }, proposed: { 'org-draft-only': 'Draft Customer Operations' } };
+  const modelValue = { context: { branchId, branchRevision: 1, blueprintId: 'blueprint-draft', blueprintVersion: 1 },
+    permissions: { branchWrite: true, branchAdmin: false },
+    blueprint: { areas: { capabilitiesProcesses: { items: [object] } } }, branches: [],
+    branch: { id: branchId, title: 'Delivery branch', status: 'DRAFT', revision: 1, headRevision: 1, isHead: true,
+      revisions: [{ revision: 1, recordedAt: '2026-10-03T00:00:00.000Z' }],
+      comparison: { mainBlueprintId: 'blueprint-main', mainBlueprintVersion: 2, changes: [conflict], conflicts: [conflict], referenceNames,
+        relations: { currentAdded: [{ source: 'process-deliver', target: 'org-current-only', type: 'within-organization' }], currentRemoved: [],
+          branchAdded: [{ source: 'process-deliver', target: 'org-draft-only', type: 'within-organization' }], branchRemoved: [] } },
+      candidate: null } };
+  let command = null;
+  const root = renderEnterpriseBranches({ model: modelValue, query: { branchId, branchRevision: 1 }, el, ui: branchUi,
+    onContext: () => {}, onCommand: (value) => { command = value; }, utcTime: (value) => value || null });
+  assert.match(root.textContent, /Saved base:.*Base Commerce Group/);
+  assert.match(root.textContent, /Current main:.*Northstar Services/);
+  assert.match(root.textContent, /Draft:.*Draft Customer Operations/);
+  assert.match(root.textContent, /Main added:.*Northstar Services/);
+  assert.match(root.textContent, /Draft added:.*Draft Customer Operations/);
+  const resolve = root.querySelectorAll('form').find((form) => form.attrs['data-enterprise-action'] === 'prepare-merge');
+  const choice = resolve.querySelectorAll('select')[0];
+  assert.ok(choice.children.some((entry) => entry.textContent.includes('Keep main:') && entry.textContent.includes('Northstar Services')));
+  assert.ok(choice.children.some((entry) => entry.textContent.includes('Use draft:') && entry.textContent.includes('Draft Customer Operations')));
+  choice.value = 'current';
+  resolve.listeners.get('submit')?.({ preventDefault() {} });
+  assert.deepEqual(command.resolutions, [{ conflictId, choice: 'current' }]);
 });
 
 test('an unavailable requested enterprise context stays explicit and offers an intentional reset', () => {

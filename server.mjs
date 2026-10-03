@@ -18,7 +18,7 @@ import { PostgresPersistence } from './src/platform/postgres.mjs';
 import { OidcAuthenticator } from './src/platform/oidc.mjs';
 import { OidcLoginFlow } from './src/platform/oidc-login.mjs';
 import { PostgresOidcSessionStore } from './src/platform/oidc-sessions.mjs';
-import { hasVerifiedHumanTaskSuccess, LegacyImporter, PostgresChangeCaseStore, PostgresExecutionRunStore, PostgresGitHubSourceStore, PostgresProjectStore } from './src/platform/postgres-stores.mjs';
+import { hasVerifiedHumanTaskSuccess, LegacyImporter, lockProjectAccess, PostgresChangeCaseStore, PostgresExecutionRunStore, PostgresGitHubSourceStore, PostgresProjectStore, requirePrincipalAuthority } from './src/platform/postgres-stores.mjs';
 import { PostgresSecretStore } from './src/platform/secrets.mjs';
 import { GitHubSourceIngestion } from './src/execution/github-source-ingestion.mjs';
 import { parseInstallConfig } from './src/platform/install-config.mjs';
@@ -31,6 +31,7 @@ import { OutcomeService } from './src/outcomes/service.mjs';
 import { PostgresOutcomeStore } from './src/outcomes/postgres-store.mjs';
 import { applyEnterpriseCommand, normalizeEnterpriseCommand } from './src/enterprise/commands.mjs';
 import { normalizeEnterpriseQuery, projectEnterprise } from './src/enterprise/projections.mjs';
+import { ENTERPRISE_BRANCH_KINDS, enterpriseMergeApproval } from './src/enterprise/branches.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -1552,7 +1553,7 @@ export function createApp({
           authzGeneration: request.identity.authzGeneration,
           operation(project, membership) {
             const write = ['owner', 'editor'].includes(membership.access) && requestRoles(request).includes('workspace-write');
-            const projection = projectEnterprise(project, query, { write,
+            const projection = projectEnterprise(project, query, { write, human: request.identity.actorType === 'human',
               scopeAdmin: write && membership.access === 'owner' && request.identity.actorType === 'human' });
             sendApi(response, 200, projection, { correlationId });
             return project;
@@ -1567,9 +1568,11 @@ export function createApp({
         const body = validateCommand(await readJson(request));
         rejectAuthorityClaims(body); rejectAuthorityClaims(body.payload);
         const payload = normalizeEnterpriseCommand(body.payload);
-        const administrative = ['create-scope', 'rename-scope', 'set-validity', 'propose-future-design'].includes(payload.kind)
-          || (payload.kind === 'record-state' && payload.dimension === 'review');
-        if ((administrative || payload.kind === 'record-state') && request.identity.actorType !== 'human') {
+        const administrative = ['create-scope', 'rename-scope', 'set-validity', 'propose-future-design',
+          'set-branch-validity', 'review-merge', 'apply-reviewed-merge', 'abandon-branch'].includes(payload.kind)
+          || (payload.kind === 'record-state' && payload.dimension === 'review')
+          || (payload.kind === 'edit-branch-scope' && ['create-scope', 'rename-scope'].includes(payload.change.kind));
+        if ((administrative || payload.kind === 'record-state' || ENTERPRISE_BRANCH_KINDS.has(payload.kind)) && request.identity.actorType !== 'human') {
           throw apiFailure(403, 'ENTERPRISE_HUMAN_OWNER_REQUIRED', 'A current human project member must report state; a human project owner must review design or define scopes, validity and future proposals.');
         }
         const actor = requestActor(request);
@@ -1577,13 +1580,37 @@ export function createApp({
           operation: 'project.enterprise-command', commandId: body.commandId,
           payloadHash: payloadHash({ principal: actor, schemaVersion: body.schemaVersion, expectedVersion: body.expectedVersion, payload: body.payload }),
           expectedVersion: body.expectedVersion,
-          apply(project) {
-            const changed = applyEnterpriseCommand(project, payload, actor);
+          async apply(project, client) {
+            let reviewMembershipGeneration = null;
+            if (payload.kind === 'review-merge') {
+              const membership = await lockProjectAccess(client, { tenantId: requestTenant(request), projectId: project.id,
+                principal: actor, minimum: 'owner' });
+              reviewMembershipGeneration = membership.generation;
+            }
+            if (payload.kind === 'apply-reviewed-merge') {
+              const review = enterpriseMergeApproval(project, payload);
+              try {
+                const membership = await lockProjectAccess(client, { tenantId: requestTenant(request), projectId: project.id,
+                  principal: review.principal, minimum: 'owner' });
+                if (membership.generation !== review.membershipGeneration) {
+                  throw apiFailure(403, 'ENTERPRISE_MERGE_REVIEW_AUTHORITY_STALE', 'The reviewer project grant changed.');
+                }
+                await requirePrincipalAuthority(client, { tenantId: requestTenant(request), principal: review.principal,
+                  roles: ['workspace-write'], actorType: 'human', authzGeneration: review.authzGeneration });
+              } catch (error) {
+                if (![401, 403, 409].includes(error.statusCode)) throw error;
+                throw apiFailure(403, 'ENTERPRISE_MERGE_REVIEW_AUTHORITY_STALE', 'The saved reviewer no longer has the same human owner authority. Prepare a new candidate and obtain a current review.');
+              }
+            }
+            const changed = applyEnterpriseCommand(project, payload, actor, { authzGeneration: request.identity.authzGeneration,
+              membershipGeneration: reviewMembershipGeneration });
             project.version += 1; project.updatedAt = changed.recordedAt ?? changed.blueprint.createdAt; project.updatedBy = actor;
-            project.events.push(projectEvent(project, { type: ['record-state', 'set-validity', 'propose-future-design'].includes(payload.kind)
+            project.events.push(projectEvent(project, { type: ['record-state', 'set-validity', 'propose-future-design'].includes(payload.kind) || ENTERPRISE_BRANCH_KINDS.has(payload.kind)
               ? 'EnterpriseDesignChanged' : 'EnterpriseScopeChanged', actor, commandId: body.commandId, correlationId,
               data: { kind: payload.kind, blueprintId: changed.blueprint.id, blueprintVersion: changed.blueprint.version,
-                objectId: changed.affectedObjectId, proposalId: changed.proposalId ?? null, reason: payload.reason } }));
+                objectId: changed.affectedObjectId, proposalId: changed.proposalId ?? null,
+                branchId: changed.branchId ?? null, branchRevision: changed.branchRevision ?? null,
+                candidateId: changed.candidateId ?? null, candidateHash: changed.candidateHash ?? null, reason: payload.reason } }));
           },
         }, actor, { requiredPrincipalRoles: ['workspace-write'], authzGeneration: request.identity.authzGeneration,
           ...(administrative ? { minimumProjectAccess: 'owner' } : {}) });
@@ -1591,7 +1618,9 @@ export function createApp({
         const blueprint = latestBlueprint(result.project);
         const receipt = result.project.events.at(-1).data;
         return sendApi(response, 200, { projectVersion: result.project.version, blueprintId: blueprint.id,
-          blueprintVersion: blueprint.version, affectedObjectId: receipt.objectId, proposalId: receipt.proposalId ?? null },
+          blueprintVersion: blueprint.version, affectedObjectId: receipt.objectId, proposalId: receipt.proposalId ?? null,
+          branchId: receipt.branchId ?? null, branchRevision: receipt.branchRevision ?? null,
+          candidateId: receipt.candidateId ?? null, candidateHash: receipt.candidateHash ?? null },
         { correlationId, event: result.project.events.at(-1), meta: { replayed: result.replayed } });
       }
 

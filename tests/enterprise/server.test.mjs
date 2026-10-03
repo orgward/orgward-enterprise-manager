@@ -96,6 +96,15 @@ function commandBody(view, commandId, payload, expectedVersion = view.data.conte
     payload: { ...payload, blueprintId: view.data.context.blueprintId,
       blueprintVersion: view.data.context.blueprintVersion } };
 }
+function branchCommandBody(view, commandId, payload, expectedVersion = view.data.context.projectVersion) {
+  const mergeCommand = ['prepare-merge', 'review-merge', 'apply-reviewed-merge'].includes(payload.kind);
+  const source = mergeCommand ? view.data.branch.comparison : view.data.context;
+  return { schemaVersion: '1.0', commandId, expectedVersion,
+    payload: { ...payload, blueprintId: source.blueprintId ?? source.mainBlueprintId,
+      blueprintVersion: source.blueprintVersion ?? source.mainBlueprintVersion,
+      ...(view.data.branch ? { branchId: view.data.branch.id, branchRevision: view.data.branch.revision } : {}),
+      ...(payload.kind === 'create-branch' ? { proposalId: view.data.context.proposalId ?? null } : {}) } };
+}
 async function postCommand(base, subject, projectId, body, status = 200) {
   return request(base, subject, `/api/v1/projects/${projectId}/enterprise/commands`, { method: 'POST', body }, status);
 }
@@ -103,11 +112,15 @@ function items(blueprint) { return Object.values(blueprint.areas).flatMap((area)
 
 test('enterprise scopes retain design identity across sixteen lenses, commands, history, and restart', async (t) => {
   const postgres = await startPostgres();
-  t.after(() => postgres.close());
-  const root = await mkdtemp(path.join(tmpdir(), 'orgward-enterprise-scope-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  let instance = await startApp(postgres, root);
-  t.after(async () => closeApp(instance));
+  let root;
+  let instance;
+  t.after(async () => {
+    await closeApp(instance);
+    if (root) await rm(root, { recursive: true, force: true });
+    await postgres.close();
+  });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-enterprise-scope-'));
+  instance = await startApp(postgres, root);
   for (const identity of identities.values()) {
     await postgres.query(`insert into orgward.oidc_principals
       (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
@@ -120,9 +133,9 @@ test('enterprise scopes retain design identity across sixteen lenses, commands, 
   const ownerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
   const editorView = await currentView(instance.base, 'editor', project.id);
   const readerView = await currentView(instance.base, 'reader', project.id);
-  assert.deepEqual(ownerView.data.permissions, { write: true, scopeAdmin: true });
-  assert.deepEqual(editorView.data.permissions, { write: true, scopeAdmin: false });
-  assert.deepEqual(readerView.data.permissions, { write: false, scopeAdmin: false });
+  assert.deepEqual(ownerView.data.permissions, { write: true, scopeAdmin: true, branchCreate: true, branchWrite: false, branchAdmin: false });
+  assert.deepEqual(editorView.data.permissions, { write: true, scopeAdmin: false, branchCreate: true, branchWrite: false, branchAdmin: false });
+  assert.deepEqual(readerView.data.permissions, { write: false, scopeAdmin: false, branchCreate: false, branchWrite: false, branchAdmin: false });
   assert.equal(ownerView.data.selection.object.id, 'process-deliver');
   assert.equal(ownerView.data.selection.object.enterpriseScope, undefined);
   assert.equal(ownerView.data.selection.visible, true);
@@ -314,11 +327,15 @@ test('enterprise scopes retain design identity across sixteen lenses, commands, 
 
 test('enterprise state and time views keep human reports independent and future proposals off the main design', async (t) => {
   const postgres = await startPostgres();
-  t.after(() => postgres.close());
-  const root = await mkdtemp(path.join(tmpdir(), 'orgward-enterprise-time-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  let instance = await startApp(postgres, root);
-  t.after(async () => closeApp(instance));
+  let root;
+  let instance;
+  t.after(async () => {
+    await closeApp(instance);
+    if (root) await rm(root, { recursive: true, force: true });
+    await postgres.close();
+  });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-enterprise-time-'));
+  instance = await startApp(postgres, root);
   for (const identity of identities.values()) {
     await postgres.query(`insert into orgward.oidc_principals
       (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
@@ -389,7 +406,11 @@ test('enterprise state and time views keep human reports independent and future 
   assert.equal(futureProposal.data.context.proposalId, proposalId);
   assert.equal(futureProposal.data.context.effectiveStatus, 'IN_RANGE');
   assert.equal(futureProposal.data.context.isCurrent, false);
-  assert.deepEqual(futureProposal.data.permissions, { write: false, scopeAdmin: false });
+  assert.equal(futureProposal.data.permissions.write, false);
+  assert.equal(futureProposal.data.permissions.scopeAdmin, false);
+  assert.deepEqual({ branchCreate: futureProposal.data.permissions.branchCreate,
+    branchWrite: futureProposal.data.permissions.branchWrite, branchAdmin: futureProposal.data.permissions.branchAdmin },
+  { branchCreate: true, branchWrite: false, branchAdmin: false });
   assert.equal(futureProposal.data.selection.object.name, 'Deliver the next-generation service');
   assert.ok(mainAfterProposal.data.versions.every((entry) => entry.id !== futureProposal.data.context.blueprintId),
     'the proposal snapshot is not inserted into the main version history');
@@ -456,4 +477,354 @@ test('enterprise state and time views keep human reports independent and future 
   assert.equal(proposalReplay.data.proposalId, proposalId);
   const mainAfterReplay = await currentView(instance.base, 'owner', project.id);
   assert.equal(mainAfterReplay.data.context.blueprintId, mainEditResult.data.blueprintId);
+});
+
+test('enterprise branches merge exact typed changes only after a current owner review', async (t) => {
+  const postgres = await startPostgres();
+  let root;
+  let instance;
+  t.after(async () => {
+    await closeApp(instance);
+    if (root) await rm(root, { recursive: true, force: true });
+    await postgres.close();
+  });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-enterprise-branches-'));
+  instance = await startApp(postgres, root);
+  for (const identity of identities.values()) {
+    await postgres.query(`insert into orgward.oidc_principals
+      (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+    [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  }
+  const project = await seedProject(postgres, 'Enterprise branch fixture');
+  const reviewer = { issuer, subject: 'branch-reviewer', principal: `oidc:${createHash('sha256').update(`${issuer}\nbranch-reviewer`).digest('hex')}`,
+    tenantId, actorType: 'human', displayName: 'branch-reviewer', roles: ['workspace-read', 'workspace-write'],
+    expiresAt: Math.floor(Date.now() / 1000) + 300 };
+  identities.set('branch-reviewer', reviewer);
+  t.after(() => identities.delete('branch-reviewer'));
+  await postgres.query(`insert into orgward.oidc_principals
+    (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+  [reviewer.principal, reviewer.issuer, reviewer.tenantId, reviewer.actorType, reviewer.displayName, reviewer.roles]);
+  await postgres.query(`insert into orgward.project_memberships
+    (tenant_id,project_id,principal,access,granted_by) values ($1,$2,$3,'editor',$4)`,
+  [tenantId, project.id, reviewer.principal, identities.get('owner').principal]);
+
+  const readMain = (subject = 'owner') => currentView(instance.base, subject, project.id);
+  const readBranch = (subject, branchId, branchRevision = null) => currentView(instance.base, subject, project.id,
+    { branchId, ...(branchRevision === null ? {} : { branchRevision }), selectedId: 'process-deliver' });
+  let serial = 0;
+  const createMainOrg = async (name) => {
+    const view = await readMain();
+    const result = await postCommand(instance.base, 'owner', project.id, commandBody(view, `branch-main-scope-${++serial}`, {
+      kind: 'create-scope', scopeType: 'organization', name, detail: `Scope ${name}.`, ownerRoleId: 'role-founder',
+      reason: `Create ${name} as canonical main design.` }));
+    return result.data.affectedObjectId;
+  };
+  const baseOrganizationId = await createMainOrg('Base organization');
+  const mainOrganizationId = await createMainOrg('Main organization');
+  const draftOrganizationId = await createMainOrg('Draft organization');
+  let view = await readMain();
+  await postCommand(instance.base, 'editor', project.id, commandBody(view, 'branch-set-base-process-scope', {
+    kind: 'assign-object-scope', objectId: 'process-deliver', organizationId: baseOrganizationId,
+    legalEntityId: null, unitId: null, reason: 'Set the branch base scope.' }));
+  view = await readMain();
+  const readerCreate = await postCommand(instance.base, 'reader', project.id,
+    branchCommandBody(view, 'reader-cannot-create-branch', { kind: 'create-branch', title: 'Denied branch', reason: 'Read-only identity.' }), 403);
+  assert.equal(readerCreate.error.code, 'ACTION_FORBIDDEN');
+
+  const initialBlueprint = view.data.blueprint;
+  const baseProcess = items(initialBlueprint).find((entry) => entry.id === 'process-deliver');
+  const role = items(initialBlueprint).find((entry) => entry.id === baseProcess.owner);
+  const createBranch = await postCommand(instance.base, 'editor', project.id,
+    branchCommandBody(view, 'create-delivery-branch', { kind: 'create-branch', title: 'Delivery redesign branch', reason: 'Explore an isolated design alternative.' }));
+  const branchId = createBranch.data.branchId;
+  assert.equal(createBranch.data.branchRevision, 1);
+  const branchRoute = `/api/v1/projects/${project.id}/enterprise?branchId=${branchId}`;
+  const foreignBranch = await request(instance.base, 'foreign', branchRoute, {}, 404);
+  assert.equal(foreignBranch.error.code, 'PROJECT_NOT_FOUND');
+
+  let draft = await readBranch('editor', branchId);
+  assert.equal(draft.data.context.sourceKind, 'BRANCH_DRAFT');
+  assert.equal(draft.data.context.isCurrent, false);
+  assert.equal(draft.data.permissions.branchWrite, true);
+  assert.equal(draft.data.branch.status, 'DRAFT');
+  assert.equal(draft.data.branch.revision, 1);
+  assert.ok(draft.data.versions.every((entry) => entry.id !== draft.data.context.blueprintId), 'branch snapshots do not enter main version history');
+  const invalidTypedEdit = branchCommandBody(draft, 'branch-rejects-missing-information', { kind: 'edit-branch-object',
+    edit: { objectId: 'process-deliver', name: 'Invalid branch process', detail: 'References absent information.', ownerRoleName: role.name,
+      trigger: baseProcess.trigger, inputInformationIds: ['information-missing-target'], outputInformationIds: baseProcess.outputs },
+    reason: 'The missing typed target must be rejected.' });
+  const invalidTypedResult = await postCommand(instance.base, 'editor', project.id, invalidTypedEdit, 400);
+  assert.equal(invalidTypedResult.error.code, 'INVALID_BLUEPRINT_RELATION');
+  assert.equal((await readBranch('editor', branchId)).data.branch.revision, 1);
+
+  const mainOnlyCreateView = await readMain();
+  const mainOnlyResult = await postCommand(instance.base, 'owner', project.id,
+    commandBody(mainOnlyCreateView, 'create-main-only-scope-after-branch', { kind: 'create-scope', scopeType: 'organization',
+      name: 'Main-only organization', detail: 'Canonical main-only addition.', ownerRoleId: 'role-founder',
+      reason: 'Add one main-only organization.' }));
+  const mainOnlyOrganizationId = mainOnlyResult.data.affectedObjectId;
+
+  draft = await readBranch('owner', branchId);
+  const branchOnlyCreate = await postCommand(instance.base, 'owner', project.id,
+    branchCommandBody(draft, 'create-draft-only-scope', { kind: 'edit-branch-scope',
+      change: { kind: 'create-scope', scopeType: 'organization', name: 'Draft-only organization',
+        detail: 'Canonical draft-only addition.', ownerRoleId: 'role-founder' }, reason: 'Add one draft-only organization.' }));
+  const draftOnlyOrganizationId = branchOnlyCreate.data.affectedObjectId;
+  draft = await readBranch('editor', branchId);
+  const branchProcess = items(draft.data.blueprint).find((entry) => entry.id === 'process-deliver');
+  const branchEdit = await postCommand(instance.base, 'editor', project.id,
+    branchCommandBody(draft, 'edit-branch-process', { kind: 'edit-branch-object', edit: {
+      objectId: branchProcess.id, name: 'Draft delivery process', detail: 'Draft-specific delivery detail.',
+      ownerRoleName: role.name, trigger: branchProcess.trigger, inputInformationIds: ['information-delivery-result'],
+      outputInformationIds: branchProcess.outputs,
+    }, reason: 'Change process name, reference array and details in the isolated draft.' }));
+  draft = await readBranch('owner', branchId);
+  const draftScope = await postCommand(instance.base, 'editor', project.id,
+    branchCommandBody(draft, 'assign-draft-process-scope', { kind: 'edit-branch-scope',
+      change: { kind: 'assign-object-scope', objectId: 'process-deliver', organizationId: draftOrganizationId,
+        legalEntityId: null, unitId: null }, reason: 'Change the process scope in the isolated draft.' }));
+  assert.equal(draftScope.data.branchRevision, branchEdit.data.branchRevision + 1);
+
+  const mainProject = (await request(instance.base, 'owner', `/api/v1/projects/${project.id}`)).data;
+  const mainProcess = items(mainProject.latestBlueprint).find((entry) => entry.id === 'process-deliver');
+  const mainEdit = await request(instance.base, 'owner', `/api/v1/projects/${project.id}/blueprint/edits`, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'edit-main-process-against-branch', expectedVersion: mainProject.version,
+    payload: { objectId: mainProcess.id, name: 'Main delivery process', detail: 'Main-specific delivery detail.',
+      ownerRoleName: role.name, trigger: mainProcess.trigger, inputInformationIds: ['information-customer-signal'],
+      outputInformationIds: mainProcess.outputs },
+  } });
+  view = await readMain();
+  const mainScopeChange = await postCommand(instance.base, 'editor', project.id,
+    commandBody(view, 'assign-main-process-scope', { kind: 'assign-object-scope', objectId: 'process-deliver',
+      organizationId: mainOrganizationId, legalEntityId: null, unitId: null, reason: 'Change main process scope.' }));
+  view = await readMain();
+  const compare = await readBranch('editor', branchId);
+  assert.equal(compare.data.branch.comparison.mainBlueprintId, mainScopeChange.data.blueprintId);
+  const conflicts = compare.data.branch.comparison.conflicts;
+  const conflict = (field) => conflicts.find((row) => row.objectId === 'process-deliver' && row.field === field);
+  assert.equal(conflict('name')?.kind, 'CONTENT');
+  assert.equal(conflict('inputs')?.kind, 'REFERENCE');
+  assert.equal(conflict('enterpriseScope')?.kind, 'SCOPE');
+  const changes = compare.data.branch.comparison.changes;
+  assert.ok(changes.some((row) => row.objectId === mainOnlyOrganizationId && row.field === '$object' && !row.basePresent && row.currentPresent && !row.proposedPresent));
+  assert.ok(changes.some((row) => row.objectId === draftOnlyOrganizationId && row.field === '$object' && !row.basePresent && !row.currentPresent && row.proposedPresent));
+  assert.ok(compare.data.branch.comparison.relations.currentAdded.length + compare.data.branch.comparison.relations.branchAdded.length > 0);
+
+  const resolutionFor = (projection) => projection.data.branch.comparison.conflicts.map((row) => ({ conflictId: row.conflictId,
+    choice: ['name', 'enterpriseScope'].includes(row.field) ? 'branch' : 'current' }));
+  const staleBranchSource = branchCommandBody(compare, 'merge-revision-source-is-current', { kind: 'prepare-merge', resolutions: resolutionFor(compare), reason: 'Build the exact three-way candidate.' });
+  const unresolved = structuredClone(staleBranchSource);
+  unresolved.commandId = 'merge-missing-resolution'; unresolved.payload.resolutions.pop();
+  const unresolvedResult = await postCommand(instance.base, 'owner', project.id, unresolved, 409);
+  assert.equal(unresolvedResult.error.code, 'ENTERPRISE_MERGE_CONFLICTS');
+  const badChoice = structuredClone(staleBranchSource);
+  badChoice.commandId = 'merge-invalid-resolution-choice'; badChoice.payload.resolutions[0].choice = 'automatic';
+  const badChoiceResult = await postCommand(instance.base, 'owner', project.id, badChoice, 400);
+  assert.equal(badChoiceResult.error.code, 'INVALID_ENTERPRISE_BRANCH_COMMAND');
+
+  const planBeforeMerge = await request(instance.base, 'editor', `/api/v1/projects/${project.id}/process-plans`, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'plan-main-while-draft-open', expectedVersion: view.data.context.projectVersion,
+    payload: { processId: 'process-deliver' },
+  } }, 201);
+  assert.equal(planBeforeMerge.data.processPlans.at(-1).source.blueprintId, mainScopeChange.data.blueprintId);
+  const publicationBeforeMerge = await request(instance.base, 'owner', `/api/v1/projects/${project.id}/blueprint/publications`, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'publish-main-while-draft-open', expectedVersion: planBeforeMerge.data.version,
+    payload: { blueprintId: planBeforeMerge.data.latestBlueprint.id, blueprintVersion: planBeforeMerge.data.latestBlueprint.version, acknowledgeDisclosures: true },
+  } });
+  assert.equal(publicationBeforeMerge.data.blueprintPublications.at(-1).blueprintId, mainScopeChange.data.blueprintId);
+
+  const afterPublication = await readBranch('owner', branchId);
+  const candidateOne = await postCommand(instance.base, 'owner', project.id,
+    branchCommandBody(afterPublication, 'prepare-merge-one', { kind: 'prepare-merge', resolutions: resolutionFor(afterPublication), reason: 'Prepare immutable merge candidate one.' }));
+  const candidateOneView = await readBranch('owner', branchId);
+  assert.equal(candidateOneView.data.branch.candidate.id, candidateOne.data.candidateId);
+  assert.equal(candidateOneView.data.branch.candidate.status, 'PENDING');
+  assert.equal(candidateOneView.data.branch.candidate.mainBlueprintId, mainScopeChange.data.blueprintId);
+  assert.equal(candidateOneView.data.branch.candidate.branchRevision, afterPublication.data.branch.revision);
+  const editorReview = await postCommand(instance.base, 'editor', project.id,
+    branchCommandBody(candidateOneView, 'editor-review-denied', { kind: 'review-merge', candidateId: candidateOne.data.candidateId,
+      candidateHash: candidateOne.data.candidateHash, decision: 'ACCEPT', reason: 'Editor lacks merge review authority.' }), 403);
+  assert.equal(editorReview.error.code, 'ACTION_FORBIDDEN');
+  const rejected = await postCommand(instance.base, 'owner', project.id,
+    branchCommandBody(candidateOneView, 'reject-merge-candidate-one', { kind: 'review-merge', candidateId: candidateOne.data.candidateId,
+      candidateHash: candidateOne.data.candidateHash, decision: 'REJECT', reason: 'Reject this exact merge candidate.' }));
+  assert.equal(rejected.data.candidateId, candidateOne.data.candidateId);
+  const rejectedView = await readBranch('owner', branchId);
+  assert.equal(rejectedView.data.branch.candidate.status, 'REJECTED');
+  const secondDecision = await postCommand(instance.base, 'owner', project.id,
+    branchCommandBody(rejectedView, 'second-review-is-denied', { kind: 'review-merge', candidateId: candidateOne.data.candidateId,
+      candidateHash: candidateOne.data.candidateHash, decision: 'ACCEPT', reason: 'A rejected candidate is immutable.' }), 409);
+  assert.equal(secondDecision.error.code, 'ENTERPRISE_MERGE_ALREADY_REVIEWED');
+  const rejectedApply = await postCommand(instance.base, 'owner', project.id,
+    branchCommandBody(rejectedView, 'rejected-merge-cannot-apply', { kind: 'apply-reviewed-merge', candidateId: candidateOne.data.candidateId,
+      candidateHash: candidateOne.data.candidateHash, reason: 'A rejected candidate must not apply.' }), 409);
+  assert.equal(rejectedApply.error.code, 'ENTERPRISE_MERGE_REVIEW_REQUIRED');
+
+  const mainPlan = items(rejectedView.data.blueprint).find((entry) => entry.id === 'process-deliver');
+  const changedBranch = await postCommand(instance.base, 'editor', project.id,
+    branchCommandBody(rejectedView, 'revise-branch-after-rejected-candidate', { kind: 'edit-branch-object', edit: {
+      objectId: mainPlan.id, name: 'Draft delivery process', detail: 'Draft detail after rejection.', ownerRoleName: role.name,
+      trigger: mainPlan.trigger, inputInformationIds: ['information-delivery-result'], outputInformationIds: mainPlan.outputs,
+    }, reason: 'A new revision invalidates prior candidate review.' }));
+  const changedBranchView = await readBranch('owner', branchId);
+  assert.equal(changedBranchView.data.branch.candidate.status, 'STALE');
+  const staleReview = await postCommand(instance.base, 'owner', project.id,
+    branchCommandBody(changedBranchView, 'stale-candidate-review-denied', { kind: 'review-merge', candidateId: candidateOne.data.candidateId,
+      candidateHash: candidateOne.data.candidateHash, decision: 'ACCEPT', reason: 'Changed branch revision requires a fresh candidate.' }), 409);
+  assert.equal(staleReview.error.code, 'ENTERPRISE_MERGE_STALE');
+
+  const candidateTwo = await postCommand(instance.base, 'owner', project.id,
+    branchCommandBody(changedBranchView, 'prepare-merge-two', { kind: 'prepare-merge', resolutions: resolutionFor(changedBranchView), reason: 'Prepare candidate after draft revision.' }));
+  const candidateTwoView = await readBranch('owner', branchId);
+  await postCommand(instance.base, 'owner', project.id,
+    branchCommandBody(candidateTwoView, 'review-merge-two', { kind: 'review-merge', candidateId: candidateTwo.data.candidateId,
+      candidateHash: candidateTwo.data.candidateHash, decision: 'ACCEPT', reason: 'Review the exact current draft candidate.' }));
+  const beforeMainStale = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  const processLearn = items(beforeMainStale.data.latestBlueprint).find((entry) => entry.id === 'process-learn');
+  const processLearnRole = items(beforeMainStale.data.latestBlueprint).find((entry) => entry.id === processLearn.owner);
+  await request(instance.base, 'owner', `/api/v1/projects/${project.id}/blueprint/edits`, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'invalidate-reviewed-main-source', expectedVersion: beforeMainStale.data.version,
+    payload: { objectId: processLearn.id, name: 'Updated discovery process', detail: 'Change main after review.',
+      ownerRoleName: processLearnRole.name, trigger: processLearn.trigger },
+  } });
+  const mainChangedBranchView = await readBranch('owner', branchId);
+  assert.equal(mainChangedBranchView.data.branch.candidate.status, 'STALE');
+  const changedMainApply = await postCommand(instance.base, 'owner', project.id,
+    branchCommandBody(mainChangedBranchView, 'apply-after-main-change', { kind: 'apply-reviewed-merge', candidateId: candidateTwo.data.candidateId,
+      candidateHash: candidateTwo.data.candidateHash, reason: 'The changed main source invalidates this candidate.' }), 409);
+  assert.equal(changedMainApply.error.code, 'ENTERPRISE_MERGE_STALE');
+
+  const candidateThree = await postCommand(instance.base, 'owner', project.id,
+    branchCommandBody(mainChangedBranchView, 'prepare-merge-three', { kind: 'prepare-merge', resolutions: resolutionFor(mainChangedBranchView), reason: 'Prepare after current main changed.' }));
+  const candidateThreeView = await readBranch('owner', branchId);
+  await postgres.query(`update orgward.project_memberships set access='editor' where tenant_id=$1 and project_id=$2 and principal=$3`,
+    [tenantId, project.id, identities.get('owner').principal]);
+  await postgres.query(`update orgward.project_memberships set access='owner', generation=generation+1
+    where tenant_id=$1 and project_id=$2 and principal=$3`, [tenantId, project.id, reviewer.principal]);
+  const reviewerAtApproval = await postgres.query(`select m.generation as membership_generation, p.authz_generation
+    from orgward.project_memberships m join orgward.oidc_principals p on p.tenant_id=m.tenant_id and p.principal=m.principal
+    where m.tenant_id=$1 and m.project_id=$2 and m.principal=$3`, [tenantId, project.id, reviewer.principal]);
+  await postCommand(instance.base, 'branch-reviewer', project.id,
+    branchCommandBody(candidateThreeView, 'review-merge-three', { kind: 'review-merge', candidateId: candidateThree.data.candidateId,
+      candidateHash: candidateThree.data.candidateHash, decision: 'ACCEPT', reason: 'Accept the current immutable candidate.' }));
+  await postgres.query(`update orgward.project_memberships set access='editor', generation=generation+1
+    where tenant_id=$1 and project_id=$2 and principal=$3`, [tenantId, project.id, reviewer.principal]);
+  await postgres.query(`update orgward.project_memberships set access='owner' where tenant_id=$1 and project_id=$2 and principal=$3`,
+    [tenantId, project.id, identities.get('owner').principal]);
+  await request(instance.base, 'owner', `/api/v1/projects/${project.id}/members/${reviewer.principal}/revoke`, { method: 'POST', body: {} });
+  await request(instance.base, 'owner', `/api/v1/projects/${project.id}/members`, { method: 'POST', body: { principal: reviewer.principal, access: 'editor' } });
+  await postgres.query(`update orgward.project_memberships set access='editor' where tenant_id=$1 and project_id=$2 and principal=$3`,
+    [tenantId, project.id, identities.get('owner').principal]);
+  await postgres.query(`update orgward.project_memberships set access='owner', generation=generation+1
+    where tenant_id=$1 and project_id=$2 and principal=$3`, [tenantId, project.id, reviewer.principal]);
+  const reviewerAfterRegrant = await postgres.query(`select m.generation as membership_generation, p.authz_generation
+    from orgward.project_memberships m join orgward.oidc_principals p on p.tenant_id=m.tenant_id and p.principal=m.principal
+    where m.tenant_id=$1 and m.project_id=$2 and m.principal=$3`, [tenantId, project.id, reviewer.principal]);
+  assert.ok(Number(reviewerAfterRegrant.rows[0].membership_generation) > Number(reviewerAtApproval.rows[0].membership_generation));
+  assert.equal(Number(reviewerAfterRegrant.rows[0].authz_generation), Number(reviewerAtApproval.rows[0].authz_generation),
+    'the principal authority generation stays unchanged while project membership is revoked and restored');
+  const afterReviewerGenerationChange = await readBranch('owner', branchId);
+  const projectBeforeRevokedReviewApply = (await request(instance.base, 'owner', `/api/v1/projects/${project.id}`)).data;
+  const revokedReviewerApply = await postCommand(instance.base, 'branch-reviewer', project.id,
+    branchCommandBody(afterReviewerGenerationChange, 'regrant-does-not-restore-old-review', { kind: 'apply-reviewed-merge',
+      candidateId: candidateThree.data.candidateId, candidateHash: candidateThree.data.candidateHash,
+      reason: 'An old approval cannot survive reviewer membership revocation and regrant.' }), 403);
+  assert.equal(revokedReviewerApply.error.code, 'ENTERPRISE_MERGE_REVIEW_AUTHORITY_STALE');
+  const mainAfterRevokedReviewApply = await readMain();
+  assert.equal(mainAfterRevokedReviewApply.data.context.blueprintId, mainChangedBranchView.data.branch.comparison.mainBlueprintId,
+    'a revoked approval does not create a main blueprint version');
+  assert.equal(mainAfterRevokedReviewApply.data.context.blueprintVersion, mainChangedBranchView.data.branch.comparison.mainBlueprintVersion);
+  const projectAfterRevokedReviewApply = (await request(instance.base, 'owner', `/api/v1/projects/${project.id}`)).data;
+  assert.equal(projectAfterRevokedReviewApply.version, projectBeforeRevokedReviewApply.version,
+    'the denied apply does not append a project command or main revision');
+  await postgres.query(`update orgward.project_memberships set access='editor', generation=generation+1
+    where tenant_id=$1 and project_id=$2 and principal=$3`, [tenantId, project.id, reviewer.principal]);
+  await postgres.query(`update orgward.project_memberships set access='owner' where tenant_id=$1 and project_id=$2 and principal=$3`,
+    [tenantId, project.id, identities.get('owner').principal]);
+
+  const candidateFour = await postCommand(instance.base, 'owner', project.id,
+    branchCommandBody(afterReviewerGenerationChange, 'prepare-merge-four', { kind: 'prepare-merge', resolutions: resolutionFor(afterReviewerGenerationChange), reason: 'Prepare a fresh candidate after reviewer revocation.' }));
+  const candidateFourView = await readBranch('owner', branchId);
+  await postCommand(instance.base, 'owner', project.id,
+    branchCommandBody(candidateFourView, 'review-merge-four', { kind: 'review-merge', candidateId: candidateFour.data.candidateId,
+      candidateHash: candidateFour.data.candidateHash, decision: 'ACCEPT', reason: 'Current owner accepts exact candidate.' }));
+  const approved = await readBranch('owner', branchId);
+  assert.equal(approved.data.branch.candidate.status, 'ACCEPTED');
+  const replayBody = branchCommandBody(approved, 'apply-reviewed-merge-four', { kind: 'apply-reviewed-merge',
+    candidateId: candidateFour.data.candidateId, candidateHash: candidateFour.data.candidateHash,
+    reason: 'Apply the explicitly reviewed candidate to proposed main.' });
+  const versionBeforeApply = approved.data.context.projectVersion;
+  const currentBeforeApply = await readMain();
+  assert.equal(currentBeforeApply.data.context.blueprintId, approved.data.branch.comparison.mainBlueprintId);
+  const projectBeforeApply = (await request(instance.base, 'owner', `/api/v1/projects/${project.id}`)).data;
+  const applied = await postCommand(instance.base, 'owner', project.id, replayBody);
+  assert.notEqual(applied.data.blueprintId, currentBeforeApply.data.context.blueprintId);
+  assert.equal(applied.data.blueprintVersion, currentBeforeApply.data.context.blueprintVersion + 1);
+  assert.equal(applied.data.projectVersion, versionBeforeApply + 1);
+  const appliedReplay = await postCommand(instance.base, 'owner', project.id, replayBody);
+  assert.equal(appliedReplay.meta.replayed, true);
+  assert.deepEqual(appliedReplay.data, applied.data);
+  const mainAfterApply = await readMain();
+  assert.equal(mainAfterApply.data.context.blueprintId, applied.data.blueprintId);
+  assert.equal(mainAfterApply.data.context.blueprintVersion, applied.data.blueprintVersion);
+  assert.equal(mainAfterApply.data.blueprint.epistemicStatus, 'proposed-design');
+  const projectAfterApply = (await request(instance.base, 'owner', `/api/v1/projects/${project.id}`)).data;
+  assert.equal(projectAfterApply.blueprintPublications.length, projectBeforeApply.blueprintPublications.length,
+    'merge does not publish the proposed main blueprint');
+  assert.equal(projectAfterApply.processPlans.length, projectBeforeApply.processPlans.length,
+    'merge does not create new operational work');
+  const mergedProcess = items(mainAfterApply.data.blueprint).find((entry) => entry.id === 'process-deliver');
+  assert.equal(mergedProcess.name, 'Draft delivery process');
+  assert.deepEqual(mergedProcess.inputs.filter((id) => id.startsWith('information-')), ['information-customer-signal'], 'the explicit current choice wins the reference-array conflict');
+  assert.equal(mergedProcess.enterpriseScope.organizationId, draftOrganizationId, 'the explicit draft choice wins the scope conflict');
+  const mergedNames = items(mainAfterApply.data.blueprint).map((entry) => entry.name);
+  assert.ok(mergedNames.includes('Main-only organization'));
+  assert.ok(mergedNames.includes('Draft-only organization'));
+  assert.ok(mainAfterApply.data.graph.links.some((link) => link.source === 'process-deliver' && link.target === draftOrganizationId && link.type === 'within-organization'));
+  const appliedBranch = await readBranch('owner', branchId);
+  assert.equal(appliedBranch.data.branch.status, 'MERGED');
+  assert.equal(appliedBranch.data.branch.candidate.status, 'APPLIED');
+  assert.equal(appliedBranch.data.permissions.branchWrite, false);
+  const historicalDraft = await readBranch('owner', branchId, 1);
+  assert.equal(historicalDraft.data.branch.isHead, false);
+  assert.equal(historicalDraft.data.permissions.branchWrite, false);
+
+  await closeApp(instance);
+  instance = await startApp(postgres, root);
+  const afterRestart = await readMain();
+  assert.equal(afterRestart.data.context.blueprintId, applied.data.blueprintId);
+  const applyReplayAfterRestart = await postCommand(instance.base, 'owner', project.id, replayBody);
+  assert.equal(applyReplayAfterRestart.meta.replayed, true);
+  assert.deepEqual(applyReplayAfterRestart.data, applied.data);
+
+  const futureBase = await readMain();
+  const futureBranchResult = await postCommand(instance.base, 'owner', project.id,
+    branchCommandBody(futureBase, 'create-future-branch', { kind: 'create-branch', title: 'Future dated branch', reason: 'Keep this work inactive until its date.' }));
+  const futureBranchId = futureBranchResult.data.branchId;
+  let futureBranch = await readBranch('owner', futureBranchId);
+  const futureStart = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+  await postCommand(instance.base, 'owner', project.id,
+    branchCommandBody(futureBranch, 'set-future-branch-interval', { kind: 'set-branch-validity', effectiveFrom: futureStart,
+      effectiveTo: null, reason: 'Declare a future-only merge interval.' }));
+  futureBranch = await readBranch('owner', futureBranchId);
+  const futureCandidate = await postCommand(instance.base, 'owner', project.id,
+    branchCommandBody(futureBranch, 'prepare-future-branch-candidate', { kind: 'prepare-merge', resolutions: [], reason: 'Prepare future-dated branch candidate.' }));
+  futureBranch = await readBranch('owner', futureBranchId);
+  assert.equal(futureBranch.data.branch.candidate.eligibility.status, 'FUTURE');
+  await postCommand(instance.base, 'owner', project.id,
+    branchCommandBody(futureBranch, 'review-future-branch-candidate', { kind: 'review-merge', candidateId: futureCandidate.data.candidateId,
+      candidateHash: futureCandidate.data.candidateHash, decision: 'ACCEPT', reason: 'Review, but do not activate, future work.' }));
+  futureBranch = await readBranch('owner', futureBranchId);
+  const futureApply = await postCommand(instance.base, 'owner', project.id,
+    branchCommandBody(futureBranch, 'future-branch-cannot-auto-apply', { kind: 'apply-reviewed-merge', candidateId: futureCandidate.data.candidateId,
+      candidateHash: futureCandidate.data.candidateHash, reason: 'A future effective date does not authorize activation.' }), 409);
+  assert.equal(futureApply.error.code, 'ENTERPRISE_MERGE_NOT_EFFECTIVE');
+  const unchangedMain = await readMain();
+  assert.equal(unchangedMain.data.context.blueprintId, applied.data.blueprintId);
+  futureBranch = await readBranch('owner', futureBranchId);
+  await postCommand(instance.base, 'owner', project.id,
+    branchCommandBody(futureBranch, 'abandon-future-branch', { kind: 'abandon-branch', reason: 'Abandon the unmerged future branch.' }));
+  const abandoned = await readBranch('owner', futureBranchId);
+  assert.equal(abandoned.data.branch.status, 'ABANDONED');
+  assert.equal(abandoned.data.permissions.branchWrite, false);
 });

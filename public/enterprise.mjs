@@ -1,3 +1,4 @@
+import { ENTERPRISE_BRANCH_COMMANDS, enterpriseBranchWritable, renderEnterpriseBranches } from './enterprise-branches.mjs';
 const SCOPE_TYPES = new Set(['organization', 'legal-entity', 'unit']);
 const STATE_VALUES = {
   lifecycle: ['UNKNOWN', 'PLANNED', 'ACTIVE', 'RETIRED'],
@@ -52,15 +53,15 @@ export function renderEnterpriseStates({ states = {}, el }) {
 
 export function enterpriseQuery(route = {}) {
   return { lensId: route.lensId ?? 'all', scopeId: route.scopeId ?? null, blueprintVersion: route.blueprintVersion ?? null,
-    ...Object.fromEntries(['proposalId', 'effectiveAt', 'recordedAt'].filter((field) => Object.hasOwn(route, field)).map((field) => [field, route[field]])) };
+    ...Object.fromEntries(['proposalId', 'effectiveAt', 'recordedAt', 'branchId', 'branchRevision'].filter((field) => Object.hasOwn(route, field)).map((field) => [field, route[field]])) };
 }
 
 export function hasEnterpriseContext(route = {}) {
-  return ['lensId', 'scopeId', 'blueprintVersion', 'proposalId', 'effectiveAt', 'recordedAt'].some((field) => Object.hasOwn(route, field));
+  return ['lensId', 'scopeId', 'blueprintVersion', 'proposalId', 'effectiveAt', 'recordedAt', 'branchId', 'branchRevision'].some((field) => Object.hasOwn(route, field));
 }
 
 export function enterpriseContextReadOnly(context) {
-  return Boolean(context && (context.isCurrent === false || context.proposalId || context.sourceKind === 'FUTURE_PROPOSAL'
+  return Boolean(context && (context.isCurrent === false || context.proposalId || context.sourceKind === 'FUTURE_PROPOSAL' || context.branchId || context.sourceKind === 'BRANCH_DRAFT'
     || context.effectiveAt != null || context.recordedAtCutoff != null));
 }
 
@@ -79,7 +80,7 @@ export function enterpriseRequestPath(projectId, query, selectedId = null) {
   const params = new URLSearchParams({ lensId: query.lensId ?? 'all' });
   if (query.scopeId !== null && query.scopeId !== undefined) params.set('scopeId', query.scopeId);
   if (query.blueprintVersion !== null && query.blueprintVersion !== undefined) params.set('blueprintVersion', String(query.blueprintVersion));
-  for (const field of ['proposalId', 'effectiveAt', 'recordedAt']) if (query[field] !== null && query[field] !== undefined) params.set(field, String(query[field]));
+  for (const field of ['proposalId', 'effectiveAt', 'recordedAt', 'branchId', 'branchRevision']) if (query[field] !== null && query[field] !== undefined) params.set(field, String(query[field]));
   if (selectedId) params.set('selectedId', selectedId);
   return `/api/v1/projects/${encodeURIComponent(projectId)}/enterprise?${params}`;
 }
@@ -93,7 +94,7 @@ export function restoreEnterpriseCommand(storage, principal, projectId) {
   if (!saved) return null;
   if (saved.projectId !== projectId || saved.envelope?.schemaVersion !== '1.0'
     || typeof saved.envelope.commandId !== 'string' || !Number.isSafeInteger(saved.envelope.expectedVersion)
-    || !['create-scope', 'rename-scope', 'assign-object-scope', 'record-state', 'set-validity', 'propose-future-design'].includes(saved.envelope.payload?.kind)) throw new Error('Saved enterprise command is unreadable.');
+    || !['create-scope', 'rename-scope', 'assign-object-scope', 'record-state', 'set-validity', 'propose-future-design', ...ENTERPRISE_BRANCH_COMMANDS].includes(saved.envelope.payload?.kind)) throw new Error('Saved enterprise command is unreadable.');
   return saved;
 }
 
@@ -179,9 +180,9 @@ export function renderEnterpriseContext({ model, query, loading = false, error =
     return root;
   }
   if (error) {
-    root.append(el('p', { text: `Requested enterprise context unavailable: ${error}. The requested lens, scope or version has not been replaced with another context. Time and future draft requests also retain their exact requested identity.`, attrs: { role: 'alert' } }));
+    root.append(el('p', { text: `Requested enterprise context unavailable: ${error}. The requested lens, scope or version has not been replaced with another context. Time, future draft and branch requests also retain their exact requested identity.`, attrs: { role: 'alert' } }));
     const reset = el('button', { className: 'button', text: 'Open current design with all objects', attrs: { type: 'button' } });
-    reset.addEventListener('click', () => onContext({ lensId: 'all', scopeId: null, blueprintVersion: null, proposalId: null, effectiveAt: null, recordedAt: null })); root.append(reset);
+    reset.addEventListener('click', () => onContext({ lensId: 'all', scopeId: null, blueprintVersion: null, proposalId: null, effectiveAt: null, recordedAt: null, branchId: null, branchRevision: null })); root.append(reset);
     return root;
   }
   if (!model) return root;
@@ -191,19 +192,20 @@ export function renderEnterpriseContext({ model, query, loading = false, error =
   const version = field('blueprintVersion', 'Saved main design version', { entries: [['', query.effectiveAt || query.recordedAt ? 'Latest eligible main snapshot' : 'Current saved main design'], ...(model.versions ?? []).map((version) => [String(version.version), `Saved main version ${version.version}`])], required: false, value: query.blueprintVersion });
   const controls = el('div', { className: 'enterprise-context-controls' }, [lens.node, scope.node, version.node]);
   for (const control of [lens, scope, version]) {
-    control.control.disabled = loading;
+    control.control.disabled = loading || Boolean(pending);
     control.control.addEventListener('change', () => onContext({ ...query, lensId: lens.control.value, scopeId: scope.control.value || null, blueprintVersion: version.control.value ? Number(version.control.value) : null,
-      ...(control === version && query.proposalId ? { proposalId: null } : {}) }));
+      ...(control === version ? { proposalId: null, branchId: null, branchRevision: null } : {}) }));
   }
   const proposalChoices = [...(model.proposals ?? [])];
   if (model.proposal && !proposalChoices.some((proposal) => proposal.id === model.proposal.id)) proposalChoices.push(model.proposal);
   const proposal = field('proposalId', 'Future design draft', { entries: [['', 'Current main or saved main version'], ...proposalChoices.map((proposal) => [proposal.id, `${proposal.title} · proposed from version ${proposal.baseBlueprintVersion}`])], required: false, value: query.proposalId });
-  proposal.control.disabled = loading;
-  proposal.control.addEventListener('change', () => onContext({ ...query, proposalId: proposal.control.value || null, blueprintVersion: null }));
+  proposal.control.disabled = loading || Boolean(pending);
+  proposal.control.addEventListener('change', () => onContext({ ...query, proposalId: proposal.control.value || null, blueprintVersion: null, branchId: null, branchRevision: null }));
   controls.append(proposal.node);
-  const source = model.context.sourceKind === 'FUTURE_PROPOSAL' ? 'proposed future draft · read only'
+  const source = model.context.branchId ? 'branch draft · main work and publication unavailable' : model.context.sourceKind === 'FUTURE_PROPOSAL' ? 'proposed future draft · read only'
     : enterpriseContextReadOnly(model.context) ? 'saved time or historical context · read only' : 'current main design';
   root.append(controls, el('p', { text: model.blueprint ? `Snapshot version ${model.context.blueprintVersion} · ${source}.` : 'No saved design version at this context.' }));
+  root.append(renderEnterpriseBranches({ model, query, loading, pending, el, ui: { field, form }, onContext, onCommand, utcTime: enterpriseUtcTime }));
   const effectiveAt = field('effectiveAt', 'Effective at (UTC, blank means no time filter)', { type: 'datetime-local', value: timeInput(query.effectiveAt), required: false });
   const recordedAt = field('recordedAt', 'Recorded by (UTC cutoff, blank means latest recorded)', { type: 'datetime-local', value: timeInput(query.recordedAt), required: false });
   if (model.blueprint || (model.versions ?? []).length || proposalChoices.length || query.effectiveAt || query.recordedAt || query.proposalId) root.append(form('inspect-time', 'Inspect exact time context', [effectiveAt.node, recordedAt.node], () => onContext({ ...query, effectiveAt: enterpriseUtcTime(effectiveAt.control.value), recordedAt: enterpriseUtcTime(recordedAt.control.value) }), loading || Boolean(pending)));
@@ -230,9 +232,9 @@ export function renderEnterpriseContext({ model, query, loading = false, error =
     ]));
     root.append(panel);
   }
-  if (enterpriseContextReadOnly(model.context) && (model.blueprint || (model.versions ?? []).length || query.blueprintVersion != null || query.effectiveAt || query.recordedAt || query.proposalId || model.context.effectiveAt || model.context.recordedAtCutoff || model.context.proposalId)) {
+  if (enterpriseContextReadOnly(model.context) && (model.blueprint || (model.versions ?? []).length || query.blueprintVersion != null || query.effectiveAt || query.recordedAt || query.proposalId || model.context.effectiveAt || model.context.recordedAtCutoff || model.context.proposalId || query.branchId || model.context.branchId)) {
     const current = el('button', { className: 'button ghost', text: 'Return to the current saved design', attrs: { type: 'button' } });
-    current.addEventListener('click', () => onContext({ ...query, blueprintVersion: null, proposalId: null, effectiveAt: null, recordedAt: null })); root.append(current);
+    current.addEventListener('click', () => onContext({ ...query, blueprintVersion: null, proposalId: null, effectiveAt: null, recordedAt: null, branchId: null, branchRevision: null })); root.append(current);
   }
   if (model.gaps?.length) root.append(el('details', {}, [el('summary', { text: 'Perspective gaps and unavailable capabilities' }), el('ul', {}, model.gaps.map((gap) => el('li', { text: gap.message })))]));
   if (!model.blueprint) {
@@ -256,6 +258,12 @@ export function renderEnterpriseContext({ model, query, loading = false, error =
   const name = field('name', 'Scope name', { maximum: 120 });
   const detail = field('detail', 'Design purpose and description', { multiline: true });
   const reason = field('reason', 'Reason for this design change', { multiline: true, maximum: 500 });
+  const scopeDisabled = loading || Boolean(pending) || (model.context.branchId ? (!enterpriseBranchWritable(model) || !model.permissions?.branchAdmin) : disabled);
+  const scopeCommand = (payload) => {
+    if (!model.context.branchId) return onCommand(payload);
+    const { reason, ...change } = payload;
+    return onCommand({ kind: 'edit-branch-scope', change, reason });
+  };
   const roles = Object.values(model.blueprint.areas ?? {}).flatMap((area) => area.items ?? []).filter((object) => object.type === 'role');
   const owner = field('ownerRoleId', 'Proposed owner role', { entries: [['', 'None specified'], ...roles.map((role) => [role.id, role.name])], required: false });
   const scopes = scopeFields(el, model.scopes ?? []);
@@ -272,11 +280,11 @@ export function renderEnterpriseContext({ model, query, loading = false, error =
   scopeType.control.addEventListener('change', updateType); updateType();
   const create = form('create-scope', 'Create proposed design scope', [scopeType.node, name.node, detail.node, owner.node, hierarchy, reason.node], () => {
     const type = scopeType.control.value;
-    onCommand({ kind: 'create-scope', scopeType: type, name: name.control.value.trim(), detail: detail.control.value.trim(), ownerRoleId: owner.control.value || null, reason: reason.control.value.trim(),
+    scopeCommand({ kind: 'create-scope', scopeType: type, name: name.control.value.trim(), detail: detail.control.value.trim(), ownerRoleId: owner.control.value || null, reason: reason.control.value.trim(),
       ...(type === 'organization' ? {} : { organizationId: scopes.organization.control.value }),
       ...(type === 'legal-entity' ? { jurisdiction: jurisdiction.control.value.trim() } : {}),
       ...(type === 'unit' ? { legalEntityId: scopes.legalEntity.control.value || null, parentUnitId: scopes.unit.control.value || null } : {}) });
-  }, disabled);
+  }, scopeDisabled);
   root.append(el('details', {}, [el('summary', { text: 'Create an organization, legal entity or unit' }), create]));
   if (!model.permissions?.scopeAdmin && model.context.isCurrent) root.append(el('p', { text: 'A project owner can create or rename proposed design scopes.' }));
   return root;
@@ -334,17 +342,23 @@ export function renderEnterpriseObject({ model, object, pending = null, loading 
         title: title.control.value.trim(), name: futureName.control.value.trim(), detail: futureDetail.control.value.trim(), effectiveFrom: enterpriseUtcTime(from.control.value), effectiveTo: enterpriseUtcTime(to.control.value), reason: reason.control.value.trim() }), disabled || !model.permissions?.scopeAdmin),
     ]));
   }
+  const scopeDisabled = loading || Boolean(pending) || (model.context.branchId ? !enterpriseBranchWritable(model) : disabled);
+  const scopeCommand = (payload) => {
+    if (!model.context.branchId) return onCommand(payload);
+    const { reason, ...change } = payload;
+    return onCommand({ kind: 'edit-branch-scope', change, reason });
+  };
   if (SCOPE_TYPES.has(object.type)) {
     if (object.type === 'legal-entity') root.append(el('p', { text: `Reported jurisdiction: ${object.jurisdiction || 'unknown'}` }));
     if (object.type === 'unit') root.append(el('p', { text: `Parent unit: ${scopes.find((entry) => entry.id === object.parentUnitId)?.name ?? 'None specified'}` }));
     const name = field('name', 'Scope name', { value: object.name, maximum: 120 });
     const detail = field('detail', 'Design purpose and description', { value: object.detail, multiline: true });
     const reason = field('reason', 'Reason for renaming this design scope', { multiline: true, maximum: 500 });
-    root.append(form('rename-scope', 'Rename proposed design scope', [name.node, detail.node, reason.node], () => onCommand({ kind: 'rename-scope', objectId: object.id, name: name.control.value.trim(), detail: detail.control.value.trim(), reason: reason.control.value.trim() }), disabled || !model.permissions?.scopeAdmin));
+    root.append(form('rename-scope', 'Rename proposed design scope', [name.node, detail.node, reason.node], () => scopeCommand({ kind: 'rename-scope', objectId: object.id, name: name.control.value.trim(), detail: detail.control.value.trim(), reason: reason.control.value.trim() }), scopeDisabled || (model.context.branchId ? !model.permissions?.branchAdmin : !model.permissions?.scopeAdmin)));
   } else {
     const fields = scopeFields(el, scopes, scope ?? {});
     const reason = field('reason', 'Reason for this scope assignment', { multiline: true, maximum: 500 });
-    root.append(form('assign-object-scope', 'Save proposed scope assignment', [fields.organization.node, fields.legalEntity.node, fields.unit.node, reason.node], () => onCommand({ kind: 'assign-object-scope', objectId: object.id, organizationId: fields.organization.control.value || null, legalEntityId: fields.legalEntity.control.value || null, unitId: fields.unit.control.value || null, reason: reason.control.value.trim() }), disabled || !model.permissions?.write));
+    root.append(form('assign-object-scope', 'Save proposed scope assignment', [fields.organization.node, fields.legalEntity.node, fields.unit.node, reason.node], () => scopeCommand({ kind: 'assign-object-scope', objectId: object.id, organizationId: fields.organization.control.value || null, legalEntityId: fields.legalEntity.control.value || null, unitId: fields.unit.control.value || null, reason: reason.control.value.trim() }), scopeDisabled || (!model.context.branchId && !model.permissions?.write)));
   }
   return root;
 }

@@ -134,7 +134,7 @@ through ordinary blueprint edits and internal publication.
 
 The API is `GET /api/v1/projects/:projectId/enterprise` with optional `lensId`,
 `scopeId`, `blueprintVersion`, `selectedId`, `proposalId`, `effectiveAt` and
-`recordedAt`. The default `lensId=all` preserves
+`recordedAt`, `branchId` and `branchRevision`. The default `lensId=all` preserves
 the complete map; `L-01` through `L-16` select named perspectives. Mutations use
 `POST /api/v1/projects/:projectId/enterprise/commands` with the existing
 `schemaVersion: "1.0"`, `commandId`, project `expectedVersion`, and a payload
@@ -169,10 +169,43 @@ and can be opened by `proposalId`. Future proposals remain read-only even after
 their declared start passes. Work and publication continue using main; later
 main edits mark a proposal's base stale without altering it.
 
-Alternative branches, semantic merge and promotion, advanced process decisions,
-quantitative economic/capacity scenarios, refinement and simulation remain
-visible gaps. These projections and human reports describe organizational
-design rather than operational or verified outcome coverage.
+## Branches and reviewed design merge
+
+A human project editor can create a branch from an exact current or historical
+main version, or from an immutable future proposal. Branches live in the saved
+project and retain immutable draft revisions with canonical object IDs. Draft
+object edits use the existing typed Studio fields, including process owner,
+information inputs/outputs and reference arrays. Scope edits can propose new
+organizations, legal entities and units or assign existing objects. Scope
+creation/renaming and validity changes require a human project owner.
+
+The branch panel compares base, current main and draft fields, reference arrays,
+scope assignments and derived relationship edges. Concurrent changes to the same
+field require an explicit current/branch choice. A saved merge candidate contains
+the resolved result and binds the exact main snapshot, branch revision and
+choices. A current human owner accepts or rejects its digest. Main or draft
+changes invalidate that candidate; another review requires a new candidate.
+Applying an accepted candidate rechecks the reviewer's current identity and
+project grant. An interval with a future start or an expired end cannot be
+applied. There is no timed activation.
+
+**Apply reviewed merge** adds one new current **proposed design** revision.
+Internal publication with disclosures and work/effect approval remain separate
+actions. Existing human reports and provenance are preserved; changed object
+meaning makes old reports stale. Each changed object receives merge lineage.
+Merged, abandoned and historical branch revisions remain read-only. Recorded-time
+views show only revisions, reviews and application facts saved by their cutoff.
+
+Branch commands use the same enterprise command endpoint: `create-branch`,
+`edit-branch-object`, `edit-branch-scope`, `set-branch-validity`, `prepare-merge`,
+`review-merge`, `apply-reviewed-merge` and `abandon-branch`. Draft edits bind the
+exact branch head; merge actions bind current main as well as the branch revision.
+An uncertain response is recovered with the original command ID and body.
+
+Advanced process decisions, quantitative economic/capacity scenarios, refinement,
+simulation, bulk collaboration and broader portfolio completeness remain open.
+These projections, merges and human reports describe organizational design
+rather than operational or verified outcome coverage.
 
 ## Financial SDLC reference
 

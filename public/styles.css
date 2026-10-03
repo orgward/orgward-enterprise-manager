@@ -334,3 +334,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .enterprise-context button, .enterprise-object button { white-space: normal; max-width: 100%; }
 .enterprise-context details { margin-top: .8rem; }
 .enterprise-context [hidden], .enterprise-object [hidden] { display: none; }
+
+.enterprise-change { border-top: 1px solid var(--border, #363b32); padding: .6rem 0; min-width: 0; }
+.enterprise-context [data-enterprise-merge-candidate] { border: 1px solid var(--border, #363b32); padding: .8rem; margin-top: .8rem; }
