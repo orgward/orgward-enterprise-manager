@@ -6061,6 +6061,40 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   economics/resources/value lifecycles, simulation, bulk collaboration and
   explainable multi-axis completeness.
 
+  Scope/lens slice verified (2026-10-03, PR-10 base `5958fd3`): Sol added canonical
+  organization/legal-entity/unit records and explicit object scopes in the existing
+  blueprint model, with all-object and sixteen consistent lens projections, exact
+  current/historical context and version-bound commands. Map/list/inspector share
+  canonical IDs and route state; historical snapshots stay read-only. Commands
+  retain normal authority, command replay and audit in the existing project store.
+  Review repaired underscore-ID compatibility, explicit all-lens route persistence,
+  missing-blueprint handling, unsupported-default workspace preservation and
+  concurrent source alignment. The UI keeps exact uncertain commands for recovery.
+  Luna's 12 distinct focused tests passed across nonduplicated runs: initial run
+  10 passed, 2 test-expectation failures (3.71s runner); the affected PostgreSQL
+  journey then passed (3.15s TAP), and the affected UI case passed after its narrow
+  copy/renderer expectation repair (0.22s runner). No product source repair was
+  needed after the first run. Coverage includes owner/editor/reader authority,
+  exact scoped sources across all lenses, hierarchy and cross-project denials,
+  explicit UNKNOWN/UNSCOPED, stale versions, historical immutability, restart/
+  command replay, legacy edits/internal publication retaining scope links, exact
+  routes, unavailable-context behavior, hidden selection, source alignment and
+  pending-command recovery. Logs:
+  `/tmp/orgward-pr12-enterprise-focused-20261003.log`,
+  `/tmp/orgward-pr12-enterprise-failure-repair-20261003.log`,
+  `/tmp/orgward-pr12-enterprise-view-repair-20261003.log`.
+  `node --check public/app.js` and `git diff --check` passed. No full parent check,
+  rendered browser proof, provider call, live effect or release-gate promotion
+  occurred. This bounded slice leaves PR-12 open; the verified parent full check
+  remains PR-10. Next implementation slice: independent state/time dimensions.
+  Remaining functionality in this same parent: independent state/time dimensions;
+  branches and reviewed conflict-aware merge; advanced processes/decisions and
+  simulation; typed economics, resources, capacity and value lifecycles; refinement
+  and reverse trace; loss-aware interchange/atomic bulk collaboration; and scoped
+  completeness across multiple axes. Work these as bounded implemented flows,
+  then freeze the complete parent and run one full check. These slices are not a
+  second task cursor or paperwork prerequisites; the active cursor remains PR-12.
+
 - [ ] PR-13 — Evidence ingestion and integrity operations (T-65–T-75). Safely
   onboard sources, extract evidence-backed identity/claim proposals, review and
   publish atomic snapshots, run typed integrity/lineage rules, manage exceptions,

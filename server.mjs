@@ -29,6 +29,8 @@ import { PostgresReleaseStore } from './src/release/postgres-store.mjs';
 import { parseReleaseEnvironments } from './src/release/contracts.mjs';
 import { OutcomeService } from './src/outcomes/service.mjs';
 import { PostgresOutcomeStore } from './src/outcomes/postgres-store.mjs';
+import { applyEnterpriseCommand, normalizeEnterpriseCommand } from './src/enterprise/commands.mjs';
+import { normalizeEnterpriseQuery, projectEnterprise } from './src/enterprise/projections.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -1534,6 +1536,60 @@ export function createApp({
           throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
         }
         return deliverProject(project);
+      }
+
+      const enterpriseMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/enterprise(?:\/(commands))?$/);
+      if (enterpriseMatch && request.method === 'GET' && !enterpriseMatch[2]) {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified project identity is required to explore enterprise perspectives.');
+        requirePrincipalStoreMethod(store, 'getWithPrincipalAuthority');
+        const entries = [...url.searchParams.entries()];
+        if (new Set(entries.map(([key]) => key)).size !== entries.length) {
+          throw apiFailure(400, 'INVALID_ENTERPRISE_CONTEXT', 'Each perspective context field must be supplied once.');
+        }
+        const query = normalizeEnterpriseQuery(Object.fromEntries(entries));
+        const found = await store.getWithPrincipalAuthority({ id: enterpriseMatch[1], tenantId: requestTenant(request),
+          principal: requestActor(request), anyPrincipalRoleGroups: [['workspace-read', 'workspace-write', 'tenant-admin']],
+          authzGeneration: request.identity.authzGeneration,
+          operation(project, membership) {
+            const write = ['owner', 'editor'].includes(membership.access) && requestRoles(request).includes('workspace-write');
+            const projection = projectEnterprise(project, query, { write,
+              scopeAdmin: write && membership.access === 'owner' && request.identity.actorType === 'human' });
+            sendApi(response, 200, projection, { correlationId });
+            return project;
+          } });
+        if (!found) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
+        return;
+      }
+      if (enterpriseMatch && request.method === 'POST' && enterpriseMatch[2] === 'commands') {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified project identity is required to change enterprise scopes.');
+        requireWriteAccess(request);
+        requirePrincipalStoreMethod(store, 'updateWithCommandForPrincipal');
+        const body = validateCommand(await readJson(request));
+        rejectAuthorityClaims(body); rejectAuthorityClaims(body.payload);
+        const payload = normalizeEnterpriseCommand(body.payload);
+        const administrative = ['create-scope', 'rename-scope'].includes(payload.kind);
+        if (administrative && request.identity.actorType !== 'human') {
+          throw apiFailure(403, 'ENTERPRISE_HUMAN_OWNER_REQUIRED', 'A current human project owner must define or rename an organizational scope.');
+        }
+        const actor = requestActor(request);
+        const result = await store.updateWithCommandForPrincipal(enterpriseMatch[1], requestTenant(request), {
+          operation: 'project.enterprise-command', commandId: body.commandId,
+          payloadHash: payloadHash({ principal: actor, schemaVersion: body.schemaVersion, expectedVersion: body.expectedVersion, payload: body.payload }),
+          expectedVersion: body.expectedVersion,
+          apply(project) {
+            const changed = applyEnterpriseCommand(project, payload, actor);
+            project.version += 1; project.updatedAt = changed.blueprint.createdAt; project.updatedBy = actor;
+            project.events.push(projectEvent(project, { type: 'EnterpriseScopeChanged', actor, commandId: body.commandId, correlationId,
+              data: { kind: payload.kind, blueprintId: changed.blueprint.id, blueprintVersion: changed.blueprint.version,
+                objectId: changed.affectedObjectId, reason: payload.reason } }));
+          },
+        }, actor, { requiredPrincipalRoles: ['workspace-write'], authzGeneration: request.identity.authzGeneration,
+          ...(administrative ? { minimumProjectAccess: 'owner' } : {}) });
+        if (!result) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
+        const blueprint = latestBlueprint(result.project);
+        return sendApi(response, 200, { projectVersion: result.project.version, blueprintId: blueprint.id,
+          blueprintVersion: blueprint.version, affectedObjectId: blueprint.edit.objectId },
+        { correlationId, event: result.project.events.at(-1), meta: { replayed: result.replayed } });
       }
 
       const v1MessageMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/messages$/);

@@ -324,3 +324,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   .map-stage { height: 680px; min-height: 620px; }.graph-canvas, .list-canvas { inset: 0 0 300px; }.object-detail { height: 300px; }
   .list-row { grid-template-columns: 12px 82px minmax(0, 1fr); }.list-row > small { grid-column: 3; }
 }
+/* Enterprise perspectives share the saved studio's map, list and inspector. */
+.enterprise-context, .enterprise-object { min-width: 0; overflow-wrap: anywhere; }
+.enterprise-context { border-bottom: 1px solid var(--border, #363b32); padding: 1rem; }
+.enterprise-context-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: .8rem; }
+.enterprise-form, .enterprise-hierarchy { display: grid; gap: .7rem; min-width: 0; }
+.enterprise-context label, .enterprise-object label { display: grid; gap: .3rem; min-width: 0; }
+.enterprise-context input, .enterprise-context select, .enterprise-context textarea, .enterprise-object input, .enterprise-object select, .enterprise-object textarea { width: 100%; min-width: 0; max-width: 100%; }
+.enterprise-context button, .enterprise-object button { white-space: normal; max-width: 100%; }
+.enterprise-context details { margin-top: .8rem; }
+.enterprise-context [hidden], .enterprise-object [hidden] { display: none; }

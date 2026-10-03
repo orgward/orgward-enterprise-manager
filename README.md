@@ -107,6 +107,44 @@ The first workflow:
 
 The generator is a deterministic, knowledge-backed design assistant. It reuses the OrgWard research primitives and integrity rules without sending data to an external model. Real LLM-backed task execution belongs to the original release gate P-09 and is not enabled in that workflow yet.
 
+## Enterprise scopes and perspectives
+
+The Studio's enterprise context panel offers **All objects** and sixteen named
+perspectives over the same saved blueprint. Organization, legal-entity and unit
+records have stable IDs. A current human project owner with `workspace-write`
+can define or rename these scopes; project editors with write access can assign
+existing business objects to compatible scopes. Optional scope ownership names
+a design role. Scope records and reported jurisdictions describe proposed
+organization design and do not grant tool access or verify legal registration.
+
+Lens and scope choices filter a shared graph and list. A selected object keeps
+its identity across views; when a filter hides it, the inspector explains the
+exclusion. Organizations include their explicitly assigned design objects; legal
+entity and unit filters use their explicit assignments. Objects with no legacy
+scope metadata remain `UNKNOWN`, while an explicitly cleared assignment is
+`UNSCOPED`.
+
+The context panel can open an earlier immutable blueprint version. Historical
+views are read-only, retain their original names and scope relationships, and
+disable design edits and work-start actions. Current commands bind the project
+version and exact latest blueprint; stale commands require a reload. Retry after
+an uncertain response uses the same command ID and returns its saved result.
+Scope changes also appear in the existing version history and remain intact
+through ordinary blueprint edits and internal publication.
+
+The API is `GET /api/v1/projects/:projectId/enterprise` with optional `lensId`,
+`scopeId`, `blueprintVersion` and `selectedId`. The default `lensId=all` preserves
+the complete map; `L-01` through `L-16` select named perspectives. Mutations use
+`POST /api/v1/projects/:projectId/enterprise/commands` with the existing
+`schemaVersion: "1.0"`, `commandId`, project `expectedVersion`, and a payload
+containing `create-scope`, `rename-scope` or `assign-object-scope` plus the current
+blueprint ID/version and a change reason.
+
+This first portfolio slice projects design records. Effective-date queries,
+alternative branches, semantic merge, advanced process decisions, quantitative
+economic/capacity scenarios, refinement and simulation remain visible gaps.
+The design projections do not establish operational or verified outcome coverage.
+
 ## Financial SDLC reference
 
 Open `/sdlc.html` for the fully executable MVPX reference track based on `orgward/orgward-autonomous-stack@11fb942f4ea7aee0767ae6132294778dec08d74c`.

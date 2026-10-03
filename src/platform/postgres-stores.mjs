@@ -1280,14 +1280,14 @@ export class PostgresProjectStore extends PostgresDocumentStore {
         tenantId, principal, anyRoleGroups: anyPrincipalRoleGroups, authzGeneration,
       });
       const result = await client.query(`
-        select a.* from orgward.aggregates a
+        select a.*, m.access as membership_access from orgward.aggregates a
         join orgward.project_memberships m
           on m.tenant_id = a.tenant_id and m.project_kind = a.aggregate_kind and m.project_id = a.aggregate_id
         where a.tenant_id = $1 and a.aggregate_kind = 'project' and a.aggregate_id = $2
           and m.principal = $3 and m.revoked_at is null
         for share of a, m
       `, [tenantId, id, principal]);
-      return result.rowCount ? operation(verifyAggregateRow(result.rows[0])) : null;
+      return result.rowCount ? operation(verifyAggregateRow(result.rows[0]), { access: result.rows[0].membership_access }) : null;
     });
   }
 

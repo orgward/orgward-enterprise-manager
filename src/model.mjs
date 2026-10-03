@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { verifyBlueprintProposalEvaluation } from './execution/proposals.mjs';
+import { enterpriseScopeErrors, enterpriseScopeRelations } from './enterprise/types.mjs';
 
 export const AREA_DEFINITIONS = [
   ['purposeStrategy', 'Purpose & strategy'],
@@ -1110,7 +1111,7 @@ export function editProcessTaskGraph(project, planId, payload, actor) {
   return next;
 }
 
-function buildRelations(areas) {
+export function buildRelations(areas) {
   const relations = [];
   const add = (source, target, type) => relations.push({ id: `${source}--${type}--${target}`, source, target, type });
   const objects = Object.values(areas).flatMap((entry) => entry.items);
@@ -1145,6 +1146,7 @@ function buildRelations(areas) {
       if (object.capability) add(object.id, object.capability, 'realises');
     }
   }
+  relations.push(...enterpriseScopeRelations(objects));
   return [...new Map(relations.map((relation) => [relation.id, relation])).values()];
 }
 
@@ -1184,6 +1186,7 @@ export function validateBlueprint(blueprint) {
     if (!ids.has(relation.source)) errors.push({ code: 'DANGLING_REFERENCE', path: relation.id, message: `Missing relation source ${relation.source}.` });
     if (!ids.has(relation.target)) errors.push({ code: 'DANGLING_REFERENCE', path: relation.id, message: `Missing relation target ${relation.target}.` });
   }
+  errors.push(...enterpriseScopeErrors(objects));
 
   return {
     valid: errors.length === 0,

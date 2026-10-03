@@ -3,6 +3,7 @@ import { apiErrorFrom, decodeStudioRoute, encodeExecutionRoute, encodeStudioRout
 import { coverageAreaStateLabel, coverageForBlueprint } from './coverage-dashboard.mjs';
 import { compareBlueprintObjectVersions } from './blueprint-comparison.mjs';
 import { renderOutcomeInbox } from './outcomes.mjs';
+import { enterpriseContextFailure, enterpriseSourceAligned, hasEnterpriseContext, enterpriseQuery, enterpriseRequestPath, persistEnterpriseCommand, restoreEnterpriseCommand, submitEnterpriseCommand, renderEnterpriseContext, renderEnterpriseObject } from './enterprise.mjs';
 
 const state = {
   projects: [],
@@ -29,6 +30,18 @@ const state = {
   pendingBlueprintPublication: null,
   requestedProjectId: null,
   restoringHistory: false,
+  enterpriseModel: null,
+  enterpriseQuery: enterpriseQuery(),
+  enterpriseGeneration: 0,
+  enterpriseLoading: false,
+  enterpriseError: null,
+  enterpriseUnavailable: null,
+  enterpriseExplicit: false,
+  enterpriseBusy: false,
+  enterpriseStatus: '',
+  pendingEnterprise: null,
+  enterpriseStorageAvailable: true,
+  projectLoadGeneration: 0,
 };
 
 const typeColors = {
@@ -155,7 +168,116 @@ function setFieldError(id, messages) {
 }
 
 function currentRoute() {
-  return { projectId: state.project?.id ?? null, view: state.view, selectedId: state.selectedId, types: [...state.activeTypes], area: state.mapAreaFilter };
+  return { projectId: state.project?.id ?? null, view: state.view, selectedId: state.selectedId, types: [...state.activeTypes], area: state.mapAreaFilter, ...(state.enterpriseExplicit ? state.enterpriseQuery : {}) };
+}
+
+function viewedBlueprint() {
+  if (state.enterpriseLoading || state.enterpriseError) return null;
+  return state.enterpriseModel?.blueprint ?? state.project?.latestBlueprint;
+}
+
+function viewedGraph() {
+  if (state.enterpriseLoading || state.enterpriseError) return { nodes: [], links: [], types: [] };
+  return state.enterpriseModel?.graph ?? state.project?.graph ?? { nodes: [], links: [], types: [] };
+}
+
+function enterpriseReadOnly() {
+  return Boolean(state.enterpriseLoading || state.enterpriseError || state.enterpriseBusy || state.pendingEnterprise || state.enterpriseModel?.context.isCurrent === false);
+}
+
+function retainEnterprise(value) {
+  state.pendingEnterprise = value;
+  try {
+    persistEnterpriseCommand(localStorage, state.sessionPrincipal, state.project.id, value);
+    state.enterpriseStorageAvailable = true;
+  } catch { state.enterpriseStorageAvailable = false; }
+}
+
+function restoreEnterprise(projectId) {
+  state.pendingEnterprise = null; state.enterpriseStorageAvailable = true;
+  try {
+    state.pendingEnterprise = restoreEnterpriseCommand(localStorage, state.sessionPrincipal, projectId);
+  } catch (error) { state.enterpriseStorageAvailable = false; state.enterpriseStatus = `${error.message} Review project activity before issuing another command.`; }
+}
+
+async function loadEnterpriseContext({ render = true, resetTypes = false } = {}) {
+  const projectId = state.project?.id;
+  if (!projectId || !state.project.latestBlueprint) return;
+  const generation = ++state.enterpriseGeneration;
+  const query = { ...state.enterpriseQuery };
+  let aligning = false;
+  state.enterpriseLoading = true; state.enterpriseError = null; state.enterpriseUnavailable = null; state.enterpriseModel = null;
+  if (render) renderStudio();
+  try {
+    const result = await api(enterpriseRequestPath(projectId, query, state.selectedId));
+    if (generation !== state.enterpriseGeneration || state.project?.id !== projectId || state.requestedProjectId !== projectId) return;
+    if (!enterpriseSourceAligned(state.project, result.data)) {
+      aligning = true;
+      const refreshed = await api(`/api/v1/projects/${encodeURIComponent(projectId)}`);
+      if (generation !== state.enterpriseGeneration || state.project?.id !== projectId || state.requestedProjectId !== projectId) return;
+      if (!enterpriseSourceAligned(refreshed.data, result.data)) throw Object.assign(new Error('The design changed while this perspective was loading. Reload the requested context to inspect a consistent saved version.'), { requiresReadOnly: true });
+      state.project = refreshed.data;
+    }
+    state.enterpriseModel = result.data;
+    if (resetTypes) state.activeTypes = new Set(result.data.graph.types);
+  } catch (error) {
+    if (generation !== state.enterpriseGeneration || state.project?.id !== projectId) return;
+    const failure = enterpriseContextFailure(state.enterpriseExplicit || aligning || error.requiresReadOnly, error.message);
+    state.enterpriseError = failure.error; state.enterpriseUnavailable = failure.unavailable;
+  } finally {
+    if (generation === state.enterpriseGeneration && state.project?.id === projectId && state.requestedProjectId === projectId) {
+      state.enterpriseLoading = false;
+      if (render) { renderStudio(); syncRoute('replace'); }
+    }
+  }
+}
+
+async function changeEnterpriseContext(query) {
+  if (!allowRouteChange()) return;
+  state.enterpriseExplicit = true;
+  state.enterpriseQuery = query;
+  state.mapAreaFilter = null; state.coverageReturnContext = null; state.view = 'map';
+  syncRoute('push');
+  if (state.enterpriseError) {
+    await loadProject(state.project.id, { history: 'replace', route: { ...currentRoute(), types: [] } });
+    return;
+  }
+  await loadEnterpriseContext({ resetTypes: true });
+}
+
+async function saveEnterpriseCommand(payload = null) {
+  if (state.enterpriseBusy || state.enterpriseLoading || !state.project) return;
+  const projectId = state.project.id;
+  if (!state.pendingEnterprise) {
+    const model = state.enterpriseModel;
+    if (!payload || enterpriseReadOnly() || !model?.permissions?.write
+      || (['create-scope', 'rename-scope'].includes(payload.kind) && !model.permissions.scopeAdmin)) return;
+    retainEnterprise({ projectId, envelope: command({ ...payload, blueprintId: model.context.blueprintId, blueprintVersion: model.context.blueprintVersion }, model.context.projectVersion, `enterprise:${crypto.randomUUID()}`) });
+  }
+  const saved = state.pendingEnterprise;
+  state.enterpriseBusy = true;
+  state.enterpriseStatus = 'Saving the exact proposed design change…';
+  renderStudio();
+  let result = null; let definitive = false;
+  try {
+    result = await submitEnterpriseCommand(api, projectId, saved);
+    if (state.project?.id !== projectId) return;
+    retainEnterprise(null);
+    state.enterpriseStatus = 'Saved. The canonical record and its new design version are shown below.';
+  } catch (error) {
+    if (state.project?.id !== projectId) return;
+    definitive = error.status >= 400 && error.status < 500 && error.status !== 408;
+    if (definitive) retainEnterprise(null);
+    state.enterpriseStatus = definitive ? `${error.message} Review the refreshed current design before submitting a new change.`
+      : `${error.message} The response is uncertain. Recover the saved command before making another change.`;
+  } finally { state.enterpriseBusy = false; }
+  if (state.project?.id !== projectId) return;
+  if (result || definitive) {
+    const created = result && saved.envelope.payload.kind === 'create-scope';
+    await loadProject(projectId, { history: 'replace', route: { ...currentRoute(), blueprintVersion: null,
+      ...(created ? { lensId: 'all', scopeId: null, types: [] } : {}),
+      selectedId: result?.data.affectedObjectId ?? state.selectedId, view: 'map' } });
+  } else renderStudio();
 }
 
 function syncRoute(mode = 'push') {
@@ -167,12 +289,16 @@ function syncRoute(mode = 'push') {
 
 function syncExecutionNavigation() {
   const link = document.querySelector('#execution-nav');
-  if (link) link.href = encodeExecutionRoute(state.project?.id ?? null);
+  if (link) {
+    if (enterpriseReadOnly()) { link.removeAttribute('href'); link.setAttribute('aria-disabled', 'true'); }
+    else { link.href = encodeExecutionRoute(state.project?.id ?? null); link.removeAttribute('aria-disabled'); }
+  }
 }
 
-function hasUnsavedDraft() { return Boolean(state.draft.trim() || state.pendingBlueprintEdit || state.blueprintEditDraft || state.pendingActorBinding || state.pendingActorBindingEnable); }
+function hasUnsavedDraft() { return Boolean(state.draft.trim() || state.pendingBlueprintEdit || state.blueprintEditDraft || state.pendingActorBinding || state.pendingActorBindingEnable || state.pendingEnterprise); }
 
 function allowRouteChange() {
+  if (state.enterpriseBusy || state.pendingEnterprise) { notify('Recover the saved enterprise command before leaving this workspace.'); return false; }
   if (!hasUnsavedDraft()) return true;
   const prompt = state.pendingBlueprintEdit || state.blueprintEditDraft || state.pendingActorBinding ? 'Leave and discard this unsaved workspace change?' : 'Discard the unsent answer and leave this workspace?';
   const accepted = window.confirm(prompt);
@@ -200,6 +326,10 @@ async function refreshProjects() {
 }
 
 function showWelcome({ history = 'push' } = {}) {
+  state.projectLoadGeneration += 1;
+  state.enterpriseGeneration += 1; state.enterpriseModel = null; state.enterpriseError = null; state.enterpriseLoading = false;
+  state.enterpriseUnavailable = null; state.enterpriseExplicit = false;
+  state.enterpriseQuery = enterpriseQuery(); state.pendingEnterprise = null; state.enterpriseStatus = '';
   state.requestedProjectId = null;
   state.pendingBlueprintEdit = null;
   state.blueprintEditDraft = null;
@@ -257,12 +387,15 @@ async function createProject(event) {
 
 async function loadProject(id, { history = 'push', route = null } = {}) {
   if (!id) return showWelcome({ history });
+  const loadGeneration = ++state.projectLoadGeneration;
+  if (state.project?.id !== id) state.enterpriseStatus = '';
   if (state.project?.id !== id) { state.pendingBlueprintEdit = null; state.blueprintEditDraft = null; state.pendingActorBinding = null; state.pendingActorBindingEnable = null; state.mapSearch = ''; }
   state.requestedProjectId = id;
+  state.enterpriseGeneration += 1;
   try {
     showAppState('loading', 'Loading workspace', 'Restoring saved conversation, blueprint, and view state…');
     const result = await api(`/api/v1/projects/${id}`);
-    if (state.requestedProjectId !== id) return;
+    if (state.requestedProjectId !== id || loadGeneration !== state.projectLoadGeneration) return;
     state.project = result.data;
     state.projectAccess = null;
     if (state.sessionPrincipal && state.sessionRoles.includes('workspace-write')) {
@@ -273,19 +406,31 @@ async function loadProject(id, { history = 'push', route = null } = {}) {
         // Readers cannot open the owner/editor roster; publication remains hidden.
       }
     }
-    if (state.requestedProjectId !== id) return;
+    if (state.requestedProjectId !== id || loadGeneration !== state.projectLoadGeneration) return;
     const validTypes = new Set(state.project.graph.types);
     state.activeTypes = new Set(route?.types?.filter((type) => validTypes.has(type)) ?? state.project.graph.types);
     if (!state.activeTypes.size) state.activeTypes = new Set(state.project.graph.types);
-    state.selectedId = state.project.graph.nodes.some((node) => node.id === route?.selectedId) ? route.selectedId : null;
+    state.selectedId = route?.selectedId ?? null;
     state.mapAreaFilter = route?.area ?? null;
     state.coverageReturnContext = null;
     state.view = state.project.latestBlueprint && ['map', 'coverage'].includes(route?.view) ? route.view : 'blueprint';
+    state.enterpriseQuery = enterpriseQuery(route ?? {});
+    state.enterpriseExplicit = hasEnterpriseContext(route ?? {});
+    state.enterpriseModel = null; state.enterpriseError = null; state.enterpriseLoading = false;
+    restoreEnterprise(id);
+    await loadEnterpriseContext({ render: false });
+    if (state.requestedProjectId !== id || loadGeneration !== state.projectLoadGeneration) return;
+    if (!state.enterpriseError) {
+      const types = viewedGraph().types;
+      state.activeTypes = new Set(route?.types?.filter((type) => types.includes(type)) ?? types);
+      if (!state.activeTypes.size) state.activeTypes = new Set(types);
+    }
     renderStudio();
     announceFounderConversation(state.project);
     hideAppState();
     syncRoute(history);
   } catch (error) {
+    if (state.requestedProjectId !== id || loadGeneration !== state.projectLoadGeneration) return;
     showRequestFailure(error, () => loadProject(id, { history, route }));
   }
 }
@@ -295,11 +440,12 @@ function renderStudio() {
   document.querySelector('.studio').classList.toggle('complete', state.project.phase !== 'discovery');
   document.querySelector('#project-title').textContent = state.project.name;
   setupGitHubOnboarding();
-  app.append(renderOutcomeInbox({ projectId: state.project.id, principal: state.sessionPrincipal, el: element, api }));
+  if (!enterpriseReadOnly()) app.append(renderOutcomeInbox({ projectId: state.project.id, principal: state.sessionPrincipal, el: element, api }));
   renderConversation();
   document.querySelector('#message-form').addEventListener('submit', sendMessage);
   const textarea = document.querySelector('#message-input');
   textarea.value = state.draft;
+  if (enterpriseReadOnly()) for (const control of document.querySelectorAll('#message-form input, #message-form textarea, #message-form button')) control.disabled = true;
   textarea.addEventListener('input', () => {
     state.draft = textarea.value;
     if (state.pendingMessage && state.pendingMessage.content !== state.draft) state.pendingMessage = null;
@@ -310,8 +456,13 @@ function renderStudio() {
   if (state.project.latestBlueprint) {
     document.querySelector('#workspace-empty').hidden = true;
     document.querySelector('#blueprint-workspace').hidden = false;
-    document.querySelector('#blueprint-title').textContent = state.project.latestBlueprint.title;
-    document.querySelector('#blueprint-version').textContent = state.project.latestBlueprint.version;
+    const contextPanel = renderEnterpriseContext({ model: state.enterpriseModel, query: state.enterpriseQuery,
+      loading: state.enterpriseLoading || state.enterpriseBusy, error: state.enterpriseError, unavailable: state.enterpriseUnavailable,
+      pending: state.pendingEnterprise, status: state.enterpriseStatus, storageAvailable: state.enterpriseStorageAvailable,
+      el: element, onContext: changeEnterpriseContext, onCommand: saveEnterpriseCommand, onRetry: () => saveEnterpriseCommand(), onReload: () => loadEnterpriseContext() });
+    document.querySelector('#blueprint-workspace').prepend(contextPanel);
+    document.querySelector('#blueprint-title').textContent = viewedBlueprint()?.title ?? 'Requested saved design';
+    document.querySelector('#blueprint-version').textContent = viewedBlueprint()?.version ?? 'unavailable';
     if (!state.activeTypes.size) state.activeTypes = new Set(state.project.graph.types);
     renderBlueprint();
     setView(state.view, { history: null });
@@ -371,7 +522,7 @@ async function refreshGitHubSnapshots() {
 function setupGitHubOnboarding() {
   const panel = document.querySelector('#github-onboarding');
   if (!panel) return;
-  const allowed = state.projectAccess === 'owner' && state.sessionRoles.includes('tenant-admin');
+  const allowed = !enterpriseReadOnly() && state.projectAccess === 'owner' && state.sessionRoles.includes('tenant-admin');
   panel.hidden = !allowed;
   if (!allowed) return;
   const form = document.querySelector('#github-onboarding-form');
@@ -466,23 +617,28 @@ function renderConversation() {
 
 async function sendMessage(event) {
   event.preventDefault();
+  if (enterpriseReadOnly()) return;
   const form = event.currentTarget;
   const textarea = form.elements['message-input'];
   const button = form.querySelector('button');
   state.draft = textarea.value;
   setFieldError('message-error', []);
   button.disabled = true;
+  const projectId = state.project.id;
   try {
     state.pendingMessage ??= { commandId: `message:${crypto.randomUUID()}`, content: state.draft };
     showAppState('loading', 'Saving answer', 'Keeping this draft until the server confirms its durable version…');
-    const result = await api(`/api/v1/projects/${state.project.id}/messages`, {
+    const result = await api(`/api/v1/projects/${projectId}/messages`, {
       method: 'POST', body: JSON.stringify(command({ content: state.pendingMessage.content }, state.project.version, state.pendingMessage.commandId)),
     });
+    if (state.project?.id !== projectId || state.requestedProjectId !== projectId) return;
     state.project = result.data;
     state.pendingMessage = null;
     state.draft = '';
     if (!state.project.latestBlueprint) announceFounderConversation(state.project, { answerSaved: true });
     if (state.project.latestBlueprint) {
+      await loadEnterpriseContext({ render: false });
+      if (state.project?.id !== projectId || state.requestedProjectId !== projectId) return;
       state.activeTypes = new Set(state.project.graph.types);
       state.view = 'blueprint';
       notify('Blueprint saved with integrity checks.');
@@ -515,13 +671,13 @@ function setView(view, { history = 'push' } = {}) {
 }
 
 function drillToCoverageArea(areaKey) {
-  const area = state.project.latestBlueprint.areas[areaKey];
+  const area = viewedBlueprint()?.areas[areaKey];
   if (!area) return;
   state.coverageReturnContext = {
     projectId: state.project.id, view: 'coverage', selectedId: state.selectedId,
     types: [...state.activeTypes], mapMode: state.mapMode, area: state.mapAreaFilter,
   };
-  const node = area.items.find((item) => state.project.graph.nodes.some((graphNode) => graphNode.id === item.id));
+  const node = area.items.find((item) => viewedGraph().nodes.some((graphNode) => graphNode.id === item.id));
   state.mapAreaFilter = areaKey;
   state.activeTypes = new Set(area.items.map((item) => item.type));
   state.selectedId = node?.id ?? null;
@@ -612,7 +768,9 @@ function renderBlueprintPublication(coverage) {
       state.pendingBlueprintPublication = null;
       state.project = result.data;
       state.projectAccess = 'owner';
-      renderCoverage();
+      await loadEnterpriseContext({ render: false });
+      if (state.project?.id !== projectId || state.requestedProjectId !== projectId) return;
+      renderStudio();
       notify(`Published blueprint v${latest.version} as an internal design baseline.`);
     } catch (failure) {
       message.textContent = `${failure.message}${failure.correlationId ? ` Reference ${failure.correlationId}.` : ''}`;
@@ -635,10 +793,12 @@ function renderBlueprintPublication(coverage) {
 
 function renderCoverage() {
   const target = document.querySelector('#coverage-view');
-  if (!target || !state.project.latestBlueprint) return;
-  const coverage = coverageForBlueprint(state.project.latestBlueprint);
+  if (!target) return;
+  if (!viewedBlueprint()) { target.replaceChildren(); return; }
+  const coverage = coverageForBlueprint(viewedBlueprint());
   target.replaceChildren();
-  target.append(renderBlueprintPublication(coverage));
+  if (!enterpriseReadOnly()) target.append(renderBlueprintPublication(coverage));
+  else target.append(element('p', { text: 'This saved context is read only. Publication requires the current saved design.' }));
   target.append(element('div', { className: 'coverage-heading' }, [
     element('div', {}, [element('span', { className: 'eyebrow', text: 'Saved blueprint coverage' }), element('h3', { text: `Version ${coverage.blueprintVersion} · ${coverage.epistemicStatus.replaceAll('-', ' ')}` })]),
     element('p', { text: 'This is proposed design coverage. Founder chat and edit history provide provenance, not independent business evidence or verification.' }),
@@ -700,7 +860,8 @@ function renderCoverage() {
 }
 
 function renderBlueprint() {
-  const blueprint = state.project.latestBlueprint;
+  const blueprint = viewedBlueprint();
+  if (!blueprint) return;
   const brief = state.project.brief;
   const view = document.querySelector('#blueprint-view');
   const summary = element('div', { className: 'summary-strip' });
@@ -774,7 +935,7 @@ function renderMap() {
     areaContext.replaceChildren();
     areaContext.hidden = !state.mapAreaFilter;
     if (state.mapAreaFilter) {
-      const area = state.project.latestBlueprint.areas[state.mapAreaFilter];
+      const area = viewedBlueprint()?.areas[state.mapAreaFilter];
       areaContext.append(element('span', { text: `Coverage drill-in · ${area?.label ?? state.mapAreaFilter}` }));
       const back = element('button', { className: 'button ghost', text: 'Return to coverage', attrs: { type: 'button' } });
       back.addEventListener('click', returnToCoverage);
@@ -783,7 +944,7 @@ function renderMap() {
   }
   const filters = document.querySelector('#type-filters');
   filters.replaceChildren();
-  for (const type of state.project.graph.types) {
+  for (const type of viewedGraph().types) {
     const button = element('button', {
       className: `type-${type}`,
       text: type.replaceAll('-', ' '),
@@ -799,7 +960,7 @@ function renderMap() {
   const mapSearchStatus = document.querySelector('#map-search-status');
   const matches = visibleGraph();
   document.querySelector('#map-results-jump').disabled = matches.nodes.length === 0;
-  const total = state.project.graph.nodes.filter((node) => state.activeTypes.has(node.type)
+  const total = viewedGraph().nodes.filter((node) => state.activeTypes.has(node.type)
     && (!state.mapAreaFilter || node.area === state.mapAreaFilter)).length;
   const selectedIsOutsideResults = state.selectedId && !matches.nodes.some((node) => node.id === state.selectedId);
   if (state.mapSearch.trim()) {
@@ -814,7 +975,7 @@ function renderMap() {
 }
 
 function visibleGraph() {
-  const filtered = filterGraph(state.project.graph, state.activeTypes);
+  const filtered = filterGraph(viewedGraph(), state.activeTypes);
   let areaFiltered = filtered;
   if (state.mapAreaFilter) {
     const nodes = filtered.nodes.filter((node) => node.area === state.mapAreaFilter);
@@ -830,7 +991,7 @@ function nodePositions(nodes) {
     if (!byArea.has(node.area)) byArea.set(node.area, []);
     byArea.get(node.area).push(node);
   }
-  const allAreas = Object.keys(state.project.latestBlueprint.areas);
+  const allAreas = Object.keys(viewedBlueprint()?.areas ?? {});
   const positions = new Map();
   for (const [area, areaNodes] of byArea) {
     const areaIndex = allAreas.indexOf(area);
@@ -940,6 +1101,11 @@ function renderList() {
 
 function selectNode(id) {
   state.selectedId = id;
+  if (state.enterpriseModel) {
+    const visible = state.enterpriseModel.graph.nodes.some((node) => node.id === id);
+    state.enterpriseModel.selection = { object: blueprintItem(state.enterpriseModel.blueprint, id), visible,
+      hiddenBy: visible ? [] : ['current lens or design scope'] };
+  }
   if (state.mapMode === 'graph') renderGraph(); else renderList();
   renderDetail();
   const mapCanvas = document.querySelector(state.mapMode === 'graph' ? '#graph-canvas' : '#list-canvas');
@@ -1028,6 +1194,7 @@ function versionHistoryFor(node) {
     entry.append(element('small', { text: `Saved by ${edit.actor} · ${new Date(edit.at).toLocaleString()}` }));
     for (const key of edit.changedFields) {
       const label = key === 'ownerRoleName' ? 'Owner role'
+        : key === 'enterpriseScope' ? 'Proposed design scope'
         : key === 'servesCustomerNames' ? 'Customers served'
         : key === 'enabledByCapabilityNames' ? 'Enabling capabilities'
         : key === 'inputInformationNames' ? 'Information inputs'
@@ -1053,7 +1220,9 @@ function versionHistoryFor(node) {
             : key === 'proposedToolStatements' ? 'Proposed tool statements'
               : key === 'proposedEscalationRules' ? 'Proposed escalation rules'
             : key[0].toUpperCase() + key.slice(1);
-      const display = (value) => value === null ? 'None' : Array.isArray(value) ? (value.length ? value.join(', ') : 'None') : (value || '—');
+      const display = (value) => value === null ? 'None' : Array.isArray(value) ? (value.length ? value.join(', ') : 'None')
+        : key === 'enterpriseScope' && value ? ['organizationId', 'legalEntityId', 'unitId'].map((field) => `${({ organizationId: 'Organization', legalEntityId: 'Legal entity', unitId: 'Unit' })[field]}: ${blueprintItem(blueprint, value[field])?.name ?? 'None'}`).join(' · ')
+          : typeof value === 'object' ? JSON.stringify(value) : (value || '—');
       entry.append(element('div', { className: 'history-diff' }, [
         element('b', { text: label }),
         element('p', { text: `Before: ${display(edit.before[key])}` }),
@@ -1083,7 +1252,7 @@ function editField(form, labelText, name, value, { multiline = false, maxLength 
 }
 
 function renderBlueprintEditForm(node) {
-  if (!state.sessionRoles.includes('workspace-write')) return null;
+  if (enterpriseReadOnly() || (state.enterpriseModel && !state.enterpriseModel.permissions.write) || !state.sessionRoles.includes('workspace-write')) return null;
   const object = blueprintItem(state.project.latestBlueprint, node.id);
   if (!object || !['goal', 'strategy', 'customer', 'offering', 'economics', 'capability', 'process', 'role',
     'decision', 'resource', 'information', 'system', 'risk', 'control', 'metric', 'feedback-loop', 'lifecycle', 'actor-human', 'actor-agent'].includes(object.type)) return null;
@@ -1560,10 +1729,13 @@ function renderBlueprintEditForm(node) {
       state.pendingBlueprintEdit = null;
       state.blueprintEditDraft = null;
       if (result.meta.replayed) {
-        await loadProject(projectId, { history: 'replace', route: { view: 'map', selectedId, types: [...previousTypes] } });
+        await loadProject(projectId, { history: 'replace', route: { ...currentRoute(), view: 'map', selectedId, types: [...previousTypes], blueprintVersion: null } });
         return;
       }
       state.project = result.data;
+      state.enterpriseQuery.blueprintVersion = null;
+      await loadEnterpriseContext({ render: false });
+      if (state.project?.id !== projectId) return;
       state.activeTypes = new Set([...previousTypes].filter((typeValue) => state.project.graph.types.includes(typeValue)));
       state.selectedId = selectedId;
       state.view = 'map';
@@ -1607,7 +1779,7 @@ function renderBlueprintEditForm(node) {
 }
 
 function renderActorBindingPanel(node) {
-  if (!state.sessionRoles.includes('workspace-write')) return null;
+  if (enterpriseReadOnly() || (state.enterpriseModel && !state.enterpriseModel.permissions.write) || !state.sessionRoles.includes('workspace-write')) return null;
   const actor = blueprintItem(state.project.latestBlueprint, node.id);
   if (!actor || !['actor-human', 'actor-agent'].includes(actor.type)) return null;
   const projectId = state.project.id;
@@ -1819,9 +1991,11 @@ function renderActorBindingPanel(node) {
 function renderDetail() {
   const detail = document.querySelector('#object-detail');
   if (!detail) return;
-  const node = state.project.graph.nodes.find((entry) => entry.id === state.selectedId);
+  const blueprint = viewedBlueprint();
+  const object = blueprintItem(blueprint, state.selectedId);
+  const node = viewedGraph().nodes.find((entry) => entry.id === state.selectedId) ?? object;
   if (!node) {
-    detail.replaceChildren(element('p', { className: 'detail-placeholder', text: 'Select an object to inspect its design status, confidence, provenance, and relationships.' }));
+    detail.replaceChildren(element('p', { className: 'detail-placeholder', text: state.selectedId ? 'The requested selected object is unavailable in this saved context. Choose an available record or another saved version.' : 'Select an object to inspect its design status, confidence, provenance, and relationships.' }));
     return;
   }
   const type = element('span', { className: `type type-${node.type}`, text: node.type.replaceAll('-', ' ') });
@@ -1830,10 +2004,10 @@ function renderDetail() {
     element('div', {}, [element('b', { text: 'Confidence' }), element('span', { text: node.confidence })]),
   ]);
   const connections = element('div', { className: 'connections' }, [element('h4', { text: 'Connections' })]);
-  const relatedLinks = state.project.graph.links.filter((link) => link.source === node.id || link.target === node.id);
+  const relatedLinks = (blueprint?.relations ?? []).filter((link) => link.source === node.id || link.target === node.id);
   for (const link of relatedLinks) {
     const otherId = link.source === node.id ? link.target : link.source;
-    const other = state.project.graph.nodes.find((entry) => entry.id === otherId);
+    const other = blueprintItem(blueprint, otherId);
     if (!other) continue;
     const button = element('button', { text: `${link.type} · ${other.name}`, attrs: { type: 'button' } });
     button.addEventListener('click', () => { state.activeTypes.add(other.type); selectNode(other.id); });
@@ -1842,7 +2016,9 @@ function renderDetail() {
   const content = [type, element('h3', { text: node.name }), element('p', { text: node.detail }), meta,
     element('p', { text: `Evidence: ${node.provenance?.at(-1)?.note ?? 'No provenance recorded'}` }), connections,
     versionHistoryFor(node)];
-  const savedProcess = node.type === 'process' ? blueprintItem(state.project.latestBlueprint, node.id) : null;
+  if (state.enterpriseModel && object) content.push(renderEnterpriseObject({ model: state.enterpriseModel, object,
+    pending: state.pendingEnterprise, loading: state.enterpriseLoading || state.enterpriseBusy, el: element, onCommand: saveEnterpriseCommand }));
+  const savedProcess = !enterpriseReadOnly() && node.type === 'process' ? blueprintItem(state.project.latestBlueprint, node.id) : null;
   if (savedProcess?.type === 'process') {
     const planLink = element('a', {
       className: 'button', text: 'Plan this process in Execution',

@@ -18,10 +18,13 @@ export function decodeStudioRoute(value = '/') {
     area: AREA_KEYS.has(area) ? area : null,
     selectedId: SAFE_ID.test(selectedId ?? '') ? selectedId : null,
     types,
+    ...(url.searchParams.has('lensId') ? { lensId: url.searchParams.get('lensId').slice(0, 120) } : {}),
+    ...(url.searchParams.has('scopeId') ? { scopeId: url.searchParams.get('scopeId').slice(0, 120) } : {}),
+    ...(url.searchParams.has('blueprintVersion') ? { blueprintVersion: /^[1-9][0-9]*$/.test(url.searchParams.get('blueprintVersion')) ? Number(url.searchParams.get('blueprintVersion')) : url.searchParams.get('blueprintVersion').slice(0, 120) } : {}),
   };
 }
 
-export function encodeStudioRoute({ projectId = null, view = 'blueprint', selectedId = null, types = [], area = null } = {}) {
+export function encodeStudioRoute({ projectId = null, view = 'blueprint', selectedId = null, types = [], area = null, lensId = null, scopeId = null, blueprintVersion = null } = {}) {
   const params = new URLSearchParams();
   if (PROJECT_ID.test(projectId ?? '')) params.set('project', projectId);
   if (VIEWS.has(view) && view !== 'blueprint') params.set('view', view);
@@ -29,6 +32,9 @@ export function encodeStudioRoute({ projectId = null, view = 'blueprint', select
   if (SAFE_ID.test(selectedId ?? '')) params.set('selected', selectedId);
   const safeTypes = [...new Set(types.filter((entry) => SAFE_ID.test(entry)))].sort();
   if (safeTypes.length) params.set('types', safeTypes.join(','));
+  if (lensId !== null && lensId !== undefined) params.set('lensId', String(lensId).slice(0, 120));
+  if (scopeId !== null && scopeId !== undefined) params.set('scopeId', String(scopeId).slice(0, 120));
+  if (blueprintVersion !== null && blueprintVersion !== undefined) params.set('blueprintVersion', String(blueprintVersion).slice(0, 120));
   const query = params.toString();
   return query ? `/?${query}` : '/';
 }
