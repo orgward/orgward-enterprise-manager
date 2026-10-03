@@ -418,7 +418,8 @@ test('served SDLC product surface and meta contract expose stages and mutation l
   assert.match(styles, /scroll-snap-type:\s*x proximity/);
   assert.match(script, /crypto\?\.randomUUID\?\.\(\)/);
   assert.match(script, /expectedProjectVersion/);
-  assert.match(script, /state\.activeSourceProject = detail\.data/);
+  assert.match(script, /if \(detail\.data\?\.id === changeCase\.projectId\) activeSourceProject = detail\.data/);
+  assert.match(script, /if \(selectionId !== caseSelectionId\) return;[\s\S]*?state\.activeSourceProject = activeSourceProject/);
   assert.match(script, /api\(`\/api\/v1\/projects\/\$\{encodeURIComponent\(changeCase\.projectId\)\}`\)/);
   assert.match(script, /caseUiModel\(changeCase, state\.meta, state\.activeSourceProject\)/);
   assert.match(script, /Pinned saved-design evidence/);

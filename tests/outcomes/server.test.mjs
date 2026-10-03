@@ -14,7 +14,7 @@ const tenantId = 'tenant-outcome-test';
 const issuer = 'https://outcomes.example.test';
 const subjects = ['owner', 'editor', 'reader', 'outsider', 'foreign'];
 const roles = { owner: ['workspace-read', 'workspace-write'], editor: ['workspace-read', 'workspace-write'],
-  reader: ['workspace-read'], outsider: ['workspace-read', 'workspace-write'] };
+  reader: ['workspace-read'], outsider: ['workspace-read', 'workspace-write'], foreign: ['workspace-read', 'workspace-write'] };
 const identities = new Map(subjects.map((subject) => {
   const principal = `oidc:${createHash('sha256').update(`${issuer}\n${subject}`).digest('hex')}`;
   return [subject, { issuer, subject, principal, tenantId: subject === 'foreign' ? 'tenant-outcome-foreign' : tenantId, actorType: 'human', displayName: subject,
@@ -51,11 +51,11 @@ async function seedProject(postgres) {
   return project;
 }
 
-async function seedSources(postgres, project) {
+async function seedSources(postgres, project, foreignProject) {
   const runId = `execution-run-${randomUUID()}`;
   const foreignRunId = `execution-run-${randomUUID()}`;
   const now = new Date().toISOString();
-  for (const [id, scopedProject] of [[runId, project.id], [foreignRunId, `project-${randomUUID()}`]]) {
+  for (const [id, scopedProject] of [[runId, project.id], [foreignRunId, foreignProject.id]]) {
     const run = { id, tenantId, projectId: scopedProject, version: 1, status: 'COMPLETED',
       title: id === runId ? 'Transfer reconciliation task' : 'Another project task',
       execution: { evidenceHash: hash(id === runId ? 'a' : 'b') }, createdAt: now, updatedAt: now };
@@ -76,7 +76,7 @@ async function seedSources(postgres, project) {
     (tenant_id,project_id,action_id,environment_id,state,state_hash,created_at)
     values ($1,$2,$3,'production',$4::jsonb,$5,$6)`,
   [tenantId, project.id, actionId, JSON.stringify(action), contentHash(action), now]);
-  return { runId, foreignRunId, actionId, action };
+  return { runId, runEvidenceHash: hash('a'), foreignRunId, foreignProjectId: foreignProject.id, actionId, action };
 }
 
 async function startApp(postgres, root) {
@@ -122,16 +122,17 @@ test('customer outcomes bind real sources, preserve reported evidence, and creat
   t.after(() => postgres.close());
   const root = await mkdtemp(path.join(tmpdir(), 'orgward-customer-outcomes-'));
   t.after(() => rm(root, { recursive: true, force: true }));
+  let instance = await startApp(postgres, root);
+  t.after(async () => closeApp(instance));
   for (const identity of identities.values()) {
     await postgres.query(`insert into orgward.oidc_principals
       (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
-    [identity.principal, identity.issuer, tenantId, identity.actorType, identity.displayName, identity.roles]);
+    [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
   }
   const project = await seedProject(postgres);
-  const sources = await seedSources(postgres, project);
+  const foreignProject = await seedProject(postgres);
+  const sources = await seedSources(postgres, project, foreignProject);
   const baseRoute = `/api/v1/projects/${project.id}/outcomes`;
-  let instance = await startApp(postgres, root);
-  t.after(async () => closeApp(instance));
   const initial = await request(instance.base, 'editor', baseRoute);
   assert.deepEqual(initial.outcomes, []);
   assert.ok(initial.sources.tasks.some((entry) => entry.runId === sources.runId));
@@ -142,7 +143,7 @@ test('customer outcomes bind real sources, preserve reported evidence, and creat
   const taskCreated = await request(instance.base, 'editor', baseRoute, { method: 'POST', body: taskCreate }, 201);
   assert.equal(taskCreated.outcome.source.kind, 'task');
   assert.equal(taskCreated.outcome.source.runVersion, 1);
-  assert.equal(taskCreated.outcome.source.evidenceKind, undefined);
+  assert.equal(taskCreated.outcome.source.evidenceHash, sources.runEvidenceHash);
   const duplicateCreate = await request(instance.base, 'editor', baseRoute, { method: 'POST', body: taskCreate });
   assert.equal(duplicateCreate.replayed, true);
   assert.equal(duplicateCreate.outcome.id, taskCreated.outcome.id);
@@ -292,7 +293,7 @@ test('customer outcomes bind real sources, preserve reported evidence, and creat
 
   const staleDesign = await request(instance.base, 'owner', followUpPath, { method: 'POST', body: followUpBody(
     'follow-up-stale-blueprint', 9, design.projectVersion, design.blueprintVersion + 1) }, 409);
-  assert.equal(staleDesign.error.code, 'SOURCE_BINDING_STALE');
+  assert.equal(staleDesign.error.code, 'SOURCE_BLUEPRINT_VERSION_STALE');
 
   const followUpCommand = followUpBody('create-follow-up-case', 9, design.projectVersion, design.blueprintVersion);
   const followUp = await request(instance.base, 'owner', followUpPath, { method: 'POST', body: followUpCommand });

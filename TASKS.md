@@ -44,9 +44,9 @@ effects, durable audit and operational actions needed by that path. PR-11 and
 PR-19 remain pending in the separate future backlog. No P/E release gate is
 closed by this queue; active section order follows the functionality work order.
 
-Active cursor: PR-10. The active checkboxes below are the source of truth;
+Active cursor: PR-12. The active checkboxes below are the source of truth;
 `npm run task:next` checks that this cursor matches their first open PR in section
-order. PR-01 through PR-09 are functionally complete, and PR-10 is next. A stale PR
+order. PR-01 through PR-10 are functionally complete, and PR-12 is next. A stale PR
 number in a saved goal, dated receipt or older document does not reset the queue.
 Read this header and the active PR outcome at the line printed by
 `npm run task:next`; search receipts only for a concrete dependency.
@@ -5989,7 +5989,7 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   Broad progressive/health/resilience qualification remains pending separately.
   The cursor advances to PR-10.
 
-- [ ] PR-10 — Outcomes and customer next actions (T-36–T-38). Connect
+- [x] PR-10 — Outcomes and customer next actions (T-36–T-38). Connect
   technical/control/business observations to reviewed learning in a usable customer
   journey with a durable inbox and next actions. Include authority, audit, basic
   admin, import/export, restore/recovery, incident and support actions needed to
@@ -6023,6 +6023,35 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   PR-12 gap planning may resume read-only during verification; no PR-12 product
   implementation has started. No P/E gate, production qualification, provider
   call, rendered browser proof or live business effect is claimed here.
+
+  Functionality closure (2026-10-03): verification resumed after the quota stop.
+  All six outcomes tests passed across the focused runs, without duplicating
+  passing cases. Initial failures were corrected fixture setup (migration order,
+  complete principal roles/tenant, real foreign-project scope), UI-copy expectations
+  and the precise stale-blueprint error contract. The PostgreSQL/API journey
+  passed 1/1 (3.13s runner), including task/release/manual source capture, explicit
+  reported comparisons and unknowns, stale observation/version/design denials,
+  owner revocation/reassignment, atomic scoped case creation and first-stage
+  operation, restart/replay, export hash validation and import without authority
+  carryover. UI tests cover exact case routing, unavailable-case handling, stale
+  proposal actions, export/import and uncertain command recovery after remount.
+  Sol backend/UI review and integrator review found no remaining blocking issue.
+  The first frozen parent check found one outdated source-text assertion in the
+  existing SDLC surface test (473 passed, 1 failed, 1 skipped). Its narrow repair
+  now checks staged project identity and the selection guard before committing
+  state; the affected case passed 1/1 (0.53s). The full failure-repair check passed
+  474 tests, 0 failed and 1 skipped (96.05s runner, 94.90s TAP). Logs:
+  `/tmp/orgward-pr10-outcomes-pg-focused-20261003-r5.log`,
+  `/tmp/orgward-pr10-sdlc-surface-focused-20261003.log`,
+  `/tmp/orgward-pr10-parent-check-20261003-r2.log`,
+  `/tmp/orgward-tests-OLvuwZ/node-test.tap.log`.
+  The skip remains PostgreSQL backup/restore qualification with client tools
+  unavailable; no passing restore qualification is inferred. This closes the
+  customer outcome/inbox/next-action functionality. Reported or imported measures
+  remain human reports, not verified business performance. No rendered browser
+  proof, live effect or P/E gate promotion occurred. Broad operations qualification
+  remains in the future backlog. The checked cursor advances to PR-12; functionality
+  progress is 10/17, while the release-goal qualification remains pending.
 
 ## Complete enterprise portfolio
 

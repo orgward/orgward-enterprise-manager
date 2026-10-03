@@ -94,7 +94,7 @@ test('outcome inbox shows project sources and exposes the exact linked change-ca
     assert.equal(root.attrs['aria-label'], 'Project outcome inbox');
     assert.match(root.textContent, /Technical: NOT_MET · control: UNKNOWN · business: UNKNOWN/);
     assert.match(root.textContent, /Human reported/);
-    assert.match(root.textContent, /Protected release/);
+    assert.match(root.textContent, /Release Production/);
     assert.match(root.textContent, /Task Transfer run/);
     const link = root.querySelectorAll('a').find((node) => node.textContent === 'Open linked change case');
     assert.ok(link);
@@ -167,6 +167,105 @@ test('change-case deep link selects its exact saved case on reload and does not 
   assert.deepEqual(unavailable, { state: 'unavailable', caseId: 'change-case-not-owned' });
   assert.deepEqual(selected, ['welcome'], 'an unavailable linked case does not select a different case');
   assert.match(notices.at(-1), /unavailable to your current identity/i);
+});
+
+test('historical learning stays visible but cannot be owner-reviewed against a newer observation', async () => {
+  const originalStorage = globalThis.localStorage;
+  globalThis.localStorage = storageFixture();
+  try {
+    const outcome = acceptedOutcome();
+    outcome.latestEvaluation.observationHash = 'c'.repeat(64);
+    const api = async () => inbox(outcome);
+    const root = renderOutcomeInbox({ projectId: 'project-one', principal: 'oidc:owner', el, api });
+    await settle();
+    assert.match(root.textContent, /Historical learning: this proposal is not bound to the latest observation/);
+    assert.match(root.textContent, /Existing reviews and linked cases remain in the history/);
+    const review = findForm(root, 'Save owner review');
+    assert.ok(review);
+    assert.equal(review.querySelectorAll('button')[0].disabled, true);
+  } finally {
+    if (originalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = originalStorage;
+  }
+});
+
+test('outcome export downloads and verified import recovers its exact command after remount', async () => {
+  const originalStorage = globalThis.localStorage;
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalRevokeObjectURL = URL.revokeObjectURL;
+  const storage = storageFixture();
+  globalThis.localStorage = storage;
+  let exportedBlob;
+  URL.createObjectURL = (blob) => { exportedBlob = blob; return 'blob:outcome-export'; };
+  URL.revokeObjectURL = () => {};
+  try {
+    const base = '/api/v1/projects/project-one/outcomes';
+    const outcome = acceptedOutcome();
+    const bundle = { version: 'orgward-outcome-export-v1', projectId: 'project-one', outcome, exportHash: 'd'.repeat(64) };
+    const preview = { importHash: 'e'.repeat(64), exportHash: bundle.exportHash,
+      origin: { tenantId: 'tenant-source', projectId: 'project-source', outcomeId: outcome.id, version: outcome.version },
+      title: outcome.title, category: outcome.category, observationCount: 1,
+      latestEvaluation: { technical: 'NOT_MET', control: 'UNKNOWN', business: 'UNKNOWN' },
+      evidenceKind: 'HUMAN_REPORTED', authorityImported: false };
+    const importedOutcome = { ...outcome, id: 'outcome-imported', status: 'OPEN', proposals: [], importedFrom: {
+      tenantId: 'tenant-source', projectId: 'project-source', outcomeId: outcome.id, version: outcome.version,
+      exportHash: bundle.exportHash, authorityImported: false } };
+    const calls = [];
+    let importUncertain = true;
+    let imported = false;
+    const api = async (route, options) => {
+      calls.push({ route, options });
+      if (route === base && !options) return { ...inbox(imported ? importedOutcome : outcome),
+        outcomes: imported ? [importedOutcome, outcome] : [outcome] };
+      if (route === `${base}/${outcome.id}/export` && !options) return bundle;
+      if (route === `${base}/import-preview`) return { preview };
+      if (route === `${base}/import`) {
+        if (importUncertain) { importUncertain = false; throw Object.assign(new Error('import response lost'), { status: 503 }); }
+        imported = true;
+        return { outcome: importedOutcome, replayed: true };
+      }
+      throw new Error(`Unexpected API call ${route}`);
+    };
+    const options = { projectId: 'project-one', principal: 'oidc:owner', el, api };
+    const first = renderOutcomeInbox(options);
+    await settle();
+    await findButton(first, 'Download outcome JSON export').click();
+    assert.ok(exportedBlob);
+    assert.match(await exportedBlob.text(), /orgward-outcome-export-v1/);
+    assert.ok(calls.some(({ route }) => route === `${base}/${outcome.id}/export`));
+
+    const fileControl = findForm(first, 'Verify outcome import').querySelectorAll('input')[0];
+    fileControl.files = [{ name: 'saved-outcome.json', size: 20, text: async () => JSON.stringify(bundle) }];
+    await findForm(first, 'Verify outcome import').submit();
+    await settle();
+    assert.match(first.textContent, /Export verified\. Review its origin and reported observations/);
+    assert.match(first.textContent, /Learning approvals and change-case authority are not copied/);
+    const importForm = findForm(first, 'Import as new open item');
+    assert.ok(importForm);
+    assert.match(importForm.textContent, /I reviewed the origin and latest reported observations/);
+    await importForm.submit();
+    await settle();
+    const originalImport = calls.find(({ route, options: requestOptions }) => route === `${base}/import` && requestOptions?.method === 'POST');
+    assert.ok(originalImport);
+    const originalPayload = JSON.parse(originalImport.options.body);
+    assert.equal(originalPayload.bundle.exportHash, bundle.exportHash);
+    assert.equal(originalPayload.expectedImportHash, preview.importHash);
+    assert.match(first.textContent, /response is uncertain/i);
+
+    const second = renderOutcomeInbox(options);
+    await settle();
+    await findButton(second, 'Retry saved command: Import outcome').click();
+    await settle();
+    const retriedImport = calls.filter(({ route, options: requestOptions }) => route === `${base}/import` && requestOptions?.method === 'POST')[1];
+    assert.deepEqual(retriedImport, originalImport);
+    assert.equal(storage.values.size, 0);
+    assert.match(second.textContent, /Imported context:/);
+  } finally {
+    if (originalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = originalStorage;
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+  }
 });
 
 function rootText(node) { return node.textContent; }
