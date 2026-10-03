@@ -1,24 +1,26 @@
-# Production implementation queue
+# Customer functionality queue
 
-This is the authoritative implementation queue for the full OrgWard Enterprise
-Studio target. It condenses the product brief, P-01–P-12 first-release outcomes,
-E-01–E-16 production gates and T-01–T-132 historical specification into
-implementation-sized increments. The T-ranges identify coverage; they do not
-set work order or create paperwork gates. Historical roadmaps, task indexes,
-vectors and packet instructions under `docs/production/` remain reference material
-for requirements and dependencies. Their old "next" directions and unrun-status
-claims do not supersede the active checkbox, cursor, order or passing receipts here.
+**Latest scope and model override (2026-10-03):** This queue contains the 17
+stable functionality IDs PR-01–PR-10 and PR-12–PR-18. GPT-6.1 Sol owns
+implementation, orchestration, design and code review. Luna is the sole
+verifier/test runner and may provide focused text support. PR-11 and PR-19 remain pending in
+`HARDENING-TASKS.md`; broad hardening and release qualification follow this
+functionality queue. Required runtime integrity and customer operations remain
+part of the relevant functionality paths.
 
-Work the first unchecked, dependency-ready item. For each bounded implementation
-slice, run its relevant focused behavior and recovery tests and review the source
-diff. When the parent PR/task is ready for completion, freeze its source tree and
-run `npm run check` once; mark it complete only after that result and the review
-pass. Do not run parallel or duplicate full checks. Rerun a full check only to
-repair a failure, reviewing the repair first. Report counts and skips accurately;
-a skipped optional check is not passing coverage. Do not count specification
-validators, manifests or generated vectors as product acceptance. Never perform
-live effects, deployments, purchases or external communications without explicit
-user authorization.
+This queue covers customer-facing functionality from the product brief, first
+release outcomes and relevant historical requirements. T-ranges identify
+coverage; they do not create paperwork gates. Historical roadmaps, task indexes,
+vectors and packet instructions under `docs/production/` remain reference
+material, not a competing cursor.
+
+Work the first unchecked, dependency-ready item. Sol implements and reviews;
+Luna is the sole verifier/test runner and runs focused tests when the slice is
+ready and the integrator coordinates it. Freeze the source and run `npm run check`
+once at parent-task completion. Do not duplicate checks. Preserve skip and failure
+details; specification validators and vectors are not product acceptance.
+Unrequested live effects, deployments, purchases and external communications are
+out of scope.
 
 Work order (PR numbers are stable IDs, not numeric sequence):
 
@@ -28,26 +30,23 @@ Work order (PR numbers are stable IDs, not numeric sequence):
    intervention, persisted evidence and restart recovery. A planning graph or
    static UI alone does not complete it.
 3. PR-07–PR-10: deliver customer-usable governed software delivery and outcomes.
-   PR-10 closes the observable outcome, learning and next-action journey; its
-   standalone operations work follows the product journeys in PR-11.
+   PR-10 closes the observable outcome, learning and next-action journey.
 4. PR-12–PR-15, then PR-17: deliver the complete enterprise portfolio and
    consistent customer-defined work.
 5. PR-16 and PR-18: deliver managed SaaS and migration journeys.
-6. PR-11 and PR-19: run broad core and final release qualification after the
-   product paths they qualify exist.
+6. After the functionality queue, handle PR-11 and PR-19 from
+   `HARDENING-TASKS.md` as pending broad qualification.
 
-Within each open task, complete its customer-visible end-to-end path before
-standalone broad security, resilience, scale or operations qualification. Build
-the authorization, tenant isolation, secret protection, explicit intervention,
-approval-bound effects and durable audit controls needed for that path as part of
-the path. If an earlier PR depends on part of T-39–T-44, deliver that part inside
-the earlier PR; PR-11 closes their remaining standalone scope and qualification.
-Broader qualification remains mandatory before release; this ordering does not
-mark any P/E gate complete. Active section order below follows this list.
+Complete each customer-visible end-to-end path before standalone broad security,
+resilience, scale or operations qualification. Build the runtime authorization,
+tenant isolation, secret protection, explicit intervention, approval-bound
+effects, durable audit and operational actions needed by that path. PR-11 and
+PR-19 remain pending in the separate future backlog. No P/E release gate is
+closed by this queue; active section order follows the functionality work order.
 
-Active cursor: PR-08. The active checkboxes below are the source of truth;
+Active cursor: PR-09. The active checkboxes below are the source of truth;
 `npm run task:next` checks that this cursor matches their first open PR in section
-order. PR-01 through PR-07 are complete, and PR-08 is next. A stale PR
+order. PR-01 through PR-08 are functionally complete, and PR-09 is next. A stale PR
 number in a saved goal, dated receipt or older document does not reset the queue.
 Read this header and the active PR outcome at the line printed by
 `npm run task:next`; search receipts only for a concrete dependency.
@@ -5287,11 +5286,13 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   post-compile owner promotion/human runtime/restart path remains unverified
   because host Chrome reports `No usable sandbox`; no browser bypass was used.
 
-- [ ] PR-08 — SCM, agent changes and immutable assurance (T-29–T-32; E-06, E-09).
+- [x] PR-08 — SCM, agent changes and immutable assurance (T-29–T-32; E-06, E-09).
   Let a user onboard a repository, request a bounded agent change, review its diff,
-  and inspect reproducible build/test results. Keep credentials scoped and publish
-  the required security checks, SBOM, provenance, signatures and immutable candidate
-  evidence as part of that path.
+  and inspect named-check/build outputs bound to immutable candidate receipts,
+  including repeat results. Keep credentials scoped. This functionality does not
+  complete T-31 environment-independence/dependency-toolchain reproducibility
+  qualification or T-32 supply-chain scanners, SBOM, provenance and signatures;
+  those remain in `HARDENING-TASKS.md`.
 
   Bounded local-only implementation receipt (2026-09-28): added server-configured,
   exact tenant/project repository bindings; bounded immutable file/mode snapshots
@@ -5926,17 +5927,42 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   qualify build-environment independence, security checks, SBOM, provenance,
   signatures or T-32 artifact signing. PR-08 and all release gates remain open.
 
+  Functionality closure (2026-10-03): the latest user scope separates remaining
+  customer functionality from future hardening. GPT-6.1 Sol reviewed the repository
+  onboarding, exact snapshot selection, bounded patch, persisted diff, named-check
+  receipts, candidate-specific two-build comparison/output downloads and repeat
+  verification path. No blocking implementation finding remained after repairing
+  installation proof consistency: source capture and saved capture now exclude
+  the incomplete installations already excluded by discovery/execution readers.
+  The stale installation fixture was updated, with a separate incomplete-binding
+  denial case. Luna's first closing check found that fixture failure (459 passed,
+  1 failed, 1 skipped; 87.81s). The reviewed repair passed the affected store and
+  ingestion tests 12/12 (4.54s), then the frozen-tree full check passed 460 tests,
+  0 failed and 1 skipped (runner 86.43s, TAP 85.35s).
+  Logs: `/tmp/orgward-pr08-functional-failure-repair-check-20261003.log` and
+  `/tmp/orgward-tests-fVaGZk/node-test.tap.log`. The skip is PostgreSQL backup/
+  restore qualification because `ORGWARD_PG_TOOLS_BIN` was unavailable; it is not
+  passing coverage. Four updated project skills validated and diff whitespace
+  checks passed. This closes the revised PR-08 functionality scope only; the
+  original T-31 environment/dependency-toolchain qualification and T-32 supply-
+  chain scanners, SBOM, provenance and signatures remain pending in
+  `HARDENING-TASKS.md`. No live GitHub/provider call, rendered browser proof,
+  deployment or release-gate promotion occurred. The cursor advances to PR-09.
+
 - [ ] PR-09 — Authorized environments, release and rollback (T-33–T-35; E-10).
   Let a user review an exact candidate, approve a protected environment action,
   observe its result and recover through rollback. Bind authority to principals,
-  actions, assets, risks and environments; reconcile ambiguous effects and prove
-  health, progressive delivery where applicable, and restart-safe idempotency.
+  actions, assets, risks and environments; reconcile ambiguous effects and provide
+  restart-safe idempotency plus the health signal needed to operate this release
+  flow. Broad progressive-delivery, health and resilience qualification remains
+  deferred to `HARDENING-TASKS.md`.
 
 - [ ] PR-10 — Outcomes and customer next actions (T-36–T-38). Connect
   technical/control/business observations to reviewed learning in a usable customer
-  journey with a durable inbox and next actions. Include the authority, audit and
-  recovery behavior needed for this journey; broader operations acceptance is in
-  PR-11.
+  journey with a durable inbox and next actions. Include authority, audit, basic
+  admin, import/export, restore/recovery, incident and support actions needed to
+  act on those outcomes. Broad operations qualification remains deferred to
+  `HARDENING-TASKS.md`.
 
 ## Complete enterprise portfolio
 
@@ -5954,15 +5980,17 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
 - [ ] PR-14 — Governance and supervised agents (T-76–T-89). Implement versioned
   policy decisions/enforcement, decision rights and appeals, semantic/data
   stewardship, verifiable governance ledger, agent identities/autonomy envelopes,
-  multi-agent handoffs, shared budgets and independent adversarial evaluation.
+  multi-agent handoffs and shared budgets. Independent adversarial qualification
+  remains deferred to `HARDENING-TASKS.md`.
 
 - [ ] PR-15 — Integrated portfolio round trip and extensibility (T-90–T-105,
   T-107–T-108, then T-106). Join enterprise truth, integrity and SDLC context;
   support multi-repository/legacy delivery, progressive promotion, incidents,
   governed enterprise transactions, connectors, role-based portfolio UX, modular
-  self-hosting, packs, simulation, continuity, portability and retirement. Finish
-  the customer-visible portfolio round trip before broad security, scale and
-  complete portfolio qualification.
+  self-hosting, packs, simulation, continuity, portability and retirement. Include
+  usable admin, import/export, basic restore, incident and support actions for the
+  portfolio round trip. Finish customer functionality before broad security,
+  scale and continuity qualification in `HARDENING-TASKS.md`.
 
 ## Consistent customer-defined work
 
@@ -5972,31 +6000,18 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   continuously, and support typed customer concepts/actions, executable work forms,
   safe templates, role adoption and graduated autonomy.
 
-## Managed SaaS, migration and final qualification
+## Managed SaaS and migration
 
 - [ ] PR-16 — Managed SaaS foundation (T-109–T-114). Add whole-business inventory,
   isolated tenant/cell provisioning, enterprise identity onboarding, entitlements,
-  metering/quotas, safe subscription lifecycle, operator/support controls, residency,
-  customer-owned keys and tenant relocation without granting business authority.
+  metering/quotas, safe subscription lifecycle and customer-usable operator/support
+  controls without granting business authority. Broad residency, customer-owned-key
+  and tenant-relocation hardening is deferred to `HARDENING-TASKS.md`.
 
 - [ ] PR-18 — Existing-enterprise migration and activation (T-115–T-120). Discover
   sources and ownership, map identities and transformations, stage imports, operate
   with fenced source-of-record coexistence, rehearse and validate, then cut over with
   rollback/hypercare and owner-approved activation evidence.
-
-- [ ] PR-11 — Core operations and production qualification (T-39–T-48;
-  P-01–P-12, E-01–E-16). Complete verifiable audit export, admin controls,
-  backup/restore, upgrade recovery, telemetry/incidents and stable
-  import/export/integration contracts. Qualify accessible supported-browser
-  workflows, security/supply chain, scale/soak, redundant recovery and an isolated
-  customer installation. Close gates only from evidence produced by the releasable
-  revision and after its product journeys exist.
-
-- [ ] PR-19 — Full enterprise SaaS release qualification (T-128–T-132). Generate and
-  execute the enterprise variation/conformance matrix; qualify SaaS isolation,
-  fairness, public edge, service operations, migration and cross-perspective
-  consistency; enforce bounded implementation handoffs; adjudicate the final release
-  only after the complete T-01–T-132 dependency closure and applicable P/E gates pass.
 
 ## Completed closed-loop foundation
 

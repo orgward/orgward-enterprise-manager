@@ -1924,7 +1924,8 @@ export class PostgresGitHubSourceStore {
     return this.persistence.transaction(async (client) => {
       await this.#authorize(client, { tenantId, projectId, principal, authzGeneration });
       const result = await client.query(`select 1 from orgward.github_app_installations
-        where tenant_id=$1 and installation_id=$2`, [tenantId, installationId]);
+        where tenant_id=$1 and installation_id=$2
+          and github_account_id is not null and github_user_id is not null`, [tenantId, installationId]);
       return Boolean(result.rowCount);
     });
   }
@@ -2010,7 +2011,8 @@ export class PostgresGitHubSourceStore {
     return this.persistence.transaction(async (client) => {
       await this.#authorize(client, { tenantId, projectId, principal, authzGeneration });
       const installed = await client.query(`select tenant_id from orgward.github_app_installations
-        where installation_id=$1 for key share`, [binding.installationId]);
+        where installation_id=$1 and github_account_id is not null and github_user_id is not null
+        for key share`, [binding.installationId]);
       if (!installed.rowCount || installed.rows[0].tenant_id !== tenantId) throw Object.assign(new Error('Connect this GitHub App installation to the current OrgWard tenant before capturing source.'), {
         statusCode: 403, code: 'GITHUB_INSTALLATION_NOT_BOUND', retryable: false,
       });

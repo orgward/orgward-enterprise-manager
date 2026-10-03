@@ -8,23 +8,26 @@ check the active cursor against the PR checkboxes. Read the active PR outcome at
 the printed line; search receipts only for a concrete dependency. Use the
 numbered work order and active section order to choose the first unchecked,
 dependency-ready PR. PR IDs do not set sequence.
+
+For the active continuation, GPT-6.1 Sol owns orchestration and implementation;
+Luna is the sole verifier/test runner and may handle focused text support. Keep
+tool use and context bounded to the current slice. `TASKS.md` contains only the
+customer functionality queue; broad hardening and qualification are tracked in
+`HARDENING-TASKS.md` and are out of scope until that queue is complete. Do not
+confuse deferred qualification with runtime integrity controls needed by a
+customer flow.
 The current checkboxes and passing receipts override stale goal text, dated notes
 and archived backlogs. If an external resource blocks the current PR, keep it
 open and scan later sections for independently ready work before treating the
 whole goal as blocked. This skill is not a second status ledger.
 After the final PR is checked, set the cursor to `COMPLETE` and review release
-gates in their own ledgers.
-Finish the saved-design-to-result customer journey before standalone broad
-security, resilience and operations qualification. Within later PRs, deliver each
-customer-visible end-to-end journey first, including the authority, tenant,
-secret, intervention, approval/effect and audit controls needed to execute it
-safely. PR-17 precedes PR-16/PR-18 while dependencies permit. PR-10 closes the
-customer outcome and next-action path; PR-11 carries T-39–T-44 standalone
-operations work and core qualification after the customer paths. PR-19 is final
-qualification. Implement any operation PR-10 needs for safe use within PR-10;
-do not defer a path blocker.
-Deliver any part of T-39–T-44 required by PR-12–PR-18 within the dependent PR;
-PR-11 closes only the remaining standalone scope and qualification.
+gates in their own ledgers; `COMPLETE` closes this functionality queue only.
+Broad hardening and release qualification remain pending in
+`HARDENING-TASKS.md`. Deliver each customer-visible path with the runtime
+authority, tenant, secret, intervention, approval/effect and audit controls it
+needs. PR-17 precedes PR-16/PR-18 while dependencies permit. Include any
+operations needed for safe customer use in the dependent functionality task;
+defer only the remaining standalone qualification.
 
 Historical increment notes, `docs/production/` roadmaps, task vectors, packet
 instructions and archived backlogs supply requirements and dependencies, not a
@@ -45,11 +48,8 @@ record the gap in `TASKS.md`; do not infer a rendered or accessible journey from
 static markup or API tests.
 
 Do not generate packet digests, model-routing matrices or review bureaucracy. Track
-progress in `TASKS.md`, integrate code, have Luna run focused tests, review the
-implementation, then have Luna run `npm run check` once at task end. Give Sol only
-bounded design or security questions with only the necessary code slice and request
-concise findings. Sol does not run routine tests or broad repository searches. One
-Luna owner runs each test suite once when the slice is ready; a long regression may
-run alongside independent review, but its result must be checked before closing the
-task. Summarize tool output instead of copying passing logs into chat. Never infer
-permission for pushes, deployments, paid services or live effects.
+progress in `TASKS.md`; Sol implements and reviews the code, then Luna runs focused
+tests when the tree is ready and one `npm run check` at task end after source
+freeze. Do not duplicate checks. Summarize tool output instead of copying passing
+logs into chat. Never infer permission for pushes, deployments, paid services or
+live effects.

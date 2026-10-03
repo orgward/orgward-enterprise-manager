@@ -35,8 +35,10 @@ test('GitHub bindings and snapshots survive store restart and require tenant-adm
     await persistence.query(`insert into orgward.project_memberships (tenant_id,project_id,principal,access,granted_by)
       values ($1,$2,$3,'owner',$3),($1,$2,$4,'editor',$3),($1,$2,$5,'reader',$3)`, [tenantId, projectId, principal, editor, reader]);
     await persistence.query(`insert into orgward.github_app_installations
-      (installation_id,tenant_id,app_id,account_login,account_type,connected_by,verified_at)
-      values ('123',$1,'456','fixture-account','Organization',$2,now())`, [tenantId, principal]);
+      (installation_id,tenant_id,app_id,account_login,account_type,connected_by,verified_at,
+        github_account_id,github_user_id,github_user_login)
+      values ('123',$1,'456','fixture-account','Organization',$2,now(),'788','986','fixture-owner'),
+             ('125',$1,'456','incomplete-fixture-account','Organization',$2,now(),null,null,null)`, [tenantId, principal]);
     const byteProjectState = { ...projectState, id: byteProjectId, name: 'Byte bound fixture' };
     await persistence.query(`insert into orgward.aggregates (tenant_id,aggregate_kind,aggregate_id,version,state,state_hash,updated_at)
       values ($1,'project',$2,0,$3::jsonb,$4,$5)`, [tenantId, byteProjectId, JSON.stringify(byteProjectState), 'b'.repeat(64), now]);
@@ -58,6 +60,13 @@ test('GitHub bindings and snapshots survive store restart and require tenant-adm
       files: [{ path: 'README.md', mode: '100644', size: sourceBytes.length, contentHash: sourceContentHash, blobSha, contentBase64: sourceBytes.toString('base64') }] };
     const savedCapture = await initial.saveCapture({ tenantId, projectId, principal, authzGeneration: 1, binding, snapshot });
     assert.equal(Object.hasOwn(savedCapture.snapshots[0], 'files'), false, 'save response contains snapshot metadata only');
+    assert.equal(await initial.assertTenantInstallation({ tenantId, projectId, principal, authzGeneration: 1,
+      installationId: '125' }), false, 'an incomplete installation does not authorize source capture');
+    assert.equal(await initial.getTenantInstallation({ tenantId, projectId, principal, authzGeneration: 1,
+      installationId: '125' }), null, 'an incomplete installation is not offered for discovery');
+    await assert.rejects(initial.saveCapture({ tenantId, projectId, principal, authzGeneration: 1,
+      binding: { ...binding, installationId: '125', credentialReference: 'github-installation:125' }, snapshot }),
+    { code: 'GITHUB_INSTALLATION_NOT_BOUND' }, 'saving capture also requires the installation authorization proof');
 
     const restartedStore = new PostgresGitHubSourceStore(persistence);
     await assert.rejects(restartedStore.createInstallationIntent({ tenantId, projectId, principal: editor, authzGeneration: 1,
@@ -112,7 +121,7 @@ test('GitHub bindings and snapshots survive store restart and require tenant-adm
     const connectedInstallations = await new PostgresGitHubSourceStore(persistence)
       .listTenantInstallations({ tenantId, projectId, principal, authzGeneration: 1 });
     assert.deepEqual(connectedInstallations.map(({ installationId }) => installationId), ['123', '124'],
-      'installation ownership survives store reconstruction');
+      'verified installation ownership survives store reconstruction while incomplete bindings remain hidden');
     const saved = await restartedStore.listForProject({ tenantId, projectId, principal, authzGeneration: 1 });
     assert.equal(Object.hasOwn(saved[0].snapshots[0], 'files'), false, 'project listing returns metadata only');
     assert.deepEqual(saved[0].snapshots[0], (({ files, ...metadata }) => metadata)(snapshot));
