@@ -7214,3 +7214,24 @@ cursor and release gates remain open and unchanged.
   Chrome or agent-browser process. Evidence:
   `/tmp/orgward-t28-rendered-proof-20260930-stop-summary.txt`. PR-07 remains
   first open; task checkboxes, cursor and release ledger remain unchanged.
+
+PR-15 bounded portfolio workspace-list slice (2026-10-04): the authenticated
+PostgreSQL project-specific list query now carries the caller's authoritative
+membership access alongside the existing saved project summary. The welcome screen renders
+portfolio cards with workspace name, phase, saved blueprint version, last saved
+time and access label, plus an Open workspace action using existing routing.
+Focused acceptance fixtures cover owner/editor/reader membership projection,
+nonmember invisibility, displayed saved state and opening the selected project.
+Static syntax and diff checks only; no behavior tests run pending Sol review.
+Proposed focused command:
+`npm test -- tests/enterprise/view.test.mjs tests/enterprise/server.test.mjs --test-name-pattern='portfolio cards show saved workspace state and access|portfolio project list returns each caller’s persisted workspace access'`.
+Focused acceptance receipt (2026-10-04): UI 1/1 passed in the initial two-case
+run (33ms case; runner 2.17s; `/tmp/orgward-tests-9xGTSE/node-test.tap.log`).
+The PostgreSQL case initially failed in setup before assertions because its
+owner/editor/reader principals were missing (`project_memberships_principal_tenant_id_fkey`).
+The fixture now seeds identity rows using the established `oidc_principals`
+setup; its corrected targeted rerun passed 1/1 (778ms case; TAP 1.08s, runner
+2.35s; `/tmp/orgward-tests-hNlGrM/node-test.tap.log`). Across distinct cases,
+portfolio UI and PostgreSQL access acceptance are both accounted for passing;
+the PostgreSQL case passed after the fixture correction. No full check was run.
+PR-15 remains open and active.

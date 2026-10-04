@@ -1416,7 +1416,7 @@ export class PostgresProjectStore extends PostgresDocumentStore {
         tenantId, principal, anyRoleGroups: anyPrincipalRoleGroups, authzGeneration,
       });
       const result = await client.query(`
-        select a.* from orgward.aggregates a
+        select a.*, m.access as scoped_membership_access from orgward.aggregates a
         join orgward.project_memberships m
           on m.tenant_id = a.tenant_id and m.project_kind = a.aggregate_kind and m.project_id = a.aggregate_id
         where a.tenant_id = $1 and a.aggregate_kind = 'project'
@@ -1433,6 +1433,7 @@ export class PostgresProjectStore extends PostgresDocumentStore {
             id: project.id, name: project.name, tenantId: project.tenantId,
             version: project.version, phase: project.phase, updatedAt: project.updatedAt,
             blueprintVersion: project.blueprintVersions?.at(-1)?.version ?? null,
+            workspaceAccess: row.scoped_membership_access,
           });
         } catch { corruptRecords += 1; }
       }

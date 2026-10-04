@@ -9,6 +9,7 @@ import { coverageAreaStateLabel, coverageForBlueprint } from './coverage-dashboa
 import { compareBlueprintObjectVersions } from './blueprint-comparison.mjs';
 import { renderOutcomeInbox } from './outcomes.mjs';
 import { enterpriseContextFailure, enterpriseContextReadOnly, enterpriseStateSummary, enterpriseSourceAligned, hasEnterpriseContext, enterpriseQuery, enterpriseRequestPath, persistEnterpriseCommand, restoreEnterpriseCommand, persistEnterpriseInterchangeDraft, restoreEnterpriseInterchangeDraft, submitEnterpriseCommand, renderEnterpriseContext, renderEnterpriseObject, renderEnterpriseStewardshipPanel } from './enterprise.mjs';
+import { renderProjectPortfolio } from './project-portfolio.mjs';
 
 const state = {
   projects: [],
@@ -435,6 +436,19 @@ async function refreshProjects() {
   select.replaceChildren(element('option', { text: state.projects.length ? 'Choose project…' : 'No projects yet', attrs: { value: '' } }));
   for (const project of state.projects) select.append(element('option', { text: project.name, attrs: { value: project.id } }));
   select.value = state.project?.id ?? '';
+  renderPortfolio();
+}
+
+function renderPortfolio() {
+  const target = document.querySelector('#portfolio-list');
+  if (!target) return;
+  target.replaceChildren(renderProjectPortfolio(state.projects, { el: element, onOpen: (id) => {
+    if (!allowRouteChange()) return;
+    state.draft = '';
+    state.pendingMessage = null;
+    select.value = id;
+    loadProject(id);
+  } }));
 }
 
 function showWelcome({ history = 'push' } = {}) {
@@ -465,6 +479,7 @@ function showWelcome({ history = 'push' } = {}) {
     if (state.pendingCreate && state.pendingCreate.name !== form.elements.name.value) state.pendingCreate = null;
     setFieldError('project-name-error', []);
   });
+  renderPortfolio();
   select.value = '';
   hideAppState();
   showProjectSourceWarning();
@@ -483,6 +498,7 @@ async function createProject(event) {
     state.pendingCreate ??= { commandId: `project:${crypto.randomUUID()}`, name: input.value };
     const result = await api('/api/v1/projects', { method: 'POST', body: JSON.stringify(command({ name: state.pendingCreate.name }, undefined, state.pendingCreate.commandId)) });
     state.project = result.data;
+    select.value = result.data.id;
     state.projectAccess = result.data.createdBy === state.sessionPrincipal ? 'owner' : null;
     state.requestedProjectId = result.data.id;
     state.pendingCreate = null;
@@ -511,6 +527,7 @@ async function loadProject(id, { history = 'push', route = null } = {}) {
     if (state.requestedProjectId !== id || loadGeneration !== state.projectLoadGeneration) return;
     if (state.project?.id !== id) { state.enterpriseProcessDraft = null; state.enterpriseEconomicDraft = null; state.enterpriseRefinementDraft = null; state.enterpriseInterchangeDraft = null; state.enterpriseIntegrityDraft = null; state.enterpriseSimulation = null; }
     state.project = result.data;
+    select.value = id;
     state.projectAccess = null;
     if (state.sessionPrincipal && state.sessionRoles.includes('workspace-write')) {
       try {

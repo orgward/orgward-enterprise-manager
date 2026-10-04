@@ -14,6 +14,7 @@ import { enterpriseInterchangeCommandPayload, enterpriseInterchangeWritable, ren
 import { enterpriseIntegrityCommandPayload, enterpriseIntegrityExceptionPayload, renderEnterpriseIntegrity } from '../../public/enterprise-integrity.mjs';
 import { enterpriseGovernanceCommandPayload, renderEnterpriseGovernance } from '../../public/enterprise-governance.mjs';
 import { enterpriseStewardshipPayload, renderEnterpriseStewardship } from '../../public/enterprise-stewardship.mjs';
+import { projectPortfolioFacts, renderProjectPortfolio } from '../../public/project-portfolio.mjs';
 import { decodeStudioRoute, encodeStudioRoute } from '../../public/shared-interactions.mjs';
 
 class NodeListFixture extends Array {
@@ -81,6 +82,25 @@ const el = (tag, options = {}, children = []) => {
   node.append(...(Array.isArray(children) ? children : [children]));
   return node;
 };
+
+test('portfolio cards show saved workspace state and access and open the chosen project', () => {
+  const opened = [];
+  const projects = [
+    { id: 'project-a', name: 'Northstar', phase: 'design', blueprintVersion: 3,
+      workspaceAccess: 'editor', updatedAt: '2026-10-03T12:00:00.000Z' },
+    { id: 'project-b', name: 'Harbor', phase: 'discovery', blueprintVersion: null,
+      workspaceAccess: 'reader', updatedAt: '2026-10-02T12:00:00.000Z' },
+  ];
+  const rendered = renderProjectPortfolio(projects, { el, onOpen: (id) => opened.push(id) });
+  assert.match(rendered.textContent, /Your portfolio Workspaces/);
+  assert.match(rendered.textContent, /Northstar Editor access design Blueprint version 3/);
+  assert.match(rendered.textContent, /Harbor Reader access discovery No saved blueprint yet/);
+  const secondCard = rendered.children[1].children[1];
+  const openButton = secondCard.children.find((child) => child.tagName === 'button');
+  openButton.listeners.get('click')();
+  assert.deepEqual(opened, ['project-b']);
+  assert.equal(projectPortfolioFacts({}).access, 'Local workspace');
+});
 const branchUi = {
   field(name, label, { entries = null, value = '', required = true, multiline = false } = {}) {
     const control = el(entries ? 'select' : multiline ? 'textarea' : 'input', { attrs: { name } },

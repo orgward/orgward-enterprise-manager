@@ -86,6 +86,27 @@ async function request(base, subject, route, { method = 'GET', body } = {}, expe
   return value;
 }
 
+test('portfolio project list returns each caller’s persisted workspace access', async (t) => {
+  const postgres = await startPostgres();
+  const root = await mkdtemp(path.join(tmpdir(), 'orgward-enterprise-portfolio-'));
+  const instance = await startApp(postgres, root);
+  t.after(async () => { await closeApp(instance); await postgres.close(); await rm(root, { recursive: true, force: true }); });
+  for (const identity of identities.values()) {
+    await postgres.query(`insert into orgward.oidc_principals
+      (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+    [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  }
+  const project = await seedProject(postgres, 'Portfolio access fixture');
+  for (const [subject, access] of [['owner', 'owner'], ['editor', 'editor'], ['reader', 'reader']]) {
+    const response = await request(instance.base, subject, '/api/v1/projects');
+    const visible = response.data.find((record) => record.id === project.id);
+    assert.equal(visible?.workspaceAccess, access, `${subject} sees their authoritative project access`);
+  }
+  const unrelated = await request(instance.base, 'outsider', '/api/v1/projects');
+  assert.equal(unrelated.data.some((record) => record.id === project.id), false,
+    'portfolio metadata follows project membership visibility');
+});
+
 function enterpriseRoute(projectId, query = {}) {
   const params = new URLSearchParams(query);
   return `/api/v1/projects/${projectId}/enterprise${params.size ? `?${params}` : ''}`;
