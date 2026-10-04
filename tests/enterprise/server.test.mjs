@@ -97,6 +97,17 @@ test('portfolio project list returns each caller’s persisted workspace access'
     [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
   }
   const project = await seedProject(postgres, 'Portfolio access fixture');
+  const exportRoute = `/api/v1/projects/${project.id}/enterprise/export`;
+  const expectedBlueprint = project.blueprintVersions.at(-1);
+  for (const subject of ['owner', 'reader']) {
+    const exported = await request(instance.base, subject, exportRoute);
+    assert.equal(exported.data.source.projectId, project.id);
+    assert.equal(exported.data.source.blueprintId, expectedBlueprint.id);
+    assert.equal(exported.data.source.blueprintVersion, expectedBlueprint.version);
+    assert.match(exported.data.source.snapshotHash, /^[a-f0-9]{64}$/);
+    assert.equal(exported.data.recordsCount, exported.data.records.length);
+  }
+  await request(instance.base, 'outsider', exportRoute, {}, 404);
   const createdOutcomes = {};
   for (const [category, commandId] of [['incident', 'portfolio-open-incident'], ['support', 'portfolio-open-support']]) {
     const created = await request(instance.base, 'owner', `/api/v1/projects/${project.id}/outcomes`, {

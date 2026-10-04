@@ -14,7 +14,9 @@ import { enterpriseInterchangeCommandPayload, enterpriseInterchangeWritable, ren
 import { enterpriseIntegrityCommandPayload, enterpriseIntegrityExceptionPayload, renderEnterpriseIntegrity } from '../../public/enterprise-integrity.mjs';
 import { enterpriseGovernanceCommandPayload, renderEnterpriseGovernance } from '../../public/enterprise-governance.mjs';
 import { enterpriseStewardshipPayload, renderEnterpriseStewardship } from '../../public/enterprise-stewardship.mjs';
-import { projectPortfolioFacts, renderProjectPortfolio } from '../../public/project-portfolio.mjs';
+import { downloadPortfolioDesign, portfolioDesignExportFilename, projectPortfolioFacts, renderProjectPortfolio,
+  verifyPortfolioDesignBundle } from '../../public/project-portfolio.mjs';
+import { digest } from '../../src/sdlc/contracts.mjs';
 import { decodeStudioRoute, encodeStudioRoute } from '../../public/shared-interactions.mjs';
 
 class NodeListFixture extends Array {
@@ -85,13 +87,17 @@ const el = (tag, options = {}, children = []) => {
 
 test('portfolio cards show saved workspace state and access and open the chosen project', () => {
   const opened = [];
+  const exported = [];
   const projects = [
     { id: 'project-a', name: 'Northstar', phase: 'design', blueprintVersion: 3,
       workspaceAccess: 'editor', openIncidentCount: 2, openSupportCount: 1, updatedAt: '2026-10-03T12:00:00.000Z' },
     { id: 'project-b', name: 'Harbor', phase: 'discovery', blueprintVersion: null,
       workspaceAccess: 'reader', updatedAt: '2026-10-02T12:00:00.000Z' },
   ];
-  const rendered = renderProjectPortfolio(projects, { el, onOpen: (id, options) => opened.push(options ? [id, options] : id) });
+  const rendered = renderProjectPortfolio(projects, {
+    el, onOpen: (id, options) => opened.push(options ? [id, options] : id),
+    onExport: (id, button) => exported.push([id, button.text]),
+  });
   assert.match(rendered.textContent, /Your portfolio Workspaces/);
   assert.match(rendered.textContent, /Northstar Editor access design Blueprint version 3/);
   assert.match(rendered.textContent, /Active incidents: 2 · Active support: 1/);
@@ -102,11 +108,49 @@ test('portfolio cards show saved workspace state and access and open the chosen 
   const reviewButton = rendered.children[1].children[0].children.find((child) => child.text === 'Review incident and support inbox');
   reviewButton.listeners.get('click')();
   assert.deepEqual(opened, ['project-b', ['project-a', { focusOutcomes: true }]]);
+  const exportButton = rendered.children[1].children[0].children.find((child) => child.text === 'Export proposed design JSON');
+  exportButton.listeners.get('click')();
+  assert.deepEqual(exported, [['project-a', 'Export proposed design JSON']]);
   assert.equal(projectPortfolioFacts({}).access, 'Local workspace');
   const returned = renderProjectPortfolio([{ ...projects[0], openIncidentCount: 0, openSupportCount: 0 }], { el, onOpen() {} });
   assert.match(returned.textContent, /Active incidents: 0 · Active support: 0/);
   assert.equal(returned.children[1].children[0].children.some((child) => child.text === 'Review incident and support inbox'), false,
     'the refreshed portfolio removes the review action after all incident/support items are closed');
+});
+
+test('portfolio design export downloads the authenticated saved blueprint pin', async () => {
+  const baseline = { id: 'blueprint-00000000-0000-4000-8000-000000000001', version: 7, areas: { items: [{ id: 'item-z', type: 'goal' }, { id: 'item-a', type: 'process' }] } };
+  const bundle = { kind: 'orgward-enterprise-blueprint', schemaVersion: '1.0',
+    source: { projectId: 'project-round-trip', blueprintId: baseline.id,
+      blueprintVersion: baseline.version, snapshotHash: digest(baseline) }, baseline, records: [], recordsCount: 0 };
+  let requestedPath;
+  let savedAnchor;
+  let savedBlob;
+  let revokedUrl;
+  const result = await downloadPortfolioDesign('project-round-trip', {
+    api: async (route) => { requestedPath = route; return { data: bundle }; },
+    el: (tag, options) => {
+      const node = el(tag, options);
+      node.click = () => { savedAnchor = node; };
+      return node;
+    },
+    createObjectURL: (blob) => { savedBlob = blob; return 'blob:portfolio-export'; },
+    revokeObjectURL: (url) => { revokedUrl = url; }, deferRevoke: (action) => action(),
+  });
+  assert.equal(requestedPath, '/api/v1/projects/project-round-trip/enterprise/export');
+  assert.equal(result.fileName, 'orgward-enterprise-blueprint-00000000-0000-4000-8000-000000000001-v7.json');
+  assert.equal(savedAnchor.attrs.href, 'blob:portfolio-export');
+  assert.equal(savedAnchor.attrs.download, result.fileName);
+  assert.equal(savedAnchor.parent, null);
+  assert.equal((await savedBlob.text()).includes('"blueprintVersion": 7'), true);
+  assert.equal(revokedUrl, 'blob:portfolio-export');
+  assert.equal(portfolioDesignExportFilename(bundle), result.fileName);
+  await assert.rejects(() => verifyPortfolioDesignBundle('project-round-trip', {
+    ...bundle, baseline: { ...baseline, version: 8 },
+  }), /exact workspace and saved blueprint pin/);
+  await assert.rejects(() => verifyPortfolioDesignBundle('project-round-trip', {
+    ...bundle, source: { ...bundle.source, snapshotHash: 'b'.repeat(64) },
+  }), /snapshot hash check/);
 });
 const branchUi = {
   field(name, label, { entries = null, value = '', required = true, multiline = false } = {}) {

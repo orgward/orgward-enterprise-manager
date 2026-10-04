@@ -7259,3 +7259,23 @@ asserts the issue-inbox action disappears. Focused run after Sol review passed
 `/tmp/orgward-tests-jkZx8l/node-test.tap.log`). No skips or failures; no full
 check run.
 PR-15 remains open and active.
+
+PR-15 portfolio export entry point (2026-10-04): portfolio cards expose
+“Export proposed design JSON” for projects with a saved blueprint. The action
+calls the existing authenticated export endpoint and downloads the exact saved
+blueprint bundle named by its pinned blueprint ID/version; the client verifies
+the returned workspace pin and snapshot hash before saving. PostgreSQL
+acceptance covers owner and reader export of the saved pin and nonmember 404;
+UI acceptance checks the card callback, exact endpoint, JSON download filename,
+and saved pin in the file content. Static checks only; no behavior tests pending
+Sol review. Proposed focused command:
+`npm test -- tests/enterprise/view.test.mjs tests/enterprise/server.test.mjs --test-name-pattern='portfolio cards show saved workspace state and access|portfolio project list returns each caller’s persisted workspace access|portfolio design export downloads the authenticated saved blueprint pin'`.
+Sol review correction: client validation now requires `baseline.id/version` to
+match the pinned source and recomputes the canonical SHA-256 over the returned
+baseline before download. UI coverage uses a real matching baseline/hash and
+rejects a baseline-version mismatch and altered snapshot hash. Static checks
+passed before review; Sol approved the final diff. Focused run passed 3/3
+(PostgreSQL 851ms, portfolio cards 49ms, download validation 17ms; TAP 1.21s,
+runner 2.42s; `/tmp/orgward-tests-ikv6st/node-test.tap.log`), with 0 failures
+or skips. No full check run.
+PR-15 remains open and active.

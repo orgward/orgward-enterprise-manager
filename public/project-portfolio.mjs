@@ -4,6 +4,7 @@ export function projectPortfolioFacts(project) {
   return {
     name: typeof project?.name === 'string' && project.name.trim() ? project.name.trim() : 'Untitled workspace',
     phase: typeof project?.phase === 'string' && project.phase.trim() ? project.phase.trim() : 'Not started',
+    hasBlueprint: Number.isInteger(project?.blueprintVersion) && project.blueprintVersion > 0,
     blueprint: Number.isInteger(project?.blueprintVersion) && project.blueprintVersion > 0
       ? `Blueprint version ${project.blueprintVersion}` : 'No saved blueprint yet',
     access: accessLabels[project?.workspaceAccess] ?? 'Local workspace',
@@ -14,7 +15,57 @@ export function projectPortfolioFacts(project) {
   };
 }
 
-export function renderProjectPortfolio(projects, { el, onOpen }) {
+export function portfolioDesignExportFilename(bundle) {
+  const source = bundle?.source;
+  if (bundle?.kind !== 'orgward-enterprise-blueprint' || !source
+    || !/^blueprint-[0-9a-f-]{36}$/.test(source.blueprintId ?? '')
+    || !Number.isSafeInteger(source.blueprintVersion) || source.blueprintVersion < 1
+    || typeof source.snapshotHash !== 'string' || !/^[a-f0-9]{64}$/.test(source.snapshotHash)) {
+    throw new Error('The proposed design export did not include a valid saved blueprint pin.');
+  }
+  return `orgward-enterprise-${source.blueprintId}-v${source.blueprintVersion}.json`;
+}
+
+function canonicalPortfolioJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalPortfolioJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalPortfolioJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+async function snapshotHash(baseline) {
+  const data = new TextEncoder().encode(canonicalPortfolioJson(baseline));
+  const bytes = await globalThis.crypto.subtle.digest('SHA-256', data);
+  return [...new Uint8Array(bytes)].map((value) => value.toString(16).padStart(2, '0')).join('');
+}
+
+export async function verifyPortfolioDesignBundle(projectId, bundle) {
+  const fileName = portfolioDesignExportFilename(bundle);
+  const { source, baseline } = bundle;
+  if (source.projectId !== projectId || !baseline || baseline.id !== source.blueprintId
+    || baseline.version !== source.blueprintVersion) {
+    throw new Error('The proposed design export does not match its exact workspace and saved blueprint pin.');
+  }
+  if (await snapshotHash(baseline) !== source.snapshotHash) {
+    throw new Error('The proposed design export baseline failed its snapshot hash check.');
+  }
+  return { fileName, source };
+}
+
+export async function downloadPortfolioDesign(projectId, { api, el, createObjectURL = (blob) => URL.createObjectURL(blob),
+  revokeObjectURL = (url) => URL.revokeObjectURL(url), deferRevoke = (callback) => setTimeout(callback, 1000) }) {
+  const response = await api(`/api/v1/projects/${encodeURIComponent(projectId)}/enterprise/export`);
+  const bundle = response.data;
+  const { fileName, source } = await verifyPortfolioDesignBundle(projectId, bundle);
+  const url = createObjectURL(new Blob([`${JSON.stringify(bundle, null, 2)}\n`], { type: 'application/json' }));
+  const anchor = el('a', { attrs: { href: url, download: fileName } });
+  try { anchor.click(); }
+  finally { anchor.remove(); deferRevoke(() => revokeObjectURL(url)); }
+  return { fileName, source };
+}
+
+export function renderProjectPortfolio(projects, { el, onOpen, onExport }) {
   const section = el('section', { className: 'portfolio-list', attrs: { 'aria-labelledby': 'portfolio-heading' } });
   section.append(el('div', { className: 'portfolio-heading' }, [
     el('div', {}, [el('span', { className: 'eyebrow', text: 'Your portfolio' }),
@@ -37,6 +88,9 @@ export function renderProjectPortfolio(projects, { el, onOpen }) {
     const open = el('button', { className: 'button secondary', text: 'Open workspace', attrs: { type: 'button' } });
     open.addEventListener('click', () => onOpen(project.id));
     card.append(open);
+    const exportButton = el('button', { className: 'button ghost', text: 'Export proposed design JSON', attrs: { type: 'button', ...(!facts.hasBlueprint ? { disabled: 'disabled' } : {}) } });
+    exportButton.addEventListener('click', () => onExport(project.id, exportButton));
+    card.append(exportButton);
     if (facts.incidents || facts.support) {
       const review = el('button', { className: 'button ghost', text: 'Review incident and support inbox', attrs: { type: 'button' } });
       review.addEventListener('click', () => onOpen(project.id, { focusOutcomes: true }));

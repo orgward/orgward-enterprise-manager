@@ -9,7 +9,7 @@ import { coverageAreaStateLabel, coverageForBlueprint } from './coverage-dashboa
 import { compareBlueprintObjectVersions } from './blueprint-comparison.mjs';
 import { renderOutcomeInbox } from './outcomes.mjs';
 import { enterpriseContextFailure, enterpriseContextReadOnly, enterpriseStateSummary, enterpriseSourceAligned, hasEnterpriseContext, enterpriseQuery, enterpriseRequestPath, persistEnterpriseCommand, restoreEnterpriseCommand, persistEnterpriseInterchangeDraft, restoreEnterpriseInterchangeDraft, submitEnterpriseCommand, renderEnterpriseContext, renderEnterpriseObject, renderEnterpriseStewardshipPanel } from './enterprise.mjs';
-import { renderProjectPortfolio } from './project-portfolio.mjs';
+import { downloadPortfolioDesign, renderProjectPortfolio } from './project-portfolio.mjs';
 
 const state = {
   projects: [],
@@ -448,13 +448,24 @@ async function refreshProjects() {
 function renderPortfolio() {
   const target = document.querySelector('#portfolio-list');
   if (!target) return;
-  target.replaceChildren(renderProjectPortfolio(state.projects, { el: element, onOpen: (id, { focusOutcomes = false } = {}) => {
-    if (!allowRouteChange()) return;
-    state.draft = '';
-    state.pendingMessage = null;
-    select.value = id;
-    loadProject(id, { focusOutcomes });
-  } }));
+  target.replaceChildren(renderProjectPortfolio(state.projects, {
+    el: element,
+    onOpen: (id, { focusOutcomes = false } = {}) => {
+      if (!allowRouteChange()) return;
+      state.draft = '';
+      state.pendingMessage = null;
+      select.value = id;
+      loadProject(id, { focusOutcomes });
+    },
+    onExport: async (id, button) => {
+      button.disabled = true;
+      try {
+        const result = await downloadPortfolioDesign(id, { api, el: element });
+        notify(`Downloaded ${result.fileName} from blueprint ${result.source.blueprintId} v${result.source.blueprintVersion}.`);
+      } catch (error) { notify(`Export failed: ${error.message}`); }
+      finally { button.disabled = false; }
+    },
+  }));
 }
 
 function showWelcome({ history = 'push', refreshPortfolio = true } = {}) {
