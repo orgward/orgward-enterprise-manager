@@ -6819,6 +6819,41 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   `/tmp/orgward-tests-SSybXs/node-test.tap.log`. No full check run; PR-14
   remains open pending root review.
 
+  Seventh bounded slice (2026-10-04; frozen for review): added an optional
+  source-pinned multi-agent handoff to the existing supervised manual-flow
+  task request. A child task must be READY in the same saved plan instance and
+  blueprint, use a distinct actor/role binding, and select a profile in that
+  binding's owner-approved persisted envelope. PostgreSQL revalidates that the
+  parent task completed successfully and its own enabled binding/profile
+  envelope remains current. The child request pins the parent run and execution
+  hashes plus bounded parent output as untrusted context; command context files,
+  model prompts and GitHub patch prompts include it under an explicit
+  untrusted-data label. Existing run request and
+  process-task audit records carry the immutable link. Parent run reads expose
+  child results, and the UI offers exact-source completed-parent choices and
+  displays linked child output. The manual-flow PostgreSQL fixture now covers
+  a distinct second role binding, profile-envelope denial, successful child
+  execution, durable request audit, command context consumption, parent outcome
+  readback and restart; pure UI-selection and GitHub-prompt fixtures reject
+  stale, failed, cross-project and same-binding parents and label parent output
+  as untrusted. The three-test focused command had two fixture failures, both
+  corrected: its new actor edit first omitted required unchanged `name` and
+  `detail` (run 1: 2/3 passed; log
+  `/tmp/orgward-tests-jjDcjK/node-test.tap.log`); then an existing assertion
+  selected an actor's profile envelope without its now-ambiguous role (run 2:
+  2/3 passed; log `/tmp/orgward-tests-pixqFA/node-test.tap.log`). The third
+  run (2/3 passed; log `/tmp/orgward-tests-ZOrJND/node-test.tap.log`) showed
+  the fixture hashed the API-projected execution instead of the authoritative
+  persisted execution hash. The assertion now uses the succeeded event hash,
+  already verified against the database row. Final targeted PostgreSQL
+  handoff case passed 1/1, 0 failures/skips, runner duration 6.01s; TAP:
+  `/tmp/orgward-tests-HKhkeq/node-test.tap.log`. The two pure handoff tests
+  separately passed in all three focused runs above (2/2 each). No full check;
+  PR-14 remains open.
+  Proposed command:
+  `npm test -- tests/execution/delegation.test.mjs tests/execution/github-patch.test.mjs tests/enterprise/server.test.mjs
+  --test-name-pattern='multi-agent handoff|saved manual flow routes audited human choices'`.
+
 - [ ] PR-15 — Integrated portfolio round trip and extensibility (T-90–T-105,
   T-107–T-108, then T-106). Join enterprise truth, integrity and SDLC context;
   support multi-repository/legacy delivery, progressive promotion, incidents,

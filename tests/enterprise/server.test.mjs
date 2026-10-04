@@ -1030,6 +1030,7 @@ test('saved manual flow routes audited human choices through a governed local ag
     tenantId, actorType, displayName: subject, roles: identityRoles, expiresAt: Math.floor(Date.now() / 1000) + 300 });
   const additionalIdentities = new Map([
     ['flow-agent', extraIdentity('flow-agent', 'workload', ['workspace-read', 'workspace-write'])],
+    ['flow-agent-specialist', extraIdentity('flow-agent-specialist', 'workload', ['workspace-read', 'workspace-write'])],
     ['flow-approver', extraIdentity('flow-approver', 'human', ['workspace-read', 'workspace-write', 'execution-approver'])],
   ]);
   const profileRoot = path.join(root, 'fixed-agent-profile');
@@ -1038,7 +1039,9 @@ test('saved manual flow routes audited human choices through a governed local ag
   { id: 'flow-fixed-agent-failure', label: 'Fixed local failing flow agent', kind: 'command', version: '1.0.0',
     executable: process.execPath, args: ['-e', "process.stderr.write('fixed local flow failure');process.exit(17)"], workspaceRoot: profileRoot },
   { id: 'flow-fixed-agent-outside', label: 'Unapproved local flow agent', kind: 'command', version: '1.0.0',
-    executable: process.execPath, args: ['-e', "process.stdout.write('must not execute')"], workspaceRoot: profileRoot }];
+    executable: process.execPath, args: ['-e', "process.stdout.write('must not execute')"], workspaceRoot: profileRoot },
+  { id: 'flow-fixed-specialist', label: 'Fixed local specialist', kind: 'command', version: '1.0.0',
+    executable: process.execPath, args: ['-e', "const c=JSON.parse(require('fs').readFileSync(process.env.ORGWARD_CONTEXT_PATH,'utf8'));const h=c.contextPackage.delegatedParentOutcome;if(!h||!h.label.includes('Untrusted factual context')||h.text!=='fixed local flow result')process.exit(18);process.stdout.write('Consumed parent outcome: '+h.text)"], workspaceRoot: profileRoot }];
   const inMemoryExecution = { status: 'FAILED', omittedByJson: undefined };
   assert.notEqual(digest(inMemoryExecution), persistedDigest(inMemoryExecution));
   assert.equal(persistedDigest(inMemoryExecution), contentHash({ status: 'FAILED' }));
@@ -1049,13 +1052,19 @@ test('saved manual flow routes audited human choices through a governed local ag
     [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
   }
   const project = await seedProject(postgres, 'Governed manual agent flow fixture');
-  for (const subject of ['flow-agent', 'flow-approver']) {
+  for (const subject of ['flow-agent', 'flow-agent-specialist', 'flow-approver']) {
     await postgres.query(`insert into orgward.project_memberships
       (tenant_id,project_id,principal,access,granted_by) values ($1,$2,$3,'editor',$4)`,
     [tenantId, project.id, additionalIdentities.get(subject).principal, identities.get('owner').principal]);
   }
   const getProject = (subject = 'owner') => request(instance.base, subject, `/api/v1/projects/${project.id}`);
   let projectRead = await getProject();
+  projectRead = await request(instance.base, 'owner', `/api/v1/projects/${project.id}/blueprint/edits`, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'manual-agent-add-operations-binding', expectedVersion: projectRead.data.version,
+    payload: { objectId: 'actor-design-assistant', name: 'Org design assistant',
+      detail: 'Proposes structures and gaps; has no external-action authority.',
+      assignedRoleIds: ['role-design-assistant', 'role-operations'] },
+  } });
   const flowView = await currentView(instance.base, 'owner', project.id, { selectedId: 'process-deliver' });
   const decisionTable = { schemaVersion: '1.0', hitPolicy: 'UNIQUE', decisionMode: 'ENFORCED', defaultOutcome: null,
     inputs: [{ informationId: 'information-customer-signal', valueType: 'number' }], rules: [
@@ -1074,7 +1083,8 @@ test('saved manual flow routes audited human choices through a governed local ag
     manual('start', 'Review transfer request', 'role-founder', 'gate'),
     { id: 'gate', kind: 'decision', title: 'Choose review route', decisionId: 'decision-priority', routes: [
       { outcome: 'AGENT', targetStepId: 'agent-work' }, { outcome: 'HUMAN', targetStepId: 'human-alternate' }] },
-    manual('agent-work', 'Prepare a bounded review result', 'role-design-assistant', 'human-checkpoint', { exceptionStepId: 'agent-failure-handler' }),
+    manual('agent-work', 'Prepare a bounded review result', 'role-design-assistant', 'specialist-work', { exceptionStepId: 'agent-failure-handler' }),
+    manual('specialist-work', 'Review the parent result as specialist', 'role-operations', 'human-checkpoint'),
     manual('human-checkpoint', 'Verify the agent result', 'role-founder', 'loop'),
     manual('human-alternate', 'Review without agent assistance', 'role-founder', 'flow-end'),
     manual('agent-failure-handler', 'Review the agent failure', 'role-founder', 'flow-end', { kind: 'manual-exception' }),
@@ -1107,13 +1117,15 @@ test('saved manual flow routes audited human choices through a governed local ag
     projectRead = await request(instance.base, 'owner', `${bindingRoute}/enable`, { method: 'POST', body: {
       schemaVersion: '1.0', commandId: `manual-agent-enable-${suffix}`, expectedVersion: projectRead.data.version,
       payload: { actorId, roleId, blueprintVersion: payload.blueprintVersion,
-        ...(actorId === 'actor-design-assistant' ? { executionProfileIds: ['flow-fixed-agent', 'flow-fixed-agent-failure'] } : {}) },
+        ...(actorId === 'actor-design-assistant' ? { executionProfileIds: roleId === 'role-design-assistant'
+          ? ['flow-fixed-agent', 'flow-fixed-agent-failure'] : ['flow-fixed-specialist'] } : {}) },
     } });
   };
   await bind({ actorId: 'actor-founder', roleId: 'role-founder', subject: 'editor', suffix: 'human' });
   await bind({ actorId: 'actor-design-assistant', roleId: 'role-design-assistant', subject: 'flow-agent', suffix: 'agent' });
+  await bind({ actorId: 'actor-design-assistant', roleId: 'role-operations', subject: 'flow-agent-specialist', suffix: 'specialist' });
   const bindingProjection = await request(instance.base, 'owner', bindingRoute);
-  assert.deepEqual(bindingProjection.data.proposals.find((entry) => entry.actorId === 'actor-design-assistant')?.executionProfileIds,
+  assert.deepEqual(bindingProjection.data.proposals.find((entry) => entry.actorId === 'actor-design-assistant' && entry.roleId === 'role-design-assistant')?.executionProfileIds,
     ['flow-fixed-agent', 'flow-fixed-agent-failure']);
   projectRead = await getProject();
   const plansRoute = `/api/v1/projects/${project.id}/process-plans`;
@@ -1127,7 +1139,9 @@ test('saved manual flow routes audited human choices through a governed local ag
   const assignments = (override = {}) => plan.tasks.map((entry) => {
     const assignment = override[entry.flowRef.stepId] ?? (entry.flowRef.stepId === 'agent-work'
       ? { roleId: 'role-design-assistant', actorId: 'actor-design-assistant' }
-      : { roleId: 'role-founder', actorId: 'actor-founder' });
+      : entry.flowRef.stepId === 'specialist-work'
+        ? { roleId: 'role-operations', actorId: 'actor-design-assistant' }
+        : { roleId: 'role-founder', actorId: 'actor-founder' });
     return { taskId: entry.id, title: entry.title, detail: entry.detail, dependencies: entry.dependencies, ...assignment };
   });
   const revisionRoute = `${plansRoute}/${plan.id}/revisions`;
@@ -1165,6 +1179,10 @@ test('saved manual flow routes audited human choices through a governed local ag
   const createAgentRunWithProfile = (instanceId, commandId, profileId, status = 201) => request(instance.base, 'editor', '/api/execution/process-task-runs', { method: 'POST', body: {
     schemaVersion: '1.0', commandId, payload: { projectId: project.id, planId: plan.id, revision: planRevision.revision,
       planInstanceId: instanceId, taskId: flowAgentTask.id, profileId },
+  } }, status);
+  const createSpecialistRun = (instanceId, parentRunId, commandId, profileId = 'flow-fixed-specialist', status = 201) => request(instance.base, 'editor', '/api/execution/process-task-runs', { method: 'POST', body: {
+    schemaVersion: '1.0', commandId, payload: { projectId: project.id, planId: plan.id, revision: planRevision.revision,
+      planInstanceId: instanceId, taskId: task('specialist-work').id, profileId, parentRunId },
   } }, status);
   const denyBeforeRoute = await createAgentRun(null, 'manual-agent-request-before-root', 409);
   assert.equal(denyBeforeRoute.error.code, 'PROCESS_TASK_DEPENDENCY_UNSATISFIED');
@@ -1220,7 +1238,8 @@ test('saved manual flow routes audited human choices through a governed local ag
   } });
   assert.equal(configuredEnvelope.meta.replayed, false);
   const configuredProjection = await request(instance.base, 'owner', bindingRoute);
-  assert.deepEqual(configuredProjection.data.proposals.find((entry) => entry.actorId === 'actor-design-assistant')?.executionProfileIds,
+  assert.deepEqual(configuredProjection.data.proposals.find((entry) => entry.actorId === 'actor-design-assistant'
+    && entry.roleId === 'role-design-assistant')?.executionProfileIds,
     envelopePayload.executionProfileIds);
   const outsideEnvelope = await createAgentRunWithProfile(failedInstance, 'manual-agent-request-outside-envelope', 'flow-fixed-agent-outside', 409);
   assert.equal(outsideEnvelope.error.code, 'PROCESS_TASK_PROFILE_OUTSIDE_ENVELOPE');
@@ -1277,12 +1296,44 @@ test('saved manual flow routes audited human choices through a governed local ag
     && entry.data.runId === executed.id && entry.data.status === 'SUCCEEDED');
   assert.equal(Number(terminalAudit.rows[0].aggregate_version), Number(statusEvent.data.runVersion),
     'terminal run audit version matches the linked task status receipt');
-  assert.equal(agentRuntime.activation.tasks.find((entry) => entry.taskId === task('human-checkpoint').id).state, 'READY');
+  assert.equal(agentRuntime.activation.tasks.find((entry) => entry.taskId === task('specialist-work').id).state, 'READY');
+  const outsideSpecialistEnvelope = await createSpecialistRun(activeInstance, executed.id,
+    'manual-agent-specialist-outside-envelope', 'flow-fixed-agent', 409);
+  assert.equal(outsideSpecialistEnvelope.error.code, 'PROCESS_TASK_PROFILE_OUTSIDE_ENVELOPE');
+  const specialistRequest = await createSpecialistRun(activeInstance, executed.id, 'manual-agent-specialist-handoff');
+  assert.equal(specialistRequest.status, 'AWAITING_APPROVAL');
+  assert.deepEqual(specialistRequest.processTaskRef.delegation, {
+    parentRunId: executed.id,
+    parentExecutionHash: succeededEvent.data.executionHash,
+    contextHash: contentHash(specialistRequest.workItem.delegatedContext),
+  });
+  assert.equal(specialistRequest.workItem.delegatedContext.text, 'fixed local flow result');
+  const requestEvent = specialistRequest.events.find((entry) => entry.type === 'ExecutionRequested');
+  assert.equal(requestEvent.data.processTaskRef.delegation.parentRunId, executed.id);
+  const requestAudit = await postgres.query(`select 1 from orgward.audit_log
+    where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2
+      and event_type='ExecutionRequested' and event=$3::jsonb and event_hash=$4`,
+  [tenantId, specialistRequest.id, JSON.stringify(requestEvent), contentHash(requestEvent)]);
+  assert.equal(requestAudit.rowCount, 1, 'the delegated child request is durably audited with its immutable parent link');
+  const specialistApproval = await request(instance.base, 'flow-approver', `/api/execution/runs/${specialistRequest.id}/approve`, { method: 'POST', body: { version: specialistRequest.version } });
+  const specialistRun = await request(instance.base, 'editor', `/api/execution/runs/${specialistRequest.id}/execute`, { method: 'POST', body: { version: specialistApproval.version } });
+  assert.equal(specialistRun.status, 'SUCCEEDED');
+  assert.equal(specialistRun.execution.stdout, 'Consumed parent outcome: fixed local flow result');
+  const parentWithChild = await request(instance.base, 'editor', `/api/execution/runs/${executed.id}`);
+  assert.equal(parentWithChild.delegatedChildren.length, 1);
+  assert.equal(parentWithChild.delegatedChildren[0].id, specialistRun.id);
+  assert.equal(parentWithChild.delegatedChildren[0].execution.stdout, 'Consumed parent outcome: fixed local flow result');
+  rows = await runtimeRead();
+  const specialistRuntime = rows.find((row) => row.planInstanceId === activeInstance && row.taskId === task('specialist-work').id);
+  assert.equal(specialistRuntime.status, 'SUCCEEDED');
+  assert.equal(specialistRuntime.activation.tasks.find((entry) => entry.taskId === task('human-checkpoint').id).state, 'READY');
   await closeApp(instance);
   instance = await startApp(postgres, root, { additionalIdentities, executionProfiles });
   rows = await runtimeRead();
   const restartedAgent = rows.find((row) => row.planInstanceId === activeInstance && row.taskId === flowAgentTask.id);
   assert.equal(restartedAgent.activation.tasks.find((entry) => entry.taskId === task('human-checkpoint').id).state, 'READY');
+  const parentAfterRestart = await request(instance.base, 'editor', `/api/execution/runs/${executed.id}`);
+  assert.equal(parentAfterRestart.delegatedChildren[0].execution.stdout, 'Consumed parent outcome: fixed local flow result');
   await startTask('human-checkpoint', activeInstance, 'after-restart-human');
   await completeTask('human-checkpoint', activeInstance, 'after-restart-human');
   rows = await runtimeRead();

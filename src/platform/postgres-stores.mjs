@@ -476,7 +476,17 @@ function verifyAdvancedFlowRunRef(plan, runtime, run) {
   const requested = run.events?.find((event) => event.type === 'ExecutionRequested');
   const { contentHash: requestedHash, ...requestCore } = requested ?? {};
   if (!requestedHash || requestedHash !== contentHash(requestCore)
-    || contentHash(requested.data?.processTaskRef?.flowBinding ?? null) !== contentHash(run.processTaskRef?.flowBinding ?? null)) throw persistenceIntegrity('The agent flow binding differs from its saved request event.');
+    || contentHash(requested.data?.processTaskRef?.flowBinding ?? null) !== contentHash(run.processTaskRef?.flowBinding ?? null)
+    || contentHash(requested.data?.processTaskRef?.delegation ?? null) !== contentHash(run.processTaskRef?.delegation ?? null)) throw persistenceIntegrity('The agent flow or delegation binding differs from its saved request event.');
+  if (run.processTaskRef.delegation
+    && (run.workItem?.delegatedContext?.parentRunId !== run.processTaskRef.delegation.parentRunId
+      || contentHash(run.workItem?.delegatedContext) !== run.processTaskRef.delegation.contextHash
+      || run.workItem?.delegatedContext?.parentExecutionHash !== run.processTaskRef.delegation.parentExecutionHash)) {
+    throw persistenceIntegrity('The delegated parent outcome differs from its immutable handoff reference.');
+  }
+  if (!run.processTaskRef.delegation && run.workItem?.delegatedContext) {
+    throw persistenceIntegrity('A process task contains parent outcome data without a handoff reference.');
+  }
   if (run.processTaskRef?.flowBinding?.snapshotHash !== plan.snapshotHash
     || run.processTaskRef.flowBinding.definitionHash !== plan.flow.definitionHash
     || !/^[a-f0-9]{64}$/.test(run.processTaskRef.flowBinding.activationIdentity ?? '')) throw persistenceIntegrity('The agent run does not match its pinned advanced flow identity.');
@@ -3134,7 +3144,7 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
 
   async createForProcessTask({
     tenantId, projectId, principal, authzGeneration, planId, revision, planInstanceId = null,
-    taskId, profileId, commandId, requestHash, repositoryRef = null, buildRun,
+    taskId, profileId, parentRunId = null, commandId, requestHash, repositoryRef = null, buildRun,
   }) {
     if (!tenantId || !projectId || !principal || typeof buildRun !== 'function') throw projectAccessDenied();
     const operation = 'execution.process-task.request';
@@ -3158,7 +3168,8 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
             || recorded.projectId !== projectId || recorded.processTaskRef?.processPlanId !== planId
             || recorded.processTaskRef?.revision !== revision
             || (planInstanceId && recorded.processTaskRef?.planInstanceId !== planInstanceId)
-            || recorded.processTaskRef?.taskId !== taskId) {
+            || recorded.processTaskRef?.taskId !== taskId
+            || (recorded.processTaskRef?.delegation?.parentRunId ?? null) !== parentRunId) {
             throw persistenceIntegrity('A process task command result does not match its execution run reference.');
           }
           const selected = await client.query(`
@@ -3314,6 +3325,57 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
           throw conflict('The assigned identity or project membership changed after binding approval.', null, 'PROCESS_TASK_ACTOR_BINDING_STALE');
         }
 
+        let delegatedContext = null;
+        let delegation = null;
+        if (parentRunId) {
+          const parentRecord = await client.query(`select a.*,s.project_id as scoped_project_id
+            from orgward.aggregates a join orgward.aggregate_project_scopes s
+              on s.tenant_id=a.tenant_id and s.aggregate_kind=a.aggregate_kind and s.aggregate_id=a.aggregate_id
+            where a.tenant_id=$1 and a.aggregate_kind='execution_run' and a.aggregate_id=$2 and s.project_id=$3
+            for share of a,s`, [tenantId, parentRunId, projectId]);
+          if (!parentRecord.rowCount) throw conflict('The parent run is unavailable in this project.', null, 'PROCESS_TASK_DELEGATION_PARENT_UNAVAILABLE');
+          const parentRun = verifyAggregateRow(parentRecord.rows[0]);
+          const parentRef = parentRun.processTaskRef;
+          if (parentRun.status !== 'SUCCEEDED' || parentRun.execution?.status !== 'COMPLETED'
+            || !parentRef || parentRef.processPlanId !== planId || parentRef.revision !== revision
+            || parentRef.planInstanceId !== instanceId || parentRef.blueprintId !== plan.source.blueprintId
+            || parentRef.blueprintVersion !== plan.source.blueprintVersion || parentRef.taskId === taskId
+            || (parentRef.actorId === actor.id && parentRef.roleId === role.id)) {
+            throw conflict('Delegation requires a completed parent run in this exact source and a different enabled actor/role binding.', null, 'PROCESS_TASK_DELEGATION_SOURCE_MISMATCH');
+          }
+          const parentRuntime = await client.query(`select * from orgward.process_task_instances
+            where tenant_id=$1 and project_id=$2 and plan_instance_id=$3 and task_id=$4 for share`,
+          [tenantId, projectId, instanceId, parentRef.taskId]);
+          if (!parentRuntime.rowCount || parentRuntime.rows[0].execution_run_id !== parentRun.id
+            || parentRuntime.rows[0].status !== 'SUCCEEDED' || parentRuntime.rows[0].actor_type !== 'workload') {
+            throw conflict('The parent run is not a completed linked workload task.', null, 'PROCESS_TASK_DELEGATION_PARENT_UNAVAILABLE');
+          }
+          const parentBinding = await client.query(`select b.status,b.execution_profile_ids,b.target_principal,
+              b.target_membership_generation,b.target_authz_generation,
+              i.actor_type,i.status as identity_status,i.authz_generation as current_authz_generation,
+              m.access,m.generation as current_membership_generation,m.revoked_at
+            from orgward.project_actor_binding_proposals b
+            join orgward.oidc_principals i on i.tenant_id=b.tenant_id and i.principal=b.target_principal
+            join orgward.project_memberships m on m.tenant_id=b.tenant_id and m.project_id=b.project_id and m.principal=b.target_principal
+            where b.tenant_id=$1 and b.project_id=$2 and b.blueprint_version=$3 and b.actor_id=$4 and b.role_id=$5
+            for share of b,i,m`, [tenantId, projectId, parentRef.blueprintVersion, parentRef.actorId, parentRef.roleId]);
+          if (!parentBinding.rowCount || parentBinding.rows[0].status !== 'enabled'
+            || parentBinding.rows[0].target_principal !== parentRuntime.rows[0].assigned_principal
+            || !Array.isArray(parentBinding.rows[0].execution_profile_ids)
+            || !parentBinding.rows[0].execution_profile_ids.includes(parentRun.profile?.id)
+            || parentBinding.rows[0].actor_type !== 'workload' || parentBinding.rows[0].identity_status !== 'active'
+            || parentBinding.rows[0].revoked_at !== null || !['owner','editor'].includes(parentBinding.rows[0].access)
+            || Number(parentBinding.rows[0].target_authz_generation) !== Number(parentBinding.rows[0].current_authz_generation)
+            || Number(parentBinding.rows[0].target_membership_generation) !== Number(parentBinding.rows[0].current_membership_generation)) {
+            throw conflict('The completed parent no longer has its current owner-approved profile envelope.', null, 'PROCESS_TASK_DELEGATION_PARENT_BINDING_STALE');
+          }
+          const parentOutput = [parentRun.execution.stdout, parentRun.execution.stderr].filter((value) => typeof value === 'string' && value.length).join('\n');
+          delegatedContext = { parentRunId: parentRun.id, parentStatus: parentRun.status,
+            parentExecutionHash: contentHash(parentRun.execution), text: parentOutput.slice(0, 4000) };
+          delegation = { parentRunId: parentRun.id, parentExecutionHash: delegatedContext.parentExecutionHash,
+            contextHash: contentHash(delegatedContext) };
+        }
+
         const processTaskRef = {
           processPlanId: plan.id, revision: plan.revision,
           planInstanceId: instanceId, taskId: task.id,
@@ -3321,9 +3383,10 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
           processId: plan.source.processId, processName: plan.source.processName,
           actorId: actor.id, roleId: role.id,
           ...(flowActivation ? { flowBinding: { snapshotHash: plan.snapshotHash, definitionHash: plan.flow.definitionHash, activationIdentity: flowActivation.identity } } : {}),
+          ...(delegation ? { delegation } : {}),
           ...(repositoryRef ? { repository: structuredClone(repositoryRef) } : {}),
         };
-        const run = await buildRun({ project, plan, task, processTaskRef, client });
+        const run = await buildRun({ project, plan, task, processTaskRef, client, delegatedContext });
         if (!run || run.tenantId !== tenantId || run.projectId !== projectId
           || run.processTaskRef && contentHash(run.processTaskRef) !== contentHash(processTaskRef)) {
           throw persistenceIntegrity('A process task run builder returned mismatched immutable references.');

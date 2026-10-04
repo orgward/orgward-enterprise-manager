@@ -12,7 +12,7 @@ function event(type, actor, data) {
   return { ...value, contentHash: digest(value) };
 }
 
-export function createExecutionRun({ tenantId, projectId = null, profile, requestedBy, title, objective, requirements = [], sourceRefs = [], processTaskRef = null, proposalContext = null, taskGuidance = null }) {
+export function createExecutionRun({ tenantId, projectId = null, profile, requestedBy, title, objective, requirements = [], sourceRefs = [], processTaskRef = null, proposalContext = null, taskGuidance = null, delegatedContext = null }) {
   if (!profile) throw new Error('A valid execution profile is required.');
   const cleanTitle = text(title, 160);
   const cleanObjective = text(objective, 4_000);
@@ -43,6 +43,7 @@ export function createExecutionRun({ tenantId, projectId = null, profile, reques
       sourceRefs: [...new Set(sourceRefs.map((entry) => text(entry, 240)).filter(Boolean))].slice(0, 50),
       ...(proposalContext && processTaskRef ? { proposalContext: structuredClone(proposalContext) } : {}),
       ...(taskGuidance && processTaskRef ? { taskGuidance: structuredClone(taskGuidance) } : {}),
+      ...(delegatedContext && processTaskRef ? { delegatedContext: structuredClone(delegatedContext) } : {}),
     },
     ...(processTaskRef ? { processTaskRef: structuredClone(processTaskRef) } : {}),
     approval: null,
@@ -61,6 +62,7 @@ export function createExecutionRun({ tenantId, projectId = null, profile, reques
         blueprintId: run.processTaskRef.blueprintId,
         blueprintVersion: run.processTaskRef.blueprintVersion,
         ...(run.processTaskRef.flowBinding ? { flowBinding: structuredClone(run.processTaskRef.flowBinding) } : {}),
+        ...(run.processTaskRef.delegation ? { delegation: structuredClone(run.processTaskRef.delegation) } : {}),
         ...(run.processTaskRef.repository ? { repository: structuredClone(run.processTaskRef.repository) } : {}),
       },
     } : {}),

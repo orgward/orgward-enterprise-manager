@@ -22,6 +22,7 @@ import { isCurrentProcessInstanceRefresh, processInstanceRefreshDisposition, pro
   processInstanceStatusAnnouncement, updateProcessInstanceRefreshStatus } from './process-instance-refresh.mjs';
 import { isCurrentSelectedRunRefresh, selectedRunRefreshDisposition, selectedRunRefreshMessage, selectedRunStatusAnnouncement } from './selected-run-refresh.mjs';
 import { linkedProcessTaskResult, modelAttemptEvidencePresentation, modelUsagePresentation } from './linked-process-task-result.mjs';
+import { eligibleParentAgentRuns } from './execution-delegation.mjs';
 import { linkedRunActivityLabel } from './linked-run-activity.mjs';
 import { captureExpandedSavedTaskResultKeys, captureFocusedSavedTaskResult, restoreFocusedSavedTaskResult,
   restoreSavedTaskResultOpen, savedTaskResultDisclosureKey } from './saved-task-result-disclosure.mjs';
@@ -1357,6 +1358,22 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
           repositorySelect.addEventListener('change', updateRepositorySelectionState);
           profileSelect.addEventListener('change', updateRepositorySelectionState);
           const profileDisclosure = el('p', { className: 'muted' });
+          const parentCandidates = selectedInstance === 'new' ? [] : eligibleParentAgentRuns({ runs: state.runs,
+            projectId: project.id, planId: plan.id, revision: plan.revision, planInstanceId: selectedInstance,
+            blueprintId: plan.source.blueprintId, blueprintVersion: plan.source.blueprintVersion,
+            actorId: task.assignee?.actorId, roleId: task.assignee?.roleId });
+          const parentRunSelect = el('select', { attrs: { 'aria-label': `Completed parent agent run for ${task.title}`,
+            ...(requestPresentation.locked ? { disabled: '' } : {}) } });
+          parentRunSelect.append(el('option', { text: 'No parent handoff', attrs: { value: '' } }));
+          for (const candidate of parentCandidates) parentRunSelect.append(el('option', {
+            text: `${candidate.title} · ${candidate.id.slice(-8)} · ${candidate.status}`,
+            attrs: { value: candidate.id },
+          }));
+          if (pendingRequest?.payload?.parentRunId && !parentCandidates.some((candidate) => candidate.id === pendingRequest.payload.parentRunId)) {
+            parentRunSelect.append(el('option', { text: `Saved parent handoff · ${pendingRequest.payload.parentRunId}`,
+              attrs: { value: pendingRequest.payload.parentRunId } }));
+          }
+          if (requestPresentation.locked) parentRunSelect.value = pendingRequest?.payload?.parentRunId ?? '';
           const updateProfileDisclosure = () => {
             const selectedProfile = (state.meta?.profiles ?? []).find((profile) => profile.id === profileSelect.value);
             profileDisclosure.textContent = ['provider-openai', 'provider-deepseek'].includes(selectedProfile?.kind)
@@ -1370,10 +1387,14 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
           void renderGithubFileSelection();
           requestButton.addEventListener('click', () => {
             void requestTaskApproval({ project, plan, task, selectedInstance, profileId: profileSelect.value,
+              parentRunId: parentRunSelect.value || undefined,
               repositorySelectionId: repositorySelect.value, requestButton, profileSelect, repositorySelect, requestStatus, requestKey });
           });
           item.append(
             profileDisclosure, el('label', { text: 'Configured execution profile' }, profileSelect),
+            ...(parentCandidates.length || pendingRequest?.payload?.parentRunId
+              ? [el('label', { text: 'Consume completed parent agent result (optional)' }, parentRunSelect),
+                el('p', { className: 'muted', text: 'A handoff can use only a completed agent task from this exact saved plan instance and blueprint. Its output is pinned into this request as untrusted context; the child still needs separate approval.' })] : []),
             ...(state.localRepositories.length || pendingRequest?.payload?.repositoryId || pendingRequest?.payload?.githubSnapshotId
               ? [el('label', { text: 'Repository source' }, repositorySelect), githubFileSelectionPanel,
                 ...(state.localRepositories.some((repository) => repository.kind === 'github') && !state.githubExecutionAvailable
@@ -2077,7 +2098,7 @@ function currentTaskAssignment(task, plan, project, pinnedInstance = false) {
   return { available: true, binding };
 }
 
-async function requestTaskApproval({ project, plan, task, selectedInstance, profileId, repositorySelectionId,
+async function requestTaskApproval({ project, plan, task, selectedInstance, profileId, parentRunId, repositorySelectionId,
   requestButton, profileSelect, repositorySelect, requestStatus, requestKey }) {
   const requestPrincipal = state.currentPrincipal;
   const selectionKey = `${plan.id}\n${plan.revision}`;
@@ -2123,6 +2144,7 @@ async function requestTaskApproval({ project, plan, task, selectedInstance, prof
       const payload = {
         projectId: project.id, planId: plan.id, revision: plan.revision,
         taskId: task.id, profileId,
+        ...(parentRunId ? { parentRunId } : {}),
         ...(selectedInstance !== 'new' ? { planInstanceId: selectedInstance } : {}),
       };
       const selectedProfile = state.meta?.profiles?.find((entry) => entry.id === profileId);
@@ -3111,6 +3133,21 @@ function renderRun() {
       processTaskDetails.push(openPlan);
     }
     panel.append(section('Saved process task', processTaskDetails));
+  }
+  if (Array.isArray(run.delegatedChildren) && run.delegatedChildren.length) {
+    panel.append(section('Agent handoffs', run.delegatedChildren.map((child) => {
+      const link = el('button', { className: 'button', text: `Open child · ${child.title} · ${child.status}`,
+        attrs: { type: 'button', 'data-delegated-child-run': child.id } });
+      link.addEventListener('click', () => { void load(child.id); });
+      return el('article', { className: 'delegated-child-result' }, [
+        el('p', { text: `Task ${child.processTaskRef?.taskId ?? 'unknown'} · ${child.processTaskRef?.actorId ?? 'unknown'} → ${child.processTaskRef?.roleId ?? 'unknown'} · profile ${child.profile?.id ?? 'unknown'}` }),
+        el('p', { className: 'muted', text: child.workItem?.delegatedContext?.parentExecutionHash
+          ? `Consumed parent output hash ${child.workItem.delegatedContext.parentExecutionHash}` : 'No parent output context was attached.' }),
+        ...(child.execution?.stdout ? [el('pre', { className: 'execution-output', text: child.execution.stdout })] : []),
+        ...(child.execution?.stderr ? [el('pre', { className: 'execution-output execution-error', text: child.execution.stderr })] : []),
+        link,
+      ]);
+    })));
   }
   const taskGuidance = renderTaskGuidanceReview(run);
   if (taskGuidance) panel.append(taskGuidance);

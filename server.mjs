@@ -2704,7 +2704,7 @@ export function createApp({
         const body = validateCommand(await readJson(request), { versionRequired: false });
         rejectAuthorityClaims(body);
         const allowedEnvelope = new Set(['schemaVersion', 'commandId', 'payload']);
-        const payloadFields = new Set(['projectId', 'planId', 'revision', 'planInstanceId', 'taskId', 'profileId', 'profileRevision', 'repositoryId', 'repositoryRefId', 'repositoryCommitOid', 'snapshotDigest', 'githubSnapshotId', 'githubSelectedPaths']);
+        const payloadFields = new Set(['projectId', 'planId', 'revision', 'planInstanceId', 'taskId', 'profileId', 'profileRevision', 'parentRunId', 'repositoryId', 'repositoryRefId', 'repositoryCommitOid', 'snapshotDigest', 'githubSnapshotId', 'githubSelectedPaths']);
         const unknownEnvelope = Object.keys(body).filter((field) => !allowedEnvelope.has(field));
         const unknownPayload = Object.keys(body.payload).filter((field) => !payloadFields.has(field));
         if (unknownEnvelope.length || unknownPayload.length) {
@@ -2722,6 +2722,7 @@ export function createApp({
           || (planInstanceId !== undefined && !/^[0-9a-f-]{36}$/i.test(planInstanceId ?? ''))
           || !/^[a-z0-9][a-z0-9_-]{0,119}$/i.test(taskId ?? '')
           || !/^[a-z0-9][a-z0-9_-]{1,79}$/i.test(profileId ?? '')
+          || (body.payload.parentRunId !== undefined && !/^execution-run-[0-9a-f-]{36}$/i.test(body.payload.parentRunId))
           || (body.payload.profileRevision !== undefined && (!Number.isSafeInteger(body.payload.profileRevision) || body.payload.profileRevision < 1))) {
           throw apiFailure(400, 'INVALID_PROCESS_TASK_REQUEST', 'Choose a valid saved project, graph revision, task, and configured profile.');
         }
@@ -2747,7 +2748,7 @@ export function createApp({
         if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified workspace identity is required to request work from a saved task.');
         const result = await executionService.createForProcessTask({
           tenantId: requestTenant(request), projectId, planId, revision, planInstanceId,
-          taskId, profileId, commandId: body.commandId,
+          taskId, profileId, parentRunId: body.payload.parentRunId, commandId: body.commandId,
           profileRevision: body.payload.profileRevision,
           repositoryId: body.payload.repositoryId, repositoryRefId: body.payload.repositoryRefId,
           repositoryCommitOid: body.payload.repositoryCommitOid,
