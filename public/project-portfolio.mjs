@@ -97,7 +97,7 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
   const headingContent = el('div', {}, [el('span', { className: 'eyebrow', text: 'Your portfolio' }),
     el('h2', { text: 'Workspaces' }),
     el('p', { text: 'Choose a workspace to continue. Access and saved design state are shown for each one.' })]);
-  const count = el('span', { className: 'portfolio-count', attrs: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' }, text: `${projects.length} ${projects.length === 1 ? 'workspace' : 'workspaces'}` });
+  const count = el('p', { className: 'portfolio-count', attrs: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' } });
   const heading = el('div', { className: 'portfolio-heading' }, [
     headingContent, count,
   ]);
@@ -109,7 +109,7 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
     el('label', { text: 'Search workspaces by name' }, [search]),
     el('label', { text: 'Filter by access' }, [access]),
   ]);
-  headingContent.append(filters);
+  headingContent.append(filters, count);
   section.append(heading);
   const list = el('div', { className: 'portfolio-cards', attrs: { role: 'list' } });
   const renderCards = () => {
@@ -120,13 +120,13 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
       const matchesAccess = access.value === 'all' || project.workspaceAccess === access.value;
       return matchesName && matchesAccess;
     });
-    count.textContent = filtered.length === projects.length
+    const countText = filtered.length === projects.length
       ? `${projects.length} ${projects.length === 1 ? 'workspace' : 'workspaces'}`
       : `Showing ${filtered.length} of ${projects.length} workspaces`;
+    count.textContent = !filtered.length && projects.length
+      ? `${countText}. No workspaces match these filters. Adjust the search or access level, or clear filters.`
+      : !projects.length ? '0 workspaces. No workspaces are available to your account yet.' : countText;
     if (!filtered.length) {
-      list.append(el('p', { className: 'portfolio-empty', attrs: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' }, text: projects.length
-        ? 'No workspaces match these filters. Adjust the search or access level, or clear filters.'
-        : 'No workspaces are available to your account yet.' }));
       if (projects.length && (term || access.value !== 'all')) {
         const clear = el('button', { className: 'button ghost', text: 'Clear workspace filters', attrs: { type: 'button' } });
         clear.addEventListener('click', () => { search.value = ''; access.value = 'all'; renderCards(); search.focus?.(); });

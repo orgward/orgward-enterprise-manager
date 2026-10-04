@@ -198,21 +198,31 @@ test('portfolio search and access filter find the matching workspace and preserv
 });
 
 test('portfolio filter feedback is announced and its layout adapts to narrow screens', () => {
+  let status = null;
   const portfolio = renderProjectPortfolio([
     { id: 'project-a', name: 'Northstar', workspaceAccess: 'owner' },
-  ], { el, onOpen: () => {}, onExport: () => {}, onImport: () => {} });
-  const count = portfolio.querySelectorAll('span').find((entry) => entry.className === 'portfolio-count');
-  assert.equal(count.attrs.role, 'status');
-  assert.equal(count.attrs['aria-live'], 'polite');
-  assert.equal(count.attrs['aria-atomic'], 'true');
+  ], { el: (tag, options, children) => {
+    const node = el(tag, options, children);
+    if (options.className === 'portfolio-count') { assert.equal(node.textContent, ''); status = node; }
+    return node;
+  }, onOpen: () => {}, onExport: () => {}, onImport: () => {} });
+  assert.ok(status);
+  assert.equal(status.attrs.role, 'status');
+  assert.equal(status.attrs['aria-live'], 'polite');
+  assert.equal(status.attrs['aria-atomic'], 'true');
+  const list = portfolio.querySelectorAll('div').find((entry) => entry.attrs.role === 'list');
+  assert.equal(list.contains(status), false);
 
   const search = portfolio.querySelectorAll('input').find((entry) => entry.attrs.type === 'search');
+  search.value = 'north'; search.listeners.get('input')();
+  assert.equal(list.contains(status), false, 'the same live region remains outside the replaceable list');
+  assert.match(status.textContent, /1 workspace/);
   search.value = 'missing'; search.listeners.get('input')();
-  const empty = portfolio.querySelectorAll('p').find((entry) => entry.className === 'portfolio-empty');
-  assert.equal(count.textContent, 'Showing 0 of 1 workspaces');
-  assert.equal(empty.attrs.role, 'status');
-  assert.equal(empty.attrs['aria-live'], 'polite');
-  assert.equal(empty.attrs['aria-atomic'], 'true');
+  assert.equal(portfolio.querySelectorAll('p').find((entry) => entry.className === 'portfolio-count'), status);
+  assert.match(status.textContent, /Showing 0 of 1 workspaces/);
+  assert.match(status.textContent, /No workspaces match these filters/);
+  assert.match(status.textContent, /Adjust the search or access level, or clear filters/);
+  assert.equal(list.contains(status), false, 'filter changes update the same live region outside the replaceable list');
 
   const css = readFileSync(new URL('../../public/styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.portfolio-heading\s*\{[^}]*min-width:\s*0/);

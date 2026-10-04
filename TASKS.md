@@ -7443,6 +7443,19 @@ layout case passed 4/4 (0 failures, 0 skips; 2.68s; TAP log:
 `public/project-portfolio.mjs` and `tests/enterprise/view.test.mjs`;
 `git diff --check` passed. No full check run; PR-15 remains open and active.
 
+PR-15 portfolio filter live-region persistence correction (2026-10-04): one
+initially empty polite, atomic status node now lives outside the replaceable
+card list and is updated in place for every filter change. It announces the
+result count and, when there are no matches, includes recovery guidance. The
+focused view assertion verifies the initial empty construction, stable node
+identity and list separation across matching and no-match changes. The first
+rerun exposed an existing UI fixture indexing the list by its old child slot;
+the component keeps its list position and the fixture checks the status node
+outside that list. Final four-case selection passed 4/4 (0 failures, 0 skips;
+2.49s; TAP log: `/tmp/orgward-tests-2TnxwU/node-test.tap.log`). `node --check`
+passed for `public/project-portfolio.mjs` and `tests/enterprise/view.test.mjs`;
+`git diff --check` passed. No full check run; PR-15 remains open and active.
+
 PR-15 restore draft from a saved design version (2026-10-04): when an owner or
 editor selects a historical saved main version, the branch panel offers an
 explicit “Restore this saved version as a draft” action. The draft copies the
