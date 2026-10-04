@@ -1,3 +1,4 @@
+import { ENTERPRISE_PROCESS_COMMANDS, enterpriseProcessCommandPayload } from './enterprise-process.mjs';
 import { ENTERPRISE_BRANCH_COMMANDS, enterpriseBranchWritable, enterpriseBranchCommandPayload, enterpriseCommandResultRoute } from './enterprise-branches.mjs';
 import { connectedNodeIds, filterGraph, focusFirstMapResult, focusSelectedMapControl, graphAccessibilityAttributes, mapControlPressed, searchGraph, shouldStartMapPan, toggleType, zoomTransform } from './map-state.js';
 import { apiErrorFrom, decodeStudioRoute, encodeExecutionRoute, encodeStudioRoute, fieldErrorsFor, founderConversationAnnouncement } from './shared-interactions.mjs';
@@ -40,6 +41,8 @@ const state = {
   enterpriseExplicit: false,
   enterpriseBusy: false,
   enterpriseStatus: '',
+  enterpriseSimulation: null,
+  enterpriseProcessDraft: null,
   pendingEnterprise: null,
   enterpriseStorageAvailable: true,
   projectLoadGeneration: 0,
@@ -233,8 +236,9 @@ async function loadEnterpriseContext({ render = true, resetTypes = false } = {})
   }
 }
 
-async function changeEnterpriseContext(query) {
-  if (!allowRouteChange()) return;
+async function changeEnterpriseContext(query, { preserveProcessDraft = false, selectedId = undefined } = {}) {
+  if (!allowRouteChange({ preserveProcessDraft })) return;
+  if (selectedId !== undefined) state.selectedId = selectedId;
   state.enterpriseExplicit = true;
   state.enterpriseQuery = query;
   state.mapAreaFilter = null; state.coverageReturnContext = null; state.view = 'map';
@@ -253,7 +257,11 @@ async function saveEnterpriseCommand(payload = null) {
     const model = state.enterpriseModel;
     if (!payload || state.enterpriseError || !model) return;
     let boundPayload;
-    if (ENTERPRISE_BRANCH_COMMANDS.includes(payload.kind)) {
+    if (ENTERPRISE_PROCESS_COMMANDS.includes(payload.kind)) {
+      boundPayload = enterpriseProcessCommandPayload(model, payload);
+      if (!boundPayload) return;
+      state.enterpriseProcessDraft = boundPayload;
+    } else if (ENTERPRISE_BRANCH_COMMANDS.includes(payload.kind)) {
       boundPayload = enterpriseBranchCommandPayload(model, payload);
       if (!boundPayload) return;
     } else {
@@ -262,9 +270,11 @@ async function saveEnterpriseCommand(payload = null) {
           || (payload.kind === 'record-state' && payload.dimension === 'review')) && !model.permissions.scopeAdmin)) return;
       boundPayload = { ...payload, blueprintId: model.context.blueprintId, blueprintVersion: model.context.blueprintVersion };
     }
-    retainEnterprise({ projectId, envelope: command(boundPayload, model.context.projectVersion, `enterprise:${crypto.randomUUID()}`) });
+    retainEnterprise({ projectId, route: currentRoute(), envelope: command(boundPayload, model.context.projectVersion, `enterprise:${crypto.randomUUID()}`) });
   }
   const saved = state.pendingEnterprise;
+  if (ENTERPRISE_PROCESS_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseProcessDraft = saved.envelope.payload;
+  const sourceGeneration = state.enterpriseGeneration;
   state.enterpriseBusy = true;
   state.enterpriseStatus = 'Saving the exact proposed design change…';
   renderStudio();
@@ -273,7 +283,10 @@ async function saveEnterpriseCommand(payload = null) {
     result = await submitEnterpriseCommand(api, projectId, saved);
     if (state.project?.id !== projectId) return;
     retainEnterprise(null);
-    state.enterpriseStatus = saved.envelope.payload.kind === 'apply-reviewed-merge' ? 'Owner-reviewed merge applied to the proposed main design. Publication and execution remain separate actions.'
+    if (ENTERPRISE_PROCESS_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseProcessDraft = null;
+    if (result.data.simulation) state.enterpriseSimulation = result.data.simulation;
+    state.enterpriseStatus = result.data.simulation ? 'Saved the deterministic simulation for its exact source. No work was performed.'
+      : saved.envelope.payload.kind === 'apply-reviewed-merge' ? 'Owner-reviewed merge applied to the proposed main design. Publication and execution remain separate actions.'
       : result.data.branchId ? 'Saved the exact branch command. The draft and its reviewed candidate are shown below.'
       : result.data.proposalId ? 'Future design draft saved. Inspect the proposed snapshot below; the current main design remains its original source.'
       : 'Saved. The canonical record and its new design version are shown below.';
@@ -281,12 +294,14 @@ async function saveEnterpriseCommand(payload = null) {
     if (state.project?.id !== projectId) return;
     definitive = error.status >= 400 && error.status < 500 && error.status !== 408;
     if (definitive) retainEnterprise(null);
-    state.enterpriseStatus = definitive ? `${error.message} Review the refreshed current design before submitting a new change.`
+    state.enterpriseStatus = definitive ? `${error.message} ${ENTERPRISE_PROCESS_COMMANDS.includes(saved.envelope.payload.kind) ? 'The submitted process draft is retained for its original source. ' : ''}Review the refreshed requested design before submitting a new change.`
       : `${error.message} The response is uncertain. Recover the saved command before making another change.`;
   } finally { state.enterpriseBusy = false; }
   if (state.project?.id !== projectId) return;
-  if (result || definitive) {
-    await loadProject(projectId, { history: 'replace', route: enterpriseCommandResultRoute(currentRoute(), saved.envelope.payload, result?.data ?? null) });
+  if (result?.data.simulation && (sourceGeneration !== state.enterpriseGeneration || (saved.route && saved.route.selectedId !== state.selectedId))) {
+    renderStudio();
+  } else if (result || definitive) {
+    await loadProject(projectId, { history: 'replace', route: enterpriseCommandResultRoute(saved.route ?? currentRoute(), saved.envelope.payload, result?.data ?? null) });
   } else renderStudio();
 }
 
@@ -305,14 +320,14 @@ function syncExecutionNavigation() {
   }
 }
 
-function hasUnsavedDraft() { return Boolean(state.draft.trim() || state.pendingBlueprintEdit || state.blueprintEditDraft || state.pendingActorBinding || state.pendingActorBindingEnable || state.pendingEnterprise); }
+function hasUnsavedDraft({ includeProcessDraft = true } = {}) { return Boolean((includeProcessDraft && state.enterpriseProcessDraft) || state.draft.trim() || state.pendingBlueprintEdit || state.blueprintEditDraft || state.pendingActorBinding || state.pendingActorBindingEnable || state.pendingEnterprise); }
 
-function allowRouteChange() {
+function allowRouteChange({ preserveProcessDraft = false } = {}) {
   if (state.enterpriseBusy || state.pendingEnterprise) { notify('Recover the saved enterprise command before leaving this workspace.'); return false; }
-  if (!hasUnsavedDraft()) return true;
-  const prompt = state.pendingBlueprintEdit || state.blueprintEditDraft || state.pendingActorBinding ? 'Leave and discard this unsaved workspace change?' : 'Discard the unsent answer and leave this workspace?';
+  if (!hasUnsavedDraft({ includeProcessDraft: !preserveProcessDraft })) return true;
+  const prompt = state.pendingBlueprintEdit || state.blueprintEditDraft || state.pendingActorBinding || (!preserveProcessDraft && state.enterpriseProcessDraft) ? 'Leave and discard this unsaved workspace change?' : 'Discard the unsent answer and leave this workspace?';
   const accepted = window.confirm(prompt);
-  if (accepted) { state.pendingBlueprintEdit = null; state.blueprintEditDraft = null; state.pendingActorBinding = null; state.pendingActorBindingEnable = null; }
+  if (accepted) { state.pendingBlueprintEdit = null; state.blueprintEditDraft = null; state.pendingActorBinding = null; state.pendingActorBindingEnable = null; if (!preserveProcessDraft) state.enterpriseProcessDraft = null; }
   return accepted;
 }
 
@@ -340,6 +355,7 @@ function showWelcome({ history = 'push' } = {}) {
   state.enterpriseGeneration += 1; state.enterpriseModel = null; state.enterpriseError = null; state.enterpriseLoading = false;
   state.enterpriseUnavailable = null; state.enterpriseExplicit = false;
   state.enterpriseQuery = enterpriseQuery(); state.pendingEnterprise = null; state.enterpriseStatus = '';
+  state.enterpriseSimulation = null; state.enterpriseProcessDraft = null;
   state.requestedProjectId = null;
   state.pendingBlueprintEdit = null;
   state.blueprintEditDraft = null;
@@ -406,6 +422,7 @@ async function loadProject(id, { history = 'push', route = null } = {}) {
     showAppState('loading', 'Loading workspace', 'Restoring saved conversation, blueprint, and view state…');
     const result = await api(`/api/v1/projects/${id}`);
     if (state.requestedProjectId !== id || loadGeneration !== state.projectLoadGeneration) return;
+    if (state.project?.id !== id) { state.enterpriseProcessDraft = null; state.enterpriseSimulation = null; }
     state.project = result.data;
     state.projectAccess = null;
     if (state.sessionPrincipal && state.sessionRoles.includes('workspace-write')) {
@@ -1110,6 +1127,8 @@ function renderList() {
 }
 
 function selectNode(id) {
+  const selectedChanged = state.selectedId !== id;
+  if (selectedChanged) state.enterpriseQuery.simulationId = null;
   state.selectedId = id;
   let needsStateProjection = false;
   if (state.enterpriseModel) {
@@ -1118,7 +1137,7 @@ function selectNode(id) {
     const states = projected?.states ?? (state.enterpriseModel.selection?.object?.id === id ? state.enterpriseModel.selection.states : null);
     state.enterpriseModel.selection = { object: blueprintItem(state.enterpriseModel.blueprint, id), states, visible,
       hiddenBy: visible ? [] : ['current lens or design scope'] };
-    needsStateProjection = Boolean(id && !states && state.enterpriseModel.selection.object);
+    needsStateProjection = Boolean(id && state.enterpriseModel.selection.object && (!states || (selectedChanged && state.enterpriseModel.selection.object.type === 'process')));
   }
   if (state.mapMode === 'graph') renderGraph(); else renderList();
   renderDetail();
@@ -2041,7 +2060,9 @@ function renderDetail() {
     element('p', { text: `Evidence: ${node.provenance?.at(-1)?.note ?? 'No provenance recorded'}` }), connections,
     versionHistoryFor(node)];
   if (state.enterpriseModel && object) content.push(renderEnterpriseObject({ model: state.enterpriseModel, object,
-    pending: state.pendingEnterprise, loading: state.enterpriseLoading || state.enterpriseBusy, el: element, onCommand: saveEnterpriseCommand }));
+    pending: state.pendingEnterprise, loading: state.enterpriseLoading || state.enterpriseBusy, simulation: state.enterpriseSimulation, processDraft: state.enterpriseProcessDraft, selectedSimulationId: state.enterpriseQuery.simulationId, el: element, onCommand: saveEnterpriseCommand, onInspectDraft: (query, selectedId) => changeEnterpriseContext(query, { preserveProcessDraft: true, selectedId }),
+    onSimulationSelection: (simulationId) => changeEnterpriseContext({ ...state.enterpriseQuery, simulationId }),
+    onInspectSimulation: (simulation) => changeEnterpriseContext({ ...state.enterpriseQuery, blueprintVersion: simulation.source.branchId || simulation.source.proposalId ? null : simulation.source.blueprintVersion, branchId: simulation.source.branchId, branchRevision: simulation.source.branchRevision, proposalId: simulation.source.proposalId, recordedAt: null, simulationId: simulation.id }, { selectedId: simulation.source.processId }) }));
   const savedProcess = !enterpriseReadOnly() && node.type === 'process' ? blueprintItem(state.project.latestBlueprint, node.id) : null;
   if (savedProcess?.type === 'process') {
     const planLink = element('a', {

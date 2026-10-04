@@ -43,8 +43,14 @@ export function enterpriseBranchCommandPayload(model, payload) {
 export function enterpriseCommandResultRoute(route, payload, result = null) {
   // A definitive failure refreshes the same requested context, never a substitute.
   if (!result) return { ...route };
-  const reset = { blueprintVersion: null, proposalId: null, effectiveAt: null, recordedAt: null, branchId: null, branchRevision: null };
-  if (ENTERPRISE_BRANCH_COMMANDS.includes(payload.kind) && payload.kind !== 'apply-reviewed-merge') return {
+  if (payload.kind === 'simulate-process') return { ...route,
+    blueprintVersion: payload.branchId || payload.proposalId ? null : payload.blueprintVersion,
+    branchId: payload.branchId ?? null, branchRevision: payload.branchRevision ?? null, proposalId: payload.proposalId ?? null,
+    selectedId: payload.processId,
+    ...(!route.recordedAt || Date.parse(result.simulation?.createdAt) <= Date.parse(route.recordedAt) ? { simulationId: result.simulation?.id ?? route.simulationId } : {}) };
+  const reset = { blueprintVersion: null, proposalId: null, effectiveAt: null, recordedAt: null, branchId: null, branchRevision: null, ...(Object.hasOwn(route, 'simulationId') ? { simulationId: null } : {}) };
+  if ((ENTERPRISE_BRANCH_COMMANDS.includes(payload.kind) && payload.kind !== 'apply-reviewed-merge')
+    || (['define-process-flow', 'define-decision-table'].includes(payload.kind) && payload.branchId)) return {
     ...route, ...reset, branchId: result.branchId ?? payload.branchId, branchRevision: result.branchRevision ?? payload.branchRevision,
     selectedId: result.affectedObjectId ?? route.selectedId, view: 'map',
     ...(payload.kind === 'edit-branch-scope' && payload.change?.kind === 'create-scope' ? { lensId: 'all', scopeId: null, types: [], area: null } : {}),
@@ -84,7 +90,7 @@ export function renderEnterpriseBranches({ model, query, loading = false, pendin
   if (branch && !branches.some((entry) => entry.id === branch.id)) branches.push(branch);
   const selector = field('branchId', 'Design branch', { entries: [['', 'Main design or future draft'], ...branches.map((entry) => [entry.id, `${entry.title} · ${LABELS[entry.status] ?? entry.status}`])], required: false, value: query.branchId });
   selector.control.disabled = loading || Boolean(pending);
-  selector.control.addEventListener('change', () => onContext({ ...query, branchId: selector.control.value || null, branchRevision: null, blueprintVersion: null, proposalId: null }));
+  selector.control.addEventListener('change', () => onContext({ ...query, branchId: selector.control.value || null, branchRevision: null, blueprintVersion: null, proposalId: null, simulationId: null }));
   root.append(selector.node);
   const transportDisabled = loading || Boolean(pending);
   if (!branch) {
@@ -100,7 +106,7 @@ export function renderEnterpriseBranches({ model, query, loading = false, pendin
   }
   const revision = field('branchRevision', 'Saved branch revision', { entries: (branch.revisions ?? []).map((entry) => [String(entry.revision), `Revision ${entry.revision}${entry.revision === branch.headRevision ? ' · latest draft' : ''} · ${entry.recordedAt}`]), value: String(branch.revision) });
   revision.control.disabled = transportDisabled;
-  revision.control.addEventListener('change', () => onContext({ ...query, branchRevision: Number(revision.control.value) }));
+  revision.control.addEventListener('change', () => onContext({ ...query, branchRevision: Number(revision.control.value), simulationId: null }));
   root.append(revision.node, el('p', { text: `${branch.title} · ${LABELS[branch.status] ?? branch.status} · revision ${branch.revision} · based on saved main version ${branch.baseBlueprintVersion}.` }));
   const writable = enterpriseBranchWritable(model); const disabled = transportDisabled || !writable;
   if (!writable) root.append(el('p', { text: 'This branch context is read only. Editing requires a human editor viewing the latest active draft without time filters. Main publication and work actions remain unavailable here.', attrs: { role: 'status', 'data-enterprise-branch-readonly': '' } }));

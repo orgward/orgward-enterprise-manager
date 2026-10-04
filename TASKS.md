@@ -6061,11 +6061,54 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   economics/resources/value lifecycles, simulation, bulk collaboration and
   explainable multi-axis completeness.
 
-  Current slice: advanced processes/decisions, deterministic simulation and
-  actual bounded manual-flow runtime. Scope/lens, independent state/time and
-  reviewed branch/merge slices below are implemented and focused checks passed.
+  Current slice: actual bounded manual-flow runtime. Scope/lens, independent
+  state/time, reviewed branch/merge and typed process/decision authoring with
+  deterministic simulation below are implemented and focused checks passed.
   Keep the parent open until its remaining functionality and one frozen parent
   full check pass; the active cursor remains PR-12.
+
+  Process/decision authoring and simulation verified (2026-10-04, branch base
+  `d81f9e4`): GPT-6.1 Sol added canonical typed activity, exception, decision,
+  fork/join, loop/return and end definitions with stable local identities,
+  saved role/process/information references and derived graph links. Typed
+  FIRST_MATCH/UNIQUE tables validate scalar comparisons and declared outcomes.
+  Main and active branch authoring use exact source/version commands, preserve
+  independent reports and audit, and reject definitions invalidating references.
+  Saved deterministic scenarios retain exact source/scenario/engine/result
+  identity, captured labels, rule explanations and bounded trace. Missing values
+  remain UNKNOWN/BLOCKED; overlaps CONFLICTED; exhausted bounds LIMIT_REACHED.
+  Results are SIMULATION_ONLY, never human completion or verified performance.
+  GET returns bounded history summaries and one selected detail, with recorded
+  cutoffs and exact result inspection. UI offers typed row editors, exact pending
+  recovery, original-source rejected-draft inspection, source/cutoff guards and
+  explicit inspection of a newer result from a dated view. Project switches clear
+  local result/draft state. The legacy planner rejects authored advanced flows
+  until actual runtime integration, which follows this checkpoint. README now
+  directs continuation to this queue before its preserved historical notes.
+  Luna's five distinct new cases passed across the initial and affected-only
+  repairs. Initial run: 3 passed/2 failed (3.41s runner, 2.175s Node); later runs
+  were 0/2 (3.01s/1.889s), 0/1 (3.39s/2.297s), 0/2 (3.77s/2.713s), 1/1
+  (3.84s/2.680s), 0/1 (4.04s/2.943s), then final server-only 1/0
+  (4.41s/3.287s). Those pairs are passed/failed; every run had zero skips.
+  Failures were fixture/expectation errors: no later version for a historical
+  assertion, removed CONTINUE outcome still required by a saved loop, omitted
+  selected-result DTO, obsolete copy, nonexistent GET process-plans route,
+  NodeList fixture filtering, optional empty plan array and a self-comparison.
+  Sol/root inspected the failures; product source stayed unchanged during runs.
+  Passing cases were not rerun. Before the next first run, Sol reviews fixtures
+  as well as implementation to reduce these avoidable repair invocations.
+  Logs: `/tmp/orgward-tests-8zt8Vq/node-test.tap.log`,
+  `/tmp/orgward-tests-NLhMrG/node-test.tap.log`,
+  `/tmp/orgward-tests-u0CGNh/node-test.tap.log`,
+  `/tmp/orgward-tests-Zdexlk/node-test.tap.log`,
+  `/tmp/orgward-tests-y9j9Wr/node-test.tap.log`,
+  `/tmp/orgward-tests-pevSo0/node-test.tap.log`,
+  `/tmp/orgward-tests-Ij6I7N/node-test.tap.log`.
+  Changed-source/test syntax and `git diff --check` passed. No full parent check,
+  rendered browser proof, provider request, live effect or gate promotion occurred.
+  PR-12 remains open for actual advanced manual and governed agent runtime,
+  economics/resources/value, refinement/reverse trace, bulk/interchange and
+  scoped multi-axis completeness. Broad hardening remains in the later backlog.
 
   Branch/merge slice verified (2026-10-03, state/time base `a65352a`): Sol added
   immutable-base branches with typed draft editing, exact saved revisions,

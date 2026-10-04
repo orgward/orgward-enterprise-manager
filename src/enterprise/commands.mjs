@@ -4,6 +4,7 @@ import { ENTERPRISE_SCOPE_TYPES, blueprintObjects, enterpriseFailure, enterprise
 import { digest } from '../sdlc/contracts.mjs';
 import { ENTERPRISE_STATE_VALUES, enterpriseInterval, objectBasisHash } from './state.mjs';
 import { applyEnterpriseBranchCommand, ENTERPRISE_BRANCH_KINDS, normalizeEnterpriseBranchCommand } from './branches.mjs';
+import { applyEnterpriseProcessCommand, ENTERPRISE_PROCESS_KINDS, normalizeEnterpriseProcessCommand } from './process-commands.mjs';
 
 const base = ['kind', 'blueprintId', 'blueprintVersion', 'reason'];
 function reference(value, field, { nullable = false } = {}) {
@@ -14,6 +15,7 @@ function reference(value, field, { nullable = false } = {}) {
   return value;
 }
 export function normalizeEnterpriseCommand(input) {
+  if (input && ENTERPRISE_PROCESS_KINDS.has(input.kind)) return normalizeEnterpriseProcessCommand(input);
   if (input && ENTERPRISE_BRANCH_KINDS.has(input.kind)) return normalizeEnterpriseBranchCommand(input);
   if (!input || typeof input !== 'object' || Array.isArray(input)
     || !['create-scope', 'rename-scope', 'assign-object-scope', 'record-state', 'set-validity', 'propose-future-design'].includes(input.kind)
@@ -71,6 +73,7 @@ export function normalizeEnterpriseCommand(input) {
   return normalized;
 }
 export function applyEnterpriseCommand(project, command, actor, options = {}) {
+  if (ENTERPRISE_PROCESS_KINDS.has(command.kind)) return applyEnterpriseProcessCommand(project, command, actor);
   if (ENTERPRISE_BRANCH_KINDS.has(command.kind)) return applyEnterpriseBranchCommand(project, command, actor, options);
   const previous = latestBlueprint(project);
   if (!previous) throw enterpriseFailure('BLUEPRINT_NOT_FOUND', 'Save the initial blueprint before defining enterprise scopes.', 409);

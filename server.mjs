@@ -32,6 +32,7 @@ import { PostgresOutcomeStore } from './src/outcomes/postgres-store.mjs';
 import { applyEnterpriseCommand, normalizeEnterpriseCommand } from './src/enterprise/commands.mjs';
 import { normalizeEnterpriseQuery, projectEnterprise } from './src/enterprise/projections.mjs';
 import { ENTERPRISE_BRANCH_KINDS, enterpriseMergeApproval } from './src/enterprise/branches.mjs';
+import { ENTERPRISE_PROCESS_KINDS } from './src/enterprise/process-commands.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -1572,7 +1573,8 @@ export function createApp({
           'set-branch-validity', 'review-merge', 'apply-reviewed-merge', 'abandon-branch'].includes(payload.kind)
           || (payload.kind === 'record-state' && payload.dimension === 'review')
           || (payload.kind === 'edit-branch-scope' && ['create-scope', 'rename-scope'].includes(payload.change.kind));
-        if ((administrative || payload.kind === 'record-state' || ENTERPRISE_BRANCH_KINDS.has(payload.kind)) && request.identity.actorType !== 'human') {
+        if ((administrative || payload.kind === 'record-state' || ENTERPRISE_BRANCH_KINDS.has(payload.kind)
+          || ENTERPRISE_PROCESS_KINDS.has(payload.kind)) && request.identity.actorType !== 'human') {
           throw apiFailure(403, 'ENTERPRISE_HUMAN_OWNER_REQUIRED', 'A current human project member must report state; a human project owner must review design or define scopes, validity and future proposals.');
         }
         const actor = requestActor(request);
@@ -1605,22 +1607,26 @@ export function createApp({
             const changed = applyEnterpriseCommand(project, payload, actor, { authzGeneration: request.identity.authzGeneration,
               membershipGeneration: reviewMembershipGeneration });
             project.version += 1; project.updatedAt = changed.recordedAt ?? changed.blueprint.createdAt; project.updatedBy = actor;
-            project.events.push(projectEvent(project, { type: ['record-state', 'set-validity', 'propose-future-design'].includes(payload.kind) || ENTERPRISE_BRANCH_KINDS.has(payload.kind)
+            project.events.push(projectEvent(project, { type: ['record-state', 'set-validity', 'propose-future-design'].includes(payload.kind)
+              || ENTERPRISE_BRANCH_KINDS.has(payload.kind) || ENTERPRISE_PROCESS_KINDS.has(payload.kind)
               ? 'EnterpriseDesignChanged' : 'EnterpriseScopeChanged', actor, commandId: body.commandId, correlationId,
               data: { kind: payload.kind, blueprintId: changed.blueprint.id, blueprintVersion: changed.blueprint.version,
                 objectId: changed.affectedObjectId, proposalId: changed.proposalId ?? null,
                 branchId: changed.branchId ?? null, branchRevision: changed.branchRevision ?? null,
-                candidateId: changed.candidateId ?? null, candidateHash: changed.candidateHash ?? null, reason: payload.reason } }));
+                candidateId: changed.candidateId ?? null, candidateHash: changed.candidateHash ?? null,
+                simulationId: changed.simulationId ?? null, reason: payload.reason } }));
           },
         }, actor, { requiredPrincipalRoles: ['workspace-write'], authzGeneration: request.identity.authzGeneration,
           ...(administrative ? { minimumProjectAccess: 'owner' } : {}) });
         if (!result) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
         const blueprint = latestBlueprint(result.project);
         const receipt = result.project.events.at(-1).data;
-        return sendApi(response, 200, { projectVersion: result.project.version, blueprintId: blueprint.id,
-          blueprintVersion: blueprint.version, affectedObjectId: receipt.objectId, proposalId: receipt.proposalId ?? null,
+        const simulation = receipt.simulationId ? result.project.enterpriseSimulations.find((entry) => entry.id === receipt.simulationId) : null;
+        return sendApi(response, 200, { projectVersion: result.project.version, blueprintId: simulation?.source.blueprintId ?? blueprint.id,
+          blueprintVersion: simulation?.source.blueprintVersion ?? blueprint.version, affectedObjectId: receipt.objectId, proposalId: receipt.proposalId ?? null,
           branchId: receipt.branchId ?? null, branchRevision: receipt.branchRevision ?? null,
-          candidateId: receipt.candidateId ?? null, candidateHash: receipt.candidateHash ?? null },
+          candidateId: receipt.candidateId ?? null, candidateHash: receipt.candidateHash ?? null,
+          ...(simulation ? { simulation } : {}) },
         { correlationId, event: result.project.events.at(-1), meta: { replayed: result.replayed } });
       }
 

@@ -337,3 +337,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 
 .enterprise-change { border-top: 1px solid var(--border, #363b32); padding: .6rem 0; min-width: 0; }
 .enterprise-context [data-enterprise-merge-candidate] { border: 1px solid var(--border, #363b32); padding: .8rem; margin-top: .8rem; }
+
+.enterprise-editor-rows, .enterprise-step-fields { display: grid; gap: .7rem; min-width: 0; }
+.enterprise-editor-row { border: 1px solid var(--border, #363b32); padding: .7rem; display: grid; gap: .5rem; min-width: 0; }
+.enterprise-row-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.enterprise-reference-choices { max-height: 15rem; overflow: auto; min-width: 0; }
+.enterprise-object .enterprise-reference-option { display: flex; align-items: start; gap: .5rem; }
+.enterprise-reference-option input { width: auto; flex: 0 0 auto; }

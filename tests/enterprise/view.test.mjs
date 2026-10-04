@@ -5,6 +5,7 @@ import { enterpriseCommandStorageKey, enterpriseContextFailure, enterpriseContex
   renderEnterpriseObject, restoreEnterpriseCommand, submitEnterpriseCommand } from '../../public/enterprise.mjs';
 import { enterpriseBranchCommandPayload, enterpriseBranchWritable, enterpriseCandidateCurrent, enterpriseCommandResultRoute,
   renderEnterpriseBranches } from '../../public/enterprise-branches.mjs';
+import { enterpriseProcessCommandPayload, enterpriseTypedValue, renderEnterpriseProcess, renderEnterpriseSimulation } from '../../public/enterprise-process.mjs';
 import { decodeStudioRoute, encodeStudioRoute } from '../../public/shared-interactions.mjs';
 
 class NodeListFixture extends Array {
@@ -20,14 +21,21 @@ class NodeFixture {
     this.className = options.className ?? '';
     this.children = [];
     this.listeners = new Map();
-    this.value = '';
+    this._value = '';
     this.disabled = false;
     this.hidden = false;
     this.required = false;
     this.parent = null;
   }
-  append(...nodes) { for (const node of nodes) { node.parent = this; this.children.push(node); } }
+  append(...nodes) {
+    for (const node of nodes) { node.parent = this; this.children.push(node); }
+    if (this.tagName === 'select' && !this.children.some((option) => String(option.attrs.value ?? '') === this._value)) {
+      this._value = String(this.children[0]?.attrs.value ?? '');
+    }
+  }
   replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
+  contains(node) { return node === this || this.children.some((child) => child.contains(node)); }
+  remove() { if (this.parent) this.parent.children = this.parent.children.filter((child) => child !== this); this.parent = null; }
   addEventListener(type, handler) { this.listeners.set(type, handler); }
   querySelectorAll(selector) {
     const tags = selector.split(',').map((part) => part.trim());
@@ -37,6 +45,18 @@ class NodeFixture {
     ]));
   }
   reportValidity() { return true; }
+  get value() {
+    if (this.tagName === 'select') return this.children.find((option) => String(option.attrs.value ?? '') === this._value)?.attrs.value
+      ?? this.children[0]?.attrs.value ?? '';
+    return this._value;
+  }
+  set value(value) {
+    const selected = String(value ?? '');
+    if (this.tagName === 'select') {
+      this._value = this.children.some((option) => String(option.attrs.value ?? '') === selected)
+        ? selected : String(this.children[0]?.attrs.value ?? '');
+    } else this._value = selected;
+  }
   get firstChild() {
     if (this.text) {
       const parent = this;
@@ -90,6 +110,14 @@ test('enterprise route preserves the exact perspective, optional scope, history,
     '/api/v1/projects/project-one/enterprise?lensId=all&scopeId=organization-one');
   assert.equal(enterpriseRequestPath('project-one', enterpriseQuery({ lensId: 'L-05', blueprintVersion: 2 }), 'unit-child'),
     '/api/v1/projects/project-one/enterprise?lensId=L-05&blueprintVersion=2&selectedId=unit-child');
+  const simulationId = 'process-simulation-00000000-0000-4000-8000-000000000001';
+  const simulationQuery = enterpriseQuery({ simulationId });
+  assert.equal(simulationQuery.simulationId, simulationId);
+  assert.equal(enterpriseRequestPath('project-one', simulationQuery, 'process-deliver'),
+    `/api/v1/projects/project-one/enterprise?lensId=all&simulationId=${simulationId}&selectedId=process-deliver`);
+  assert.equal(hasEnterpriseContext({ simulationId }), true);
+  const savedRoute = { projectId: 'project-one', view: 'map', selectedId: 'process-deliver', simulationId };
+  assert.equal(decodeStudioRoute(encodeStudioRoute(savedRoute)).simulationId, simulationId);
   assert.equal(enterpriseContextReadOnly({ isCurrent: true }), false);
   assert.equal(enterpriseCommandStorageKey('oidc:owner', 'project-one'),
     'orgward:enterprise-command:oidc%3Aowner:project-one');
@@ -247,6 +275,74 @@ test('branch conflict labels use names from the matching base, current, and draf
   choice.value = 'current';
   resolve.listeners.get('submit')?.({ preventDefault() {} });
   assert.deepEqual(command.resolutions, [{ conflictId, choice: 'current' }]);
+});
+
+test('enterprise process authoring binds current and branch snapshots and requires explicit typed scenario values', () => {
+  const process = { id: 'process-transfer', type: 'process', name: 'Transfer funds', detail: 'Move a transfer.' };
+  const current = { permissions: { processWrite: true, simulate: true }, context: { blueprintId: 'blueprint-main', blueprintVersion: 8, isCurrent: true }, blueprint: { id: 'blueprint-main' } };
+  assert.deepEqual(enterpriseProcessCommandPayload(current, { kind: 'define-process-flow', objectId: process.id, processFlow: { schemaVersion: '1.0' }, reason: 'Record route design.' }), {
+    kind: 'define-process-flow', objectId: process.id, processFlow: { schemaVersion: '1.0' }, reason: 'Record route design.',
+    blueprintId: 'blueprint-main', blueprintVersion: 8,
+  });
+  const draft = { ...current, permissions: { processWrite: true, branchWrite: true, simulate: true }, context: { blueprintId: 'blueprint-draft', blueprintVersion: 3,
+    branchId: 'enterprise-branch-00000000-0000-4000-8000-000000000021', branchRevision: 4 },
+    branch: { id: 'enterprise-branch-00000000-0000-4000-8000-000000000021', status: 'DRAFT', revision: 4, isHead: true } };
+  const draftEdit = enterpriseProcessCommandPayload(draft, { kind: 'define-process-flow', objectId: process.id, processFlow: { schemaVersion: '1.0' }, reason: 'Edit the exact draft.' });
+  assert.equal(draftEdit.blueprintId, 'blueprint-draft');
+  assert.equal(draftEdit.branchId, draft.context.branchId);
+  assert.equal(draftEdit.branchRevision, 4);
+  const simulation = enterpriseProcessCommandPayload(draft, { kind: 'simulate-process', processId: process.id,
+    scenario: { inputs: [], activityOutcomes: [], decisionChoices: [], stepLimit: 12 }, reason: 'Inspect the exact draft flow.' });
+  assert.equal(simulation.blueprintId, 'blueprint-draft');
+  assert.equal(simulation.branchRevision, 4);
+  assert.equal(enterpriseProcessCommandPayload({ ...draft, permissions: { write: false, simulate: false } }, {
+    kind: 'simulate-process', processId: process.id, scenario: {}, reason: 'Denied.' }), null);
+  assert.equal(enterpriseTypedValue('number', '12.5'), 12.5);
+  assert.equal(enterpriseTypedValue('boolean', 'false'), false);
+  assert.deepEqual(enterpriseTypedValue('number', '1\n2', true), [1, 2]);
+  assert.throws(() => enterpriseTypedValue('number', 'NaN'), /finite number/);
+});
+
+test('enterprise process UI shows a saved simulation as exact hypothetical evidence', () => {
+  const process = { ...object, id: 'process-transfer', type: 'process', name: 'Transfer funds', owner: 'role-operator', processFlow: {
+    schemaVersion: '1.0', startStepId: 'step-intake', steps: [
+      { id: 'step-intake', kind: 'manual', title: 'Review transfer', processId: 'process-transfer', roleId: 'role-operator',
+        inputIds: ['information-transfer-amount'], outputIds: [], nextStepId: 'step-end', exceptionStepId: null },
+      { id: 'step-end', kind: 'end', title: 'Done' },
+    ],
+  } };
+  const information = { id: 'information-transfer-amount', type: 'information', name: 'Transfer amount' };
+  const role = { id: 'role-operator', type: 'role', name: 'Operations' };
+  const blueprint = { id: 'blueprint-main', areas: { capabilitiesProcesses: { items: [process, information, role] } } };
+  const modelValue = { context: { blueprintId: blueprint.id, blueprintVersion: 8, snapshotHash: 'a'.repeat(64), isCurrent: true }, blueprint,
+    permissions: { write: true, processWrite: true, simulate: true }, simulations: [] };
+  const result = { id: 'process-simulation-00000000-0000-4000-8000-000000000031', status: 'COMPLETED',
+    createdAt: '2026-10-03T12:00:00.000Z', createdBy: 'oidc:operator', source: { blueprintId: blueprint.id, blueprintVersion: 8,
+      processId: process.id, snapshotHash: 'a'.repeat(64) }, engineVersion: 'orgward-declared-flow-v1', scenarioHash: 'b'.repeat(64),
+    resultHash: 'c'.repeat(64), meaning: 'SIMULATION_ONLY', scenario: { inputs: [{ informationId: information.id, value: 125 }] },
+    trace: [{ sequence: 1, stepId: 'step-intake', iteration: 0, kind: 'manual', status: 'SUCCEEDED', detail: 'Scenario assumption only.' },
+      { sequence: 2, stepId: 'step-end', iteration: 0, kind: 'end', status: 'ENDED', detail: 'Design path ended.' }], unresolved: [] };
+  let selectedSimulation = null;
+  const root = renderEnterpriseProcess({ model: { ...modelValue, simulation: result, simulations: [{ id: result.id, status: result.status, meaning: result.meaning,
+    createdAt: result.createdAt, source: result.source, resultHash: result.resultHash }] }, object: process, simulation: result,
+    selectedSimulationId: result.id, el, ui: branchUi, onCommand: () => {}, onSimulationSelection: (id) => { selectedSimulation = id; } });
+  assert.equal(root.attrs['aria-label'], 'Typed process authoring and simulation');
+  assert.match(root.textContent, /Simulation never starts work, approves a decision or applies a design/);
+  assert.match(root.textContent, /Input Transfer amount: 125/);
+  assert.match(root.textContent, /Review transfer · iteration 0 · SUCCEEDED/);
+  assert.match(root.textContent, /Blueprint blueprint-main · version 8/);
+  assert.equal(Array.from(root.querySelectorAll('section')).filter((node) => node.attrs['data-enterprise-simulation-result'] === result.id).length, 1);
+  assert.equal(root.querySelectorAll('ol').find((node) => Object.hasOwn(node.attrs, 'data-enterprise-simulation-trace')).querySelectorAll('li').length, 2);
+  assert.ok(root.querySelectorAll('form').some((form) => form.attrs['data-enterprise-action'] === 'define-process-flow'));
+  assert.ok(root.querySelectorAll('form').some((form) => form.attrs['data-enterprise-action'] === 'simulate-process'));
+  const savedFlowTarget = root.querySelectorAll('select').find((control) => control.attrs.name === 'nextStepId');
+  assert.equal(savedFlowTarget.value, 'step-end', 'the DOM selection retains a saved forward target after every step is loaded');
+  assert.ok(savedFlowTarget.children.some((option) => option.attrs.value === 'step-end'));
+  const simulationPicker = root.querySelectorAll('select').find((control) => control.attrs.name === 'simulationId');
+  assert.ok(simulationPicker);
+  simulationPicker.value = result.id;
+  simulationPicker.listeners.get('change')?.();
+  assert.equal(selectedSimulation, result.id, 'choosing saved history requests the exact detail record');
 });
 
 test('an unavailable requested enterprise context stays explicit and offers an intentional reset', () => {

@@ -133,9 +133,9 @@ test('enterprise scopes retain design identity across sixteen lenses, commands, 
   const ownerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
   const editorView = await currentView(instance.base, 'editor', project.id);
   const readerView = await currentView(instance.base, 'reader', project.id);
-  assert.deepEqual(ownerView.data.permissions, { write: true, scopeAdmin: true, branchCreate: true, branchWrite: false, branchAdmin: false });
-  assert.deepEqual(editorView.data.permissions, { write: true, scopeAdmin: false, branchCreate: true, branchWrite: false, branchAdmin: false });
-  assert.deepEqual(readerView.data.permissions, { write: false, scopeAdmin: false, branchCreate: false, branchWrite: false, branchAdmin: false });
+  assert.deepEqual(ownerView.data.permissions, { write: true, scopeAdmin: true, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, simulate: true });
+  assert.deepEqual(editorView.data.permissions, { write: true, scopeAdmin: false, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, simulate: true });
+  assert.deepEqual(readerView.data.permissions, { write: false, scopeAdmin: false, branchCreate: false, branchWrite: false, branchAdmin: false, processWrite: false, simulate: false });
   assert.equal(ownerView.data.selection.object.id, 'process-deliver');
   assert.equal(ownerView.data.selection.object.enterpriseScope, undefined);
   assert.equal(ownerView.data.selection.visible, true);
@@ -411,6 +411,8 @@ test('enterprise state and time views keep human reports independent and future 
   assert.deepEqual({ branchCreate: futureProposal.data.permissions.branchCreate,
     branchWrite: futureProposal.data.permissions.branchWrite, branchAdmin: futureProposal.data.permissions.branchAdmin },
   { branchCreate: true, branchWrite: false, branchAdmin: false });
+  assert.equal(futureProposal.data.permissions.processWrite, false);
+  assert.equal(futureProposal.data.permissions.simulate, true);
   assert.equal(futureProposal.data.selection.object.name, 'Deliver the next-generation service');
   assert.ok(mainAfterProposal.data.versions.every((entry) => entry.id !== futureProposal.data.context.blueprintId),
     'the proposal snapshot is not inserted into the main version history');
@@ -477,6 +479,241 @@ test('enterprise state and time views keep human reports independent and future 
   assert.equal(proposalReplay.data.proposalId, proposalId);
   const mainAfterReplay = await currentView(instance.base, 'owner', project.id);
   assert.equal(mainAfterReplay.data.context.blueprintId, mainEditResult.data.blueprintId);
+});
+
+test('enterprise process definitions and simulations stay typed, bounded, source-bound and separate from actual work', async (t) => {
+  const postgres = await startPostgres();
+  let root;
+  let instance;
+  t.after(async () => {
+    await closeApp(instance);
+    if (root) await rm(root, { recursive: true, force: true });
+    await postgres.close();
+  });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-enterprise-process-'));
+  instance = await startApp(postgres, root);
+  for (const identity of identities.values()) {
+    await postgres.query(`insert into orgward.oidc_principals
+      (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+    [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  }
+  const project = await seedProject(postgres, 'Enterprise process simulation fixture');
+  let view = await currentView(instance.base, 'owner', project.id, { selectedId: 'process-deliver' });
+  assert.equal(view.data.processModel.limits.loopIterations, 10);
+  assert.equal(view.data.permissions.processWrite, true);
+  assert.equal(view.data.permissions.simulate, true);
+  const decisionTable = {
+    schemaVersion: '1.0', hitPolicy: 'FIRST_MATCH', defaultOutcome: null,
+    inputs: [{ informationId: 'information-customer-signal', valueType: 'number' }],
+    rules: [
+      { id: 'priority-high', outcome: 'APPROVE', conditions: [{ informationId: 'information-customer-signal', operator: 'gte', value: 5 }] },
+      { id: 'priority-low', outcome: 'REVIEW', conditions: [{ informationId: 'information-customer-signal', operator: 'lt', value: 5 }] },
+      { id: 'loop-continue', outcome: 'CONTINUE', conditions: [{ informationId: 'information-customer-signal', operator: 'eq', value: 1 }] },
+      { id: 'loop-stop', outcome: 'STOP', conditions: [{ informationId: 'information-customer-signal', operator: 'eq', value: 2 }] },
+    ],
+  };
+  const tableCommand = commandBody(view, 'process-define-priority-table', {
+    kind: 'define-decision-table', objectId: 'decision-priority', decisionTable, reason: 'Define explicit typed routing outcomes.' });
+  const tableResult = await postCommand(instance.base, 'editor', project.id, tableCommand);
+  assert.equal(tableResult.data.affectedObjectId, 'decision-priority');
+  const tableReplay = await postCommand(instance.base, 'editor', project.id, tableCommand);
+  assert.equal(tableReplay.meta.replayed, true);
+  assert.deepEqual(tableReplay.data, tableResult.data);
+
+  view = await currentView(instance.base, 'owner', project.id, { selectedId: 'process-deliver' });
+  const flow = {
+    schemaVersion: '1.0', startStepId: 'intake',
+    steps: [
+      { id: 'intake', kind: 'manual', title: 'Review qualified request', processId: 'process-deliver', roleId: 'role-operations',
+        inputIds: ['information-customer-signal'], outputIds: ['information-delivery-result'], nextStepId: 'gate', exceptionStepId: 'exception' },
+      { id: 'gate', kind: 'decision', title: 'Route by saved decision rule', decisionId: 'decision-priority',
+        routes: [{ outcome: 'APPROVE', targetStepId: 'fork' }, { outcome: 'REVIEW', targetStepId: 'exception' }] },
+      { id: 'fork', kind: 'fork', title: 'Design independent review paths', branchStepIds: ['check-a', 'check-b'], joinStepId: 'join' },
+      { id: 'check-a', kind: 'manual', title: 'Check customer details', processId: 'process-deliver', roleId: 'role-operations',
+        inputIds: ['information-customer-signal'], outputIds: ['information-delivery-result'], nextStepId: 'join', exceptionStepId: null },
+      { id: 'check-b', kind: 'manual', title: 'Check delivery capacity', processId: 'process-deliver', roleId: 'role-operations',
+        inputIds: [], outputIds: [], nextStepId: 'join', exceptionStepId: null },
+      { id: 'join', kind: 'join', title: 'Wait for both checks', forkStepId: 'fork', mode: 'ALL', nextStepId: 'loop' },
+      { id: 'loop', kind: 'loop', title: 'Bounded correction cycle', decisionId: 'decision-priority', continueOutcome: 'CONTINUE',
+        bodyStepId: 'loop-work', exitStepId: 'done', maxIterations: 2 },
+      { id: 'loop-work', kind: 'manual', title: 'Record one correction', processId: 'process-deliver', roleId: 'role-operations',
+        inputIds: [], outputIds: ['information-delivery-result'], nextStepId: 'loop-return', exceptionStepId: null },
+      { id: 'loop-return', kind: 'loop-return', title: 'Return to bound check', loopStepId: 'loop' },
+      { id: 'exception', kind: 'manual-exception', title: 'Escalate for human review', processId: 'process-review', roleId: 'role-founder',
+        inputIds: ['information-customer-signal'], outputIds: ['information-delivery-result'], nextStepId: 'exception-done', exceptionStepId: null },
+      { id: 'exception-done', kind: 'end', title: 'Stop at human review boundary' },
+      { id: 'done', kind: 'end', title: 'Finish proposed delivery path' },
+    ],
+  };
+  const flowCommand = commandBody(view, 'process-define-delivery-flow', {
+    kind: 'define-process-flow', objectId: 'process-deliver', processFlow: flow, reason: 'Save bounded delivery and exception paths.' });
+  const flowResult = await postCommand(instance.base, 'editor', project.id, flowCommand);
+  assert.equal(flowResult.data.affectedObjectId, 'process-deliver');
+  const invalidReferenceView = await currentView(instance.base, 'owner', project.id);
+  const badFlow = structuredClone(flow);
+  badFlow.steps[0].roleId = 'decision-priority';
+  const invalidReference = await postCommand(instance.base, 'editor', project.id,
+    commandBody(invalidReferenceView, 'process-invalid-role-reference', { kind: 'define-process-flow', objectId: 'process-deliver',
+      processFlow: badFlow, reason: 'Reject a decision used as a human role.' }), 400);
+  assert.equal(invalidReference.error.code, 'INVALID_PROCESS_REFERENCE');
+
+  const scenario = { inputs: [{ informationId: 'information-customer-signal', value: 10 }],
+    activityOutcomes: [
+      { stepId: 'intake', iteration: 0, outcome: 'SUCCEEDED' },
+      { stepId: 'check-a', iteration: 0, outcome: 'SUCCEEDED' },
+      { stepId: 'check-b', iteration: 0, outcome: 'SUCCEEDED' },
+      { stepId: 'loop-work', iteration: 1, outcome: 'SUCCEEDED' },
+    ],
+    decisionChoices: [{ stepId: 'loop', iteration: 0, outcome: 'CONTINUE' }, { stepId: 'loop', iteration: 1, outcome: 'STOP' }], stepLimit: 100 };
+  const simulate = async (subject, commandId, query = {}, scenarioValue = scenario, status = 200) => {
+    const exactView = await currentView(instance.base, subject, project.id, query);
+    const body = commandBody(exactView, commandId, { kind: 'simulate-process', processId: 'process-deliver', scenario: scenarioValue,
+      reason: 'Inspect a declared hypothetical only.' });
+    if (exactView.data.context.branchId) Object.assign(body.payload, { branchId: exactView.data.context.branchId,
+      branchRevision: exactView.data.context.branchRevision });
+    return { result: await postCommand(instance.base, subject, project.id, body, status), body, view: exactView };
+  };
+  const readerSimulation = await simulate('reader', 'process-reader-simulation-denied', {}, scenario, 403);
+  assert.equal(readerSimulation.result.error.code, 'ACTION_FORBIDDEN');
+
+  const firstSimulation = await simulate('editor', 'process-simulate-complete', { selectedId: 'process-deliver' });
+  const simSource = firstSimulation.view;
+  const saved = firstSimulation.result.data.simulation;
+  assert.deepEqual(simSource.data.selection.object.processFlow, flow);
+  assert.deepEqual(simSource.data.blueprint.areas.governanceRiskControls.items.find((object) => object.id === 'decision-priority').decisionTable, decisionTable);
+  assert.ok(simSource.data.graph.links.some((link) => link.source === 'process-deliver' && link.target === 'decision-priority' && link.type === 'flow-uses-decision'));
+  assert.equal(saved.status, 'COMPLETED');
+  assert.equal(saved.meaning, 'SIMULATION_ONLY');
+  assert.equal(saved.source.blueprintId, simSource.data.context.blueprintId);
+  assert.equal(saved.source.blueprintVersion, simSource.data.context.blueprintVersion);
+  assert.equal(saved.source.snapshotHash, simSource.data.context.snapshotHash);
+  assert.equal(saved.sourceLabels.records['process-deliver'], 'Deliver the core offering');
+  assert.ok(saved.trace.some((step) => step.status === 'FORKED'));
+  assert.ok(saved.trace.some((step) => step.status === 'JOINED'));
+  assert.ok(saved.trace.some((step) => step.status === 'RETURNED'));
+  assert.ok(saved.trace.some((step) => step.status === 'ENDED'));
+  assert.ok(saved.trace.every((step) => step.meaning !== 'ACTUAL_WORK'));
+  const fullRead = await currentView(instance.base, 'owner', project.id,
+    { selectedId: 'process-deliver', simulationId: saved.id });
+  assert.equal(fullRead.data.simulation.id, saved.id);
+  assert.equal(fullRead.data.simulation.resultHash, saved.resultHash);
+  const summary = fullRead.data.simulations.find((entry) => entry.id === saved.id);
+  assert.equal(summary.traceLength, saved.trace.length);
+  assert.equal(Object.hasOwn(summary, 'trace'), false, 'history lists keep detailed trace behind an exact result selection');
+  assert.equal(Object.hasOwn(summary, 'scenario'), false);
+  const beforeSimulation = new Date(Date.parse(saved.createdAt) - 1).toISOString();
+  const hiddenByCutoff = await currentView(instance.base, 'owner', project.id,
+    { selectedId: 'process-deliver', simulationId: saved.id, recordedAt: beforeSimulation }, 404);
+  assert.equal(hiddenByCutoff.error.code, 'ENTERPRISE_CONTEXT_NOT_RECORDED');
+  const cutoffIncludesSaved = await currentView(instance.base, 'owner', project.id,
+    { selectedId: 'process-deliver', simulationId: saved.id, recordedAt: saved.createdAt });
+  assert.equal(cutoffIncludesSaved.data.simulation.id, saved.id);
+  const completeReplay = await postCommand(instance.base, 'editor', project.id, firstSimulation.body);
+  assert.equal(completeReplay.meta.replayed, true);
+  assert.equal(completeReplay.data.simulation.id, saved.id);
+  assert.equal(completeReplay.data.simulation.resultHash, saved.resultHash);
+
+  const exceptionScenario = { ...scenario,
+    activityOutcomes: [{ stepId: 'intake', iteration: 0, outcome: 'SUCCEEDED' }, { stepId: 'exception', iteration: 0, outcome: 'SUCCEEDED' }],
+    decisionChoices: [{ stepId: 'gate', iteration: 0, outcome: 'REVIEW' }] };
+  const exceptionRun = await simulate('editor', 'process-simulate-human-exception', { selectedId: 'process-deliver' }, exceptionScenario);
+  assert.equal(exceptionRun.result.data.simulation.status, 'COMPLETED');
+  assert.ok(exceptionRun.result.data.simulation.trace.some((entry) => entry.stepId === 'exception' && entry.meaning === 'SCENARIO_ASSUMPTION'));
+  assert.ok(exceptionRun.result.data.simulation.trace.find((entry) => entry.stepId === 'gate').meaning === 'SCENARIO_ASSUMPTION');
+
+  const mainBeforeBranch = await currentView(instance.base, 'owner', project.id);
+  const branchCreated = await postCommand(instance.base, 'editor', project.id,
+    branchCommandBody(mainBeforeBranch, 'process-create-exact-source-branch', { kind: 'create-branch', title: 'Process simulation branch',
+      reason: 'Bind a separate hypothetical to this saved process flow.' }));
+  const branchId = branchCreated.data.branchId;
+  const branchBase = await currentView(instance.base, 'editor', project.id, { branchId, selectedId: 'process-deliver' });
+  assert.equal(branchBase.data.permissions.processWrite, true);
+  assert.equal(branchBase.data.branch.baseBlueprintId, mainBeforeBranch.data.context.blueprintId);
+  assert.equal(branchBase.data.branch.baseBlueprintVersion, mainBeforeBranch.data.context.blueprintVersion);
+  assert.equal(branchBase.data.branch.comparison.mainSnapshotHash, mainBeforeBranch.data.context.snapshotHash);
+  assert.deepEqual(branchBase.data.branch.comparison.relations, { currentAdded: [], currentRemoved: [], branchAdded: [], branchRemoved: [] });
+  const branchSimulation = await simulate('editor', 'process-simulate-branch-head',
+    { branchId, branchRevision: String(branchBase.data.context.branchRevision), selectedId: 'process-deliver' });
+  assert.equal(branchSimulation.result.data.simulation.source.branchId, branchId);
+  assert.equal(branchSimulation.result.data.simulation.source.branchRevision, branchBase.data.context.branchRevision);
+  assert.equal(branchSimulation.result.data.simulation.source.blueprintId, branchBase.data.context.blueprintId);
+  const mainStillExact = await currentView(instance.base, 'owner', project.id);
+  assert.equal(mainStillExact.data.context.blueprintId, mainBeforeBranch.data.context.blueprintId);
+  assert.equal(mainStillExact.data.context.blueprintVersion, mainBeforeBranch.data.context.blueprintVersion);
+
+  const unsupportedPlan = await request(instance.base, 'editor', `/api/v1/projects/${project.id}/process-plans`, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'process-simulation-does-not-authorize-work', expectedVersion: mainStillExact.data.context.projectVersion,
+    payload: { processId: 'process-deliver' },
+  } }, 409);
+  assert.equal(unsupportedPlan.error.code, 'PROCESS_FLOW_RUNTIME_UNSUPPORTED');
+
+  const beforeHistorical = await currentView(instance.base, 'owner', project.id);
+  await postCommand(instance.base, 'owner', project.id, commandBody(beforeHistorical, 'process-add-later-main-version', {
+    kind: 'create-scope', scopeType: 'organization', name: 'Later organization', detail: 'A later main design version.',
+    ownerRoleId: 'role-founder', reason: 'Create a later version so saved-flow history is read-only.' }));
+  const historical = await currentView(instance.base, 'owner', project.id, { blueprintVersion: String(flowResult.data.blueprintVersion), selectedId: 'process-deliver' });
+  assert.equal(historical.data.context.isCurrent, false);
+  const historicalSimulation = await simulate('editor', 'process-simulate-historical', { blueprintVersion: String(flowResult.data.blueprintVersion), selectedId: 'process-deliver' });
+  assert.equal(historicalSimulation.result.data.simulation.source.blueprintId, historical.data.context.blueprintId);
+  assert.equal(historicalSimulation.result.data.simulation.source.blueprintVersion, historical.data.context.blueprintVersion);
+  const currentForStale = await currentView(instance.base, 'owner', project.id);
+  const staleSourceBody = commandBody(currentForStale, 'process-simulate-stale-source', { kind: 'simulate-process', processId: 'process-deliver', scenario,
+    reason: 'A prior blueprint is not the latest command source.' });
+  staleSourceBody.payload.blueprintVersion = historical.data.context.blueprintVersion;
+  const stale = await postCommand(instance.base, 'editor', project.id, staleSourceBody, 409);
+  assert.equal(stale.error.code, 'PROCESS_SIMULATION_SOURCE_STALE');
+
+  const blockedScenario = { ...scenario, inputs: [{ informationId: 'information-customer-signal', value: null }], decisionChoices: [],
+    activityOutcomes: scenario.activityOutcomes.filter((entry) => entry.stepId === 'intake' || entry.stepId === 'exception') };
+  const blocked = await simulate('editor', 'process-simulate-unknown-input', { selectedId: 'process-deliver' }, blockedScenario);
+  assert.equal(blocked.result.data.simulation.status, 'BLOCKED');
+  assert.equal(blocked.result.data.simulation.trace.find((entry) => entry.stepId === 'gate').status, 'UNKNOWN');
+  assert.equal(blocked.result.data.simulation.unresolved[0].status, 'UNKNOWN');
+  const bounded = await simulate('editor', 'process-simulate-step-limit', { selectedId: 'process-deliver' }, { ...scenario, stepLimit: 1 });
+  assert.equal(bounded.result.data.simulation.status, 'LIMIT_REACHED');
+  assert.ok(bounded.result.data.simulation.trace.length <= 1, 'the bounded trace cannot exceed the saved simulation step cap');
+
+  const uniqueView = await currentView(instance.base, 'owner', project.id);
+  const ambiguousTable = { ...decisionTable, hitPolicy: 'UNIQUE', defaultOutcome: 'STOP', rules: [
+    { id: 'overlap-one', outcome: 'APPROVE', conditions: [{ informationId: 'information-customer-signal', operator: 'gte', value: 5 }] },
+    { id: 'overlap-two', outcome: 'REVIEW', conditions: [{ informationId: 'information-customer-signal', operator: 'gte', value: 3 }] },
+    { id: 'loop-continue', outcome: 'CONTINUE', conditions: [{ informationId: 'information-customer-signal', operator: 'eq', value: 1 }] },
+    { id: 'loop-stop', outcome: 'STOP', conditions: [{ informationId: 'information-customer-signal', operator: 'eq', value: 2 }] },
+  ] };
+  const ambiguousResult = await postCommand(instance.base, 'editor', project.id,
+    commandBody(uniqueView, 'process-define-ambiguous-table', { kind: 'define-decision-table', objectId: 'decision-priority',
+      decisionTable: ambiguousTable, reason: 'Demonstrate overlap as a visible conflict.' }));
+  const conflicted = await simulate('editor', 'process-simulate-unique-conflict', {}, { ...scenario, decisionChoices: [] });
+  assert.equal(conflicted.result.data.simulation.status, 'CONFLICTED');
+  assert.equal(conflicted.result.data.simulation.unresolved.find((entry) => entry.stepId === 'gate').status, 'CONFLICTED');
+  const explicitUnknownChoice = await simulate('editor', 'process-simulate-explicit-unknown-choice', {}, { ...scenario,
+    decisionChoices: [{ stepId: 'gate', iteration: 0, outcome: null }] });
+  assert.equal(explicitUnknownChoice.result.data.simulation.status, 'BLOCKED');
+  assert.equal(explicitUnknownChoice.result.data.simulation.trace.find((entry) => entry.stepId === 'gate').status, 'UNKNOWN');
+  assert.equal(explicitUnknownChoice.result.data.simulation.unresolved.find((entry) => entry.stepId === 'gate').status, 'UNKNOWN');
+  const projectWithoutPlans = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  assert.equal((projectWithoutPlans.data.processPlans ?? []).length, 0,
+    'simulation history remains separate from actual process plans');
+
+  const projectReadBeforeRestart = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  const mainBeforeRestart = projectReadBeforeRestart.data.latestBlueprint.id;
+  assert.equal(projectReadBeforeRestart.data.latestBlueprint.id, ambiguousResult.data.blueprintId);
+  await closeApp(instance);
+  instance = await startApp(postgres, root);
+  const restartView = await currentView(instance.base, 'owner', project.id, { selectedId: 'process-deliver' });
+  assert.equal(restartView.data.context.blueprintId, mainBeforeRestart);
+  const savedAfterRestart = restartView.data.simulations;
+  assert.ok(savedAfterRestart.some((entry) => entry.id === saved.id && entry.resultHash === saved.resultHash));
+  assert.ok(savedAfterRestart.some((entry) => entry.id === historicalSimulation.result.data.simulation.id));
+  assert.ok(savedAfterRestart.some((entry) => entry.id === branchSimulation.result.data.simulation.id));
+  const exactAfterRestart = await currentView(instance.base, 'owner', project.id,
+    { selectedId: 'process-deliver', simulationId: saved.id });
+  assert.deepEqual(exactAfterRestart.data.simulation, saved);
+  const simulationReplayAfterRestart = await postCommand(instance.base, 'editor', project.id, firstSimulation.body);
+  assert.equal(simulationReplayAfterRestart.meta.replayed, true);
+  assert.equal(simulationReplayAfterRestart.data.simulation.id, saved.id);
+  assert.equal(simulationReplayAfterRestart.data.simulation.resultHash, saved.resultHash);
+  assert.ok(flowResult.data.blueprintVersion < ambiguousResult.data.blueprintVersion);
 });
 
 test('enterprise branches merge exact typed changes only after a current owner review', async (t) => {

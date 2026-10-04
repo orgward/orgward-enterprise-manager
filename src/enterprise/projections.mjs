@@ -3,9 +3,10 @@ import { ENTERPRISE_LENSES, ENTERPRISE_SCOPE_TYPES, blueprintObjects, enterprise
 import { digest } from '../sdlc/contracts.mjs';
 import { effectiveStatus, enterpriseInstant, objectStates } from './state.mjs';
 import { projectEnterpriseBranches } from './branches.mjs';
+import { PROCESS_MODEL } from './process-model.mjs';
 
 export function normalizeEnterpriseQuery(input = {}) {
-  const accepted = ['lensId', 'scopeId', 'blueprintVersion', 'selectedId', 'proposalId', 'effectiveAt', 'recordedAt', 'branchId', 'branchRevision'];
+  const accepted = ['lensId', 'scopeId', 'blueprintVersion', 'selectedId', 'proposalId', 'effectiveAt', 'recordedAt', 'branchId', 'branchRevision', 'simulationId'];
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !accepted.includes(key))) {
     throw enterpriseFailure('INVALID_ENTERPRISE_CONTEXT', 'Choose a supported lens, scope, saved blueprint version and selection.');
   }
@@ -16,9 +17,10 @@ export function normalizeEnterpriseQuery(input = {}) {
   const query = { lensId, scopeId: input.scopeId || null, selectedId: input.selectedId || null, blueprintVersion: null,
     proposalId: input.proposalId ?? null, effectiveAt: input.effectiveAt == null ? null : enterpriseInstant(input.effectiveAt, 'Effective time'),
     recordedAt: input.recordedAt == null ? null : enterpriseInstant(input.recordedAt, 'Recorded-time cutoff'),
-    branchId: input.branchId ?? null, branchRevision: null };
+    branchId: input.branchId ?? null, branchRevision: null, simulationId: input.simulationId ?? null };
   if (query.proposalId !== null && !/^enterprise-proposal-[0-9a-f-]{36}$/.test(query.proposalId)) throw enterpriseFailure('INVALID_ENTERPRISE_CONTEXT', 'Choose a saved future proposal identifier.');
   if (query.branchId !== null && !/^enterprise-branch-[0-9a-f-]{36}$/.test(query.branchId)) throw enterpriseFailure('INVALID_ENTERPRISE_CONTEXT', 'Choose a saved branch identifier.');
+  if (query.simulationId !== null && !/^process-simulation-[0-9a-f-]{36}$/.test(query.simulationId)) throw enterpriseFailure('INVALID_ENTERPRISE_CONTEXT', 'Choose an exact saved simulation identifier.');
   if (input.branchRevision != null) {
     if (!query.branchId || !/^[1-9][0-9]*$/.test(String(input.branchRevision)) || !Number.isSafeInteger(Number(input.branchRevision))) {
       throw enterpriseFailure('INVALID_ENTERPRISE_CONTEXT', 'Choose a positive saved revision within the selected branch.');
@@ -95,7 +97,7 @@ export function projectEnterprise(project, query = {}, authority = {}) {
   const gaps = [
     { code: 'PROPOSED_DESIGN_ONLY', message: 'These perspectives show saved organizational design. They do not establish enabled operations or verified outcomes.' },
     { code: 'PROPOSED_MERGE_ONLY', message: 'Reviewed branch merges change current proposed design. Internal publication and work or effect approvals remain separate.' },
-    { code: 'DOMAIN_DETAILS_PARTIAL', message: 'Advanced process decisions, economic scenarios, capacity calendars, refinement and simulations need further modeling.' },
+    { code: 'DOMAIN_DETAILS_PARTIAL', message: 'Advanced manual runtime routing, economic scenarios, capacity calendars, refinement and bulk collaboration need further implementation.' },
   ];
   if (!blueprint) gaps.unshift({ code: current ? 'TEMPORAL_CONTEXT_UNKNOWN' : 'BLUEPRINT_REQUIRED',
     message: current ? 'No saved main snapshot has known applicability at these dates. Missing effective dates remain unknown; no current-design fallback was used.'
@@ -108,10 +110,29 @@ export function projectEnterprise(project, query = {}, authority = {}) {
   const lenses = ENTERPRISE_LENSES.map((entry) => ({ ...structuredClone(entry),
     gaps: ['L-11', 'L-12', 'L-13', 'L-16'].includes(entry.id) ? [{ ...runtimeLensGap }] : [] }));
   if (lens) gaps.push(...lenses.find((entry) => entry.id === lens.id).gaps.map((gap) => ({ ...gap, lensId: lens.id })));
+  const visibleSimulations = (project.enterpriseSimulations ?? []).filter((entry) => savedBy(entry.createdAt));
+  const simulations = visibleSimulations.map(({ id, createdAt, createdBy, reason, source, status, meaning, engineVersion, scenarioHash, resultHash, trace }) =>
+    ({ id, createdAt, createdBy, reason, source: structuredClone(source), status, meaning, engineVersion, scenarioHash, resultHash, traceLength: trace.length }));
+  const snapshotHash = blueprint ? digest(blueprint) : null;
+  let simulation = context.simulationId ? (project.enterpriseSimulations ?? []).find((entry) => entry.id === context.simulationId)
+    : selected?.type === 'process' ? visibleSimulations.filter((entry) => entry.source.processId === selected.id
+      && entry.source.snapshotHash === snapshotHash && entry.source.blueprintId === blueprint.id
+      && entry.source.blueprintVersion === blueprint.version && entry.source.branchId === context.branchId
+      && entry.source.branchRevision === branchContext.revision && entry.source.proposalId === (proposal?.id ?? null)).at(-1) ?? null : null;
+  if (context.simulationId && !simulation) throw enterpriseFailure('PROCESS_SIMULATION_NOT_FOUND', 'The saved simulation was not found in this project.', 404);
+  if (simulation && !savedBy(simulation.createdAt)) throw enterpriseFailure('ENTERPRISE_CONTEXT_NOT_RECORDED', 'This simulation was not yet saved at the selected recorded-time cutoff.', 404);
+  if (simulation) {
+    const { id, createdAt, createdBy, reason, resultHash, ...core } = simulation;
+    if (digest(core) !== resultHash || digest(core.scenario) !== core.scenarioHash || core.meaning !== 'SIMULATION_ONLY') {
+      throw enterpriseFailure('PROCESS_SIMULATION_INTEGRITY', 'A saved simulation failed its source, scenario or result checks.', 409);
+    }
+    simulation = structuredClone(simulation);
+  }
   return { context: { projectVersion: project.version, blueprintId: blueprint?.id ?? null, blueprintVersion: blueprint?.version ?? null,
     isCurrent, lensId: context.lensId, scopeId: context.scopeId, branch: context.branchId ?? 'main', proposalId: proposal?.id ?? null,
     branchId: context.branchId, branchRevision: branchContext.revision,
     sourceKind: context.branchId ? 'BRANCH_DRAFT' : proposal ? 'FUTURE_PROPOSAL' : 'MAIN_DESIGN',
+    snapshotHash,
     recordedAt: context.branchId ? branchContext.recordedAt : proposal?.recordedAt ?? blueprint?.createdAt ?? null,
     recordedAtCutoff: context.recordedAt, effectiveAt: context.effectiveAt, effectiveStatus: applicability,
     validity: blueprint?.enterpriseValidity ? structuredClone(blueprint.enterpriseValidity) : null,
@@ -130,11 +151,13 @@ export function projectEnterprise(project, query = {}, authority = {}) {
       baseBlueprintId: proposal.baseBlueprintId, baseBlueprintVersion: proposal.baseBlueprintVersion, baseSnapshotHash: proposal.baseSnapshotHash,
       snapshotHash: proposal.snapshotHash, baseStale: proposal.baseStale,
       diff: { before: structuredClone(proposal.snapshot.edit.before), after: structuredClone(proposal.snapshot.edit.after), changedFields: proposal.snapshot.edit.changedFields } } : null,
-    branches: branchContext.branches, branch: branchContext.branch,
+    branches: branchContext.branches, branch: branchContext.branch, processModel: structuredClone(PROCESS_MODEL), simulations, simulation,
     permissions: { write: isCurrent && Boolean(authority.write), scopeAdmin: isCurrent && Boolean(authority.scopeAdmin),
       branchCreate: Boolean(blueprint && !context.branchId && authority.write && authority.human),
       branchWrite: Boolean(branchContext.writable && authority.write && authority.human),
-      branchAdmin: Boolean(branchContext.writable && authority.scopeAdmin && authority.human) },
+      branchAdmin: Boolean(branchContext.writable && authority.scopeAdmin && authority.human),
+      processWrite: Boolean((isCurrent || branchContext.writable) && authority.write && authority.human),
+      simulate: Boolean(blueprint && authority.write && authority.human) },
     exclusions: { totalObjects: objects.length, visibleObjects: visible.size,
       scopeUnknownCount: unknownCount, unscopedCount: objects.filter((object) => scopeState(object) === 'UNSCOPED').length,
       filteredByScope: objects.filter((object) => !inScope(object)).length,

@@ -1,3 +1,4 @@
+import { ENTERPRISE_PROCESS_COMMANDS, renderEnterpriseProcess } from './enterprise-process.mjs';
 import { ENTERPRISE_BRANCH_COMMANDS, enterpriseBranchWritable, renderEnterpriseBranches } from './enterprise-branches.mjs';
 const SCOPE_TYPES = new Set(['organization', 'legal-entity', 'unit']);
 const STATE_VALUES = {
@@ -53,11 +54,11 @@ export function renderEnterpriseStates({ states = {}, el }) {
 
 export function enterpriseQuery(route = {}) {
   return { lensId: route.lensId ?? 'all', scopeId: route.scopeId ?? null, blueprintVersion: route.blueprintVersion ?? null,
-    ...Object.fromEntries(['proposalId', 'effectiveAt', 'recordedAt', 'branchId', 'branchRevision'].filter((field) => Object.hasOwn(route, field)).map((field) => [field, route[field]])) };
+    ...Object.fromEntries(['proposalId', 'effectiveAt', 'recordedAt', 'branchId', 'branchRevision', 'simulationId'].filter((field) => Object.hasOwn(route, field)).map((field) => [field, route[field]])) };
 }
 
 export function hasEnterpriseContext(route = {}) {
-  return ['lensId', 'scopeId', 'blueprintVersion', 'proposalId', 'effectiveAt', 'recordedAt', 'branchId', 'branchRevision'].some((field) => Object.hasOwn(route, field));
+  return ['lensId', 'scopeId', 'blueprintVersion', 'proposalId', 'effectiveAt', 'recordedAt', 'branchId', 'branchRevision', 'simulationId'].some((field) => Object.hasOwn(route, field));
 }
 
 export function enterpriseContextReadOnly(context) {
@@ -80,7 +81,7 @@ export function enterpriseRequestPath(projectId, query, selectedId = null) {
   const params = new URLSearchParams({ lensId: query.lensId ?? 'all' });
   if (query.scopeId !== null && query.scopeId !== undefined) params.set('scopeId', query.scopeId);
   if (query.blueprintVersion !== null && query.blueprintVersion !== undefined) params.set('blueprintVersion', String(query.blueprintVersion));
-  for (const field of ['proposalId', 'effectiveAt', 'recordedAt', 'branchId', 'branchRevision']) if (query[field] !== null && query[field] !== undefined) params.set(field, String(query[field]));
+  for (const field of ['proposalId', 'effectiveAt', 'recordedAt', 'branchId', 'branchRevision', 'simulationId']) if (query[field] !== null && query[field] !== undefined) params.set(field, String(query[field]));
   if (selectedId) params.set('selectedId', selectedId);
   return `/api/v1/projects/${encodeURIComponent(projectId)}/enterprise?${params}`;
 }
@@ -94,7 +95,7 @@ export function restoreEnterpriseCommand(storage, principal, projectId) {
   if (!saved) return null;
   if (saved.projectId !== projectId || saved.envelope?.schemaVersion !== '1.0'
     || typeof saved.envelope.commandId !== 'string' || !Number.isSafeInteger(saved.envelope.expectedVersion)
-    || !['create-scope', 'rename-scope', 'assign-object-scope', 'record-state', 'set-validity', 'propose-future-design', ...ENTERPRISE_BRANCH_COMMANDS].includes(saved.envelope.payload?.kind)) throw new Error('Saved enterprise command is unreadable.');
+    || !['create-scope', 'rename-scope', 'assign-object-scope', 'record-state', 'set-validity', 'propose-future-design', ...ENTERPRISE_BRANCH_COMMANDS, ...ENTERPRISE_PROCESS_COMMANDS].includes(saved.envelope.payload?.kind)) throw new Error('Saved enterprise command is unreadable.');
   return saved;
 }
 
@@ -180,9 +181,9 @@ export function renderEnterpriseContext({ model, query, loading = false, error =
     return root;
   }
   if (error) {
-    root.append(el('p', { text: `Requested enterprise context unavailable: ${error}. The requested lens, scope or version has not been replaced with another context. Time, future draft and branch requests also retain their exact requested identity.`, attrs: { role: 'alert' } }));
+    root.append(el('p', { text: `Requested enterprise context unavailable: ${error}. The requested lens, scope or version has not been replaced with another context. Time, future draft, branch and simulation requests also retain their exact requested identity.`, attrs: { role: 'alert' } }));
     const reset = el('button', { className: 'button', text: 'Open current design with all objects', attrs: { type: 'button' } });
-    reset.addEventListener('click', () => onContext({ lensId: 'all', scopeId: null, blueprintVersion: null, proposalId: null, effectiveAt: null, recordedAt: null, branchId: null, branchRevision: null })); root.append(reset);
+    reset.addEventListener('click', () => onContext({ lensId: 'all', scopeId: null, blueprintVersion: null, proposalId: null, effectiveAt: null, recordedAt: null, branchId: null, branchRevision: null, simulationId: null })); root.append(reset);
     return root;
   }
   if (!model) return root;
@@ -194,13 +195,13 @@ export function renderEnterpriseContext({ model, query, loading = false, error =
   for (const control of [lens, scope, version]) {
     control.control.disabled = loading || Boolean(pending);
     control.control.addEventListener('change', () => onContext({ ...query, lensId: lens.control.value, scopeId: scope.control.value || null, blueprintVersion: version.control.value ? Number(version.control.value) : null,
-      ...(control === version ? { proposalId: null, branchId: null, branchRevision: null } : {}) }));
+      ...(control === version ? { proposalId: null, branchId: null, branchRevision: null, simulationId: null } : {}) }));
   }
   const proposalChoices = [...(model.proposals ?? [])];
   if (model.proposal && !proposalChoices.some((proposal) => proposal.id === model.proposal.id)) proposalChoices.push(model.proposal);
   const proposal = field('proposalId', 'Future design draft', { entries: [['', 'Current main or saved main version'], ...proposalChoices.map((proposal) => [proposal.id, `${proposal.title} · proposed from version ${proposal.baseBlueprintVersion}`])], required: false, value: query.proposalId });
   proposal.control.disabled = loading || Boolean(pending);
-  proposal.control.addEventListener('change', () => onContext({ ...query, proposalId: proposal.control.value || null, blueprintVersion: null, branchId: null, branchRevision: null }));
+  proposal.control.addEventListener('change', () => onContext({ ...query, proposalId: proposal.control.value || null, blueprintVersion: null, branchId: null, branchRevision: null, simulationId: null }));
   controls.append(proposal.node);
   const source = model.context.branchId ? 'branch draft · main work and publication unavailable' : model.context.sourceKind === 'FUTURE_PROPOSAL' ? 'proposed future draft · read only'
     : enterpriseContextReadOnly(model.context) ? 'saved time or historical context · read only' : 'current main design';
@@ -208,7 +209,7 @@ export function renderEnterpriseContext({ model, query, loading = false, error =
   root.append(renderEnterpriseBranches({ model, query, loading, pending, el, ui: { field, form }, onContext, onCommand, utcTime: enterpriseUtcTime }));
   const effectiveAt = field('effectiveAt', 'Effective at (UTC, blank means no time filter)', { type: 'datetime-local', value: timeInput(query.effectiveAt), required: false });
   const recordedAt = field('recordedAt', 'Recorded by (UTC cutoff, blank means latest recorded)', { type: 'datetime-local', value: timeInput(query.recordedAt), required: false });
-  if (model.blueprint || (model.versions ?? []).length || proposalChoices.length || query.effectiveAt || query.recordedAt || query.proposalId) root.append(form('inspect-time', 'Inspect exact time context', [effectiveAt.node, recordedAt.node], () => onContext({ ...query, effectiveAt: enterpriseUtcTime(effectiveAt.control.value), recordedAt: enterpriseUtcTime(recordedAt.control.value) }), loading || Boolean(pending)));
+  if (model.blueprint || (model.versions ?? []).length || proposalChoices.length || query.effectiveAt || query.recordedAt || query.proposalId) root.append(form('inspect-time', 'Inspect exact time context', [effectiveAt.node, recordedAt.node], () => onContext({ ...query, effectiveAt: enterpriseUtcTime(effectiveAt.control.value), recordedAt: enterpriseUtcTime(recordedAt.control.value), simulationId: null }), loading || Boolean(pending)));
   if (model.context.recordedAt) root.append(el('p', { text: `Snapshot recorded at: ${model.context.recordedAt}` }));
   if (model.context.recordedAtCutoff) root.append(el('p', { text: `Recorded-time cutoff: ${model.context.recordedAtCutoff}` }));
   if (model.context.effectiveAt) root.append(el('p', { text: `Effective-time query: ${model.context.effectiveAt} · ${({ IN_RANGE: 'within the declared interval', OUT_OF_RANGE: 'outside the declared interval', UNKNOWN: 'validity unknown' })[model.context.effectiveStatus] ?? 'validity unknown'}.` }));
@@ -234,7 +235,7 @@ export function renderEnterpriseContext({ model, query, loading = false, error =
   }
   if (enterpriseContextReadOnly(model.context) && (model.blueprint || (model.versions ?? []).length || query.blueprintVersion != null || query.effectiveAt || query.recordedAt || query.proposalId || model.context.effectiveAt || model.context.recordedAtCutoff || model.context.proposalId || query.branchId || model.context.branchId)) {
     const current = el('button', { className: 'button ghost', text: 'Return to the current saved design', attrs: { type: 'button' } });
-    current.addEventListener('click', () => onContext({ ...query, blueprintVersion: null, proposalId: null, effectiveAt: null, recordedAt: null, branchId: null, branchRevision: null })); root.append(current);
+    current.addEventListener('click', () => onContext({ ...query, blueprintVersion: null, proposalId: null, effectiveAt: null, recordedAt: null, branchId: null, branchRevision: null, simulationId: null })); root.append(current);
   }
   if (model.gaps?.length) root.append(el('details', {}, [el('summary', { text: 'Perspective gaps and unavailable capabilities' }), el('ul', {}, model.gaps.map((gap) => el('li', { text: gap.message })))]));
   if (!model.blueprint) {
@@ -290,7 +291,7 @@ export function renderEnterpriseContext({ model, query, loading = false, error =
   return root;
 }
 
-export function renderEnterpriseObject({ model, object, pending = null, loading = false, el, onCommand }) {
+export function renderEnterpriseObject({ model, object, pending = null, loading = false, simulation = null, processDraft = null, selectedSimulationId = null, el, onCommand, onInspectDraft, onSimulationSelection, onInspectSimulation }) {
   const { field, form } = fields(el);
   const root = el('section', { className: 'enterprise-object', attrs: { 'aria-label': 'Selected object design scope' } });
   const scope = object.enterpriseScope;
@@ -298,6 +299,8 @@ export function renderEnterpriseObject({ model, object, pending = null, loading 
   const scopes = model.scopes ?? [];
   const states = enterpriseObjectStates(model, object);
   root.append(renderEnterpriseStates({ states, el }));
+  const processPanel = renderEnterpriseProcess({ model, object, pending, loading, simulation, draft: pending?.envelope?.payload ?? processDraft, el, ui: { field, form }, onCommand, onInspectDraft, selectedSimulationId, onSimulationSelection, onInspectSimulation });
+  if (processPanel) root.append(processPanel);
   root.append(el('h4', { text: 'Proposed organizational scope' }), el('p', { text: scope ? (assigned ? 'Assigned to a design scope.' : 'Explicitly unscoped.') : 'Organizational scope is unknown; no assignment has been recorded.' }));
   if (assigned) for (const id of Object.values(scope).filter(Boolean)) root.append(el('p', { text: scopes.find((entry) => entry.id === id)?.name ?? id }));
   if (model.selection?.object?.id === object.id && !model.selection.visible) root.append(el('p', { text: `The selected record is outside this perspective: ${(model.selection.hiddenBy ?? []).map((reason) => ({ lens: 'perspective filter', scope: 'design scope filter' })[reason] ?? reason).join(', ') || 'perspective or design scope filter'}. Its saved identity and inspector remain selected.`, attrs: { 'data-enterprise-selection': '', role: 'status' } }));

@@ -2,6 +2,21 @@
 
 Development workspace with enterprise-design, synthetic SDLC-reference, and controlled-execution surfaces. It is **not production-ready**; production maturity is tracked separately in `PRODUCTION-READINESS.json` against `docs/production/ROADMAP.md`.
 
+## Current implementation workflow
+
+[TASKS.md](TASKS.md) is the authoritative functionality queue. Run
+`npm run task:next` to locate its first open task and check the continuation
+pointer. GPT-6.1 Sol implements and reviews bounded customer journeys; Luna is
+the sole verifier and test runner. Complete functionality before the broad
+hardening and qualification tracked in
+[HARDENING-TASKS.md](HARDENING-TASKS.md).
+
+The specification and engineering notes below preserve historical planning.
+Their vectors, packets, change-control steps and engineering validators are
+reference material, not prerequisites for current implementation. Actual passing
+checks and current task receipts determine progress; original release-gate
+qualification remains separate.
+
 ## Unified product specification
 
 [Engineering workflow](docs/engineering/WAYS-OF-WORKING.md) now supplies four
@@ -202,10 +217,44 @@ Branch commands use the same enterprise command endpoint: `create-branch`,
 exact branch head; merge actions bind current main as well as the branch revision.
 An uncertain response is recovered with the original command ID and body.
 
-Advanced process decisions, quantitative economic/capacity scenarios, refinement,
-simulation, bulk collaboration and broader portfolio completeness remain open.
-These projections, merges and human reports describe organizational design
-rather than operational or verified outcome coverage.
+Quantitative economic/capacity scenarios, refinement, bulk collaboration and
+broader portfolio completeness remain open. These projections, merges and human
+reports describe organizational design rather than verified operating outcomes.
+
+## Typed process design and saved simulation
+
+Human project editors can define a process flow or decision table on exact current
+main or active branch snapshots. The typed editor supports manual activities,
+manual exception paths, decisions, paired forks/joins, one bounded loop and
+explicit ends. Flows retain stable step IDs and canonical process, role,
+information and decision references; those references appear in the derived map.
+Decision tables declare typed inputs, ordered conditions and `FIRST_MATCH` or
+`UNIQUE` selection. Missing or mistyped inputs stay unknown; ambiguous unique
+matches remain conflicted. Definitions are bounded to 32 steps, 12 decision
+inputs, 20 rules and at most 10 loop iterations. Nested loops and automated agent
+steps are unsupported.
+
+The same enterprise command endpoint accepts `define-process-flow`,
+`define-decision-table` and `simulate-process`. Simulation binds an exact saved
+main, historical, proposal or branch snapshot and declared inputs, activity
+outcomes and optional decision choices. Each saved result captures source and
+scenario hashes, engine version, source labels and an explainable trace. The
+step limit bounds trace entries to 200; missing assumptions, unresolved routes,
+conflicts, failures and exhausted limits are explicit. Simulation does not run
+tasks, record actual human choices, verify outcomes or authorize publication or
+effects.
+
+Appending simulation evidence requires current human project write authority,
+even when its source is a historical or read-only design. A project retains at
+most 50 results of at most 256 KiB each. Enterprise GET returns bounded history
+summaries and one full result: the latest matching selected process and exact
+source, or an explicit `simulationId`. Recorded-time cutoffs hide later results.
+The original command ID and body recover an uncertain save response.
+
+Actual routing for these advanced flows is the next runtime increment. Until it
+is implemented, the legacy process planner rejects an authored advanced flow;
+it cannot silently compile the design as an ordinary information-dependency DAG.
+Existing baseline plans remain available.
 
 ## Financial SDLC reference
 

@@ -9,7 +9,7 @@ export const ENTERPRISE_BRANCH_KINDS = new Set(['create-branch', 'edit-branch-ob
   'set-branch-validity', 'prepare-merge', 'review-merge', 'apply-reviewed-merge', 'abandon-branch']);
 const referenceFields = new Set(['owner', 'metric', 'metrics', 'serves', 'enabledBy', 'realisers', 'capability',
   'inputs', 'outputs', 'resources', 'systems', 'responsibilities', 'decisionIds', 'assignedRoleIds', 'decisionMaker',
-  'scope', 'supports', 'control', 'mitigates', 'reads', 'consumerLoop', 'goal', 'evidence', 'decisions', 'parentUnitId']);
+  'scope', 'supports', 'control', 'mitigates', 'reads', 'consumerLoop', 'goal', 'evidence', 'decisions', 'parentUnitId', 'processFlow', 'decisionTable']);
 const reportFields = new Set(['enterpriseStates', 'provenance']);
 const clone = (value) => value === undefined ? undefined : structuredClone(value);
 const same = (left, right) => digest(left ?? null) === digest(right ?? null) && (left === undefined) === (right === undefined);
@@ -246,6 +246,16 @@ export function enterpriseMergeApproval(project, command) {
   const candidate = candidateFor(project, branch, head, command);
   if (candidate.review?.decision !== 'ACCEPT') fail('ENTERPRISE_MERGE_REVIEW_REQUIRED', 'A current human owner must accept this exact candidate before applying it.');
   return clone(candidate.review);
+}
+export function appendEnterpriseBranchDesign(project, command, actor, mutate) {
+  const { branch, head } = verifiedBranch(project, command.branchId);
+  assertActiveHead(branch, head, command);
+  const at = new Date().toISOString(); const next = mutate(clone(head.snapshot), at);
+  const revision = addRevision(branch, next, actor, command.reason, at);
+  project.audit ??= [];
+  project.audit.push({ at, action: `enterprise.${command.kind}`, actor, detail: `Updated typed process design in “${branch.title}”.` });
+  return { blueprint: latestBlueprint(project), affectedObjectId: command.objectId, branchId: branch.id,
+    branchRevision: revision.revision, proposalId: null, recordedAt: at };
 }
 function addRevision(branch, snapshot, actor, reason, at) {
   if (branch.revisions.length >= 50) fail('ENTERPRISE_BRANCH_REVISION_LIMIT', 'This branch reached its 50-revision history limit.');

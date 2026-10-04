@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { verifyBlueprintProposalEvaluation } from './execution/proposals.mjs';
 import { enterpriseScopeErrors, enterpriseScopeRelations } from './enterprise/types.mjs';
 import { enterpriseStateErrors } from './enterprise/state.mjs';
+import { processModelErrors, processModelRelations } from './enterprise/process-model.mjs';
 
 export const AREA_DEFINITIONS = [
   ['purposeStrategy', 'Purpose & strategy'],
@@ -924,6 +925,7 @@ export function planProcessTaskGraph(project, processId, actor) {
   const ordered = [];
   const dependencies = new Map();
   const visit = (process) => {
+    if (process.processFlow) throw Object.assign(new Error('Advanced process flows require their explicit manual-flow runtime plan. Simulation does not authorize work.'), { code: 'PROCESS_FLOW_RUNTIME_UNSUPPORTED', statusCode: 409 });
     if (visiting.has(process.id)) throw Object.assign(new Error('The process input/output relationships contain a cycle and cannot be planned.'), { code: 'PROCESS_GRAPH_CYCLE', statusCode: 409 });
     if (visited.has(process.id)) return;
     if (visited.size >= 32) throw Object.assign(new Error('The planned graph exceeds 32 process tasks.'), { code: 'PROCESS_GRAPH_TOO_LARGE', statusCode: 400 });
@@ -1148,6 +1150,7 @@ export function buildRelations(areas) {
     }
   }
   relations.push(...enterpriseScopeRelations(objects));
+  relations.push(...processModelRelations(objects));
   return [...new Map(relations.map((relation) => [relation.id, relation])).values()];
 }
 
@@ -1189,6 +1192,7 @@ export function validateBlueprint(blueprint) {
   }
   errors.push(...enterpriseScopeErrors(objects));
   errors.push(...enterpriseStateErrors(objects));
+  errors.push(...processModelErrors(objects));
 
   return {
     valid: errors.length === 0,
