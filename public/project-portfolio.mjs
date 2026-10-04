@@ -7,6 +7,8 @@ export function projectPortfolioFacts(project) {
     blueprint: Number.isInteger(project?.blueprintVersion) && project.blueprintVersion > 0
       ? `Blueprint version ${project.blueprintVersion}` : 'No saved blueprint yet',
     access: accessLabels[project?.workspaceAccess] ?? 'Local workspace',
+    incidents: Number.isSafeInteger(project?.openIncidentCount) && project.openIncidentCount > 0 ? project.openIncidentCount : 0,
+    support: Number.isSafeInteger(project?.openSupportCount) && project.openSupportCount > 0 ? project.openSupportCount : 0,
     updated: typeof project?.updatedAt === 'string' && Number.isFinite(Date.parse(project.updatedAt))
       ? new Date(project.updatedAt).toLocaleString() : 'No saved activity time',
   };
@@ -31,9 +33,15 @@ export function renderProjectPortfolio(projects, { el, onOpen }) {
     ]));
     card.append(el('p', { className: 'portfolio-blueprint', text: facts.blueprint }));
     card.append(el('p', { className: 'portfolio-updated', text: `Last saved ${facts.updated}` }));
+    card.append(el('p', { className: 'portfolio-issues', text: `Active incidents: ${facts.incidents} · Active support: ${facts.support}` }));
     const open = el('button', { className: 'button secondary', text: 'Open workspace', attrs: { type: 'button' } });
     open.addEventListener('click', () => onOpen(project.id));
     card.append(open);
+    if (facts.incidents || facts.support) {
+      const review = el('button', { className: 'button ghost', text: 'Review incident and support inbox', attrs: { type: 'button' } });
+      review.addEventListener('click', () => onOpen(project.id, { focusOutcomes: true }));
+      card.append(review);
+    }
     list.append(card);
   }
   section.append(list);

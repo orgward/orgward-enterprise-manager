@@ -97,14 +97,34 @@ test('portfolio project list returns each caller’s persisted workspace access'
     [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
   }
   const project = await seedProject(postgres, 'Portfolio access fixture');
+  const createdOutcomes = {};
+  for (const [category, commandId] of [['incident', 'portfolio-open-incident'], ['support', 'portfolio-open-support']]) {
+    const created = await request(instance.base, 'owner', `/api/v1/projects/${project.id}/outcomes`, {
+      method: 'POST', body: { commandId, title: `Portfolio ${category}`, category,
+        source: { kind: 'manual', summary: `Human reported ${category}; this is not independently verified.` },
+        ownerPrincipal: identities.get('owner').principal },
+    }, 201);
+    assert.equal(created.outcome.status, 'OPEN');
+    createdOutcomes[category] = created.outcome;
+  }
   for (const [subject, access] of [['owner', 'owner'], ['editor', 'editor'], ['reader', 'reader']]) {
     const response = await request(instance.base, subject, '/api/v1/projects');
     const visible = response.data.find((record) => record.id === project.id);
     assert.equal(visible?.workspaceAccess, access, `${subject} sees their authoritative project access`);
+    assert.equal(visible?.openIncidentCount, 1);
+    assert.equal(visible?.openSupportCount, 1);
   }
   const unrelated = await request(instance.base, 'outsider', '/api/v1/projects');
   assert.equal(unrelated.data.some((record) => record.id === project.id), false,
     'portfolio metadata follows project membership visibility');
+  await request(instance.base, 'owner', `/api/v1/projects/${project.id}/outcomes/${createdOutcomes.incident.id}/status`, {
+    method: 'POST', body: { commandId: 'portfolio-resolve-incident', expectedVersion: 1,
+      status: 'RESOLVED', reason: 'The human reported issue was reviewed and closed.' },
+  });
+  const afterResolution = await request(instance.base, 'owner', '/api/v1/projects');
+  const current = afterResolution.data.find((record) => record.id === project.id);
+  assert.equal(current?.openIncidentCount, 0);
+  assert.equal(current?.openSupportCount, 1);
 });
 
 function enterpriseRoute(projectId, query = {}) {

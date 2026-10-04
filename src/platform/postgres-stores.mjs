@@ -1416,9 +1416,18 @@ export class PostgresProjectStore extends PostgresDocumentStore {
         tenantId, principal, anyRoleGroups: anyPrincipalRoleGroups, authzGeneration,
       });
       const result = await client.query(`
-        select a.*, m.access as scoped_membership_access from orgward.aggregates a
+        select a.*, m.access as scoped_membership_access,
+          coalesce(outcomes.open_incident_count, 0)::int as open_incident_count,
+          coalesce(outcomes.open_support_count, 0)::int as open_support_count
+        from orgward.aggregates a
         join orgward.project_memberships m
           on m.tenant_id = a.tenant_id and m.project_kind = a.aggregate_kind and m.project_id = a.aggregate_id
+        left join lateral (
+          select count(*) filter (where state->>'category'='incident' and state->>'status' in ('OPEN','IN_PROGRESS')) as open_incident_count,
+            count(*) filter (where state->>'category'='support' and state->>'status' in ('OPEN','IN_PROGRESS')) as open_support_count
+          from orgward.customer_outcomes
+          where tenant_id=a.tenant_id and project_id=a.aggregate_id
+        ) outcomes on true
         where a.tenant_id = $1 and a.aggregate_kind = 'project'
           and m.principal = $2 and m.revoked_at is null
         order by a.updated_at desc, a.aggregate_id
@@ -1434,6 +1443,8 @@ export class PostgresProjectStore extends PostgresDocumentStore {
             version: project.version, phase: project.phase, updatedAt: project.updatedAt,
             blueprintVersion: project.blueprintVersions?.at(-1)?.version ?? null,
             workspaceAccess: row.scoped_membership_access,
+            openIncidentCount: row.open_incident_count,
+            openSupportCount: row.open_support_count,
           });
         } catch { corruptRecords += 1; }
       }

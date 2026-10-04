@@ -7235,3 +7235,27 @@ setup; its corrected targeted rerun passed 1/1 (778ms case; TAP 1.08s, runner
 portfolio UI and PostgreSQL access acceptance are both accounted for passing;
 the PostgreSQL case passed after the fixture correction. No full check was run.
 PR-15 remains open and active.
+
+PR-15 active incident/support portfolio slice (2026-10-04): the authenticated
+PostgreSQL project listing now includes per-project counts for OPEN or
+IN_PROGRESS incidents and support outcomes. Portfolio cards display both counts
+and offer a direct Review incident and support inbox action when either count
+is nonzero; the action opens the exact project and moves focus to its existing
+outcome inbox. Focused fixtures create incident/support items through the
+persisted outcome API, verify owner/editor/reader counts and nonmember
+invisibility, and verify resolved incidents no longer count as active. The UI
+fixture checks counts and exact-project inbox navigation. Static checks only;
+behavior tests are paused for Sol review. Proposed focused command:
+`npm test -- tests/enterprise/view.test.mjs tests/enterprise/server.test.mjs --test-name-pattern='portfolio cards show saved workspace state and access|portfolio project list returns each caller’s persisted workspace access'`.
+Static review correction (2026-10-04): the UI fixture now captures both project ID
+and options from the inbox action, so it verifies the exact target and
+`focusOutcomes: true` request instead of discarding the navigation option.
+Returning to the portfolio now refreshes its authenticated project list (with a
+single in-flight refresh), so changed issue counts and actions are not left stale.
+The PG fixture resolves an incident through the saved status command and checks
+the next portfolio projection; the UI fixture re-renders the cleared counts and
+asserts the issue-inbox action disappears. Focused run after Sol review passed
+2/2 (PG case 754ms, UI case 36ms; TAP 1.09s, runner 2.25s; log
+`/tmp/orgward-tests-jkZx8l/node-test.tap.log`). No skips or failures; no full
+check run.
+PR-15 remains open and active.

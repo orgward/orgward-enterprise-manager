@@ -2,7 +2,7 @@
 export function renderOutcomeInbox({ projectId, principal, el, api, preferredSource = null }) {
   const base = `/api/v1/projects/${encodeURIComponent(projectId)}/outcomes`;
   const storageKey = `orgward:outcome-command:${encodeURIComponent(principal ?? '')}:${encodeURIComponent(projectId)}`;
-  const root = el('section', { className: 'panel content-section outcome-inbox', attrs: { 'aria-label': 'Project outcome inbox' } });
+  const root = el('section', { className: 'panel content-section outcome-inbox', attrs: { 'aria-label': 'Project outcome inbox', tabindex: '-1' } });
   root.style.overflowWrap = 'anywhere'; root.style.minWidth = '0';
   const status = el('p', { attrs: { role: 'status', 'aria-live': 'polite' } });
   const body = el('div');

@@ -87,19 +87,26 @@ test('portfolio cards show saved workspace state and access and open the chosen 
   const opened = [];
   const projects = [
     { id: 'project-a', name: 'Northstar', phase: 'design', blueprintVersion: 3,
-      workspaceAccess: 'editor', updatedAt: '2026-10-03T12:00:00.000Z' },
+      workspaceAccess: 'editor', openIncidentCount: 2, openSupportCount: 1, updatedAt: '2026-10-03T12:00:00.000Z' },
     { id: 'project-b', name: 'Harbor', phase: 'discovery', blueprintVersion: null,
       workspaceAccess: 'reader', updatedAt: '2026-10-02T12:00:00.000Z' },
   ];
-  const rendered = renderProjectPortfolio(projects, { el, onOpen: (id) => opened.push(id) });
+  const rendered = renderProjectPortfolio(projects, { el, onOpen: (id, options) => opened.push(options ? [id, options] : id) });
   assert.match(rendered.textContent, /Your portfolio Workspaces/);
   assert.match(rendered.textContent, /Northstar Editor access design Blueprint version 3/);
+  assert.match(rendered.textContent, /Active incidents: 2 · Active support: 1/);
   assert.match(rendered.textContent, /Harbor Reader access discovery No saved blueprint yet/);
   const secondCard = rendered.children[1].children[1];
   const openButton = secondCard.children.find((child) => child.tagName === 'button');
   openButton.listeners.get('click')();
-  assert.deepEqual(opened, ['project-b']);
+  const reviewButton = rendered.children[1].children[0].children.find((child) => child.text === 'Review incident and support inbox');
+  reviewButton.listeners.get('click')();
+  assert.deepEqual(opened, ['project-b', ['project-a', { focusOutcomes: true }]]);
   assert.equal(projectPortfolioFacts({}).access, 'Local workspace');
+  const returned = renderProjectPortfolio([{ ...projects[0], openIncidentCount: 0, openSupportCount: 0 }], { el, onOpen() {} });
+  assert.match(returned.textContent, /Active incidents: 0 · Active support: 0/);
+  assert.equal(returned.children[1].children[0].children.some((child) => child.text === 'Review incident and support inbox'), false,
+    'the refreshed portfolio removes the review action after all incident/support items are closed');
 });
 const branchUi = {
   field(name, label, { entries = null, value = '', required = true, multiline = false } = {}) {

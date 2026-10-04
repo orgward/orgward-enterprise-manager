@@ -13,6 +13,7 @@ import { renderProjectPortfolio } from './project-portfolio.mjs';
 
 const state = {
   projects: [],
+  portfolioRefreshPromise: null,
   project: null,
   view: 'blueprint',
   mapMode: 'graph',
@@ -431,27 +432,32 @@ function announceFounderConversation(project, options) {
 }
 
 async function refreshProjects() {
-  const result = await api('/api/v1/projects');
-  state.projects = result.data;
-  select.replaceChildren(element('option', { text: state.projects.length ? 'Choose project…' : 'No projects yet', attrs: { value: '' } }));
-  for (const project of state.projects) select.append(element('option', { text: project.name, attrs: { value: project.id } }));
-  select.value = state.project?.id ?? '';
-  renderPortfolio();
+  if (state.portfolioRefreshPromise) return state.portfolioRefreshPromise;
+  state.portfolioRefreshPromise = (async () => {
+    const result = await api('/api/v1/projects');
+    state.projects = result.data;
+    select.replaceChildren(element('option', { text: state.projects.length ? 'Choose project…' : 'No projects yet', attrs: { value: '' } }));
+    for (const project of state.projects) select.append(element('option', { text: project.name, attrs: { value: project.id } }));
+    select.value = state.project?.id ?? '';
+    renderPortfolio();
+  })();
+  try { await state.portfolioRefreshPromise; }
+  finally { state.portfolioRefreshPromise = null; }
 }
 
 function renderPortfolio() {
   const target = document.querySelector('#portfolio-list');
   if (!target) return;
-  target.replaceChildren(renderProjectPortfolio(state.projects, { el: element, onOpen: (id) => {
+  target.replaceChildren(renderProjectPortfolio(state.projects, { el: element, onOpen: (id, { focusOutcomes = false } = {}) => {
     if (!allowRouteChange()) return;
     state.draft = '';
     state.pendingMessage = null;
     select.value = id;
-    loadProject(id);
+    loadProject(id, { focusOutcomes });
   } }));
 }
 
-function showWelcome({ history = 'push' } = {}) {
+function showWelcome({ history = 'push', refreshPortfolio = true } = {}) {
   state.projectLoadGeneration += 1;
   state.enterpriseGeneration += 1; state.enterpriseModel = null; state.enterpriseError = null; state.enterpriseLoading = false;
   state.enterpriseUnavailable = null; state.enterpriseExplicit = false;
@@ -480,6 +486,7 @@ function showWelcome({ history = 'push' } = {}) {
     setFieldError('project-name-error', []);
   });
   renderPortfolio();
+  if (refreshPortfolio) void refreshProjects().catch((error) => showRequestFailure(error, () => { void refreshProjects(); }));
   select.value = '';
   hideAppState();
   showProjectSourceWarning();
@@ -514,7 +521,7 @@ async function createProject(event) {
   }
 }
 
-async function loadProject(id, { history = 'push', route = null } = {}) {
+async function loadProject(id, { history = 'push', route = null, focusOutcomes = false } = {}) {
   if (!id) return showWelcome({ history });
   const loadGeneration = ++state.projectLoadGeneration;
   if (state.project?.id !== id) state.enterpriseStatus = '';
@@ -557,6 +564,11 @@ async function loadProject(id, { history = 'push', route = null } = {}) {
       if (!state.activeTypes.size) state.activeTypes = new Set(types);
     }
     renderStudio();
+    if (focusOutcomes) {
+      const inbox = document.querySelector('.outcome-inbox');
+      inbox?.scrollIntoView?.({ block: 'start' });
+      inbox?.focus?.({ preventScroll: true });
+    }
     announceFounderConversation(state.project);
     hideAppState();
     syncRoute(history);
@@ -2383,7 +2395,7 @@ try {
   foundationBadge.lastChild.textContent = ` ${state.foundation.identity.status === 'development_unverified' ? 'Development identity' : 'Authenticated workspace'}`;
   signOutButton.hidden = !session.authenticated;
   const route = decodeStudioRoute(window.location.href);
-  if (route.projectId) await loadProject(route.projectId, { history: 'replace', route }); else showWelcome({ history: 'replace' });
+  if (route.projectId) await loadProject(route.projectId, { history: 'replace', route }); else showWelcome({ history: 'replace', refreshPortfolio: false });
   showProjectSourceWarning();
 } catch (error) {
   app.replaceChildren();
