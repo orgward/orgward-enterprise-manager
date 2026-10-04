@@ -358,12 +358,17 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .enterprise-context [data-enterprise-merge-candidate] { border: 1px solid var(--border, #363b32); padding: .8rem; margin-top: .8rem; }
 
 .portfolio-list { margin: 2.5rem 0; text-align: left; }
-.portfolio-heading { display: flex; justify-content: space-between; align-items: end; gap: 1rem; margin-bottom: 1rem; }
+.portfolio-heading { display: flex; justify-content: space-between; align-items: end; gap: 1rem; margin-bottom: 1rem; min-width: 0; }
+.portfolio-heading > div { min-width: 0; }
 .portfolio-heading h2 { margin: .25rem 0; }
-.portfolio-heading p, .portfolio-updated { color: var(--muted, #a9b0a8); }
-.portfolio-count, .portfolio-access, .portfolio-phase { border: 1px solid var(--border, #363b32); border-radius: 999px; padding: .35rem .65rem; white-space: nowrap; }
+.portfolio-heading p, .portfolio-updated { color: var(--muted, #a9b0a8); overflow-wrap: anywhere; }
+.portfolio-count, .portfolio-access, .portfolio-phase { border: 1px solid var(--border, #363b32); border-radius: 999px; padding: .35rem .65rem; }
+.portfolio-access, .portfolio-phase { white-space: nowrap; }
+.portfolio-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; margin-top: 1rem; min-width: 0; }
+.portfolio-filters label { display: grid; gap: .35rem; min-width: 0; }
+.portfolio-filters input, .portfolio-filters select { box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; }
 .portfolio-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 1rem; }
-.portfolio-card { display: grid; align-content: start; gap: .65rem; border: 1px solid var(--border, #363b32); border-radius: .8rem; padding: 1rem; background: var(--surface, #171d19); }
+.portfolio-card { display: grid; align-content: start; gap: .65rem; min-width: 0; border: 1px solid var(--border, #363b32); border-radius: .8rem; padding: 1rem; background: var(--surface, #171d19); }
 .portfolio-card-heading { display: flex; justify-content: space-between; align-items: start; gap: .7rem; }
 .portfolio-card h3 { margin: 0 0 .4rem; overflow-wrap: anywhere; }
 .portfolio-card p { margin: 0; }
@@ -373,6 +378,12 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .portfolio-import { display: grid; gap: .35rem; font-size: .88rem; color: var(--muted, #a9b0a8); }
 .portfolio-import input { max-width: 100%; min-width: 0; }
 .portfolio-empty { grid-column: 1 / -1; padding: 1rem; border: 1px dashed var(--border, #363b32); border-radius: .8rem; }
+
+@media (max-width: 520px) {
+  .portfolio-heading { align-items: stretch; flex-direction: column; gap: .5rem; }
+  .portfolio-count { align-self: flex-start; white-space: normal; overflow-wrap: anywhere; }
+  .portfolio-filters { grid-template-columns: minmax(0, 1fr); }
+}
 
 .enterprise-editor-rows, .enterprise-step-fields { display: grid; gap: .7rem; min-width: 0; }
 .enterprise-editor-row { border: 1px solid var(--border, #363b32); padding: .7rem; display: grid; gap: .5rem; min-width: 0; }

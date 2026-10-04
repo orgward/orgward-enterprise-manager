@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { enterpriseCommandStorageKey, enterpriseContextFailure, enterpriseContextReadOnly, enterpriseQuery, enterpriseRequestPath, enterpriseSourceAligned, hasEnterpriseContext,
   enterpriseInterchangeDraftStorageKey, persistEnterpriseCommand, persistEnterpriseInterchangeDraft, renderEnterpriseContext,
@@ -194,6 +195,32 @@ test('portfolio search and access filter find the matching workspace and preserv
     { id: 'project-north', options: { focusOutcomes: true, focusOutcomeCategory: 'incident' } }]);
   assert.deepEqual(exported, ['project-north']);
   assert.deepEqual(imported, [['project-north', 'filtered-import.json']]);
+});
+
+test('portfolio filter feedback is announced and its layout adapts to narrow screens', () => {
+  const portfolio = renderProjectPortfolio([
+    { id: 'project-a', name: 'Northstar', workspaceAccess: 'owner' },
+  ], { el, onOpen: () => {}, onExport: () => {}, onImport: () => {} });
+  const count = portfolio.querySelectorAll('span').find((entry) => entry.className === 'portfolio-count');
+  assert.equal(count.attrs.role, 'status');
+  assert.equal(count.attrs['aria-live'], 'polite');
+  assert.equal(count.attrs['aria-atomic'], 'true');
+
+  const search = portfolio.querySelectorAll('input').find((entry) => entry.attrs.type === 'search');
+  search.value = 'missing'; search.listeners.get('input')();
+  const empty = portfolio.querySelectorAll('p').find((entry) => entry.className === 'portfolio-empty');
+  assert.equal(count.textContent, 'Showing 0 of 1 workspaces');
+  assert.equal(empty.attrs.role, 'status');
+  assert.equal(empty.attrs['aria-live'], 'polite');
+  assert.equal(empty.attrs['aria-atomic'], 'true');
+
+  const css = readFileSync(new URL('../../public/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.portfolio-heading\s*\{[^}]*min-width:\s*0/);
+  assert.match(css, /\.portfolio-filters\s*\{[^}]*minmax\(0,\s*1fr\)/);
+  assert.match(css, /\.portfolio-filters input, \.portfolio-filters select\s*\{[^}]*width:\s*100%[^}]*max-width:\s*100%[^}]*min-width:\s*0/);
+  assert.match(css, /@media\s*\(max-width:\s*520px\)[\s\S]*?\.portfolio-heading\s*\{[^}]*flex-direction:\s*column/);
+  assert.match(css, /@media\s*\(max-width:\s*520px\)[\s\S]*?\.portfolio-filters\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+  assert.match(css, /\.portfolio-count\s*\{[^}]*white-space:\s*normal/);
 });
 
 test('portfolio issue actions open the selected workspace and focus the requested inbox category', () => {

@@ -7430,6 +7430,19 @@ skips; 2.58s; TAP log: `/tmp/orgward-tests-Yq8gLd/node-test.tap.log`).
 `tests/enterprise/view.test.mjs`; `git diff --check` passed. No full check run;
 PR-15 remains open and active.
 
+PR-15 portfolio filter accessibility and narrow-screen follow-up (2026-10-04):
+the dynamic workspace count and no-match feedback now use polite atomic status
+regions. Portfolio heading content can shrink and wrap; filter controls use
+bounded full-width sizing, and a 520px breakpoint stacks heading and controls
+and permits the count to wrap. Focused view assertions cover live-region
+attributes, updated zero-result text and the narrow-screen CSS constraints.
+The requested search/card/PostgreSQL-list cases plus the new accessibility and
+layout case passed 4/4 (0 failures, 0 skips; 2.68s; TAP log:
+`/tmp/orgward-tests-XYxMc3/node-test.tap.log`). The final rerun completed in
+2.88s. `node --check` passed for
+`public/project-portfolio.mjs` and `tests/enterprise/view.test.mjs`;
+`git diff --check` passed. No full check run; PR-15 remains open and active.
+
 PR-15 restore draft from a saved design version (2026-10-04): when an owner or
 editor selects a historical saved main version, the branch panel offers an
 explicit “Restore this saved version as a draft” action. The draft copies the
