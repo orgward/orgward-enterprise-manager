@@ -6665,7 +6665,7 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   were rerun after this disposition. `git diff --check` passes and
   `npm run task:next` must report PR-14.
 
-- [ ] PR-14 — Governance and supervised agents (T-76–T-89). Implement versioned
+- [x] PR-14 — Governance and supervised agents (T-76–T-89). Implement versioned
   policy decisions/enforcement, decision rights and appeals, semantic/data
   stewardship, verifiable governance ledger, agent identities/autonomy envelopes,
   multi-agent handoffs and shared budgets. Independent adversarial qualification
@@ -6848,8 +6848,33 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   already verified against the database row. Final targeted PostgreSQL
   handoff case passed 1/1, 0 failures/skips, runner duration 6.01s; TAP:
   `/tmp/orgward-tests-HKhkeq/node-test.tap.log`. The two pure handoff tests
-  separately passed in all three focused runs above (2/2 each). No full check;
-  PR-14 remains open.
+  separately passed in all three focused runs above (2/2 each). The single
+  parent check and final fixture rerun are recorded below.
+  Parent-boundary check (2026-10-04): the single `npm run check` completed with
+  541 tests, 538 passed, 2 failed, and 1 optional skip (102.92s test duration;
+  TAP `/tmp/orgward-tests-Yj56ok/node-test.tap.log`, command capture
+  `/tmp/orgward-pr14-parent-check.log`). Both failures were legacy fixtures
+  enabling agent bindings without the now-required nonempty owner-selected
+  execution envelope (`AGENT_PROFILE_ENVELOPE_REQUIRED`). Updated the identity
+  fixture with one explicit available profile, and preserved all eight static
+  profiles on the original process-task binding. For tenant-managed DeepSeek,
+  added a separate role-bound envelope and plan revision for the two standalone
+  profile checks; mixed human-checkpoint tasks use the distinct role binding
+  whose envelope contains only the two profiles those cases exercise. No
+  post-enable envelope mutation is used. Original authorization, task routing,
+  and outcome assertions remain intact.
+  Sol review also identified a separate later-binding helper in the same
+  persistence journey. Its only agent call runs the configured OpenAI profile;
+  the owner enable command now pins `process-task-openai` in that fresh
+  blueprint binding. The sole other helper call is human and carries no model
+  envelope. Final targeted rerun of exactly the two parent-check failures passed
+  2/2 with 0 failures/skips in 24.33s; TAP:
+  `/tmp/orgward-tests-nNrSk9/node-test.tap.log`. The earlier full check was not
+  rerun after these fixture-only corrections. PR-14 is complete on distinct-
+  case evidence: the single full run passed the other 538 cases, and the two
+  corrected fixtures passed targeted verification. The optional backup/restore
+  case was skipped because PostgreSQL client tools were unavailable. Full check
+  result remains 538/541, not a clean full-suite pass.
   Proposed command:
   `npm test -- tests/execution/delegation.test.mjs tests/execution/github-patch.test.mjs tests/enterprise/server.test.mjs
   --test-name-pattern='multi-agent handoff|saved manual flow routes audited human choices'`.

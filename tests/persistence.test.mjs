@@ -2487,7 +2487,9 @@ test('blueprint actor identity proposals are restricted, type-checked, pinned, i
   t.after(postgres.close);
   const oidcAuthenticator = testOidcAuthenticator();
   oidcAuthenticator.setDisplayName('bob', 'Hidden assignment recipient');
-  let app = await start(postgres.databaseUrl, { oidcAuthenticator });
+  const actorBindingProfile = { id: 'actor-binding-fixture', label: 'Actor binding fixture profile', kind: 'command',
+    version: '1.0.0', executable: process.execPath, args: ['-e', 'process.exit(0)'], workspaceRoot: tmpdir() };
+  let app = await start(postgres.databaseUrl, { oidcAuthenticator, executionProfiles: [actorBindingProfile] });
   t.after(async () => { if (app) await close(app); });
   const issuer = 'https://persistence-identity.example.test';
   const principal = (subject) => `oidc:${createHash('sha256').update(`${issuer}\n${subject}`).digest('hex')}`;
@@ -2627,7 +2629,8 @@ test('blueprint actor identity proposals are restricted, type-checked, pinned, i
   assert.equal(enabledRegistryRow.status, 'enabled');
   assert.ok(enabledRegistryRow.eligibilityStatus.includes('eligible'));
   assert.equal(enabledRegistryRow.targetPrincipal, principal('bob'));
-  const agentEnablePayload = { actorId: agentPayload.actorId, roleId: agentPayload.roleId, blueprintVersion: 1 };
+  const agentEnablePayload = { actorId: agentPayload.actorId, roleId: agentPayload.roleId, blueprintVersion: 1,
+    executionProfileIds: [actorBindingProfile.id] };
   await app.persistence.query("update orgward.oidc_principals set actor_type='human' where tenant_id='tenant-a' and principal=$1", [principal('servicebot')]);
   const changedType = await enable('alice', 'actor-binding-enable-type-change', agentEnablePayload, project.version, 409);
   assert.equal(changedType.error.code, 'ACTOR_BINDING_TYPE_MISMATCH');
@@ -2668,7 +2671,7 @@ test('blueprint actor identity proposals are restricted, type-checked, pinned, i
   const oldProposalEnable = await enable('alice', 'actor-binding-enable-old-blueprint', agentEnablePayload, project.version, 409);
   assert.equal(oldProposalEnable.error.code, 'BLUEPRINT_VERSION_STALE');
   await close(app);
-  app = await start(postgres.databaseUrl, { oidcAuthenticator });
+  app = await start(postgres.databaseUrl, { oidcAuthenticator, executionProfiles: [actorBindingProfile] });
   registry = await request(app.base, route);
   assert.equal(registry.data.proposals.length, 2, 'restricted proposals persist across restart');
   const normalProject = await request(app.base, `/api/v1/projects/${projectId}`);
@@ -6679,16 +6682,29 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   });
   const bindingRoute = `/api/v1/projects/${project.id}/actor-bindings/proposals`;
   const bindingEnableRoute = `${bindingRoute}/enable`;
+  project = (await request(app.base, `/api/v1/projects/${project.id}/blueprint/edits`, {
+    ...as('alice'), method: 'POST', body: command('process-task-link-specialist-agent-role', {
+      objectId: 'actor-design-assistant', name: 'Org design assistant',
+      detail: 'Proposes structures and gaps; has no external-action authority.',
+      assignedRoleIds: ['role-design-assistant', 'role-operations'],
+    }, project.version),
+  })).data;
+  const processTaskBlueprintVersion = project.latestBlueprint.version;
   const bind = async ({ actorId, roleId, target, label }) => {
-    const payload = { actorId, roleId, targetPrincipal: principal(target), blueprintVersion: 1 };
+    const payload = { actorId, roleId, targetPrincipal: principal(target), blueprintVersion: processTaskBlueprintVersion };
     project = (await request(app.base, bindingRoute, {
       ...as('alice'), method: 'POST', body: command(`process-task-bind-${label}`, payload, project.version),
     })).data;
     project = (await request(app.base, bindingEnableRoute, {
-      ...as('alice'), method: 'POST', body: command(`process-task-enable-${label}`, { actorId, roleId, blueprintVersion: 1 }, project.version),
+      ...as('alice'), method: 'POST', body: command(`process-task-enable-${label}`, {
+        actorId, roleId, blueprintVersion: processTaskBlueprintVersion,
+        ...(actorId === 'actor-design-assistant' ? { executionProfileIds: roleId === 'role-design-assistant'
+          ? profiles.map((profile) => profile.id) : ['process-task-success', 'tenant-deepseek-saved'] } : {}),
+      }, project.version),
     })).data;
   };
   await bind({ actorId: 'actor-design-assistant', roleId: 'role-design-assistant', target: 'servicebot', label: 'agent' });
+  await bind({ actorId: 'actor-design-assistant', roleId: 'role-operations', target: 'servicebot', label: 'managed-deepseek-agent' });
   await bind({ actorId: 'actor-founder', roleId: 'role-founder', target: 'bob', label: 'human' });
 
   const plansRoute = `/api/v1/projects/${project.id}/process-plans`;
@@ -6711,6 +6727,24 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   const currentPlan = revised.data.processPlans.at(-1);
   const planInput = { projectId: project.id, planId: plan.id, revision: 2, taskId: 'task-process-learn', profileId: 'process-task-failure' };
   const successInput = { ...planInput, profileId: 'process-task-success' };
+  project = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
+  const managedPlanCreated = await request(app.base, plansRoute, {
+    ...as('alice'), method: 'POST', body: command('process-task-managed-deepseek-plan', { processId: 'process-review' }, project.version),
+  }, 201);
+  const managedPlan = managedPlanCreated.data.processPlans.at(-1);
+  const managedPlanRevisionPayload = { tasks: managedPlan.tasks.map((task) => {
+    const humanRoot = task.id === 'task-process-review';
+    const managedProfileTask = task.id === 'task-process-learn';
+    return { taskId: task.id, title: task.title, detail: task.detail, dependencies: task.dependencies,
+      actorId: humanRoot ? 'actor-founder' : 'actor-design-assistant',
+      roleId: humanRoot ? 'role-founder' : managedProfileTask ? 'role-operations' : 'role-design-assistant' };
+  }) };
+  const managedPlanRevision = await request(app.base, `${plansRoute}/${managedPlan.id}/revisions`, {
+    ...as('alice'), method: 'POST', body: command('process-task-managed-deepseek-plan-revision', managedPlanRevisionPayload, managedPlanCreated.data.version),
+  });
+  const managedDeepSeekRevision = managedPlanRevision.data.processPlans.find((entry) => entry.id === managedPlan.id && entry.revision === 2);
+  const managedDeepSeekPlanInput = { projectId: project.id, planId: managedPlan.id, revision: managedDeepSeekRevision.revision,
+    taskId: 'task-process-learn', profileId: 'tenant-deepseek-saved', profileRevision: 1 };
   const repositoryListRoute = `/api/execution/local-repositories?projectId=${encodeURIComponent(project.id)}`;
   const repositoryInventory = await request(app.base, repositoryListRoute, as('alice'));
   assert.equal(repositoryInventory.repositories.length, 2);
@@ -7638,9 +7672,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   });
   assert.equal(freshNewInstanceApproval.status, 'APPROVED', 'a retry is a distinct process instance with fresh independent approval');
 
-  const managedDeepSeekRun = await taskRequest('process-task-deepseek-managed-after-restart', {
-    ...planInput, profileId: 'tenant-deepseek-saved', profileRevision: 1,
-  });
+  const managedDeepSeekRun = await taskRequest('process-task-deepseek-managed-after-restart', managedDeepSeekPlanInput);
   assert.equal(managedDeepSeekRun.profile.version, 'tenant-deepseek-r1');
   assert.equal(managedDeepSeekRun.profile.providerModel, 'deepseek-fixture');
   assert.equal(managedDeepSeekRun.profile.providerMaxOutputTokens, 160);
@@ -7661,9 +7693,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal((await app.persistence.query(`select 1 from orgward.provider_dispatch_attempts
     where tenant_id='tenant-a' and run_id=$1`, [managedDeepSeekRun.id])).rowCount, 0,
   'a rotated generic credential fences dispatch before any provider attempt');
-  const managedDeepSeekCurrentRun = await taskRequest('process-task-deepseek-current-after-rotation', {
-    ...planInput, profileId: 'tenant-deepseek-saved', profileRevision: 1,
-  });
+  const managedDeepSeekCurrentRun = await taskRequest('process-task-deepseek-current-after-rotation', managedDeepSeekPlanInput);
   assert.equal(managedDeepSeekCurrentRun.profile.credential.version, 2);
   const managedDeepSeekCurrentApproval = await request(app.base, `/api/execution/runs/${managedDeepSeekCurrentRun.id}/approve`, {
     ...as('bob'), method: 'POST', body: JSON.stringify({ version: managedDeepSeekCurrentRun.version }),
@@ -7876,7 +7906,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.match(firstRoot.processTaskRef.planInstanceId, /^[0-9a-f-]{36}$/i);
   assert.deepEqual(firstRoot.events[0].data.processTaskRef, {
     processPlanId: plan.id, revision: 2, planInstanceId: firstRoot.processTaskRef.planInstanceId,
-    taskId: 'task-process-learn', blueprintId: currentPlan.source.blueprintId, blueprintVersion: 1,
+    taskId: 'task-process-learn', blueprintId: currentPlan.source.blueprintId, blueprintVersion: currentPlan.source.blueprintVersion,
   });
   const failedTerminal = await approveAndExecute(firstRoot);
   assert.equal(failedTerminal.status, 'FAILED');
@@ -8781,7 +8811,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     return {
       taskId: task.id, title: task.title, detail: task.detail, dependencies: task.dependencies,
       actorId: humanRoot ? 'actor-founder' : 'actor-design-assistant',
-      roleId: humanRoot ? 'role-founder' : 'role-design-assistant',
+      roleId: humanRoot ? 'role-founder' : 'role-operations',
     };
   }), humanCheckpoint: {
     beforeTaskId: mixedAgentTarget.id, title: 'Approve the human review result',
@@ -8797,6 +8827,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   const mixedAgentTask = mixedRevision.tasks.find((task) => task.assignee.actorId === 'actor-design-assistant');
   assert.equal(mixedHumanRootTask.assignee.actorId, 'actor-founder');
   assert.equal(mixedAgentTask.assignee.actorId, 'actor-design-assistant');
+  assert.equal(mixedAgentTask.assignee.roleId, 'role-operations', 'tenant-managed DeepSeek uses its separate pinned role envelope');
   assert.deepEqual(mixedCheckpointTask.dependencies, [mixedHumanRootTask.id]);
   assert.deepEqual(mixedAgentTask.dependencies, [mixedCheckpointTask.id]);
   const mixedRootPayload = {
@@ -8810,9 +8841,9 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   const mixedHumanBinding = await app.persistence.query(`
     select target_principal, target_membership_generation, target_authz_generation
     from orgward.project_actor_binding_proposals
-    where tenant_id='tenant-a' and project_id=$1 and blueprint_version=1
+    where tenant_id='tenant-a' and project_id=$1 and blueprint_version=$2
       and actor_id='actor-founder' and role_id='role-founder' and status='enabled'
-  `, [project.id]);
+  `, [project.id, mixedPlan.source.blueprintVersion]);
   assert.equal(mixedHumanBinding.rowCount, 1);
   const legacySuccessInstanceId = '6d70cb74-8c46-4b5b-a90a-5fa32b123456';
   await app.persistence.query(`
@@ -9878,6 +9909,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     project = (await request(app.base, bindingEnableRoute, {
       ...as('alice'), method: 'POST', body: command(`proposal-journey-enable-${label}`, {
         actorId, roleId, blueprintVersion,
+        ...(actorId === 'actor-design-assistant' ? { executionProfileIds: ['process-task-openai'] } : {}),
       }, project.version),
     })).data;
   };
