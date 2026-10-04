@@ -17,6 +17,7 @@ import { enterpriseStewardshipPayload, renderEnterpriseStewardship } from '../..
 import { downloadPortfolioDesign, portfolioDesignExportFilename, projectPortfolioFacts, readPortfolioImportFile, renderProjectPortfolio,
   portfolioImportWorkspaceRoute, verifyPortfolioDesignBundle } from '../../public/project-portfolio.mjs';
 import { digest } from '../../src/sdlc/contracts.mjs';
+import { isValidEnterpriseIntegrityAssessment, projectEnterpriseIntegrity } from '../../src/enterprise/integrity.mjs';
 import { projectPortfolioIntegritySummary } from '../../src/platform/postgres-stores.mjs';
 import { decodeStudioRoute, encodeStudioRoute } from '../../public/shared-interactions.mjs';
 
@@ -148,7 +149,9 @@ test('portfolio integrity summary requires a valid complete report history', () 
   const blueprint = { id: 'blueprint-00000000-0000-4000-8000-000000000002', version: 2 };
   const report = (id, sourceBlueprint, sourceVersion, snapshotHash) => {
     const entry = { source: { projectId, blueprintId: sourceBlueprint, blueprintVersion: sourceVersion, snapshotHash },
-      engineVersion: 'test', status: 'PASS', counts: { findings: 0 }, rules: [], findings: [],
+      engineVersion: 'test', status: 'PASS', counts: { rules: 1, passedRules: 1, failedRules: 0, reviewRules: 0, findings: 0,
+        high: 0, medium: 0, low: 0 },
+      rules: [{ id: 'design.typed-structure', status: 'PASS', findingCount: 0, summary: 'Valid fixture.' }], findings: [],
       id: `enterprise-integrity-${id}`, createdAt: '2026-10-04T00:00:00.000Z', createdBy: 'owner', reason: 'Review' };
     return { ...entry, reportHash: digest(entry) };
   };
@@ -162,7 +165,15 @@ test('portfolio integrity summary requires a valid complete report history', () 
   assert.equal(stale.integrityProjectionIncomplete, false);
   assert.equal(stale.integritySourceCurrent, false);
 
-  const malformedHistorical = { ...currentReport, id: 'enterprise-integrity-00000000-0000-4000-8000-000000000004', reportHash: 'corrupt' };
+  const { reportHash: _validHistoricalHash, ...malformedHistoricalCore } = currentReport;
+  malformedHistoricalCore.id = 'enterprise-integrity-00000000-0000-4000-8000-000000000004';
+  malformedHistoricalCore.rules = null;
+  const malformedHistorical = { ...malformedHistoricalCore, reportHash: digest(malformedHistoricalCore) };
+  assert.equal(isValidEnterpriseIntegrityAssessment(malformedHistorical), false,
+    'the report hash is valid, but missing rule data makes the historical record unusable');
+  assert.throws(() => projectEnterpriseIntegrity({ id: projectId, blueprintVersions: [blueprint],
+    enterpriseIntegrityAssessments: [malformedHistorical, currentReport] }, blueprint), { code: 'INTEGRITY_REPORT_CORRUPT' },
+  'the detailed report projection rejects the same historical record');
   const incomplete = projectPortfolioIntegritySummary({ id: projectId, blueprintVersions: [blueprint],
     enterpriseIntegrityAssessments: [malformedHistorical, currentReport] });
   assert.equal(incomplete.integrityProjectionIncomplete, true,

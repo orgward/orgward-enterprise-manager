@@ -15,6 +15,7 @@ import { digest } from '../sdlc/contracts.mjs';
 import { latestBlueprint } from '../model.mjs';
 import { SOFTWARE_PLAN_COMPILER_VERSION, verifySoftwareDeliveryDraft } from '../sdlc/software-plan-compiler.mjs';
 import { providerOutcomeDiagnosticForAttempt } from '../execution/provider-transport-diagnostic.mjs';
+import { isValidEnterpriseIntegrityAssessment } from '../enterprise/integrity.mjs';
 import { softwareRuntimePlanSnapshot, verifySoftwareRuntimePlanSnapshot } from '../sdlc/software-runtime-plan.mjs';
 import { buildBlueprintProposalPrompt, buildLegacyBlueprintProposalPrompt } from '../execution/proposals.mjs';
 import {
@@ -2280,21 +2281,7 @@ export class PostgresGitHubSourceStore {
 export function projectPortfolioIntegritySummary(project) {
   const assessments = project.enterpriseIntegrityAssessments ?? [];
   if (!Array.isArray(assessments)) return { integrityProjectionIncomplete: true };
-  const validAssessment = (assessment) => {
-    if (!assessment || typeof assessment !== 'object' || Array.isArray(assessment)) return false;
-    const { reportHash, ...core } = assessment;
-    return /^[a-f0-9]{64}$/.test(reportHash ?? '') && digest(core) === reportHash
-      && /^enterprise-integrity-[0-9a-f-]{36}$/.test(assessment.id ?? '')
-      && ['PASS', 'REVIEW', 'FAIL'].includes(assessment.status)
-      && Number.isSafeInteger(assessment.counts?.findings) && assessment.counts.findings >= 0
-      && Array.isArray(assessment.findings) && assessment.counts.findings === assessment.findings.length
-      && typeof assessment.source?.projectId === 'string' && assessment.source.projectId === project.id
-      && /^blueprint-[0-9a-f-]{36}$/.test(assessment.source.blueprintId ?? '')
-      && Number.isSafeInteger(assessment.source.blueprintVersion) && assessment.source.blueprintVersion > 0
-      && /^[a-f0-9]{64}$/.test(assessment.source.snapshotHash ?? '')
-      && typeof assessment.createdAt === 'string' && Number.isFinite(Date.parse(assessment.createdAt));
-  };
-  if (!assessments.every(validAssessment)) return { integrityProjectionIncomplete: true };
+  if (!assessments.every(isValidEnterpriseIntegrityAssessment)) return { integrityProjectionIncomplete: true };
   const assessment = assessments.at(-1);
   if (!assessment) return { integrityStatus: 'NOT_RUN', integritySourceCurrent: false, integrityReportId: null,
     integrityFindingCount: 0, integrityBlueprintVersion: null, integrityProjectionIncomplete: false };

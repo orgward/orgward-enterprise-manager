@@ -10,6 +10,37 @@ export const ENTERPRISE_INTEGRITY_LIMITS = Object.freeze({ assessments: 50, find
 
 const fail = (code, message, status = 400) => { throw enterpriseFailure(code, message, status); };
 
+export function isValidEnterpriseIntegrityAssessment(assessment) {
+  if (!assessment || typeof assessment !== 'object' || Array.isArray(assessment)) return false;
+  const { reportHash, ...core } = assessment;
+  const source = assessment.source;
+  const counts = assessment.counts;
+  if (!/^[a-f0-9]{64}$/.test(reportHash ?? '') || digest(core) !== reportHash
+    || !/^enterprise-integrity-[0-9a-f-]{36}$/.test(assessment.id ?? '')
+    || !['PASS', 'REVIEW', 'FAIL'].includes(assessment.status)
+    || !source || typeof source !== 'object' || Array.isArray(source)
+    || !/^blueprint-[0-9a-f-]{36}$/.test(source.blueprintId ?? '')
+    || !Number.isSafeInteger(source.blueprintVersion) || source.blueprintVersion < 1
+    || !/^[a-f0-9]{64}$/.test(source.snapshotHash ?? '')
+    || !counts || typeof counts !== 'object' || Array.isArray(counts)
+    || !Number.isSafeInteger(counts.findings) || counts.findings < 0
+    || !Number.isSafeInteger(counts.failedRules) || counts.failedRules < 0
+    || !Number.isSafeInteger(counts.reviewRules) || counts.reviewRules < 0
+    || !Array.isArray(assessment.rules) || !Array.isArray(assessment.findings)
+    || counts.findings !== assessment.findings.length
+    || typeof assessment.createdAt !== 'string' || !Number.isFinite(Date.parse(assessment.createdAt))
+    || typeof assessment.createdBy !== 'string' || typeof assessment.reason !== 'string') return false;
+  if (assessment.rules.some((rule) => !rule || typeof rule !== 'object' || Array.isArray(rule)
+    || typeof rule.id !== 'string' || !['PASS', 'REVIEW', 'FAIL'].includes(rule.status)
+    || !Number.isSafeInteger(rule.findingCount) || rule.findingCount < 0 || typeof rule.summary !== 'string')) return false;
+  return !assessment.findings.some((finding) => !finding || typeof finding !== 'object' || Array.isArray(finding)
+    || !/^finding-[a-f0-9]{32}$/.test(finding.id ?? '') || typeof finding.ruleId !== 'string'
+    || typeof finding.code !== 'string' || !['high', 'medium', 'low'].includes(finding.severity)
+    || !(finding.objectId === null || typeof finding.objectId === 'string')
+    || !(finding.path === null || typeof finding.path === 'string')
+    || typeof finding.message !== 'string' || typeof finding.action !== 'string');
+}
+
 export function normalizeEnterpriseIntegrityCommand(input) {
   if (input && typeof input === 'object' && !Array.isArray(input) && input.kind === 'accept-integrity-exception') {
     const allowed = ['kind', 'findingId', 'reportId', 'reportHash', 'blueprintId', 'blueprintVersion', 'snapshotHash', 'reason', 'expiresAt'];
@@ -193,7 +224,7 @@ export function projectEnterpriseIntegrity(project, blueprint, savedBy = () => t
     const { exceptionHash, ...core } = saved;
     if (digest(core) !== exceptionHash) fail('INTEGRITY_EXCEPTION_CORRUPT', 'A saved integrity exception failed its immutable record check.', 409);
     const report = (project.enterpriseIntegrityAssessments ?? []).find((entry) => entry.id === saved.reportId);
-    if (!report || report.reportHash !== saved.reportHash || !report.source || !Array.isArray(report.findings)
+    if (!report || !isValidEnterpriseIntegrityAssessment(report) || report.reportHash !== saved.reportHash
       || !report.findings.some((entry) => entry.id === saved.findingId)) {
       fail('INTEGRITY_EXCEPTION_CORRUPT', 'A saved integrity exception no longer matches its report finding.', 409);
     }
@@ -213,8 +244,7 @@ export function projectEnterpriseIntegrity(project, blueprint, savedBy = () => t
     exceptionsByReport.set(saved.reportId, [...(exceptionsByReport.get(saved.reportId) ?? []), entry]);
   }
   const assessments = (project.enterpriseIntegrityAssessments ?? []).filter((entry) => savedBy(entry.createdAt)).map((entry) => {
-    const { reportHash, ...core } = entry;
-    if (digest(core) !== reportHash) fail('INTEGRITY_REPORT_CORRUPT', 'A saved integrity assessment failed its immutable report hash check.', 409);
+    if (!isValidEnterpriseIntegrityAssessment(entry)) fail('INTEGRITY_REPORT_CORRUPT', 'A saved integrity assessment failed its immutable report or structure check.', 409);
     return { ...structuredClone(entry), exceptions: exceptionsByReport.get(entry.id) ?? [], appliesToContext: Boolean(blueprint && entry.source.blueprintId === blueprint.id
       && entry.source.blueprintVersion === blueprint.version && entry.source.snapshotHash === selectedSourceHash) };
   });

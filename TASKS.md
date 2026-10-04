@@ -7239,14 +7239,15 @@ PR-15 remains open and active.
 PR-15 portfolio integrity signal and review path (2026-10-04): member-visible
 project cards summarize the latest saved enterprise integrity assessment, its
 finding count, and whether its exact blueprint ID/version/hash still matches
-current main. The server validates every saved assessment hash and the required
-report/source fields before projecting the latest status; any malformed history
-marks evidence unavailable, which is not a blueprint FAIL. Incomplete history
-does not expose a review action. The card action opens the workspace and focuses
-its existing integrity report panel. PostgreSQL acceptance saves a current-source
-assessment and checks owner/editor/reader portfolio results; view coverage checks
-the current/stale distinction, malformed historical report with a valid latest
-report, unavailable copy, and hidden review action. The integrity restart fixture
+current main. Detailed and portfolio projections share one canonical saved-report
+validator; any malformed historical report marks evidence unavailable, which is
+not a blueprint FAIL. Incomplete history does not expose a review action. The card
+action opens the workspace and focuses its existing integrity report panel.
+PostgreSQL acceptance saves a current-source assessment and checks owner/editor/
+reader portfolio results; view coverage checks the current/stale distinction and
+a hash-valid but structurally unusable historical report alongside a valid latest
+report, including rejection in detailed projection, unavailable copy, and hidden
+review action. The integrity restart fixture
 also authenticates to the portfolio API after restart/reassessment and asserts
 the projected report ID, status, finding count, and exact-current-source flag.
 Static checks passed:
@@ -7257,7 +7258,11 @@ Static checks passed:
 behavior verification passed 4/4 selected cases in 3.73s (TAP log:
 `/tmp/orgward-tests-cEc4pn/node-test.tap.log`):
 `npm test -- tests/enterprise/view.test.mjs tests/enterprise/server.test.mjs --test-name-pattern='portfolio integrity summary requires a valid complete report history|portfolio cards show saved workspace state and access and open the chosen project|portfolio project list returns each caller’s persisted workspace access|saved integrity assessments bind exact design source, replay, survive restart and stale on design change'`.
-No full check run.
+After the shared-validator correction, the same focused selection passed 4/4
+in 3.77s (TAP log: `/tmp/orgward-tests-Lufv4V/node-test.tap.log`). This run
+includes the hash-valid, structurally unusable historical report fixture and
+confirms both detailed and portfolio projections reject it consistently. No full
+check run.
 PR-15 remains open and active.
 
 PR-15 portfolio-to-governed-change handoff (2026-10-04): authenticated
