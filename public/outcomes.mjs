@@ -7,6 +7,7 @@ export function renderOutcomeInbox({ projectId, principal, el, api, preferredSou
     ...(focusedCategory ? { 'data-focused-category': focusedCategory } : {}) } });
   root.style.overflowWrap = 'anywhere'; root.style.minWidth = '0';
   const status = el('p', { attrs: { role: 'status', 'aria-live': 'polite' } });
+  const focusStatus = el('p', { attrs: { role: 'status', 'aria-live': 'polite' } });
   const body = el('div');
   let pending = null;
   let busy = false;
@@ -278,7 +279,7 @@ export function renderOutcomeInbox({ projectId, principal, el, api, preferredSou
       if (focusedCategory) {
         const active = (result.outcomes ?? []).find((outcome) => outcome.category === focusedCategory && ['OPEN', 'IN_PROGRESS'].includes(outcome.status));
         if (active && !expandedId) expandedId = active.id;
-        status.textContent = active ? `Focused on the first active ${focusedCategory} item.` : `No active ${focusedCategory} items are currently in the inbox.`;
+        focusStatus.textContent = active ? `Focused on the first active ${focusedCategory} item.` : `No active ${focusedCategory} items are currently in the inbox.`;
       }
       body.append(el('details', {}, [el('summary', { text: 'Add an outcome, incident or support item' }), createForm(result)]));
       body.append(importForm(result));
@@ -290,7 +291,7 @@ export function renderOutcomeInbox({ projectId, principal, el, api, preferredSou
       if (pending) body.append(button(`Retry saved command: ${pending.label}`, () => command(pending.route, pending.payload, pending.label)));
     }
   }
-  root.append(el('h3', { text: 'Outcome and next-action inbox' }), text('Record observations, review learning and assign the next action. Acceptance creates a proposal for follow-up; creating its change case is a separate action.'), status, button('Refresh outcome inbox', refresh), body);
+  root.append(el('h3', { text: 'Outcome and next-action inbox' }), text('Record observations, review learning and assign the next action. Acceptance creates a proposal for follow-up; creating its change case is a separate action.'), status, focusStatus, button('Refresh outcome inbox', refresh), body);
   refresh();
   return root;
 }

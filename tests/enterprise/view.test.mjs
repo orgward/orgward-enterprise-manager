@@ -195,6 +195,38 @@ test('outcome inbox focuses the requested incident or support category', async (
   }
 });
 
+test('category focus announcement preserves a rejected outcome command status after inbox refresh', async () => {
+  const originalStorage = globalThis.localStorage;
+  globalThis.localStorage = storageFixture();
+  try {
+    const outcome = { id: 'incident-command', version: 1, status: 'OPEN', title: 'Active incident', category: 'incident', ownerPrincipal: 'owner',
+      source: { kind: 'manual', summary: 'Needs review.' }, observations: [], proposals: [], events: [] };
+    let reads = 0;
+    const api = async (_route, options) => {
+      if (options?.method === 'POST') throw Object.assign(new Error('Membership changed; reload before retrying.'), { status: 403 });
+      reads += 1;
+      return { available: true, outcomes: [outcome], permissions: { write: true, review: false, assign: true, followUp: false },
+        sources: { members: [{ principal: 'owner', displayName: 'Owner', access: 'owner' }] } };
+    };
+    const outcomeEl = (tag, options, children) => { const node = el(tag, options, children); node.style = {}; return node; };
+    const inbox = renderOutcomeInbox({ projectId: 'project-issues', principal: 'owner', el: outcomeEl, api, preferredCategory: 'incident' });
+    await new Promise((resolve) => setImmediate(resolve));
+    const update = inbox.querySelectorAll('form').find((form) => form.attrs['aria-label'] === 'Save inbox status');
+    assert.ok(update);
+    update.querySelectorAll('select').find((field) => field.attrs.name === 'status').value = 'IN_PROGRESS';
+    update.querySelectorAll('textarea')[0].value = 'The workspace access changed during review.';
+    update.listeners.get('submit')({ preventDefault() {} });
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(reads, 2, 'the failed command is followed by a successful inbox refresh');
+    assert.match(inbox.textContent, /Membership changed; reload before retrying\. Review the refreshed outcome, current design and permissions before trying a new command\./);
+    assert.match(inbox.textContent, /Focused on the first active incident item\./);
+  } finally {
+    if (originalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = originalStorage;
+  }
+});
+
 test('portfolio integrity summary requires a valid complete report history', () => {
   const projectId = 'project-00000000-0000-4000-8000-000000000001';
   const blueprint = { id: 'blueprint-00000000-0000-4000-8000-000000000002', version: 2 };

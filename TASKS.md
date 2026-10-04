@@ -7400,6 +7400,20 @@ passed 3/3 (0 failures, 0 skips; 2.70s; TAP log:
 `tests/enterprise/view.test.mjs`; `git diff --check` passed. No full check run;
 PR-15 remains open and active.
 
+PR-15 triage status-feedback correction (2026-10-04): category focus now uses
+its own polite live region and no longer overwrites the shared command/import
+status during a refresh. Added regression coverage for a definitive 403 status
+change rejection followed by a successful category-focused inbox reload; the
+actionable permission guidance and incident-focus announcement both remain
+visible. The requested triage selection plus regression passed 4/4 (0 failures,
+0 skips; 2.50s; TAP log:
+`/tmp/orgward-tests-9rWSHy/node-test.tap.log`). The focused import preview view
+fixture still mocks its response at the component boundary; `public/app.js`
+staging, restore and current-source recheck wiring was inspected and left as-is.
+`node --check` passed for `public/outcomes.mjs` and
+`tests/enterprise/view.test.mjs`; `git diff --check` passed. No full check run;
+PR-15 remains open and active.
+
 PR-15 restore draft from a saved design version (2026-10-04): when an owner or
 editor selects a historical saved main version, the branch panel offers an
 explicit “Restore this saved version as a draft” action. The draft copies the
