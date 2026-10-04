@@ -174,6 +174,47 @@ test('portfolio project list returns each caller’s persisted workspace access'
   assert.equal(current?.openSupportCount, 1);
 });
 
+test('project membership changes persist and update the recipient portfolio', async (t) => {
+  const postgres = await startPostgres();
+  const root = await mkdtemp(path.join(tmpdir(), 'orgward-enterprise-membership-roundtrip-'));
+  const instance = await startApp(postgres, root);
+  t.after(async () => { await closeApp(instance); await postgres.close(); await rm(root, { recursive: true, force: true }); });
+  for (const identity of identities.values()) {
+    await postgres.query(`insert into orgward.oidc_principals
+      (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+    [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  }
+  const project = await seedProject(postgres, 'Collaborator access round trip');
+  const member = identities.get('outsider').principal;
+  const membersRoute = `/api/v1/projects/${project.id}/members`;
+  const portfolioAccess = async () => {
+    const response = await request(instance.base, 'outsider', '/api/v1/projects');
+    return response.data.find((record) => record.id === project.id)?.workspaceAccess ?? null;
+  };
+  assert.equal(await portfolioAccess(), null, 'the identity starts without the workspace in its portfolio');
+
+  await request(instance.base, 'owner', membersRoute,
+    { method: 'POST', body: { principal: member, access: 'editor' } });
+  assert.equal(await portfolioAccess(), 'editor', 'the new editor sees persisted access in the authenticated portfolio');
+  let roster = await request(instance.base, 'owner', membersRoute);
+  assert.equal(roster.data.find((entry) => entry.principal === member)?.access, 'editor');
+  await request(instance.base, 'editor', membersRoute,
+    { method: 'POST', body: { principal: member, access: 'reader' } }, 403);
+  await request(instance.base, 'editor', `${membersRoute}/${member}/revoke`,
+    { method: 'POST', body: {} }, 403);
+
+  await request(instance.base, 'owner', membersRoute,
+    { method: 'POST', body: { principal: member, access: 'reader' } });
+  assert.equal(await portfolioAccess(), 'reader', 'the updated reader role is visible without stale editor authority');
+  roster = await request(instance.base, 'owner', membersRoute);
+  assert.equal(roster.data.find((entry) => entry.principal === member)?.access, 'reader');
+
+  await request(instance.base, 'owner', `${membersRoute}/${member}/revoke`, { method: 'POST', body: {} });
+  assert.equal(await portfolioAccess(), null, 'revocation removes the workspace from the collaborator portfolio');
+  roster = await request(instance.base, 'owner', membersRoute);
+  assert.equal(roster.data.some((entry) => entry.principal === member), false, 'the refreshed owner roster no longer contains the revoked member');
+});
+
 function enterpriseRoute(projectId, query = {}) {
   const params = new URLSearchParams(query);
   return `/api/v1/projects/${projectId}/enterprise${params.size ? `?${params}` : ''}`;

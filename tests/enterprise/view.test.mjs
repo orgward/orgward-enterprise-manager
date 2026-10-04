@@ -18,7 +18,7 @@ import { enterpriseStewardshipPayload, renderEnterpriseStewardship } from '../..
 import { downloadPortfolioDesign, portfolioDesignExportFilename, projectPortfolioFacts, readPortfolioImportFile, renderProjectPortfolio,
   portfolioImportWorkspaceRoute, portfolioManageAccessRoute, verifyPortfolioDesignBundle } from '../../public/project-portfolio.mjs';
 import { createProjectAccessController, platformViewUrl, projectAccessIdFromSearch, projectAccessSelectionMessage,
-  resolveProjectAccessSelection } from '../../public/platform-sharing.mjs';
+  createProjectMemberActions, resolveProjectAccessSelection } from '../../public/platform-sharing.mjs';
 import { digest } from '../../src/sdlc/contracts.mjs';
 import { isValidEnterpriseIntegrityAssessment, projectEnterpriseIntegrity } from '../../src/enterprise/integrity.mjs';
 import { projectPortfolioIntegritySummary } from '../../src/platform/postgres-stores.mjs';
@@ -213,6 +213,58 @@ test('platform access management deep link selects the requested workspace', asy
     { projectId: '', status: 'unavailable' });
   assert.equal(platformViewUrl('enterprise', '?projectId=workspace-owner-requested'),
     '/platform.html?projectId=workspace-owner-requested#enterprise');
+});
+
+test('platform owner manages a collaborator through the selected workspace access view', async () => {
+  const principal = `oidc:${'a'.repeat(64)}`;
+  const ownerPrincipal = `oidc:${'b'.repeat(64)}`;
+  const sharing = { projectId: 'project-selected-owner', deepLinkStatus: null, busy: false,
+    error: null, message: '', members: [{ principal: ownerPrincipal, access: 'owner' }] };
+  const calls = [];
+  let renders = 0;
+  const actions = createProjectMemberActions({
+    getSharing: () => sharing,
+    api: async (route, options) => {
+      const body = JSON.parse(options.body);
+      calls.push({ route, method: options.method, body });
+      if (route.endsWith('/members')) {
+        const existing = sharing.members.find((member) => member.principal === body.principal);
+        if (existing) existing.access = body.access;
+        else sharing.members.push({ principal: body.principal, access: body.access });
+      } else {
+        sharing.members = sharing.members.filter((member) => member.principal !== principal);
+      }
+      return { data: {} };
+    },
+    reloadMembers: async (projectId) => {
+      assert.equal(projectId, 'project-selected-owner', 'the selected workspace ID scopes every roster refresh');
+    },
+    render: () => { renders += 1; },
+  });
+  const form = { elements: { principal: { value: ` ${principal} ` }, access: { value: 'reader' } } };
+  let prevented = false;
+  await actions.submit({ target: form, preventDefault: () => { prevented = true; } });
+  assert.equal(prevented, true, 'the access form command prevents browser navigation');
+  assert.deepEqual(calls[0], { route: '/api/v1/projects/project-selected-owner/members', method: 'POST',
+    body: { principal, access: 'reader' } });
+  assert.equal(sharing.members.find((member) => member.principal === principal)?.access, 'reader');
+  assert.equal(sharing.message, 'Project access updated.');
+
+  form.elements.access.value = 'editor';
+  await actions.submit({ target: form, preventDefault() {} });
+  assert.equal(sharing.members.find((member) => member.principal === principal)?.access, 'editor',
+    'the same form updates the collaborator role');
+  assert.equal(calls[1].body.access, 'editor');
+  await actions.revoke(principal);
+  assert.deepEqual(calls[2], { route: `/api/v1/projects/project-selected-owner/members/${principal}/revoke`, method: 'POST', body: {} });
+  assert.equal(sharing.members.some((member) => member.principal === principal), false);
+  assert.equal(sharing.message, 'Project access removed.');
+  assert.equal(sharing.busy, false);
+  assert.equal(renders, 6, 'each access action renders its saving and completed state');
+
+  sharing.deepLinkStatus = 'denied';
+  await actions.revoke(principal);
+  assert.equal(calls.length, 3, 'a denied non-owner selection cannot issue membership mutations');
 });
 
 test('platform access selection ignores a stale members response after a newer non-owner selection', async () => {

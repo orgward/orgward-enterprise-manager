@@ -7569,3 +7569,20 @@ PostgreSQL branch merge 10.79s, historical restore draft UI 9.47ms; TAP
 check run. Proposed focused command:
 `npm test -- tests/enterprise/view.test.mjs tests/enterprise/server.test.mjs --test-name-pattern='historical blueprint can create an isolated restore draft from its exact saved version|enterprise branches merge exact typed changes only after a current owner review'`.
 PR-15 remains open and active.
+
+PR-15 owner-to-collaborator access round trip (2026-10-04): project access
+form submissions and roster removal now use the same small action controller as
+the platform UI. It scopes each mutation and roster refresh to the exact selected
+workspace, exposes saving/completion state, refreshes the owner roster after
+success, and avoids applying a completion/error message to a workspace selected
+while a request was pending. The view case drives the form submit and remove
+commands through that controller to grant reader access, change it to editor,
+then revoke it; denied selection issues no mutation. A PostgreSQL acceptance
+case grants an active tenant identity editor access, changes it to reader, then
+revokes it, checking the persisted owner roster and the recipient's authenticated
+portfolio at each transition; editor grant/revoke attempts are denied. The
+requested focused membership tests passed 3/3 (0 failures, 0 skips; 3.09s; TAP
+log: `/tmp/orgward-tests-5iRy9l/node-test.tap.log`). `node --check` passed for
+`public/platform.js`, `public/platform-sharing.mjs`,
+`tests/enterprise/view.test.mjs`, and `tests/enterprise/server.test.mjs`;
+`git diff --check` passed. No full check run; PR-15 remains open and active.

@@ -53,3 +53,45 @@ export function projectAccessViewUrl(projectId, { search = '', view = 'enterpris
   query.set('projectId', projectId);
   return `/platform.html?${query.toString()}#${view}`;
 }
+
+export function createProjectMemberActions({ getSharing, api, reloadMembers, render }) {
+  async function update(action) {
+    const sharing = getSharing();
+    if (sharing.busy || !sharing.projectId || sharing.deepLinkStatus === 'denied'
+      || sharing.deepLinkStatus === 'unavailable') return;
+    const projectId = sharing.projectId;
+    sharing.busy = true;
+    sharing.error = null;
+    sharing.message = '';
+    render();
+    try {
+      const message = await action(projectId);
+      if (getSharing().projectId === projectId) {
+        await reloadMembers(projectId);
+        if (getSharing().projectId === projectId) getSharing().message = message;
+      }
+    } catch (error) {
+      if (getSharing().projectId === projectId) getSharing().error = error.message;
+    } finally {
+      sharing.busy = false;
+      render();
+    }
+  }
+
+  return {
+    submit(event) {
+      event.preventDefault();
+      const form = event.target;
+      const principal = form.elements.principal.value.trim();
+      const access = form.elements.access.value;
+      return update((projectId) => api(`/api/v1/projects/${encodeURIComponent(projectId)}/members`, {
+        method: 'POST', body: JSON.stringify({ principal, access }),
+      }).then(() => 'Project access updated.'));
+    },
+    revoke(principal) {
+      return update((projectId) => api(`/api/v1/projects/${encodeURIComponent(projectId)}/members/${principal}/revoke`, {
+        method: 'POST', body: JSON.stringify({}),
+      }).then(() => 'Project access removed.'));
+    },
+  };
+}

@@ -1,5 +1,5 @@
 import { apiErrorFrom } from './shared-interactions.mjs';
-import { createProjectAccessController, platformViewUrl, projectAccessIdFromSearch, projectAccessSelectionMessage } from './platform-sharing.mjs';
+import { createProjectAccessController, createProjectMemberActions, platformViewUrl, projectAccessIdFromSearch, projectAccessSelectionMessage } from './platform-sharing.mjs';
 
 const views = new Set(['command', 'enterprise', 'changes', 'work', 'releases', 'evidence', 'administration']);
 const manageableIdentityRoles = ['workspace-read', 'workspace-write', 'execution-approver', 'release-approver', 'control-owner', 'tenant-admin'];
@@ -58,6 +58,12 @@ const projectAccessController = createProjectAccessController({
     state.sharing.deepLinkStatus = selection.status === 'owner' ? null : selection.status;
     render();
   },
+});
+const projectMemberActions = createProjectMemberActions({
+  getSharing: () => state.sharing,
+  api,
+  reloadMembers: (projectId) => loadProjectMembers(projectId),
+  render,
 });
 const canvas = document.querySelector('#platform-canvas');
 const inspector = document.querySelector('#spec-inspector');
@@ -175,39 +181,11 @@ async function loadProjectMembers(projectId = state.sharing.projectId, { updateU
 }
 
 async function saveProjectMember(event) {
-  event.preventDefault();
-  if (state.sharing.busy || !state.sharing.projectId) return;
-  const form = event.target;
-  const principal = form.elements.principal.value.trim();
-  const access = form.elements.access.value;
-  state.sharing.busy = true; state.sharing.message = ''; render();
-  try {
-    await api(`/api/v1/projects/${encodeURIComponent(state.sharing.projectId)}/members`, {
-      method: 'POST', body: JSON.stringify({ principal, access }),
-    });
-    state.sharing.message = 'Project access updated.';
-    await loadProjectMembers(state.sharing.projectId);
-  } catch (error) {
-    state.sharing.error = error.message;
-  } finally {
-    state.sharing.busy = false; render();
-  }
+  return projectMemberActions.submit(event);
 }
 
 async function revokeProjectMember(principal) {
-  if (state.sharing.busy || !state.sharing.projectId) return;
-  state.sharing.busy = true; state.sharing.error = null; state.sharing.message = ''; render();
-  try {
-    await api(`/api/v1/projects/${encodeURIComponent(state.sharing.projectId)}/members/${principal}/revoke`, {
-      method: 'POST', body: JSON.stringify({}),
-    });
-    state.sharing.message = 'Project access removed.';
-    await loadProjectMembers(state.sharing.projectId);
-  } catch (error) {
-    state.sharing.error = error.message;
-  } finally {
-    state.sharing.busy = false; render();
-  }
+  return projectMemberActions.revoke(principal);
 }
 
 function renderChanges() {
