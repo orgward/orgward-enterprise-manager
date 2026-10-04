@@ -1274,6 +1274,60 @@ test('enterprise economics save typed capacity, evaluate exact sources and keep 
   assert.equal(restored.data.economics.evaluation.matchesSelectedSource, true);
 });
 
+test('saved refinement links update canonical relations, reject cycles and trace exact branch revisions', async (t) => {
+  const postgres = await startPostgres(); let root; let instance;
+  t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-enterprise-refinement-'));
+  instance = await startApp(postgres, root);
+  for (const identity of identities.values()) {
+    await postgres.query(`insert into orgward.oidc_principals
+      (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+    [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  }
+  const project = await seedProject(postgres, 'Enterprise refinement fixture');
+  let view = await currentView(instance.base, 'owner', project.id, { lensId: 'all' });
+  const objects = Object.values(view.data.blueprint.areas).flatMap((area) => area.items);
+  assert.ok(objects.length >= 2);
+  const parent = objects[0]; const child = objects[1];
+  const payload = { kind: 'define-refinement', objectId: child.id, refines: [parent.id], reason: 'Record a proposed decomposition.' };
+  const command = commandBody(view, 'enterprise-refinement-main', payload);
+  const saved = await postCommand(instance.base, 'owner', project.id, command);
+  assert.equal(saved.data.blueprintVersion, view.data.context.blueprintVersion + 1);
+  const replay = await postCommand(instance.base, 'owner', project.id, command);
+  assert.equal(replay.meta.replayed, true);
+  view = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: parent.id });
+  assert.ok(view.data.blueprint.relations.some((relation) => relation.source === child.id && relation.target === parent.id && relation.type === 'refines'));
+  assert.equal(view.data.refinementTrace.status, 'LINKED');
+  assert.equal(view.data.refinementTrace.descendants.find((entry) => entry.id === child.id).path.join('/'), `${parent.id}/${child.id}`);
+  assert.match(view.data.refinementTrace.traceHash, /^[a-f0-9]{64}$/);
+
+  const cycle = await postCommand(instance.base, 'owner', project.id,
+    commandBody(view, 'enterprise-refinement-cycle', { kind: 'define-refinement', objectId: parent.id,
+      refines: [child.id], reason: 'Reject the proposed cycle.' }), 409);
+  assert.equal(cycle.error.code, 'INVALID_REFINEMENT');
+  const selfLink = await postCommand(instance.base, 'owner', project.id,
+    commandBody(view, 'enterprise-refinement-self-link', { kind: 'define-refinement', objectId: parent.id,
+      refines: [parent.id], reason: 'Reject a self link as a client error.' }), 400);
+  assert.equal(selfLink.error.code, 'INVALID_REFINEMENT_REFERENCE');
+  view = await currentView(instance.base, 'owner', project.id, { lensId: 'all' });
+  const branchCreated = await postCommand(instance.base, 'owner', project.id,
+    branchCommandBody(view, 'enterprise-refinement-branch-create', { kind: 'create-branch', title: 'Refinement review', reason: 'Review an alternate decomposition.' }));
+  const branchId = branchCreated.data.branchId;
+  const branchTarget = objects[2]; const branchSource = objects[3];
+  assert.ok(branchTarget && branchSource);
+  const branchView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', branchId, selectedId: branchTarget.id });
+  const branchPayload = { kind: 'define-refinement', objectId: branchSource.id, refines: [branchTarget.id], reason: 'Review branch-only decomposition.' };
+  const branchCommand = branchCommandBody(branchView, 'enterprise-refinement-branch-save', branchPayload);
+  const branchSaved = await postCommand(instance.base, 'owner', project.id, branchCommand);
+  assert.equal(branchSaved.data.branchRevision, 2);
+  const branchReplay = await postCommand(instance.base, 'owner', project.id, branchCommand);
+  assert.equal(branchReplay.meta.replayed, true);
+  const exactBranch = await currentView(instance.base, 'owner', project.id, { lensId: 'all', branchId, branchRevision: '2', selectedId: branchTarget.id });
+  assert.equal(exactBranch.data.refinementTrace.descendants.find((entry) => entry.id === branchSource.id).depth, 1);
+  const mainAgain = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: branchTarget.id });
+  assert.equal(mainAgain.data.refinementTrace.descendants.length, 0, 'the branch refinement remains isolated from proposed main design');
+});
+
 test('enterprise branches merge exact typed changes only after a current owner review', async (t) => {
   const postgres = await startPostgres();
   let root;

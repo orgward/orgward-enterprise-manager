@@ -253,7 +253,7 @@ export function appendEnterpriseBranchDesign(project, command, actor, mutate) {
   const at = new Date().toISOString(); const next = mutate(clone(head.snapshot), at);
   const revision = addRevision(branch, next, actor, command.reason, at);
   project.audit ??= [];
-  project.audit.push({ at, action: `enterprise.${command.kind}`, actor, detail: `Updated typed process design in “${branch.title}”.` });
+  project.audit.push({ at, action: `enterprise.${command.kind}`, actor, detail: `Updated typed enterprise design in “${branch.title}”.` });
   return { blueprint: latestBlueprint(project), affectedObjectId: command.objectId, branchId: branch.id,
     branchRevision: revision.revision, proposalId: null, recordedAt: at };
 }

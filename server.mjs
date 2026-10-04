@@ -35,6 +35,7 @@ import { normalizeEnterpriseQuery, projectEnterprise } from './src/enterprise/pr
 import { ENTERPRISE_BRANCH_KINDS, enterpriseMergeApproval } from './src/enterprise/branches.mjs';
 import { ENTERPRISE_PROCESS_KINDS } from './src/enterprise/process-commands.mjs';
 import { ENTERPRISE_ECONOMIC_KINDS } from './src/enterprise/economics-commands.mjs';
+import { ENTERPRISE_REFINEMENT_KINDS } from './src/enterprise/refinement-commands.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -1576,8 +1577,9 @@ export function createApp({
           || (payload.kind === 'record-state' && payload.dimension === 'review')
           || (payload.kind === 'edit-branch-scope' && ['create-scope', 'rename-scope'].includes(payload.change.kind));
         if ((administrative || payload.kind === 'record-state' || ENTERPRISE_BRANCH_KINDS.has(payload.kind)
-          || ENTERPRISE_PROCESS_KINDS.has(payload.kind) || ENTERPRISE_ECONOMIC_KINDS.has(payload.kind)) && request.identity.actorType !== 'human') {
-          throw apiFailure(403, 'ENTERPRISE_HUMAN_OWNER_REQUIRED', 'A current human project member must report state; a human project owner must review design or define scopes, validity and future proposals.');
+          || ENTERPRISE_PROCESS_KINDS.has(payload.kind) || ENTERPRISE_ECONOMIC_KINDS.has(payload.kind)
+          || ENTERPRISE_REFINEMENT_KINDS.has(payload.kind)) && request.identity.actorType !== 'human') {
+          throw apiFailure(403, 'ENTERPRISE_HUMAN_OWNER_REQUIRED', 'A current human project member must report state or define refinement links; a human project owner must review design or define scopes, validity and future proposals.');
         }
         const actor = requestActor(request);
         const result = await store.updateWithCommandForPrincipal(enterpriseMatch[1], requestTenant(request), {
@@ -1610,7 +1612,8 @@ export function createApp({
               membershipGeneration: reviewMembershipGeneration });
             project.version += 1; project.updatedAt = changed.recordedAt ?? changed.blueprint.createdAt; project.updatedBy = actor;
             project.events.push(projectEvent(project, { type: ['record-state', 'set-validity', 'propose-future-design'].includes(payload.kind)
-              || ENTERPRISE_BRANCH_KINDS.has(payload.kind) || ENTERPRISE_PROCESS_KINDS.has(payload.kind) || ENTERPRISE_ECONOMIC_KINDS.has(payload.kind)
+              || ENTERPRISE_BRANCH_KINDS.has(payload.kind) || ENTERPRISE_PROCESS_KINDS.has(payload.kind)
+              || ENTERPRISE_ECONOMIC_KINDS.has(payload.kind) || ENTERPRISE_REFINEMENT_KINDS.has(payload.kind)
               ? 'EnterpriseDesignChanged' : 'EnterpriseScopeChanged', actor, commandId: body.commandId, correlationId,
               data: { kind: payload.kind, blueprintId: changed.blueprint.id, blueprintVersion: changed.blueprint.version,
                 objectId: changed.affectedObjectId, proposalId: changed.proposalId ?? null,

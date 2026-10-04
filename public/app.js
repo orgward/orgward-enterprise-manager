@@ -1,5 +1,6 @@
 import { ENTERPRISE_PROCESS_COMMANDS, enterpriseProcessCommandPayload } from './enterprise-process.mjs';
 import { ENTERPRISE_ECONOMIC_COMMANDS, enterpriseEconomicCommandPayload } from './enterprise-economics.mjs';
+import { ENTERPRISE_REFINEMENT_COMMANDS, enterpriseRefinementCommandPayload } from './enterprise-refinement.mjs';
 import { ENTERPRISE_BRANCH_COMMANDS, enterpriseBranchWritable, enterpriseBranchCommandPayload, enterpriseCommandResultRoute } from './enterprise-branches.mjs';
 import { connectedNodeIds, filterGraph, focusFirstMapResult, focusSelectedMapControl, graphAccessibilityAttributes, mapControlPressed, searchGraph, shouldStartMapPan, toggleType, zoomTransform } from './map-state.js';
 import { apiErrorFrom, decodeStudioRoute, encodeExecutionRoute, encodeStudioRoute, fieldErrorsFor, founderConversationAnnouncement } from './shared-interactions.mjs';
@@ -45,6 +46,7 @@ const state = {
   enterpriseSimulation: null,
   enterpriseProcessDraft: null,
   enterpriseEconomicDraft: null,
+  enterpriseRefinementDraft: null,
   pendingEnterprise: null,
   enterpriseStorageAvailable: true,
   projectLoadGeneration: 0,
@@ -238,8 +240,8 @@ async function loadEnterpriseContext({ render = true, resetTypes = false } = {})
   }
 }
 
-async function changeEnterpriseContext(query, { preserveProcessDraft = false, preserveEconomicDraft = false, selectedId = undefined } = {}) {
-  if (!allowRouteChange({ preserveProcessDraft, preserveEconomicDraft })) return;
+async function changeEnterpriseContext(query, { preserveProcessDraft = false, preserveEconomicDraft = false, preserveRefinementDraft = false, selectedId = undefined } = {}) {
+  if (!allowRouteChange({ preserveProcessDraft, preserveEconomicDraft, preserveRefinementDraft })) return;
   if (selectedId !== undefined) state.selectedId = selectedId;
   state.enterpriseExplicit = true;
   state.enterpriseQuery = query;
@@ -267,6 +269,10 @@ async function saveEnterpriseCommand(payload = null) {
       boundPayload = enterpriseEconomicCommandPayload(model, payload);
       if (!boundPayload) return;
       state.enterpriseEconomicDraft = boundPayload;
+    } else if (ENTERPRISE_REFINEMENT_COMMANDS.includes(payload.kind)) {
+      boundPayload = enterpriseRefinementCommandPayload(model, payload);
+      if (!boundPayload) return;
+      state.enterpriseRefinementDraft = boundPayload;
     } else if (ENTERPRISE_BRANCH_COMMANDS.includes(payload.kind)) {
       boundPayload = enterpriseBranchCommandPayload(model, payload);
       if (!boundPayload) return;
@@ -281,6 +287,7 @@ async function saveEnterpriseCommand(payload = null) {
   const saved = state.pendingEnterprise;
   if (ENTERPRISE_PROCESS_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseProcessDraft = saved.envelope.payload;
   if (ENTERPRISE_ECONOMIC_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseEconomicDraft = saved.envelope.payload;
+  if (ENTERPRISE_REFINEMENT_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseRefinementDraft = saved.envelope.payload;
   const sourceGeneration = state.enterpriseGeneration;
   state.enterpriseBusy = true;
   state.enterpriseStatus = 'Saving the exact proposed design change…';
@@ -292,6 +299,7 @@ async function saveEnterpriseCommand(payload = null) {
     retainEnterprise(null);
     if (ENTERPRISE_PROCESS_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseProcessDraft = null;
     if (ENTERPRISE_ECONOMIC_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseEconomicDraft = null;
+    if (ENTERPRISE_REFINEMENT_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseRefinementDraft = null;
     if (result.data.simulation) state.enterpriseSimulation = result.data.simulation;
     state.enterpriseStatus = result.data.economicEvaluation ? 'Saved the exact-source economic evaluation. It contains declared assumptions and reported capacity only.'
       : result.data.simulation ? 'Saved the deterministic simulation for its exact source. No work was performed.'
@@ -303,6 +311,7 @@ async function saveEnterpriseCommand(payload = null) {
     if (state.project?.id !== projectId) return;
     definitive = error.status >= 400 && error.status < 500 && error.status !== 408;
     if (definitive && ENTERPRISE_ECONOMIC_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseEconomicDraft = saved.envelope.payload;
+    if (definitive && ENTERPRISE_REFINEMENT_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseRefinementDraft = saved.envelope.payload;
     if (definitive) retainEnterprise(null);
     state.enterpriseStatus = definitive ? `${error.message} ${ENTERPRISE_PROCESS_COMMANDS.includes(saved.envelope.payload.kind) ? 'The submitted process draft is retained for its original source. ' : ''}Review the refreshed requested design before submitting a new change.`
       : `${error.message} The response is uncertain. Recover the saved command before making another change.`;
@@ -338,21 +347,23 @@ function syncExecutionNavigation() {
   }
 }
 
-function hasUnsavedDraft({ includeProcessDraft = true, includeEconomicDraft = true } = {}) { return Boolean((includeProcessDraft && state.enterpriseProcessDraft)
-  || (includeEconomicDraft && state.enterpriseEconomicDraft) || state.draft.trim() || state.pendingBlueprintEdit || state.blueprintEditDraft
+function hasUnsavedDraft({ includeProcessDraft = true, includeEconomicDraft = true, includeRefinementDraft = true } = {}) { return Boolean((includeProcessDraft && state.enterpriseProcessDraft)
+  || (includeEconomicDraft && state.enterpriseEconomicDraft) || (includeRefinementDraft && state.enterpriseRefinementDraft) || state.draft.trim() || state.pendingBlueprintEdit || state.blueprintEditDraft
   || state.pendingActorBinding || state.pendingActorBindingEnable || state.pendingEnterprise); }
 
-function allowRouteChange({ preserveProcessDraft = false, preserveEconomicDraft = false } = {}) {
+function allowRouteChange({ preserveProcessDraft = false, preserveEconomicDraft = false, preserveRefinementDraft = false } = {}) {
   if (state.enterpriseBusy || state.pendingEnterprise) { notify('Recover the saved enterprise command before leaving this workspace.'); return false; }
-  if (!hasUnsavedDraft({ includeProcessDraft: !preserveProcessDraft, includeEconomicDraft: !preserveEconomicDraft })) return true;
+  if (!hasUnsavedDraft({ includeProcessDraft: !preserveProcessDraft, includeEconomicDraft: !preserveEconomicDraft, includeRefinementDraft: !preserveRefinementDraft })) return true;
   const prompt = state.pendingBlueprintEdit || state.blueprintEditDraft || state.pendingActorBinding
     || (!preserveProcessDraft && state.enterpriseProcessDraft) || (!preserveEconomicDraft && state.enterpriseEconomicDraft)
+    || (!preserveRefinementDraft && state.enterpriseRefinementDraft)
     ? 'Leave and discard this unsaved workspace change?' : 'Discard the unsent answer and leave this workspace?';
   const accepted = window.confirm(prompt);
   if (accepted) {
     state.pendingBlueprintEdit = null; state.blueprintEditDraft = null; state.pendingActorBinding = null; state.pendingActorBindingEnable = null;
     if (!preserveProcessDraft) state.enterpriseProcessDraft = null;
     if (!preserveEconomicDraft) state.enterpriseEconomicDraft = null;
+    if (!preserveRefinementDraft) state.enterpriseRefinementDraft = null;
   }
   return accepted;
 }
@@ -381,7 +392,7 @@ function showWelcome({ history = 'push' } = {}) {
   state.enterpriseGeneration += 1; state.enterpriseModel = null; state.enterpriseError = null; state.enterpriseLoading = false;
   state.enterpriseUnavailable = null; state.enterpriseExplicit = false;
   state.enterpriseQuery = enterpriseQuery(); state.pendingEnterprise = null; state.enterpriseStatus = '';
-  state.enterpriseSimulation = null; state.enterpriseProcessDraft = null; state.enterpriseEconomicDraft = null;
+  state.enterpriseSimulation = null; state.enterpriseProcessDraft = null; state.enterpriseEconomicDraft = null; state.enterpriseRefinementDraft = null;
   state.requestedProjectId = null;
   state.pendingBlueprintEdit = null;
   state.blueprintEditDraft = null;
@@ -448,7 +459,7 @@ async function loadProject(id, { history = 'push', route = null } = {}) {
     showAppState('loading', 'Loading workspace', 'Restoring saved conversation, blueprint, and view state…');
     const result = await api(`/api/v1/projects/${id}`);
     if (state.requestedProjectId !== id || loadGeneration !== state.projectLoadGeneration) return;
-    if (state.project?.id !== id) { state.enterpriseProcessDraft = null; state.enterpriseEconomicDraft = null; state.enterpriseSimulation = null; }
+    if (state.project?.id !== id) { state.enterpriseProcessDraft = null; state.enterpriseEconomicDraft = null; state.enterpriseRefinementDraft = null; state.enterpriseSimulation = null; }
     state.project = result.data;
     state.projectAccess = null;
     if (state.sessionPrincipal && state.sessionRoles.includes('workspace-write')) {
@@ -2087,7 +2098,7 @@ function renderDetail() {
     versionHistoryFor(node)];
   if (state.enterpriseModel && object) content.push(renderEnterpriseObject({ model: state.enterpriseModel, object,
     pending: state.pendingEnterprise, loading: state.enterpriseLoading || state.enterpriseBusy, simulation: state.enterpriseSimulation, processDraft: state.enterpriseProcessDraft,
-    economicDraft: state.enterpriseEconomicDraft, selectedSimulationId: state.enterpriseQuery.simulationId, el: element, onCommand: saveEnterpriseCommand, onInspectDraft: (query, selectedId) => changeEnterpriseContext(query, { preserveProcessDraft: true, preserveEconomicDraft: true, selectedId }),
+    economicDraft: state.enterpriseEconomicDraft, refinementDraft: state.enterpriseRefinementDraft, selectedSimulationId: state.enterpriseQuery.simulationId, el: element, onCommand: saveEnterpriseCommand, onInspectDraft: (query, selectedId) => changeEnterpriseContext(query, { preserveProcessDraft: true, preserveEconomicDraft: true, preserveRefinementDraft: true, selectedId }),
     onSimulationSelection: (simulationId) => changeEnterpriseContext({ ...state.enterpriseQuery, simulationId }),
     economicEvaluationId: state.enterpriseQuery.economicEvaluationId,
     onEconomicEvaluationSelection: (economicEvaluationId) => changeEnterpriseContext({ ...state.enterpriseQuery, economicEvaluationId }),

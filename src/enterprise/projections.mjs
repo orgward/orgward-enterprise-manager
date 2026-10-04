@@ -5,6 +5,7 @@ import { effectiveStatus, enterpriseInstant, objectStates } from './state.mjs';
 import { projectEnterpriseBranches } from './branches.mjs';
 import { PROCESS_MODEL } from './process-model.mjs';
 import { projectEconomicPortfolio } from './economics-scenario.mjs';
+import { projectRefinementTrace } from './refinement.mjs';
 
 export function normalizeEnterpriseQuery(input = {}) {
   const accepted = ['lensId', 'scopeId', 'blueprintVersion', 'selectedId', 'proposalId', 'effectiveAt', 'recordedAt', 'branchId', 'branchRevision', 'simulationId', 'economicEvaluationId'];
@@ -158,6 +159,7 @@ export function projectEnterprise(project, query = {}, authority = {}) {
       snapshotHash: proposal.snapshotHash, baseStale: proposal.baseStale,
       diff: { before: structuredClone(proposal.snapshot.edit.before), after: structuredClone(proposal.snapshot.edit.after), changedFields: proposal.snapshot.edit.changedFields } } : null,
     branches: branchContext.branches, branch: branchContext.branch, processModel: structuredClone(PROCESS_MODEL), simulations, simulation, economics,
+    refinementTrace: projectRefinementTrace(objects, selected?.id),
     permissions: { write: isCurrent && Boolean(authority.write), scopeAdmin: isCurrent && Boolean(authority.scopeAdmin),
       branchCreate: Boolean(blueprint && !context.branchId && authority.write && authority.human),
       branchWrite: Boolean(branchContext.writable && authority.write && authority.human),

@@ -5,6 +5,7 @@ import { enterpriseStateErrors } from './enterprise/state.mjs';
 import { manualFlowSnapshotHash, verifyManualFlowPlan } from './enterprise/process-runtime.mjs';
 import { processModelErrors, processModelRelations } from './enterprise/process-model.mjs';
 import { economicModelErrors, economicModelRelations } from './enterprise/economics-model.mjs';
+import { refinementModelErrors, refinementModelRelations } from './enterprise/refinement.mjs';
 
 export const AREA_DEFINITIONS = [
   ['purposeStrategy', 'Purpose & strategy'],
@@ -1162,6 +1163,7 @@ export function buildRelations(areas) {
   relations.push(...enterpriseScopeRelations(objects));
   relations.push(...processModelRelations(objects));
   relations.push(...economicModelRelations(objects));
+  relations.push(...refinementModelRelations(objects));
   return [...new Map(relations.map((relation) => [relation.id, relation])).values()];
 }
 
@@ -1205,6 +1207,7 @@ export function validateBlueprint(blueprint) {
   errors.push(...enterpriseStateErrors(objects));
   errors.push(...processModelErrors(objects));
   errors.push(...economicModelErrors(objects));
+  errors.push(...refinementModelErrors(objects));
 
   return {
     valid: errors.length === 0,

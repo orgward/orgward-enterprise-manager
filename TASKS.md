@@ -6285,6 +6285,23 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   then freeze the complete parent and run one full check. These slices are not a
   second task cursor or paperwork prerequisites; the active cursor remains PR-12.
 
+  PR-12 refinement/reverse-trace slice (2026-10-04): saved `refines` links now
+  participate in canonical relations and blueprint validation, with exact main
+  and branch revision commands, cycle/depth/link-count rejection, selected-record
+  ancestor/descendant traces, explicit bounded-trace truncation, and UI recovery
+  for a rejected exact-source draft. The new-only focused invocation selected five
+  cases: relation/path projection, invalid cycle/reference/depth validation, wide
+  trace truncation, UI trace/command binding, and PostgreSQL save/replay/cycle/
+  branch isolation. Initial runner summary was 4 passed, 1 failed, 0 skipped
+  (2.54s runner, TAP 1348.66ms), log
+  `/tmp/orgward-tests-QpYA9q/node-test.tap.log`; the sole failure was the UI test
+  fixture's unset native input value. After Sol's read-only fixture review and
+  correction, the affected UI case alone passed 1/1 (0 failed/cancelled/skipped;
+  0.22s runner, TAP 145.63ms), log
+  `/tmp/orgward-tests-FuobWQ/node-test.tap.log`. All five distinct cases now pass.
+  `node --check` on changed source and test files plus `git diff --check` passed.
+  No full parent check or browser/provider/live effect was used; PR-12 remains open.
+
 - [ ] PR-13 — Evidence ingestion and integrity operations (T-65–T-75). Safely
   onboard sources, extract evidence-backed identity/claim proposals, review and
   publish atomic snapshots, run typed integrity/lineage rules, manage exceptions,

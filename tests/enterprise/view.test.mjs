@@ -9,6 +9,7 @@ import { enterpriseProcessCommandPayload, enterpriseTypedValue, renderEnterprise
 import { activationForTask, evaluateManualFlowAdvice, manualFlowActivation, manualFlowAllowsAgent, manualFlowAgentRequestReady, manualFlowDecisionDefinition,
   mergeProcessPlanActivation, renderManualFlowDecisionChoice } from '../../public/manual-flow-ui.mjs';
 import { renderEnterpriseEconomics } from '../../public/enterprise-economics.mjs';
+import { renderEnterpriseRefinement } from '../../public/enterprise-refinement.mjs';
 import { decodeStudioRoute, encodeStudioRoute } from '../../public/shared-interactions.mjs';
 
 class NodeListFixture extends Array {
@@ -614,4 +615,28 @@ test('saved economics UI explains each allocation with its process identity and 
   assert.match(panel.textContent, /allocation-staffing/);
   assert.match(panel.textContent, /Deliver the core offering/);
   assert.match(panel.textContent, /Human staffing forecast/);
+});
+
+test('refinement UI names both reverse trace directions and saves selected existing records', () => {
+  const parent = { id: 'goal-safe-service', name: 'Safe service', type: 'goal' };
+  const selected = { id: 'process-review', name: 'Review exception', type: 'process', refines: [] };
+  const child = { id: 'task-check-evidence', name: 'Check evidence', type: 'process' };
+  const sourceModel = model({ blueprint: { areas: { purposeStrategy: { items: [parent] }, capabilitiesProcesses: { items: [selected, child] } } },
+    context: { ...model().context, blueprintId: 'blueprint-00000000-0000-4000-8000-000000000001' },
+    permissions: { processWrite: true }, refinementTrace: { selectedId: selected.id, status: 'LINKED', explanation: 'Saved design links only.',
+      ancestors: [{ id: parent.id, name: parent.name, type: parent.type, depth: 1, path: [selected.id, parent.id] }],
+      descendants: [{ id: child.id, name: child.name, type: child.type, depth: 1, path: [selected.id, child.id] }] } });
+  let submitted = null;
+  const panel = renderEnterpriseRefinement({ model: sourceModel, object: selected, el, ui: branchUi, onCommand: (payload) => { submitted = payload; } });
+  assert.match(panel.textContent, /Refinement and reverse trace/);
+  assert.match(panel.textContent, /Refines \/ higher-level \(1\)/);
+  assert.match(panel.textContent, /Refined by \/ lower-level \(1\)/);
+  assert.match(panel.textContent, /do not establish implementation, evidence or operational status/);
+  const controls = Array.from(panel.querySelectorAll('input')).filter((control) => control.attrs.name === 'refines');
+  assert.equal(controls.length, 2);
+  for (const control of controls) control.value = control.attrs.value;
+  controls.find((control) => control.value === parent.id).checked = true;
+  const form = panel.querySelectorAll('form')[0];
+  form.listeners.get('submit')({ preventDefault() {} });
+  assert.deepEqual(submitted, { kind: 'define-refinement', objectId: selected.id, refines: [parent.id], reason: '' });
 });

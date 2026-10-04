@@ -6,6 +6,7 @@ import { ENTERPRISE_STATE_VALUES, enterpriseInterval, objectBasisHash } from './
 import { applyEnterpriseBranchCommand, ENTERPRISE_BRANCH_KINDS, normalizeEnterpriseBranchCommand } from './branches.mjs';
 import { applyEnterpriseProcessCommand, ENTERPRISE_PROCESS_KINDS, normalizeEnterpriseProcessCommand } from './process-commands.mjs';
 import { applyEnterpriseEconomicCommand, ENTERPRISE_ECONOMIC_KINDS, normalizeEnterpriseEconomicCommand } from './economics-commands.mjs';
+import { applyEnterpriseRefinementCommand, ENTERPRISE_REFINEMENT_KINDS, normalizeEnterpriseRefinementCommand } from './refinement-commands.mjs';
 
 const base = ['kind', 'blueprintId', 'blueprintVersion', 'reason'];
 function reference(value, field, { nullable = false } = {}) {
@@ -18,6 +19,7 @@ function reference(value, field, { nullable = false } = {}) {
 export function normalizeEnterpriseCommand(input) {
   if (input && ENTERPRISE_PROCESS_KINDS.has(input.kind)) return normalizeEnterpriseProcessCommand(input);
   if (input && ENTERPRISE_ECONOMIC_KINDS.has(input.kind)) return normalizeEnterpriseEconomicCommand(input);
+  if (input && ENTERPRISE_REFINEMENT_KINDS.has(input.kind)) return normalizeEnterpriseRefinementCommand(input);
   if (input && ENTERPRISE_BRANCH_KINDS.has(input.kind)) return normalizeEnterpriseBranchCommand(input);
   if (!input || typeof input !== 'object' || Array.isArray(input)
     || !['create-scope', 'rename-scope', 'assign-object-scope', 'record-state', 'set-validity', 'propose-future-design'].includes(input.kind)
@@ -77,6 +79,7 @@ export function normalizeEnterpriseCommand(input) {
 export function applyEnterpriseCommand(project, command, actor, options = {}) {
   if (ENTERPRISE_PROCESS_KINDS.has(command.kind)) return applyEnterpriseProcessCommand(project, command, actor);
   if (ENTERPRISE_ECONOMIC_KINDS.has(command.kind)) return applyEnterpriseEconomicCommand(project, command, actor);
+  if (ENTERPRISE_REFINEMENT_KINDS.has(command.kind)) return applyEnterpriseRefinementCommand(project, command, actor);
   if (ENTERPRISE_BRANCH_KINDS.has(command.kind)) return applyEnterpriseBranchCommand(project, command, actor, options);
   const previous = latestBlueprint(project);
   if (!previous) throw enterpriseFailure('BLUEPRINT_NOT_FOUND', 'Save the initial blueprint before defining enterprise scopes.', 409);
