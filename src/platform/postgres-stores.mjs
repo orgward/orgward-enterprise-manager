@@ -2281,7 +2281,7 @@ export class PostgresGitHubSourceStore {
 export function projectPortfolioIntegritySummary(project) {
   const assessments = project.enterpriseIntegrityAssessments ?? [];
   if (!Array.isArray(assessments)) return { integrityProjectionIncomplete: true };
-  if (!assessments.every(isValidEnterpriseIntegrityAssessment)) return { integrityProjectionIncomplete: true };
+  if (!assessments.every((assessment) => isValidEnterpriseIntegrityAssessment(assessment, project.id))) return { integrityProjectionIncomplete: true };
   const assessment = assessments.at(-1);
   if (!assessment) return { integrityStatus: 'NOT_RUN', integritySourceCurrent: false, integrityReportId: null,
     integrityFindingCount: 0, integrityBlueprintVersion: null, integrityProjectionIncomplete: false };

@@ -169,7 +169,7 @@ test('portfolio integrity summary requires a valid complete report history', () 
   malformedHistoricalCore.id = 'enterprise-integrity-00000000-0000-4000-8000-000000000004';
   malformedHistoricalCore.rules = null;
   const malformedHistorical = { ...malformedHistoricalCore, reportHash: digest(malformedHistoricalCore) };
-  assert.equal(isValidEnterpriseIntegrityAssessment(malformedHistorical), false,
+  assert.equal(isValidEnterpriseIntegrityAssessment(malformedHistorical, projectId), false,
     'the report hash is valid, but missing rule data makes the historical record unusable');
   assert.throws(() => projectEnterpriseIntegrity({ id: projectId, blueprintVersions: [blueprint],
     enterpriseIntegrityAssessments: [malformedHistorical, currentReport] }, blueprint), { code: 'INTEGRITY_REPORT_CORRUPT' },
@@ -183,6 +183,21 @@ test('portfolio integrity summary requires a valid complete report history', () 
   assert.match(card.textContent, /Integrity report details unavailable/);
   assert.equal(card.textContent.includes('Review integrity report'), false,
     'incomplete history does not offer a review action that implies the summary is complete');
+
+  for (const [label, source] of [['missing', { ...currentReport.source, projectId: undefined }],
+    ['unrelated', { ...currentReport.source, projectId: 'project-00000000-0000-4000-8000-000000000099' }]]) {
+    const { reportHash: _hash, ...core } = currentReport;
+    const foreignReportCore = { ...core, source };
+    const invalidBinding = { ...foreignReportCore, reportHash: digest(foreignReportCore) };
+    assert.equal(isValidEnterpriseIntegrityAssessment(invalidBinding, projectId), false,
+      `${label} source project binding is invalid even with a correct report hash`);
+    assert.throws(() => projectEnterpriseIntegrity({ id: projectId, blueprintVersions: [blueprint],
+      enterpriseIntegrityAssessments: [invalidBinding] }, blueprint), { code: 'INTEGRITY_REPORT_CORRUPT' },
+    `detailed projection rejects a ${label} source project binding`);
+    assert.equal(projectPortfolioIntegritySummary({ id: projectId, blueprintVersions: [blueprint],
+      enterpriseIntegrityAssessments: [invalidBinding] }).integrityProjectionIncomplete, true,
+    `portfolio projection rejects a ${label} source project binding`);
+  }
 });
 
 test('portfolio import reads one bounded JSON file for preview', async () => {

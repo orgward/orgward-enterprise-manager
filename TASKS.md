@@ -7263,6 +7263,16 @@ in 3.77s (TAP log: `/tmp/orgward-tests-Lufv4V/node-test.tap.log`). This run
 includes the hash-valid, structurally unusable historical report fixture and
 confirms both detailed and portfolio projections reject it consistently. No full
 check run.
+Sol follow-up on source-project binding (2026-10-04): the shared assessment
+validator now takes the expected project ID, and both detailed and portfolio
+projections reject a hash-valid report with a missing or unrelated
+`source.projectId`. Focused fixtures assert both rejection paths while retaining
+the valid history and malformed-rules assertions. The recorded four-case
+selection passed 4/4 (0 failures, 0 skips; 3.39s; TAP log:
+`/tmp/orgward-tests-f62Ywg/node-test.tap.log`). `node --check` passed for
+`src/enterprise/integrity.mjs`, `src/platform/postgres-stores.mjs`, and
+`tests/enterprise/view.test.mjs`; `git diff --check` passed. No full check run;
+PR-15 remains open and active.
 PR-15 remains open and active.
 
 PR-15 portfolio-to-governed-change handoff (2026-10-04): authenticated
