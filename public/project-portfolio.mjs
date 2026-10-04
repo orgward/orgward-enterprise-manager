@@ -96,7 +96,8 @@ export async function downloadPortfolioDesign(projectId, { api, el, createObject
   return { fileName, source };
 }
 
-export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImport }) {
+export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImport,
+  filters: savedFilters = {}, onFiltersChange = () => {} }) {
   const section = el('section', { className: 'portfolio-list', attrs: { 'aria-labelledby': 'portfolio-heading' } });
   const headingContent = el('div', {}, [el('span', { className: 'eyebrow', text: 'Your portfolio' }),
     el('h2', { text: 'Workspaces' }),
@@ -106,12 +107,17 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
     headingContent, count,
   ]);
   const search = el('input', { attrs: { type: 'search', name: 'workspace-search', 'aria-label': 'Search workspaces by name', placeholder: 'Search workspaces' } });
+  search.value = typeof savedFilters.search === 'string' ? savedFilters.search : '';
   const access = el('select', { attrs: { name: 'workspace-access', 'aria-label': 'Filter workspaces by access' } }, [
     ['all', 'All access levels'], ['owner', 'Owner access'], ['editor', 'Editor access'], ['reader', 'Reader access'],
   ].map(([value, label]) => el('option', { text: label, attrs: { value } })));
+  access.value = ['owner', 'editor', 'reader'].includes(savedFilters.access) ? savedFilters.access : 'all';
+  const clearFilters = el('button', { className: 'button ghost portfolio-clear-filters', text: 'Clear workspace filters', attrs: { type: 'button' } });
+  clearFilters.hidden = true;
   const filters = el('div', { className: 'portfolio-filters' }, [
     el('label', { text: 'Search workspaces by name' }, [search]),
     el('label', { text: 'Filter by access' }, [access]),
+    clearFilters,
   ]);
   headingContent.append(filters, count);
   section.append(heading);
@@ -119,6 +125,7 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
   const renderCards = () => {
     list.replaceChildren();
     const term = search.value.trim().toLocaleLowerCase();
+    clearFilters.hidden = !term && access.value === 'all';
     const filtered = projects.filter((project) => {
       const matchesName = !term || projectPortfolioFacts(project).name.toLocaleLowerCase().includes(term);
       const matchesAccess = access.value === 'all' || project.workspaceAccess === access.value;
@@ -131,11 +138,6 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
       ? `${countText}. No workspaces match these filters. Adjust the search or access level, or clear filters.`
       : !projects.length ? '0 workspaces. No workspaces are available to your account yet.' : countText;
     if (!filtered.length) {
-      if (projects.length && (term || access.value !== 'all')) {
-        const clear = el('button', { className: 'button ghost', text: 'Clear workspace filters', attrs: { type: 'button' } });
-        clear.addEventListener('click', () => { search.value = ''; access.value = 'all'; renderCards(); search.focus?.(); });
-        list.append(clear);
-      }
       return;
     }
     for (const project of filtered) {
@@ -196,8 +198,12 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
       list.append(card);
     }
   };
-  search.addEventListener('input', renderCards);
-  access.addEventListener('change', renderCards);
+  const reportFilterChange = () => onFiltersChange({ search: search.value, access: access.value });
+  search.addEventListener('input', () => { reportFilterChange(); renderCards(); });
+  access.addEventListener('change', () => { reportFilterChange(); renderCards(); });
+  clearFilters.addEventListener('click', () => {
+    search.value = ''; access.value = 'all'; reportFilterChange(); renderCards(); search.focus?.();
+  });
   renderCards();
   section.append(list);
   return section;

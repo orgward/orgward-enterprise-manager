@@ -13,6 +13,7 @@ import { downloadPortfolioDesign, portfolioImportWorkspaceRoute, readPortfolioIm
 
 const state = {
   projects: [],
+  portfolioFilters: { search: '', access: 'all' },
   portfolioRefreshPromise: null,
   project: null,
   view: 'blueprint',
@@ -451,6 +452,8 @@ function renderPortfolio() {
   if (!target) return;
   target.replaceChildren(renderProjectPortfolio(state.projects, {
     el: element,
+    filters: state.portfolioFilters,
+    onFiltersChange: (filters) => { state.portfolioFilters = filters; },
     onOpen: (id, { focusOutcomes = false, focusIntegrity = false, focusOutcomeCategory = null } = {}) => {
       if (!allowRouteChange()) return;
       state.draft = '';

@@ -339,6 +339,41 @@ test('portfolio search and access filter find the matching workspace and preserv
   assert.deepEqual(imported, [['project-north', 'filtered-import.json']]);
 });
 
+test('portfolio filters are restored after opening a workspace and returning', () => {
+  const projects = [
+    { id: 'workspace-north', name: 'Northstar', workspaceAccess: 'editor', blueprintVersion: 2 },
+    { id: 'workspace-harbor', name: 'Harbor', workspaceAccess: 'reader', blueprintVersion: 1 },
+    { id: 'workspace-north-owner', name: 'North Annex', workspaceAccess: 'owner', blueprintVersion: 3 },
+  ];
+  let filterState = { search: '', access: 'all' };
+  const opened = [];
+  const mountPortfolio = () => renderProjectPortfolio(projects, { el, filters: filterState,
+    onFiltersChange: (next) => { filterState = next; }, onOpen: (id) => opened.push(id), onExport() {}, onImport() {},
+  });
+
+  const portfolio = mountPortfolio();
+  const search = portfolio.querySelectorAll('input').find((input) => input.attrs.type === 'search');
+  const access = portfolio.querySelectorAll('select').find((select) => select.attrs.name === 'workspace-access');
+  search.value = 'North'; search.listeners.get('input')();
+  access.value = 'editor'; access.listeners.get('change')();
+  assert.deepEqual(filterState, { search: 'North', access: 'editor' });
+  const matchingCard = portfolio.querySelectorAll('[data-project-id]')[0];
+  assert.equal(matchingCard.attrs['data-project-id'], 'workspace-north');
+  matchingCard.querySelectorAll('button').find((button) => button.text === 'Open workspace').listeners.get('click')();
+  assert.deepEqual(opened, ['workspace-north']);
+
+  const returned = mountPortfolio();
+  assert.equal(returned.querySelectorAll('input').find((input) => input.attrs.type === 'search').value, 'North');
+  assert.equal(returned.querySelectorAll('select').find((select) => select.attrs.name === 'workspace-access').value, 'editor');
+  assert.deepEqual(Array.from(returned.querySelectorAll('[data-project-id]'), (card) => card.attrs['data-project-id']), ['workspace-north']);
+  const clear = returned.querySelectorAll('button').find((button) => button.text === 'Clear workspace filters');
+  assert.equal(clear.hidden, false, 'a matching filtered list still offers explicit filter reset');
+  clear.listeners.get('click')();
+  assert.deepEqual(filterState, { search: '', access: 'all' });
+  const cleared = mountPortfolio();
+  assert.equal(cleared.querySelectorAll('[data-project-id]').length, 3);
+});
+
 test('portfolio filter feedback is announced and its layout adapts to narrow screens', () => {
   let status = null;
   const portfolio = renderProjectPortfolio([

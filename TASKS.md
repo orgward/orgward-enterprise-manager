@@ -7529,6 +7529,18 @@ selection-race and PostgreSQL membership-list cases passed 3/3 (0 failures,
 `public/project-portfolio.mjs`, and `tests/enterprise/view.test.mjs`;
 `git diff --check` passed. No full check run; PR-15 remains open and active.
 
+PR-15 portfolio filter return continuity (2026-10-04): name and access filters
+now live in app page-session state and are passed back into portfolio renders.
+Opening a matched workspace and returning restores the same search, access
+level, and exact matching workspace card; the filters reset only through the
+explicit Clear workspace filters action, which is available whenever a filter
+is active. No browser storage, API or schema change. The requested three-case
+portfolio card/filter selection passed 4/4 (0 failures, 0 skips; 1.49s; TAP
+log: `/tmp/orgward-tests-tSsNH4/node-test.tap.log`). `node --check` passed for
+`public/app.js`, `public/project-portfolio.mjs`, and
+`tests/enterprise/view.test.mjs`; `git diff --check` passed. No full check run;
+PR-15 remains open and active.
+
 PR-15 restore draft from a saved design version (2026-10-04): when an owner or
 editor selects a historical saved main version, the branch panel offers an
 explicit “Restore this saved version as a draft” action. The draft copies the
