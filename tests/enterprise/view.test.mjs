@@ -10,6 +10,7 @@ import { activationForTask, evaluateManualFlowAdvice, manualFlowActivation, manu
   mergeProcessPlanActivation, renderManualFlowDecisionChoice } from '../../public/manual-flow-ui.mjs';
 import { renderEnterpriseEconomics } from '../../public/enterprise-economics.mjs';
 import { renderEnterpriseRefinement } from '../../public/enterprise-refinement.mjs';
+import { enterpriseInterchangeCommandPayload, enterpriseInterchangeWritable, renderEnterpriseInterchange } from '../../public/enterprise-interchange.mjs';
 import { decodeStudioRoute, encodeStudioRoute } from '../../public/shared-interactions.mjs';
 
 class NodeListFixture extends Array {
@@ -25,7 +26,7 @@ class NodeFixture {
     this.className = options.className ?? '';
     this.children = [];
     this.listeners = new Map();
-    this._value = '';
+    this._value = options.attrs?.value ?? '';
     this.disabled = false;
     this.hidden = false;
     this.required = false;
@@ -92,6 +93,42 @@ const branchUi = {
     return node;
   },
 };
+
+test('enterprise interchange UI binds edits to the visible source and restores and submits a retained preview draft', async () => {
+  const model = { permissions: { write: true }, context: { isCurrent: true, blueprintId: 'blueprint-00000000-0000-4000-8000-000000000001',
+    blueprintVersion: 4, effectiveAt: null, recordedAtCutoff: null, proposalId: null, branchId: null }, blueprint: { id: 'visible' } };
+  assert.equal(enterpriseInterchangeWritable(model), true);
+  assert.deepEqual(enterpriseInterchangeCommandPayload(model, { kind: 'bulk-edit-objects', recordIds: ['customer-x'] }), {
+    kind: 'bulk-edit-objects', recordIds: ['customer-x'], blueprintId: model.context.blueprintId, blueprintVersion: 4,
+  });
+  for (const context of [{ ...model.context, isCurrent: false }, { ...model.context, branchId: 'branch-x' }, { ...model.context, effectiveAt: '2026-10-01' }]) {
+    assert.equal(enterpriseInterchangeWritable({ ...model, context }), false);
+    assert.equal(enterpriseInterchangeCommandPayload({ ...model, context }, { kind: 'bulk-edit-objects' }), null);
+  }
+  const rendered = renderEnterpriseInterchange({ projectId: 'project-x', model, el, ui: branchUi, api: async () => ({}), onCommand() {} });
+  assert.match(rendered.textContent, /never run or publish work/);
+  assert.equal(rendered.querySelectorAll('button').some((button) => button.text === 'Apply selected edits as one proposed version'), false);
+
+  const bundle = { kind: 'orgward-enterprise-blueprint' };
+  const preview = { source: { projectId: 'source-project', blueprintId: 'source-blueprint', blueprintVersion: 2, snapshotHash: 'source-hash' },
+    currentSource: { blueprintId: model.context.blueprintId, blueprintVersion: 4, snapshotHash: 'current-hash' }, recordCount: 1,
+    recognizedFields: 1, readyRecordIds: ['customer-x'], previewHash: 'preview-hash', unknownFields: [], lossyFields: [], collisions: [], validationErrors: [],
+    rows: [{ id: 'customer-x', type: 'customer', status: 'READY', changedFields: ['name'], recognizedFields: ['name'], unknownFields: [], validationErrors: [] }] };
+  const restoredDraft = { bundle, recordIds: ['customer-x'], reason: 'Retained after a definitive rejection.' };
+  let restored = null; let called = null; let previewCalls = 0;
+  const retryRoot = renderEnterpriseInterchange({ projectId: 'project-x', model, draft: restoredDraft, el, ui: branchUi,
+    api: async (_path, options) => { previewCalls += 1; assert.equal(options.method, 'POST'); return { data: preview }; },
+    onDraftChange(value) { restored = value; }, onCommand(payload) { called = payload; } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(previewCalls, 1);
+  assert.equal(restored.preview, preview);
+  assert.match(retryRoot.textContent, /Import preview/);
+  const form = retryRoot.querySelectorAll('form').find((node) => node.attrs['data-enterprise-action'] === 'bulk-edit-objects');
+  assert.ok(form);
+  const reason = form.querySelectorAll('textarea')[0]; reason.value = 'Reviewed and corrected';
+  form.listeners.get('submit')({ preventDefault() {} });
+  assert.deepEqual(called, { kind: 'bulk-edit-objects', bundle, recordIds: ['customer-x'], reason: 'Reviewed and corrected' });
+});
 function storageFixture(values = new Map()) {
   return { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, String(value)),
     removeItem: (key) => values.delete(key), values };

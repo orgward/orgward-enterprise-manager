@@ -58,6 +58,7 @@ export function enterpriseCommandResultRoute(route, payload, result = null) {
     ...(payload.kind === 'edit-branch-scope' && payload.change?.kind === 'create-scope' ? { lensId: 'all', scopeId: null, types: [], area: null } : {}),
   };
   return { ...route, ...reset, proposalId: result.proposalId ?? null, selectedId: result.affectedObjectId ?? route.selectedId, view: 'map',
+    ...(payload.kind === 'bulk-edit-objects' && Array.isArray(result.importedRecordIds) && result.importedRecordIds.length ? { selectedId: result.importedRecordIds[0] } : {}),
     ...(payload.kind === 'create-scope' ? { lensId: 'all', scopeId: null, types: [], area: null } : {}) };
 }
 

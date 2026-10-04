@@ -6302,6 +6302,28 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   `node --check` on changed source and test files plus `git diff --check` passed.
   No full parent check or browser/provider/live effect was used; PR-12 remains open.
 
+  PR-12 loss-aware interchange and atomic bulk edit slice (2026-10-04): current
+  proposed designs can be exported as bounded JSON bundles with source project,
+  saved blueprint ID/version and snapshot hash. Read-authorized preview reports
+  recognized and unknown fields, preserved/loss fields, identity/type/field
+  collisions and typed-model validation errors against the exact destination.
+  Applying selected existing record edits validates the whole selection in a
+  scratch design, writes one proposed blueprint version and one audit receipt,
+  records source provenance, and never runs or publishes work. Same-project
+  source baselines must match saved history; external/unverified sources remain
+  conflicted. The UI binds imports to the visible version, restores/re-previews
+  retained drafts and disables edits in historical/branch contexts. Initial
+  focused invocation selected four new pure/UI/PostgreSQL cases: 3 passed, 1
+  failed, 0 skipped (runner 2.32s; TAP 1182.11ms), log
+  `/tmp/orgward-tests-JqGoEH/node-test.tap.log`. The sole failure exposed the
+  global POST write-role guard running before the read-only preview route. After
+  Sol's read-only review and the exact-path any-role correction, the failed
+  PostgreSQL case alone passed 1/1 (0 failed/cancelled/skipped; runner 2.33s,
+  TAP 1190.81ms), log `/tmp/orgward-tests-Fyeodk/node-test.tap.log`. Across the
+  initial run and rerun, all four distinct new cases pass. Syntax checks and
+  `git diff --check` passed. No full parent check or external effect was used;
+  PR-12 remains open.
+
 - [ ] PR-13 — Evidence ingestion and integrity operations (T-65–T-75). Safely
   onboard sources, extract evidence-backed identity/claim proposals, review and
   publish atomic snapshots, run typed integrity/lineage rules, manage exceptions,

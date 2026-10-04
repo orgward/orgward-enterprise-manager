@@ -1274,6 +1274,54 @@ test('enterprise economics save typed capacity, evaluate exact sources and keep 
   assert.equal(restored.data.economics.evaluation.matchesSelectedSource, true);
 });
 
+test('enterprise interchange export, preview and bulk apply enforce source, type, version, replay and writer boundaries', async (t) => {
+  const postgres = await startPostgres(); let root; let instance;
+  t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-enterprise-interchange-'));
+  instance = await startApp(postgres, root);
+  for (const identity of identities.values()) {
+    await postgres.query(`insert into orgward.oidc_principals
+      (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+    [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  }
+  const project = await seedProject(postgres, 'Enterprise interchange fixture');
+  let view = await currentView(instance.base, 'owner', project.id, { lensId: 'all' });
+  const exported = await request(instance.base, 'owner', `/api/v1/projects/${project.id}/enterprise/export`);
+  const bundle = exported.data;
+  assert.equal(bundle.kind, 'orgward-enterprise-blueprint');
+  assert.equal(bundle.source.projectId, project.id);
+  assert.equal(bundle.source.blueprintId, view.data.context.blueprintId);
+  assert.equal(bundle.source.blueprintVersion, view.data.context.blueprintVersion);
+  assert.match(bundle.source.snapshotHash, /^[a-f0-9]{64}$/);
+  const customer = bundle.records.find((record) => record.type === 'customer');
+  customer.fields.name = `${customer.fields.name} (reviewed import)`;
+  const preview = await request(instance.base, 'reader', `/api/v1/projects/${project.id}/enterprise/import-preview`, {
+    method: 'POST', body: { bundle },
+  });
+  assert.equal(preview.data.currentSource.blueprintVersion, view.data.context.blueprintVersion);
+  assert.equal(preview.data.rows.find((row) => row.id === customer.id).status, 'READY');
+  assert.ok(preview.data.lossyFields.some((entry) => entry.recordId === customer.id && entry.field === 'provenance'));
+  const editBody = commandBody(view, 'enterprise-interchange-bulk-apply', { kind: 'bulk-edit-objects', bundle,
+    recordIds: [customer.id], reason: 'Import reviewed customer wording.' });
+  const applied = await postCommand(instance.base, 'editor', project.id, editBody);
+  assert.deepEqual(applied.data.importedRecordIds, [customer.id]);
+  assert.equal(applied.data.blueprintVersion, view.data.context.blueprintVersion + 1);
+  const replay = await postCommand(instance.base, 'editor', project.id, editBody);
+  assert.equal(replay.meta.replayed, true);
+  assert.equal(replay.data.blueprintVersion, applied.data.blueprintVersion);
+  const stale = await postCommand(instance.base, 'editor', project.id,
+    { ...editBody, commandId: 'enterprise-interchange-stale-source', expectedVersion: applied.data.projectVersion }, 409);
+  assert.equal(stale.error.code, 'ENTERPRISE_BLUEPRINT_STALE');
+  const denied = await postCommand(instance.base, 'reader', project.id,
+    { ...editBody, commandId: 'enterprise-interchange-reader-denied', expectedVersion: applied.data.projectVersion }, 403);
+  assert.equal(denied.error.code, 'ACTION_FORBIDDEN');
+  view = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: customer.id });
+  assert.equal(view.data.blueprint.areas.customersOfferingsValueEconomics.items.find((entry) => entry.id === customer.id).name, customer.fields.name);
+  const persisted = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  assert.equal(persisted.data.audit.filter((entry) => entry.action === 'enterprise.bulk-edit-objects').length, 1);
+  assert.equal(persisted.data.blueprintVersions.at(-1).edit.sourceHash, bundle.source.snapshotHash);
+});
+
 test('saved refinement links update canonical relations, reject cycles and trace exact branch revisions', async (t) => {
   const postgres = await startPostgres(); let root; let instance;
   t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });

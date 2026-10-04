@@ -417,6 +417,51 @@ function displayObjectForEdit(blueprint, object) {
   };
 }
 
+export function blueprintObjectEditInput(blueprint, object) {
+  const objects = Object.values(blueprint?.areas ?? {}).flatMap((entry) => entry.items ?? []);
+  const byId = new Map(objects.map((candidate) => [candidate.id, candidate]));
+  const idsOfType = (ids, type) => (Array.isArray(ids) ? ids : []).filter((id) => byId.get(id)?.type === type);
+  const input = { objectId: object.id, name: object.name, detail: object.detail };
+  if (object.owner && byId.get(object.owner)?.type === 'role') input.ownerRoleName = byId.get(object.owner).name;
+  if (object.type === 'strategy') input.strategyGoalIds = idsOfType(object.goals, 'goal');
+  if (object.type === 'offering') {
+    input.servesCustomerIds = idsOfType(object.serves, 'customer');
+    input.enabledByCapabilityIds = idsOfType(object.enabledBy, 'capability');
+  }
+  if (object.type === 'capability') input.capabilityMetricIds = idsOfType(object.metrics, 'metric');
+  if (object.type === 'process') {
+    input.trigger = object.trigger ?? '';
+    input.capabilityId = byId.get(object.capability)?.type === 'capability' ? object.capability : null;
+    input.inputInformationIds = idsOfType(object.inputs, 'information'); input.outputInformationIds = idsOfType(object.outputs, 'information');
+    input.inputDecisionIds = idsOfType(object.inputs, 'decision'); input.outputDecisionIds = idsOfType(object.outputs, 'decision');
+    input.resourceIds = idsOfType(object.resources, 'resource'); input.systemIds = idsOfType(object.systems, 'system');
+  }
+  if (object.type === 'role') {
+    const eligible = new Set(['goal', 'capability', 'process', 'system']);
+    input.responsibilityIds = (Array.isArray(object.responsibilities) ? object.responsibilities : []).filter((id) => eligible.has(byId.get(id)?.type));
+    input.proposedInstructions = object.proposedInstructions ?? '';
+    input.proposedScopeStatements = object.proposedScopeStatements ?? (Array.isArray(object.authority) ? object.authority.filter((value) => !(typeof value === 'string' && value.startsWith('decision-'))) : []);
+    input.proposedToolStatements = object.proposedToolStatements ?? []; input.proposedEscalationRules = object.proposedEscalationRules ?? [];
+  }
+  if (object.type === 'decision') {
+    input.decisionMakerRoleId = byId.get(object.by)?.type === 'role' ? object.by : null;
+    input.decisionScopeIds = (Array.isArray(object.scope) ? object.scope : []).filter((id) => DECISION_SCOPE_TARGET_TYPES.has(byId.get(id)?.type));
+  }
+  if (['actor-human', 'actor-agent'].includes(object.type)) input.assignedRoleIds = idsOfType(object.assignedRoles, 'role');
+  if (object.type === 'feedback-loop') {
+    input.evidenceMetricIds = idsOfType(object.evidence, 'metric');
+    input.feedbackGoalId = byId.get(object.goal)?.type === 'goal' ? object.goal : null;
+    input.feedbackDecisionIds = idsOfType(object.decisionIds, 'decision');
+  }
+  if (object.type === 'metric') {
+    input.readInformationId = byId.get(object.reads)?.type === 'information' ? object.reads : null;
+    input.consumerLoopId = byId.get(object.consumerLoop)?.type === 'feedback-loop' ? object.consumerLoop : null;
+  }
+  if (object.type === 'risk') input.mitigatingControlId = byId.get(object.control)?.type === 'control' ? object.control : null;
+  if (['goal', 'economics'].includes(object.type)) input.metricId = byId.get(object.metric)?.type === 'metric' ? object.metric : null;
+  return input;
+}
+
 function displayRelations(blueprint, objectId) {
   const objects = new Map(Object.values(blueprint.areas).flatMap((entry) => entry.items).map((object) => [object.id, object.name]));
   return blueprint.relations.filter((relation) => relation.source === objectId || relation.target === objectId)

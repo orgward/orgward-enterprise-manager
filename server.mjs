@@ -36,6 +36,7 @@ import { ENTERPRISE_BRANCH_KINDS, enterpriseMergeApproval } from './src/enterpri
 import { ENTERPRISE_PROCESS_KINDS } from './src/enterprise/process-commands.mjs';
 import { ENTERPRISE_ECONOMIC_KINDS } from './src/enterprise/economics-commands.mjs';
 import { ENTERPRISE_REFINEMENT_KINDS } from './src/enterprise/refinement-commands.mjs';
+import { createEnterpriseInterchangeBundle, ENTERPRISE_INTERCHANGE_KINDS, previewEnterpriseInterchange } from './src/enterprise/interchange.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -927,9 +928,12 @@ export function createApp({
           }
         }
         if (request.method === 'POST') {
+          const readOnlyEnterprisePreview = /^\/api\/v1\/projects\/project-[0-9a-f-]{36}\/enterprise\/import-preview$/.test(pathname);
           const required = pathname === '/api/v1/persistence/imports'
             || /^\/api\/v1\/secrets\/secret-[a-z0-9][a-z0-9._-]{0,79}\/revoke$/.test(pathname)
             ? ['tenant-admin']
+            : readOnlyEnterprisePreview
+              ? ['workspace-read', 'workspace-write', 'tenant-admin']
             : /^\/api\/v1\/identities\/oidc:[a-f0-9]{64}\/revoke$/.test(pathname)
               ? ['tenant-admin']
             : pathname.includes('/execution/runs/') && pathname.endsWith('/approve')
@@ -940,7 +944,8 @@ export function createApp({
                 ? ['release-approver']
               : ['workspace-write'];
           const roles = requestRoles(request);
-          if (!required.every((role) => roles.includes(role))) {
+          if (readOnlyEnterprisePreview ? !required.some((role) => roles.includes(role))
+            : !required.every((role) => roles.includes(role))) {
             throw apiFailure(403, 'ACTION_FORBIDDEN', 'This identity does not have authority for the requested action.', {
               recoveryActions: [{ type: 'request_authority', label: 'Request the required role' }],
             });
@@ -1544,6 +1549,39 @@ export function createApp({
       }
 
       const enterpriseMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/enterprise(?:\/(commands))?$/);
+      const enterpriseExportMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/enterprise\/export$/);
+      if (enterpriseExportMatch && request.method === 'GET') {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified project member is required to export a proposed design.');
+        requirePrincipalStoreMethod(store, 'getWithPrincipalAuthority');
+        const found = await store.getWithPrincipalAuthority({ id: enterpriseExportMatch[1], tenantId: requestTenant(request),
+          principal: requestActor(request), anyPrincipalRoleGroups: [['workspace-read', 'workspace-write', 'tenant-admin']],
+          authzGeneration: request.identity.authzGeneration,
+          operation(project) {
+            sendApi(response, 200, createEnterpriseInterchangeBundle(project.id, latestBlueprint(project)), { correlationId });
+            return project;
+          } });
+        if (!found) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
+        return;
+      }
+      const enterpriseImportPreviewMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/enterprise\/import-preview$/);
+      if (enterpriseImportPreviewMatch && request.method === 'POST') {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified project member is required to preview an enterprise import.');
+        requirePrincipalStoreMethod(store, 'getWithPrincipalAuthority');
+        const body = await readJson(request);
+        if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length !== 1 || !Object.hasOwn(body, 'bundle')) {
+          throw apiFailure(400, 'INVALID_ENTERPRISE_IMPORT_PREVIEW', 'Provide only the enterprise JSON bundle for preview.');
+        }
+        rejectAuthorityClaims(body);
+        const found = await store.getWithPrincipalAuthority({ id: enterpriseImportPreviewMatch[1], tenantId: requestTenant(request),
+          principal: requestActor(request), anyPrincipalRoleGroups: [['workspace-read', 'workspace-write', 'tenant-admin']],
+          authzGeneration: request.identity.authzGeneration,
+          operation(project) {
+            sendApi(response, 200, previewEnterpriseInterchange(project, body.bundle), { correlationId });
+            return project;
+          } });
+        if (!found) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
+        return;
+      }
       if (enterpriseMatch && request.method === 'GET' && !enterpriseMatch[2]) {
         if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified project identity is required to explore enterprise perspectives.');
         requirePrincipalStoreMethod(store, 'getWithPrincipalAuthority');
@@ -1578,8 +1616,8 @@ export function createApp({
           || (payload.kind === 'edit-branch-scope' && ['create-scope', 'rename-scope'].includes(payload.change.kind));
         if ((administrative || payload.kind === 'record-state' || ENTERPRISE_BRANCH_KINDS.has(payload.kind)
           || ENTERPRISE_PROCESS_KINDS.has(payload.kind) || ENTERPRISE_ECONOMIC_KINDS.has(payload.kind)
-          || ENTERPRISE_REFINEMENT_KINDS.has(payload.kind)) && request.identity.actorType !== 'human') {
-          throw apiFailure(403, 'ENTERPRISE_HUMAN_OWNER_REQUIRED', 'A current human project member must report state or define refinement links; a human project owner must review design or define scopes, validity and future proposals.');
+          || ENTERPRISE_REFINEMENT_KINDS.has(payload.kind) || ENTERPRISE_INTERCHANGE_KINDS.has(payload.kind)) && request.identity.actorType !== 'human') {
+          throw apiFailure(403, 'ENTERPRISE_HUMAN_OWNER_REQUIRED', 'A current human project member must report state, refine records or import proposed design; a human project owner must review design or define scopes, validity and future proposals.');
         }
         const actor = requestActor(request);
         const result = await store.updateWithCommandForPrincipal(enterpriseMatch[1], requestTenant(request), {
@@ -1614,11 +1652,14 @@ export function createApp({
             project.events.push(projectEvent(project, { type: ['record-state', 'set-validity', 'propose-future-design'].includes(payload.kind)
               || ENTERPRISE_BRANCH_KINDS.has(payload.kind) || ENTERPRISE_PROCESS_KINDS.has(payload.kind)
               || ENTERPRISE_ECONOMIC_KINDS.has(payload.kind) || ENTERPRISE_REFINEMENT_KINDS.has(payload.kind)
+              || ENTERPRISE_INTERCHANGE_KINDS.has(payload.kind)
               ? 'EnterpriseDesignChanged' : 'EnterpriseScopeChanged', actor, commandId: body.commandId, correlationId,
               data: { kind: payload.kind, blueprintId: changed.blueprint.id, blueprintVersion: changed.blueprint.version,
                 objectId: changed.affectedObjectId, proposalId: changed.proposalId ?? null,
                 branchId: changed.branchId ?? null, branchRevision: changed.branchRevision ?? null,
                 candidateId: changed.candidateId ?? null, candidateHash: changed.candidateHash ?? null,
+                importedRecordIds: changed.importedRecordIds ?? null,
+                importSource: changed.source ?? null, importSourceHash: changed.sourceHash ?? null,
                 simulationId: changed.simulationId ?? null, economicEvaluationId: changed.economicEvaluationId ?? null, reason: payload.reason } }));
           },
         }, actor, { requiredPrincipalRoles: ['workspace-write'], authzGeneration: request.identity.authzGeneration,
@@ -1632,6 +1673,8 @@ export function createApp({
           blueprintVersion: simulation?.source.blueprintVersion ?? economicEvaluation?.source.blueprintVersion ?? blueprint.version, affectedObjectId: receipt.objectId, proposalId: receipt.proposalId ?? null,
           branchId: receipt.branchId ?? null, branchRevision: receipt.branchRevision ?? null,
           candidateId: receipt.candidateId ?? null, candidateHash: receipt.candidateHash ?? null,
+          importedRecordIds: receipt.importedRecordIds ?? null, importSource: receipt.importSource ?? null,
+          importSourceHash: receipt.importSourceHash ?? null,
           ...(simulation ? { simulation } : {}), ...(economicEvaluation ? { economicEvaluation } : {}) },
         { correlationId, event: result.project.events.at(-1), meta: { replayed: result.replayed } });
       }

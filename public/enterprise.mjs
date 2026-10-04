@@ -2,6 +2,7 @@ import { ENTERPRISE_PROCESS_COMMANDS, renderEnterpriseProcess } from './enterpri
 import { ENTERPRISE_BRANCH_COMMANDS, enterpriseBranchWritable, renderEnterpriseBranches } from './enterprise-branches.mjs';
 import { ENTERPRISE_ECONOMIC_COMMANDS, renderEnterpriseEconomics } from './enterprise-economics.mjs';
 import { ENTERPRISE_REFINEMENT_COMMANDS, renderEnterpriseRefinement } from './enterprise-refinement.mjs';
+import { ENTERPRISE_INTERCHANGE_COMMANDS, renderEnterpriseInterchange } from './enterprise-interchange.mjs';
 const SCOPE_TYPES = new Set(['organization', 'legal-entity', 'unit']);
 const STATE_VALUES = {
   lifecycle: ['UNKNOWN', 'PLANNED', 'ACTIVE', 'RETIRED'],
@@ -97,7 +98,7 @@ export function restoreEnterpriseCommand(storage, principal, projectId) {
   if (!saved) return null;
   if (saved.projectId !== projectId || saved.envelope?.schemaVersion !== '1.0'
     || typeof saved.envelope.commandId !== 'string' || !Number.isSafeInteger(saved.envelope.expectedVersion)
-    || !['create-scope', 'rename-scope', 'assign-object-scope', 'record-state', 'set-validity', 'propose-future-design', ...ENTERPRISE_BRANCH_COMMANDS, ...ENTERPRISE_PROCESS_COMMANDS, ...ENTERPRISE_ECONOMIC_COMMANDS, ...ENTERPRISE_REFINEMENT_COMMANDS].includes(saved.envelope.payload?.kind)) throw new Error('Saved enterprise command is unreadable.');
+    || !['create-scope', 'rename-scope', 'assign-object-scope', 'record-state', 'set-validity', 'propose-future-design', ...ENTERPRISE_BRANCH_COMMANDS, ...ENTERPRISE_PROCESS_COMMANDS, ...ENTERPRISE_ECONOMIC_COMMANDS, ...ENTERPRISE_REFINEMENT_COMMANDS, ...ENTERPRISE_INTERCHANGE_COMMANDS].includes(saved.envelope.payload?.kind)) throw new Error('Saved enterprise command is unreadable.');
   return saved;
 }
 
@@ -293,7 +294,7 @@ export function renderEnterpriseContext({ model, query, loading = false, error =
   return root;
 }
 
-export function renderEnterpriseObject({ model, object, pending = null, loading = false, simulation = null, processDraft = null, economicDraft = null, refinementDraft = null, selectedSimulationId = null, economicEvaluationId = null, el, onCommand, onInspectDraft, onSimulationSelection, onInspectSimulation, onEconomicEvaluationSelection, onInspectEconomicEvaluation }) {
+export function renderEnterpriseObject({ projectId = null, model, object, pending = null, loading = false, simulation = null, processDraft = null, economicDraft = null, refinementDraft = null, interchangeDraft = null, selectedSimulationId = null, economicEvaluationId = null, el, api, onCommand, onDraftChange, onInspectDraft, onSimulationSelection, onInspectSimulation, onEconomicEvaluationSelection, onInspectEconomicEvaluation }) {
   const { field, form } = fields(el);
   const root = el('section', { className: 'enterprise-object', attrs: { 'aria-label': 'Selected object design scope' } });
   const scope = object.enterpriseScope;
@@ -310,6 +311,11 @@ export function renderEnterpriseObject({ model, object, pending = null, loading 
   const refinementPanel = renderEnterpriseRefinement({ model, object, draft: pending?.envelope?.payload ?? refinementDraft,
     pending: pending?.envelope?.payload, loading, el, ui: { field, form }, onCommand, onInspectDraft });
   if (refinementPanel) root.append(refinementPanel);
+  const pendingPayload = pending?.envelope?.payload;
+  const interchangePanel = renderEnterpriseInterchange({ projectId, model,
+    draft: pendingPayload?.kind === 'bulk-edit-objects' ? pendingPayload : interchangeDraft, pending: pendingPayload,
+    loading, el, ui: { field, form }, api, onCommand, onDraftChange });
+  if (interchangePanel) root.append(interchangePanel);
   root.append(el('h4', { text: 'Proposed organizational scope' }), el('p', { text: scope ? (assigned ? 'Assigned to a design scope.' : 'Explicitly unscoped.') : 'Organizational scope is unknown; no assignment has been recorded.' }));
   if (assigned) for (const id of Object.values(scope).filter(Boolean)) root.append(el('p', { text: scopes.find((entry) => entry.id === id)?.name ?? id }));
   if (model.selection?.object?.id === object.id && !model.selection.visible) root.append(el('p', { text: `The selected record is outside this perspective: ${(model.selection.hiddenBy ?? []).map((reason) => ({ lens: 'perspective filter', scope: 'design scope filter' })[reason] ?? reason).join(', ') || 'perspective or design scope filter'}. Its saved identity and inspector remain selected.`, attrs: { 'data-enterprise-selection': '', role: 'status' } }));
