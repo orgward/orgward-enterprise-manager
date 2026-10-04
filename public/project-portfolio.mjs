@@ -15,6 +15,14 @@ export function projectPortfolioFacts(project) {
       ? project.latestActiveChangeCaseId : null,
     latestChangeCaseTitle: typeof project?.latestActiveChangeCaseTitle === 'string' ? project.latestActiveChangeCaseTitle : 'Governed change',
     changeCaseProjectionIncomplete: project?.changeCaseProjectionIncomplete === true,
+    integrityStatus: ['NOT_RUN', 'PASS', 'REVIEW', 'FAIL'].includes(project?.integrityStatus) ? project.integrityStatus : 'UNKNOWN',
+    integritySourceCurrent: project?.integritySourceCurrent === true,
+    integrityReportId: typeof project?.integrityReportId === 'string' && /^enterprise-integrity-[0-9a-f-]{36}$/.test(project.integrityReportId)
+      ? project.integrityReportId : null,
+    integrityFindingCount: Number.isSafeInteger(project?.integrityFindingCount) && project.integrityFindingCount >= 0
+      ? project.integrityFindingCount : null,
+    integrityBlueprintVersion: Number.isSafeInteger(project?.integrityBlueprintVersion) ? project.integrityBlueprintVersion : null,
+    integrityProjectionIncomplete: project?.integrityProjectionIncomplete === true,
     updated: typeof project?.updatedAt === 'string' && Number.isFinite(Date.parse(project.updatedAt))
       ? new Date(project.updatedAt).toLocaleString() : 'No saved activity time',
   };
@@ -109,6 +117,17 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
       : `Active governed changes: ${facts.changeCases}` }));
     if (facts.latestChangeCaseId) card.append(el('a', { className: 'button ghost', text: `Open governed change: ${facts.latestChangeCaseTitle}`,
       attrs: { href: `/sdlc.html?case=${encodeURIComponent(facts.latestChangeCaseId)}` } }));
+    const integrityText = facts.integrityProjectionIncomplete ? 'Integrity report details unavailable'
+      : facts.integrityStatus === 'NOT_RUN' ? 'Integrity: not yet checked'
+        : facts.integrityStatus === 'UNKNOWN' ? 'Integrity status unavailable'
+          : `Integrity ${facts.integrityStatus} · ${facts.integrityFindingCount ?? 'unknown'} findings · ${facts.integritySourceCurrent
+            ? `current blueprint v${facts.integrityBlueprintVersion}` : `last checked blueprint v${facts.integrityBlueprintVersion ?? 'unknown'} (stale)`}`;
+    card.append(el('p', { className: 'portfolio-integrity', text: integrityText }));
+    if (facts.integrityReportId && !facts.integrityProjectionIncomplete) {
+      const reviewIntegrity = el('button', { className: 'button ghost', text: 'Review integrity report', attrs: { type: 'button' } });
+      reviewIntegrity.addEventListener('click', () => onOpen(project.id, { focusIntegrity: true }));
+      card.append(reviewIntegrity);
+    }
     const open = el('button', { className: 'button secondary', text: 'Open workspace', attrs: { type: 'button' } });
     open.addEventListener('click', () => onOpen(project.id));
     card.append(open);

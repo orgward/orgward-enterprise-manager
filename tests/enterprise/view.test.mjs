@@ -17,6 +17,7 @@ import { enterpriseStewardshipPayload, renderEnterpriseStewardship } from '../..
 import { downloadPortfolioDesign, portfolioDesignExportFilename, projectPortfolioFacts, readPortfolioImportFile, renderProjectPortfolio,
   portfolioImportWorkspaceRoute, verifyPortfolioDesignBundle } from '../../public/project-portfolio.mjs';
 import { digest } from '../../src/sdlc/contracts.mjs';
+import { projectPortfolioIntegritySummary } from '../../src/platform/postgres-stores.mjs';
 import { decodeStudioRoute, encodeStudioRoute } from '../../public/shared-interactions.mjs';
 
 class NodeListFixture extends Array {
@@ -97,7 +98,9 @@ test('portfolio cards show saved workspace state and access and open the chosen 
     { id: 'project-a', name: 'Northstar', phase: 'design', blueprintVersion: 3,
       workspaceAccess: 'editor', openIncidentCount: 2, openSupportCount: 1, activeChangeCaseCount: 2,
       latestActiveChangeCaseId: 'change-case-00000000-0000-4000-8000-000000000012',
-      latestActiveChangeCaseTitle: 'Customer data migration', updatedAt: '2026-10-03T12:00:00.000Z' },
+      latestActiveChangeCaseTitle: 'Customer data migration', integrityStatus: 'REVIEW', integritySourceCurrent: true,
+      integrityReportId: 'enterprise-integrity-00000000-0000-4000-8000-000000000013', integrityFindingCount: 4,
+      integrityBlueprintVersion: 3, updatedAt: '2026-10-03T12:00:00.000Z' },
     { id: 'project-b', name: 'Harbor', phase: 'discovery', blueprintVersion: null,
       workspaceAccess: 'reader', updatedAt: '2026-10-02T12:00:00.000Z' },
   ];
@@ -110,13 +113,16 @@ test('portfolio cards show saved workspace state and access and open the chosen 
   assert.match(rendered.textContent, /Northstar Editor access design Blueprint version 3/);
   assert.match(rendered.textContent, /Active incidents: 2 · Active support: 1/);
   assert.match(rendered.textContent, /Active governed changes: 2/);
+  assert.match(rendered.textContent, /Integrity REVIEW · 4 findings · current blueprint v3/);
   assert.match(rendered.textContent, /Harbor Reader access discovery No saved blueprint yet/);
   const secondCard = rendered.children[1].children[1];
   const openButton = secondCard.children.find((child) => child.tagName === 'button');
   openButton.listeners.get('click')();
   const reviewButton = rendered.children[1].children[0].children.find((child) => child.text === 'Review incident and support inbox');
   reviewButton.listeners.get('click')();
-  assert.deepEqual(opened, ['project-b', ['project-a', { focusOutcomes: true }]]);
+  const reviewIntegrity = rendered.children[1].children[0].children.find((child) => child.tagName === 'button' && child.text === 'Review integrity report');
+  reviewIntegrity.listeners.get('click')();
+  assert.deepEqual(opened, ['project-b', ['project-a', { focusOutcomes: true }], ['project-a', { focusIntegrity: true }]]);
   const exportButton = rendered.children[1].children[0].children.find((child) => child.text === 'Export proposed design JSON');
   exportButton.listeners.get('click')();
   assert.deepEqual(exported, [['project-a', 'Export proposed design JSON']]);
@@ -135,6 +141,37 @@ test('portfolio cards show saved workspace state and access and open the chosen 
   assert.match(returned.textContent, /Active incidents: 0 · Active support: 0/);
   assert.equal(returned.children[1].children[0].children.some((child) => child.text === 'Review incident and support inbox'), false,
     'the refreshed portfolio removes the review action after all incident/support items are closed');
+});
+
+test('portfolio integrity summary requires a valid complete report history', () => {
+  const projectId = 'project-00000000-0000-4000-8000-000000000001';
+  const blueprint = { id: 'blueprint-00000000-0000-4000-8000-000000000002', version: 2 };
+  const report = (id, sourceBlueprint, sourceVersion, snapshotHash) => {
+    const entry = { source: { projectId, blueprintId: sourceBlueprint, blueprintVersion: sourceVersion, snapshotHash },
+      engineVersion: 'test', status: 'PASS', counts: { findings: 0 }, rules: [], findings: [],
+      id: `enterprise-integrity-${id}`, createdAt: '2026-10-04T00:00:00.000Z', createdBy: 'owner', reason: 'Review' };
+    return { ...entry, reportHash: digest(entry) };
+  };
+  const currentHash = digest(blueprint);
+  const currentReport = report('00000000-0000-4000-8000-000000000003', blueprint.id, blueprint.version, currentHash);
+  const current = projectPortfolioIntegritySummary({ id: projectId, blueprintVersions: [blueprint], enterpriseIntegrityAssessments: [currentReport] });
+  assert.equal(current.integrityProjectionIncomplete, false);
+  assert.equal(current.integritySourceCurrent, true);
+  const stale = projectPortfolioIntegritySummary({ id: projectId, blueprintVersions: [{ ...blueprint, version: 3 }],
+    enterpriseIntegrityAssessments: [currentReport] });
+  assert.equal(stale.integrityProjectionIncomplete, false);
+  assert.equal(stale.integritySourceCurrent, false);
+
+  const malformedHistorical = { ...currentReport, id: 'enterprise-integrity-00000000-0000-4000-8000-000000000004', reportHash: 'corrupt' };
+  const incomplete = projectPortfolioIntegritySummary({ id: projectId, blueprintVersions: [blueprint],
+    enterpriseIntegrityAssessments: [malformedHistorical, currentReport] });
+  assert.equal(incomplete.integrityProjectionIncomplete, true,
+    'a valid latest report cannot hide malformed earlier saved evidence');
+  const card = renderProjectPortfolio([{ id: projectId, name: 'Evidence unavailable', blueprintVersion: 2,
+    ...incomplete, integrityStatus: current.integrityStatus, integrityReportId: current.integrityReportId }], { el, onOpen() {} });
+  assert.match(card.textContent, /Integrity report details unavailable/);
+  assert.equal(card.textContent.includes('Review integrity report'), false,
+    'incomplete history does not offer a review action that implies the summary is complete');
 });
 
 test('portfolio import reads one bounded JSON file for preview', async () => {

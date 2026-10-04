@@ -105,6 +105,12 @@ test('portfolio project list returns each caller’s persisted workspace access'
     expectedProjectVersion: project.version, expectedBlueprintId: savedBlueprint.id,
     expectedBlueprintVersion: savedBlueprint.version, rawIntent: 'Review a governed design change from the project portfolio.',
   } }, 201);
+  const integrityView = await currentView(instance.base, 'owner', project.id);
+  const integrityResult = await postCommand(instance.base, 'owner', project.id,
+    commandBody(integrityView, 'portfolio-integrity-assessment', { kind: 'run-integrity-checks',
+      snapshotHash: integrityView.data.context.snapshotHash, reason: 'Review the saved portfolio design integrity.' }));
+  const integrityAssessment = integrityResult.data.integrityAssessment;
+  assert.ok(integrityAssessment?.id);
   const exportRoute = `/api/v1/projects/${project.id}/enterprise/export`;
   const expectedBlueprint = project.blueprintVersions.at(-1);
   let readerBundle;
@@ -150,6 +156,10 @@ test('portfolio project list returns each caller’s persisted workspace access'
     assert.equal(visible?.activeChangeCaseCount, 1);
     assert.equal(visible?.latestActiveChangeCaseId, changeCase.id);
     assert.equal(visible?.latestActiveChangeCaseTitle, changeCase.title);
+    assert.equal(visible?.integrityReportId, integrityAssessment.id);
+    assert.equal(visible?.integrityStatus, integrityAssessment.status);
+    assert.equal(visible?.integritySourceCurrent, true);
+    assert.equal(visible?.integrityFindingCount, integrityAssessment.counts.findings);
   }
   const unrelated = await request(instance.base, 'outsider', '/api/v1/projects');
   assert.equal(unrelated.data.some((record) => record.id === project.id), false,
@@ -1933,6 +1943,13 @@ test('saved integrity assessments bind exact design source, replay, survive rest
   assert.equal(refreshedView.data.integrity.current.id, refreshed.data.integrityAssessment.id);
   assert.deepEqual(refreshedView.data.integrity.current.exceptions, [], 'prior exceptions never carry forward into a new source report');
   assert.equal(refreshedView.data.integrity.exceptions[0].status, 'STALE', 'the old exception remains visible for explicit re-review');
+  const restartedPortfolio = await request(instance.base, 'owner', '/api/v1/projects');
+  const restartedProject = restartedPortfolio.data.find((record) => record.id === project.id);
+  assert.equal(restartedProject?.integrityReportId, refreshed.data.integrityAssessment.id);
+  assert.equal(restartedProject?.integrityStatus, refreshed.data.integrityAssessment.status);
+  assert.equal(restartedProject?.integrityFindingCount, refreshed.data.integrityAssessment.counts.findings);
+  assert.equal(restartedProject?.integritySourceCurrent, true,
+    'the authenticated portfolio read after restart reflects the new exact current-source assessment');
   assert.equal(refreshedView.data.integrity.remediationInbox.items.find((entry) => entry.reportId === assessment.id).status, 'UNRESOLVED',
     'an absent finding in the new report does not resolve the historical finding');
   assert.equal(refreshedView.data.integrity.remediationInbox.items.find((entry) => entry.reportId === assessment.id).reportDrift, true);

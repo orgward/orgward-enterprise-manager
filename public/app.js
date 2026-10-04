@@ -450,12 +450,12 @@ function renderPortfolio() {
   if (!target) return;
   target.replaceChildren(renderProjectPortfolio(state.projects, {
     el: element,
-    onOpen: (id, { focusOutcomes = false } = {}) => {
+    onOpen: (id, { focusOutcomes = false, focusIntegrity = false } = {}) => {
       if (!allowRouteChange()) return;
       state.draft = '';
       state.pendingMessage = null;
       select.value = id;
-      loadProject(id, { focusOutcomes });
+      loadProject(id, { focusOutcomes, focusIntegrity });
     },
     onExport: async (id, button) => {
       button.disabled = true;
@@ -543,7 +543,7 @@ async function createProject(event) {
   }
 }
 
-async function loadProject(id, { history = 'push', route = null, focusOutcomes = false, focusImport = false } = {}) {
+async function loadProject(id, { history = 'push', route = null, focusOutcomes = false, focusIntegrity = false, focusImport = false } = {}) {
   if (!id) return showWelcome({ history });
   const loadGeneration = ++state.projectLoadGeneration;
   if (state.project?.id !== id) state.enterpriseStatus = '';
@@ -592,6 +592,11 @@ async function loadProject(id, { history = 'push', route = null, focusOutcomes =
       const inbox = document.querySelector('.outcome-inbox');
       inbox?.scrollIntoView?.({ block: 'start' });
       inbox?.focus?.({ preventScroll: true });
+    }
+    if (focusIntegrity) {
+      const integrity = document.querySelector('[aria-label="Integrity and lineage assessment"]');
+      integrity?.scrollIntoView?.({ block: 'start' });
+      integrity?.focus?.({ preventScroll: true });
     }
     if (focusImport) {
       const interchange = document.querySelector('#object-detail [data-enterprise-interchange]');

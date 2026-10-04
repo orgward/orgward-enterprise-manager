@@ -31,7 +31,7 @@ export function enterpriseIntegrityExceptionPayload(model, assessment, finding, 
 
 export function renderEnterpriseIntegrity({ model, pending = null, draft = null, loading = false, el, ui, onCommand, onInspectFinding = null }) {
   if (!model?.blueprint) return null;
-  const panel = el('section', { className: 'enterprise-integrity', attrs: { 'aria-label': 'Integrity and lineage assessment' } }, [
+  const panel = el('section', { className: 'enterprise-integrity', attrs: { 'aria-label': 'Integrity and lineage assessment', tabindex: '-1' } }, [
     el('h3', { text: 'Integrity and lineage checks' }),
     el('p', { text: 'Run deterministic structure, typed-reference, canonical relationship and design-gap checks against this exact saved blueprint. A report never changes design, grants authority or verifies business outcomes.' }),
   ]);

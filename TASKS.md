@@ -7236,6 +7236,30 @@ portfolio UI and PostgreSQL access acceptance are both accounted for passing;
 the PostgreSQL case passed after the fixture correction. No full check was run.
 PR-15 remains open and active.
 
+PR-15 portfolio integrity signal and review path (2026-10-04): member-visible
+project cards summarize the latest saved enterprise integrity assessment, its
+finding count, and whether its exact blueprint ID/version/hash still matches
+current main. The server validates every saved assessment hash and the required
+report/source fields before projecting the latest status; any malformed history
+marks evidence unavailable, which is not a blueprint FAIL. Incomplete history
+does not expose a review action. The card action opens the workspace and focuses
+its existing integrity report panel. PostgreSQL acceptance saves a current-source
+assessment and checks owner/editor/reader portfolio results; view coverage checks
+the current/stale distinction, malformed historical report with a valid latest
+report, unavailable copy, and hidden review action. The integrity restart fixture
+also authenticates to the portfolio API after restart/reassessment and asserts
+the projected report ID, status, finding count, and exact-current-source flag.
+Static checks passed:
+`node --check` for `src/platform/postgres-stores.mjs`, `public/app.js`,
+`public/enterprise-integrity.mjs`, `public/project-portfolio.mjs`,
+`tests/enterprise/server.test.mjs`, and `tests/enterprise/view.test.mjs`;
+`git diff --check`; `npm run task:next` reports PR-15 as first open. Focused
+behavior verification passed 4/4 selected cases in 3.73s (TAP log:
+`/tmp/orgward-tests-cEc4pn/node-test.tap.log`):
+`npm test -- tests/enterprise/view.test.mjs tests/enterprise/server.test.mjs --test-name-pattern='portfolio integrity summary requires a valid complete report history|portfolio cards show saved workspace state and access and open the chosen project|portfolio project list returns each caller’s persisted workspace access|saved integrity assessments bind exact design source, replay, survive restart and stale on design change'`.
+No full check run.
+PR-15 remains open and active.
+
 PR-15 portfolio-to-governed-change handoff (2026-10-04): authenticated
 membership-scoped project cards now include the count and latest destination of
 active persisted SDLC change cases. Case summaries are hash-verified from the

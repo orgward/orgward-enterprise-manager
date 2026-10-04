@@ -1472,6 +1472,7 @@ export class PostgresProjectStore extends PostgresDocumentStore {
       for (const row of result.rows) {
         try {
           const project = verifyAggregateRow(row);
+          const integritySummary = projectPortfolioIntegritySummary(project);
           records.push({
             id: project.id, name: project.name, tenantId: project.tenantId,
             version: project.version, phase: project.phase, updatedAt: project.updatedAt,
@@ -1480,6 +1481,7 @@ export class PostgresProjectStore extends PostgresDocumentStore {
             openIncidentCount: row.open_incident_count,
             openSupportCount: row.open_support_count,
             ...caseSummaryByProject.get(project.id),
+            ...integritySummary,
           });
         } catch { corruptRecords += 1; }
       }
@@ -2273,6 +2275,35 @@ export class PostgresGitHubSourceStore {
       return { ...binding, snapshots: nextSnapshots.map(({ files, ...metadata }) => metadata) };
     });
   }
+}
+
+export function projectPortfolioIntegritySummary(project) {
+  const assessments = project.enterpriseIntegrityAssessments ?? [];
+  if (!Array.isArray(assessments)) return { integrityProjectionIncomplete: true };
+  const validAssessment = (assessment) => {
+    if (!assessment || typeof assessment !== 'object' || Array.isArray(assessment)) return false;
+    const { reportHash, ...core } = assessment;
+    return /^[a-f0-9]{64}$/.test(reportHash ?? '') && digest(core) === reportHash
+      && /^enterprise-integrity-[0-9a-f-]{36}$/.test(assessment.id ?? '')
+      && ['PASS', 'REVIEW', 'FAIL'].includes(assessment.status)
+      && Number.isSafeInteger(assessment.counts?.findings) && assessment.counts.findings >= 0
+      && Array.isArray(assessment.findings) && assessment.counts.findings === assessment.findings.length
+      && typeof assessment.source?.projectId === 'string' && assessment.source.projectId === project.id
+      && /^blueprint-[0-9a-f-]{36}$/.test(assessment.source.blueprintId ?? '')
+      && Number.isSafeInteger(assessment.source.blueprintVersion) && assessment.source.blueprintVersion > 0
+      && /^[a-f0-9]{64}$/.test(assessment.source.snapshotHash ?? '')
+      && typeof assessment.createdAt === 'string' && Number.isFinite(Date.parse(assessment.createdAt));
+  };
+  if (!assessments.every(validAssessment)) return { integrityProjectionIncomplete: true };
+  const assessment = assessments.at(-1);
+  if (!assessment) return { integrityStatus: 'NOT_RUN', integritySourceCurrent: false, integrityReportId: null,
+    integrityFindingCount: 0, integrityBlueprintVersion: null, integrityProjectionIncomplete: false };
+  const current = latestBlueprint(project);
+  return { integrityStatus: assessment.status,
+    integritySourceCurrent: Boolean(current && assessment.source.blueprintId === current.id
+      && assessment.source.blueprintVersion === current.version && assessment.source.snapshotHash === digest(current)),
+    integrityReportId: assessment.id, integrityFindingCount: assessment.counts.findings,
+    integrityBlueprintVersion: assessment.source.blueprintVersion, integrityProjectionIncomplete: false };
 }
 
 export class PostgresChangeCaseStore extends PostgresDocumentStore {
