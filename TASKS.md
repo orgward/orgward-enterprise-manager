@@ -6671,6 +6671,31 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   multi-agent handoffs and shared budgets. Independent adversarial qualification
   remains deferred to `HARDENING-TASKS.md`.
 
+  First bounded slice (2026-10-04; frozen for integration review): added an
+  exact-source governance decision register. Human workspace writers can submit
+  a request tied to a saved design record; only a human project owner can decide
+  or review an appeal; only the requester can appeal. Owner appeal review can
+  uphold the decision or reopen the request for another recorded decision.
+  Transitions append to a bounded hash-chained ledger in the existing project
+  aggregate and project audit, survive command replay/restart, and never mutate
+  the proposed design. The enterprise view shows request state, decision and
+  appeal history, exact source/drift, and verified ledger hashes. Recorded-time
+  contexts validate the complete chain and every state transition/outcome while
+  exposing only the visible prefix. The final status is `DECISION_UPHELD`; the
+  owner UI says “decision upheld · appeal denied.” Deterministic event times and
+  re-hashed hidden-future invalid-transition/outcome fixtures cover temporal
+  validation. Pure lifecycle/temporal, UI action/permission/source, and
+  PostgreSQL persistence/replay/restart/denial fixtures are drafted, including
+  the exact permission snapshots for owner, editor and reader. Static syntax
+  checks and `git diff --check` passed. Focused verification (2026-10-04):
+  `npm test -- tests/enterprise/contracts.test.mjs tests/enterprise/view.test.mjs
+  tests/enterprise/server.test.mjs --test-name-pattern=governance` passed 3/3,
+  with 0 failures and 0 skips; runner duration 2.73s. TAP:
+  `/tmp/orgward-tests-vGfqML/node-test.tap.log`; invocation capture:
+  `/tmp/orgward-pr14-governance-d9iy1p.tap.log`. PR-14 remains the active
+  cursor; this first slice is reviewed and checkpointed, with remaining PR-14
+  outcome still open.
+
 - [ ] PR-15 — Integrated portfolio round trip and extensibility (T-90–T-105,
   T-107–T-108, then T-106). Join enterprise truth, integrity and SDLC context;
   support multi-repository/legacy delivery, progressive promotion, incidents,

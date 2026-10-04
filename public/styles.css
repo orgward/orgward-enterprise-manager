@@ -348,6 +348,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .integrity-remediation-inbox h4 { margin: 0 0 .5rem; }
 .integrity-remediation-inbox p { overflow-wrap: anywhere; }
 .integrity-remediation-inbox button { min-height: 44px; }
+.enterprise-governance { border-top: 1px solid var(--border, #363b32); margin-top: 1.5rem; padding-top: 1rem; }
+.enterprise-governance > ol { display: grid; gap: .8rem; padding-left: 1.5rem; }
+.enterprise-governance > ol > li { border: 1px solid var(--border, #363b32); border-radius: .5rem; padding: .8rem; min-width: 0; }
+.enterprise-governance h4 { margin: 0 0 .5rem; }
+.enterprise-governance p, .enterprise-governance [data-ledger-hash] { overflow-wrap: anywhere; }
 
 .enterprise-change { border-top: 1px solid var(--border, #363b32); padding: .6rem 0; min-width: 0; }
 .enterprise-context [data-enterprise-merge-candidate] { border: 1px solid var(--border, #363b32); padding: .8rem; margin-top: .8rem; }

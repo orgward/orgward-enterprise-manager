@@ -10,6 +10,7 @@ import { applyEnterpriseRefinementCommand, ENTERPRISE_REFINEMENT_KINDS, normaliz
 import { applyEnterpriseBulkEdit, ENTERPRISE_INTERCHANGE_KINDS, normalizeEnterpriseInterchangeCommand } from './interchange.mjs';
 import { applyEnterpriseIntegrityCommand, ENTERPRISE_INTEGRITY_KINDS, normalizeEnterpriseIntegrityCommand } from './integrity.mjs';
 import { applyEnterpriseSourceAcceptance, ENTERPRISE_SOURCE_ACCEPTANCE_KINDS, normalizeEnterpriseSourceAcceptanceCommand } from './source-acceptance.mjs';
+import { applyEnterpriseGovernanceCommand, ENTERPRISE_GOVERNANCE_KINDS, normalizeEnterpriseGovernanceCommand } from './governance.mjs';
 
 const base = ['kind', 'blueprintId', 'blueprintVersion', 'reason'];
 function reference(value, field, { nullable = false } = {}) {
@@ -20,6 +21,7 @@ function reference(value, field, { nullable = false } = {}) {
   return value;
 }
 export function normalizeEnterpriseCommand(input) {
+  if (input && ENTERPRISE_GOVERNANCE_KINDS.has(input.kind)) return normalizeEnterpriseGovernanceCommand(input);
   if (input && ENTERPRISE_INTEGRITY_KINDS.has(input.kind)) return normalizeEnterpriseIntegrityCommand(input);
   if (input && ENTERPRISE_SOURCE_ACCEPTANCE_KINDS.has(input.kind)) return normalizeEnterpriseSourceAcceptanceCommand(input);
   if (input && ENTERPRISE_PROCESS_KINDS.has(input.kind)) return normalizeEnterpriseProcessCommand(input);
@@ -83,6 +85,7 @@ export function normalizeEnterpriseCommand(input) {
   return normalized;
 }
 export function applyEnterpriseCommand(project, command, actor, options = {}) {
+  if (ENTERPRISE_GOVERNANCE_KINDS.has(command.kind)) return applyEnterpriseGovernanceCommand(project, command, actor);
   if (ENTERPRISE_INTEGRITY_KINDS.has(command.kind)) return applyEnterpriseIntegrityCommand(project, command, actor);
   if (ENTERPRISE_SOURCE_ACCEPTANCE_KINDS.has(command.kind)) return applyEnterpriseSourceAcceptance(project, command, actor);
   if (ENTERPRISE_PROCESS_KINDS.has(command.kind)) return applyEnterpriseProcessCommand(project, command, actor);

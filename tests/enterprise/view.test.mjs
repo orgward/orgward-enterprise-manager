@@ -12,6 +12,7 @@ import { renderEnterpriseEconomics } from '../../public/enterprise-economics.mjs
 import { renderEnterpriseRefinement } from '../../public/enterprise-refinement.mjs';
 import { enterpriseInterchangeCommandPayload, enterpriseInterchangeWritable, renderEnterpriseInterchange } from '../../public/enterprise-interchange.mjs';
 import { enterpriseIntegrityCommandPayload, enterpriseIntegrityExceptionPayload, renderEnterpriseIntegrity } from '../../public/enterprise-integrity.mjs';
+import { enterpriseGovernanceCommandPayload, renderEnterpriseGovernance } from '../../public/enterprise-governance.mjs';
 import { decodeStudioRoute, encodeStudioRoute } from '../../public/shared-interactions.mjs';
 
 class NodeListFixture extends Array {
@@ -784,6 +785,84 @@ test('refinement UI names both reverse trace directions and saves selected exist
   const form = panel.querySelectorAll('form')[0];
   form.listeners.get('submit')({ preventDefault() {} });
   assert.deepEqual(submitted, { kind: 'define-refinement', objectId: selected.id, refines: [parent.id], reason: '' });
+});
+
+test('governance UI guides requests, owner decisions, requester appeals and appeal review on exact current source', () => {
+  const blueprint = { areas: { governanceRiskControls: { items: [{ id: 'decision-priority', type: 'decision', name: 'Operating priority', detail: 'Choose the next priority.' }] } } };
+  const source = { blueprintId: 'blueprint-00000000-0000-4000-8000-000000000001', blueprintVersion: 3, snapshotHash: 'a'.repeat(64) };
+  const base = model({ blueprint, context: { ...model().context, ...source, isCurrent: true, sourceKind: 'MAIN_DESIGN' },
+    selection: { object: { id: 'decision-priority' } }, permissions: { governanceRequest: true, governanceDecide: false,
+      governanceReviewAppeal: false }, governance: { ledgerLength: 0, ledgerHead: null, cases: [] } });
+  let submitted = null;
+  const requestPanel = renderEnterpriseGovernance({ model: base, el, ui: branchUi, onCommand: (payload) => { submitted = payload; } });
+  const requestForm = requestPanel.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === 'request-governance-decision');
+  assert.ok(requestForm);
+  const requestControls = requestForm.querySelectorAll('input,select,textarea');
+  requestControls[0].value = 'decision-priority'; requestControls[1].value = 'Exception review authority';
+  requestControls[2].value = 'Who may approve exceptions?'; requestControls[3].value = 'Require an owner review.';
+  requestControls[4].value = 'Clarify the decision right.';
+  requestForm.listeners.get('submit')({ preventDefault() {} });
+  assert.deepEqual(submitted, { kind: 'request-governance-decision', ...source, objectId: 'decision-priority',
+    title: 'Exception review authority', question: 'Who may approve exceptions?', proposedOption: 'Require an owner review.',
+    reason: 'Clarify the decision right.' });
+
+  const caseId = 'governance-decision-00000000-0000-4000-8000-000000000001';
+  const request = { id: caseId, title: 'Exception review authority', question: 'Who may approve exceptions?',
+    proposedOption: 'Require an owner review.', objectId: 'decision-priority', source, requestedBy: 'oidc:editor',
+    status: 'REQUESTED', revision: 1, appliesToContext: true, sourceDrift: false,
+    decisions: [], appeals: [], history: [{ sequence: 1, hash: 'b'.repeat(64), action: 'request-governance-decision',
+      caseRevision: 1, actor: 'oidc:editor', at: '2026-10-04T10:00:00.000Z', reason: 'Clarify the decision right.' }] };
+  const ownerModel = { ...base, permissions: { governanceRequest: true, governanceDecide: true, governanceReviewAppeal: true },
+    governance: { ledgerLength: 1, ledgerHead: 'b'.repeat(64), cases: [request] } };
+  const ownerPanel = renderEnterpriseGovernance({ model: ownerModel, el, ui: branchUi, onCommand: (payload) => { submitted = payload; } });
+  assert.match(ownerPanel.textContent, /append-only decision history entries/);
+  assert.match(ownerPanel.textContent, /Exact saved source applies to this context/);
+  const decideForm = ownerPanel.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === `decide-governance-decision-${caseId}`);
+  assert.ok(decideForm);
+  const decideControls = decideForm.querySelectorAll('input,select,textarea');
+  decideControls[0].value = 'DECLINE'; decideControls[1].value = 'Owner keeps this decision right.';
+  decideForm.listeners.get('submit')({ preventDefault() {} });
+  assert.deepEqual(submitted, { kind: 'decide-governance-decision', ...source, caseId, caseRevision: 1,
+    outcome: 'DECLINE', reason: 'Owner keeps this decision right.' });
+
+  const decided = { ...request, status: 'DECIDED', revision: 2,
+    decisions: [{ outcome: 'DECLINE', actor: 'oidc:owner', at: '2026-10-04T11:00:00.000Z', reason: 'Owner keeps this decision right.' }], canAppeal: true };
+  const requesterModel = { ...base, permissions: { governanceRequest: true, governanceDecide: false, governanceReviewAppeal: false },
+    governance: { ledgerLength: 2, ledgerHead: 'c'.repeat(64), cases: [decided] } };
+  const requesterPanel = renderEnterpriseGovernance({ model: requesterModel, el, ui: branchUi, onCommand: (payload) => { submitted = payload; } });
+  const appealForm = requesterPanel.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === `appeal-governance-decision-${caseId}`);
+  assert.ok(appealForm);
+  appealForm.querySelectorAll('textarea')[0].value = 'Separate exception review from process ownership.';
+  appealForm.listeners.get('submit')({ preventDefault() {} });
+  assert.deepEqual(submitted, { kind: 'appeal-governance-decision', ...source, caseId, caseRevision: 2,
+    reason: 'Separate exception review from process ownership.' });
+
+  const appealed = { ...decided, status: 'APPEALED', revision: 3,
+    appeals: [{ actor: 'oidc:editor', at: '2026-10-04T12:00:00.000Z', reason: 'Separate exception review from process ownership.' }] };
+  const reviewPanel = renderEnterpriseGovernance({ model: { ...ownerModel, governance: { ledgerLength: 3, ledgerHead: 'd'.repeat(64), cases: [appealed] } },
+    el, ui: branchUi, onCommand: (payload) => { submitted = payload; } });
+  const reviewForm = reviewPanel.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === `review-governance-appeal-${caseId}`);
+  assert.ok(reviewForm);
+  const reviewControls = reviewForm.querySelectorAll('input,select,textarea');
+  reviewControls[0].value = 'REOPEN'; reviewControls[1].value = 'Ask the process owner to reconsider.';
+  reviewForm.listeners.get('submit')({ preventDefault() {} });
+  assert.deepEqual(submitted, { kind: 'review-governance-appeal', ...source, caseId, caseRevision: 3,
+    outcome: 'REOPEN', reason: 'Ask the process owner to reconsider.' });
+
+  const upheld = { ...appealed, status: 'DECISION_UPHELD', revision: 4,
+    appeals: [{ ...appealed.appeals[0], review: { outcome: 'UPHOLD', actor: 'oidc:owner',
+      at: '2026-10-04T13:00:00.000Z', reason: 'The owner decision remains appropriate.' } }] };
+  const upheldPanel = renderEnterpriseGovernance({ model: { ...ownerModel, governance: { ledgerLength: 4,
+    ledgerHead: 'e'.repeat(64), cases: [upheld] } }, el, ui: branchUi, onCommand() {} });
+  assert.match(upheldPanel.textContent, /Decision upheld · appeal denied/);
+  assert.doesNotMatch(upheldPanel.textContent, /Appeal upheld/);
+
+  const staleModel = { ...requesterModel, governance: { ledgerLength: 1, ledgerHead: 'b'.repeat(64),
+    cases: [{ ...request, sourceDrift: true, appliesToContext: false, canAppeal: false }] } };
+  assert.equal(enterpriseGovernanceCommandPayload(staleModel, 'decide-governance-decision', { caseId, caseRevision: 1, outcome: 'APPROVE', reason: 'stale' }), null);
+  const stalePanel = renderEnterpriseGovernance({ model: staleModel, el, ui: branchUi, onCommand() {} });
+  assert.match(stalePanel.textContent, /SOURCE DRIFT/);
+  assert.equal(stalePanel.querySelectorAll('form').some((entry) => entry.attrs['data-enterprise-action'] === `appeal-governance-decision-${caseId}`), false);
 });
 
 test('integrity UI keeps findings unresolved and binds exception review to current exact report source', () => {

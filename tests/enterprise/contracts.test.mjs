@@ -2,13 +2,15 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ENTERPRISE_LENSES, enterpriseScopeErrors, scopeState } from '../../src/enterprise/types.mjs';
 import { normalizeEnterpriseCommand } from '../../src/enterprise/commands.mjs';
-import { normalizeEnterpriseQuery } from '../../src/enterprise/projections.mjs';
+import { normalizeEnterpriseQuery, projectEnterprise } from '../../src/enterprise/projections.mjs';
 import { effectiveStatus, enterpriseInstant, enterpriseInterval, objectBasisHash, objectStates } from '../../src/enterprise/state.mjs';
 import { normalizeDecisionTable, normalizeProcessFlow } from '../../src/enterprise/process-model.mjs';
 import { evaluateDecisionTable, simulateProcessFlow } from '../../src/enterprise/process-simulation.mjs';
 import { planManualProcessFlow, projectManualFlowActivation } from '../../src/enterprise/process-runtime.mjs';
 import { applyEnterpriseIntegrityCommand, applyEnterpriseIntegrityException, evaluateEnterpriseIntegrity,
   normalizeEnterpriseIntegrityCommand, projectEnterpriseIntegrity } from '../../src/enterprise/integrity.mjs';
+import { applyEnterpriseGovernanceCommand, normalizeEnterpriseGovernanceCommand,
+  projectEnterpriseGovernance } from '../../src/enterprise/governance.mjs';
 import { addConversationTurn, createProject } from '../../src/model.mjs';
 import { digest } from '../../src/sdlc/contracts.mjs';
 
@@ -118,6 +120,93 @@ test('typed integrity assessment detects canonical relation drift and keeps desi
     blueprintVersion: blueprint.version, snapshotHash: digest(blueprint), reason: 'Check exact saved design.' });
   assert.equal(command.snapshotHash, digest(blueprint));
   assert.throws(() => normalizeEnterpriseIntegrityCommand({ ...command, extra: true }), { code: 'INVALID_INTEGRITY_COMMAND' });
+});
+
+test('governance decision requests, owner decisions, appeals and ledger integrity are source-bound', () => {
+  const project = createProject('Governance decision fixture');
+  for (const answer of ['A safe service.', 'Small businesses.', 'Clear status and fees.', 'Humans review exceptions.']) addConversationTurn(project, answer);
+  const blueprint = project.blueprintVersions.at(-1);
+  const source = { blueprintId: blueprint.id, blueprintVersion: blueprint.version, snapshotHash: digest(blueprint) };
+  const auditStart = project.audit?.length ?? 0;
+  const eventTime = (offset) => new Date(Date.parse(blueprint.createdAt) + 60_000 + offset * 1000);
+  const requested = applyEnterpriseGovernanceCommand(project, normalizeEnterpriseGovernanceCommand({ kind: 'request-governance-decision',
+    ...source, objectId: 'decision-priority', title: 'Exception review authority', question: 'Who may approve exceptions?',
+    proposedOption: 'Require an owner review.', reason: 'Clarify the decision right before process use.' }), 'oidc:editor', eventTime(0));
+  assert.equal(requested.governanceStatus, 'REQUESTED');
+  assert.equal(project.blueprintVersions.length, 1, 'a governance request does not edit the design');
+  const request = projectEnterpriseGovernance(project, blueprint).cases[0];
+  assert.equal(request.requestedBy, 'oidc:editor');
+  assert.equal(request.objectId, 'decision-priority');
+  assert.equal(request.appliesToContext, true);
+  assert.equal(request.sourceDrift, false);
+
+  const decide = (revision, outcome, reason) => normalizeEnterpriseGovernanceCommand({ kind: 'decide-governance-decision',
+    ...source, caseId: request.id, caseRevision: revision, outcome, reason });
+  const declined = applyEnterpriseGovernanceCommand(project, decide(1, 'DECLINE', 'Keep the current owner-only rule.'), 'oidc:owner', eventTime(1));
+  assert.equal(declined.governanceStatus, 'DECIDED');
+  const requestTime = project.enterpriseGovernanceLedger[0].at;
+  const historical = projectEnterprise(project, { recordedAt: requestTime }, { write: true, human: true, actor: 'oidc:editor' });
+  assert.equal(historical.governance.ledgerLength, 1);
+  assert.equal(historical.governance.ledgerHead, project.enterpriseGovernanceLedger[0].hash);
+  assert.equal(historical.governance.cases[0].status, 'REQUESTED');
+  assert.equal(historical.governance.cases[0].history.length, 1, 'future decisions are hidden by the recorded-time prefix');
+  assert.equal(project.enterpriseGovernanceLedger.length, 2, 'temporal projection still validates but does not truncate the saved hash chain');
+  const tamperedFuture = structuredClone(project); tamperedFuture.enterpriseGovernanceLedger[1].reason = 'tampered future event';
+  assert.throws(() => projectEnterprise(tamperedFuture, { recordedAt: requestTime }),
+    { code: 'GOVERNANCE_LEDGER_CORRUPT', statusCode: 409 }, 'future entries remain integrity-checked even when hidden from the requested time');
+  const rehashedInvalidTransition = structuredClone(project);
+  const invalidFutureTransition = rehashedInvalidTransition.enterpriseGovernanceLedger[1];
+  invalidFutureTransition.action = 'review-governance-appeal'; invalidFutureTransition.outcome = 'UPHOLD';
+  const { hash: _oldTransitionHash, ...invalidTransitionCore } = invalidFutureTransition;
+  invalidFutureTransition.hash = digest(invalidTransitionCore);
+  assert.throws(() => projectEnterprise(rehashedInvalidTransition, { recordedAt: requestTime }),
+    { code: 'GOVERNANCE_LEDGER_CORRUPT', statusCode: 409 }, 'hidden future transitions are validated after their hashes are recomputed');
+  const rehashedInvalidOutcome = structuredClone(project);
+  const invalidFutureOutcome = rehashedInvalidOutcome.enterpriseGovernanceLedger[1];
+  invalidFutureOutcome.outcome = 'MAYBE';
+  const { hash: _oldOutcomeHash, ...invalidOutcomeCore } = invalidFutureOutcome;
+  invalidFutureOutcome.hash = digest(invalidOutcomeCore);
+  assert.throws(() => projectEnterprise(rehashedInvalidOutcome, { recordedAt: requestTime }),
+    { code: 'GOVERNANCE_LEDGER_CORRUPT', statusCode: 409 }, 'hidden future outcomes are validated after their hashes are recomputed');
+  assert.throws(() => applyEnterpriseGovernanceCommand(project,
+    normalizeEnterpriseGovernanceCommand({ kind: 'appeal-governance-decision', ...source, caseId: request.id, caseRevision: 2,
+      reason: 'A different member cannot appeal for the requester.' }), 'oidc:other', eventTime(2)), { code: 'GOVERNANCE_APPEAL_NOT_ALLOWED', statusCode: 403 });
+  const appeal = applyEnterpriseGovernanceCommand(project, normalizeEnterpriseGovernanceCommand({ kind: 'appeal-governance-decision',
+    ...source, caseId: request.id, caseRevision: 2, reason: 'The proposed option would separate review from exception handling.' }), 'oidc:editor', eventTime(2));
+  assert.equal(appeal.governanceStatus, 'APPEALED');
+  const reopened = applyEnterpriseGovernanceCommand(project, normalizeEnterpriseGovernanceCommand({ kind: 'review-governance-appeal',
+    ...source, caseId: request.id, caseRevision: 3, outcome: 'REOPEN', reason: 'Reconsider with the affected process owner.' }), 'oidc:owner', eventTime(3));
+  assert.equal(reopened.governanceStatus, 'REQUESTED');
+  const approved = applyEnterpriseGovernanceCommand(project, decide(4, 'APPROVE', 'Owner review is mandatory for exceptions.'), 'oidc:owner', eventTime(4));
+  const finalCase = projectEnterpriseGovernance(project, blueprint).cases[0];
+  assert.equal(approved.governanceStatus, 'DECIDED');
+  assert.deepEqual(finalCase.decisions.map((entry) => entry.outcome), ['DECLINE', 'APPROVE']);
+  assert.equal(finalCase.appeals[0].review.outcome, 'REOPEN');
+  assert.equal(finalCase.history.length, 5);
+  assert.equal(finalCase.history.at(-1).hash, project.enterpriseGovernanceLedger.at(-1).hash);
+  assert.equal(project.audit.length - auditStart, 5);
+  assert.equal(project.blueprintVersions.length, 1);
+
+  const declinedAgain = applyEnterpriseGovernanceCommand(project, normalizeEnterpriseGovernanceCommand({ kind: 'request-governance-decision',
+    ...source, objectId: 'decision-priority', title: 'Second review', question: 'Should the decision remain?',
+    proposedOption: 'Keep owner review.', reason: 'Exercise an upheld appeal.' }), 'oidc:editor', eventTime(5));
+  const secondId = declinedAgain.governanceCaseId;
+  applyEnterpriseGovernanceCommand(project, normalizeEnterpriseGovernanceCommand({ kind: 'decide-governance-decision',
+    ...source, caseId: secondId, caseRevision: 1, outcome: 'DECLINE', reason: 'Keep the existing decision.' }), 'oidc:owner', eventTime(6));
+  applyEnterpriseGovernanceCommand(project, normalizeEnterpriseGovernanceCommand({ kind: 'appeal-governance-decision',
+    ...source, caseId: secondId, caseRevision: 2, reason: 'Request a review of the decision.' }), 'oidc:editor', eventTime(7));
+  const upheldResult = applyEnterpriseGovernanceCommand(project, normalizeEnterpriseGovernanceCommand({ kind: 'review-governance-appeal',
+    ...source, caseId: secondId, caseRevision: 3, outcome: 'UPHOLD', reason: 'The original decision remains appropriate.' }), 'oidc:owner', eventTime(8));
+  assert.equal(upheldResult.governanceStatus, 'DECISION_UPHELD');
+  assert.equal(projectEnterpriseGovernance(project, blueprint).cases.find((entry) => entry.id === secondId).status, 'DECISION_UPHELD');
+
+  const next = structuredClone(blueprint); next.id = 'blueprint-00000000-0000-4000-8000-000000000099'; next.version += 1;
+  next.createdAt = '2026-10-04T12:01:00.000Z'; project.blueprintVersions.push(next);
+  assert.equal(projectEnterpriseGovernance(project, next).cases[0].sourceDrift, true);
+  assert.throws(() => applyEnterpriseGovernanceCommand(project, decide(finalCase.revision, 'DECLINE', 'Stale source action.'), 'oidc:owner'),
+    { code: 'GOVERNANCE_SOURCE_STALE', statusCode: 409 });
+  const corrupt = structuredClone(project); corrupt.enterpriseGovernanceLedger[0].reason = 'tampered';
+  assert.throws(() => projectEnterpriseGovernance(corrupt, next), { code: 'GOVERNANCE_LEDGER_CORRUPT', statusCode: 409 });
 });
 
 test('integrity exceptions remain unresolved, expire, and become stale without carrying to a new report', () => {

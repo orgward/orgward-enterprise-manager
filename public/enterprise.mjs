@@ -4,6 +4,7 @@ import { ENTERPRISE_ECONOMIC_COMMANDS, renderEnterpriseEconomics } from './enter
 import { ENTERPRISE_REFINEMENT_COMMANDS, renderEnterpriseRefinement } from './enterprise-refinement.mjs';
 import { ENTERPRISE_INTERCHANGE_COMMANDS, renderEnterpriseInterchange } from './enterprise-interchange.mjs';
 import { ENTERPRISE_INTEGRITY_COMMANDS, renderEnterpriseIntegrity } from './enterprise-integrity.mjs';
+import { renderEnterpriseGovernance } from './enterprise-governance.mjs';
 const SCOPE_TYPES = new Set(['organization', 'legal-entity', 'unit']);
 const STATE_VALUES = {
   lifecycle: ['UNKNOWN', 'PLANNED', 'ACTIVE', 'RETIRED'],
@@ -275,6 +276,8 @@ export function renderEnterpriseContext({ model, query, loading = false, error =
   }
   const integrityPanel = renderEnterpriseIntegrity({ model, pending, draft: integrityDraft, loading, el, ui: { field, form }, onCommand, onInspectFinding });
   if (integrityPanel) root.append(integrityPanel);
+  const governancePanel = renderEnterpriseGovernance({ model, pending, loading, el, ui: { field, form }, onCommand });
+  if (governancePanel) root.append(governancePanel);
   const disabled = loading || Boolean(pending) || enterpriseContextReadOnly(model.context) || !model.permissions?.scopeAdmin;
   const validity = model.context.validity ?? {};
   root.append(el('p', { text: `Declared design validity: ${validity.effectiveFrom ?? 'start unknown'} to ${validity.effectiveTo ?? 'no end declared'} (end exclusive). This is proposed design timing.` }));

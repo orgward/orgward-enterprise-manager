@@ -135,9 +135,9 @@ test('enterprise scopes retain design identity across sixteen lenses, commands, 
   const ownerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
   const editorView = await currentView(instance.base, 'editor', project.id);
   const readerView = await currentView(instance.base, 'reader', project.id);
-  assert.deepEqual(ownerView.data.permissions, { write: true, scopeAdmin: true, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, simulate: true, economicWrite: true, economicEvaluate: true, integrityRun: true, integrityException: true });
-  assert.deepEqual(editorView.data.permissions, { write: true, scopeAdmin: false, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, simulate: true, economicWrite: true, economicEvaluate: true, integrityRun: true, integrityException: true });
-  assert.deepEqual(readerView.data.permissions, { write: false, scopeAdmin: false, branchCreate: false, branchWrite: false, branchAdmin: false, processWrite: false, simulate: false, economicWrite: false, economicEvaluate: false, integrityRun: false, integrityException: false });
+  assert.deepEqual(ownerView.data.permissions, { write: true, scopeAdmin: true, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, simulate: true, economicWrite: true, economicEvaluate: true, integrityRun: true, integrityException: true, governanceRequest: true, governanceDecide: true, governanceReviewAppeal: true });
+  assert.deepEqual(editorView.data.permissions, { write: true, scopeAdmin: false, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, simulate: true, economicWrite: true, economicEvaluate: true, integrityRun: true, integrityException: true, governanceRequest: true, governanceDecide: false, governanceReviewAppeal: false });
+  assert.deepEqual(readerView.data.permissions, { write: false, scopeAdmin: false, branchCreate: false, branchWrite: false, branchAdmin: false, processWrite: false, simulate: false, economicWrite: false, economicEvaluate: false, integrityRun: false, integrityException: false, governanceRequest: false, governanceDecide: false, governanceReviewAppeal: false });
   assert.equal(ownerView.data.selection.object.id, 'process-deliver');
   assert.equal(ownerView.data.selection.object.enterpriseScope, undefined);
   assert.equal(ownerView.data.selection.visible, true);
@@ -1525,6 +1525,86 @@ test('human acceptance stores selected source claims once and rejects stale prev
   assert.equal(accepted.name, 'Human accepted proposed customer name');
   assert.equal(accepted.provenance.at(-1).source, 'workspace:source-evidence-acceptance');
   assert.equal(accepted.provenance.at(-1).sourceEvidence.sourceHash, preview.data.source.snapshotHash);
+});
+
+test('governance decisions persist through owner review, requester appeal, restart and command replay', async (t) => {
+  const postgres = await startPostgres();
+  let root;
+  let instance;
+  t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-enterprise-governance-'));
+  instance = await startApp(postgres, root);
+  for (const identity of identities.values()) await postgres.query(`insert into orgward.oidc_principals
+    (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+  [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  const project = await seedProject(postgres, 'Governance decision fixture');
+  let editorView = await currentView(instance.base, 'editor', project.id);
+  let ownerView = await currentView(instance.base, 'owner', project.id);
+  assert.equal(editorView.data.permissions.governanceRequest, true);
+  assert.equal(editorView.data.permissions.governanceDecide, false);
+  assert.equal(ownerView.data.permissions.governanceDecide, true);
+  const versions = ownerView.data.versions.length;
+  const source = { snapshotHash: editorView.data.context.snapshotHash };
+  const requestBody = commandBody(editorView, 'governance-request-one', { kind: 'request-governance-decision', ...source,
+    objectId: 'decision-priority', title: 'Exception review authority', question: 'Who may approve exceptions?',
+    proposedOption: 'Require owner review.', reason: 'Clarify decision rights before using the process.' });
+  const requested = await postCommand(instance.base, 'editor', project.id, requestBody);
+  assert.equal(requested.event.type, 'EnterpriseGovernanceChanged');
+  assert.equal(requested.data.governanceStatus, 'REQUESTED');
+  const caseId = requested.data.governanceCaseId;
+  assert.match(caseId, /^governance-decision-/);
+  const readerView = await currentView(instance.base, 'reader', project.id);
+  assert.equal(readerView.data.permissions.governanceRequest, false);
+  const readerAttempt = await postCommand(instance.base, 'reader', project.id, commandBody(readerView, 'governance-reader-denied', {
+    kind: 'decide-governance-decision', snapshotHash: readerView.data.context.snapshotHash, caseId, caseRevision: 1,
+    outcome: 'APPROVE', reason: 'Reader cannot decide.' }), 403);
+  assert.equal(readerAttempt.error.code, 'ACTION_FORBIDDEN');
+
+  ownerView = await currentView(instance.base, 'owner', project.id);
+  const declineBody = commandBody(ownerView, 'governance-decline-one', { kind: 'decide-governance-decision',
+    snapshotHash: ownerView.data.context.snapshotHash, caseId, caseRevision: 1, outcome: 'DECLINE', reason: 'Keep current owner review.' });
+  const declined = await postCommand(instance.base, 'owner', project.id, declineBody);
+  assert.equal(declined.data.governanceStatus, 'DECIDED');
+  const replay = await postCommand(instance.base, 'editor', project.id, requestBody);
+  assert.equal(replay.meta.replayed, true);
+  assert.equal(replay.data.governanceCaseId, caseId);
+
+  editorView = await currentView(instance.base, 'editor', project.id);
+  const appealBody = commandBody(editorView, 'governance-appeal-one', { kind: 'appeal-governance-decision',
+    snapshotHash: editorView.data.context.snapshotHash, caseId, caseRevision: 2,
+    reason: 'Review authority should be separate from the process owner.' });
+  const appealed = await postCommand(instance.base, 'editor', project.id, appealBody);
+  assert.equal(appealed.data.governanceStatus, 'APPEALED');
+  ownerView = await currentView(instance.base, 'owner', project.id);
+  const reviewBody = commandBody(ownerView, 'governance-appeal-review-one', { kind: 'review-governance-appeal',
+    snapshotHash: ownerView.data.context.snapshotHash, caseId, caseRevision: 3, outcome: 'REOPEN',
+    reason: 'Ask the process owner to reconsider.' });
+  const reopened = await postCommand(instance.base, 'owner', project.id, reviewBody);
+  assert.equal(reopened.data.governanceStatus, 'REQUESTED');
+  assert.equal((await currentView(instance.base, 'owner', project.id)).data.versions.length, versions,
+    'governance decisions do not change the design version');
+
+  await closeApp(instance); instance = null;
+  instance = await startApp(postgres, root);
+  ownerView = await currentView(instance.base, 'owner', project.id);
+  const recovered = ownerView.data.governance.cases.find((entry) => entry.id === caseId);
+  assert.equal(recovered.status, 'REQUESTED');
+  assert.equal(recovered.revision, 4);
+  assert.deepEqual(recovered.decisions.map((entry) => entry.outcome), ['DECLINE']);
+  assert.equal(recovered.appeals[0].review.outcome, 'REOPEN');
+  assert.equal(recovered.history.length, 4);
+  assert.equal(ownerView.data.governance.ledgerLength, 4);
+  const approveBody = commandBody(ownerView, 'governance-approve-after-reopen', { kind: 'decide-governance-decision',
+    snapshotHash: ownerView.data.context.snapshotHash, caseId, caseRevision: 4, outcome: 'APPROVE',
+    reason: 'Owner approved after the appeal review.' });
+  const approved = await postCommand(instance.base, 'owner', project.id, approveBody);
+  assert.equal(approved.data.governanceStatus, 'DECIDED');
+  const finalView = await currentView(instance.base, 'editor', project.id);
+  const finalCase = finalView.data.governance.cases.find((entry) => entry.id === caseId);
+  assert.deepEqual(finalCase.decisions.map((entry) => entry.outcome), ['DECLINE', 'APPROVE']);
+  assert.equal(finalCase.history.length, 5);
+  assert.equal(finalView.data.governance.ledgerHead, finalCase.history.at(-1).hash);
+  assert.equal(finalView.data.blueprint.version, versions);
 });
 
 test('saved integrity assessments bind exact design source, replay, survive restart and stale on design change', async (t) => {
