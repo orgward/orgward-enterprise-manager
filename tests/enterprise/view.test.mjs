@@ -20,6 +20,7 @@ import { digest } from '../../src/sdlc/contracts.mjs';
 import { isValidEnterpriseIntegrityAssessment, projectEnterpriseIntegrity } from '../../src/enterprise/integrity.mjs';
 import { projectPortfolioIntegritySummary } from '../../src/platform/postgres-stores.mjs';
 import { decodeStudioRoute, encodeStudioRoute } from '../../public/shared-interactions.mjs';
+import { renderOutcomeInbox } from '../../public/outcomes.mjs';
 
 class NodeListFixture extends Array {
   constructor(entries) { super(...entries); this.at = undefined; }
@@ -119,11 +120,14 @@ test('portfolio cards show saved workspace state and access and open the chosen 
   const secondCard = rendered.children[1].children[1];
   const openButton = secondCard.children.find((child) => child.tagName === 'button');
   openButton.listeners.get('click')();
-  const reviewButton = rendered.children[1].children[0].children.find((child) => child.text === 'Review incident and support inbox');
-  reviewButton.listeners.get('click')();
+  const reviewIncidents = rendered.children[1].children[0].children.find((child) => child.text === 'Review incidents (2)');
+  reviewIncidents.listeners.get('click')();
+  const reviewSupport = rendered.children[1].children[0].children.find((child) => child.text === 'Review support (1)');
+  reviewSupport.listeners.get('click')();
   const reviewIntegrity = rendered.children[1].children[0].children.find((child) => child.tagName === 'button' && child.text === 'Review integrity report');
   reviewIntegrity.listeners.get('click')();
-  assert.deepEqual(opened, ['project-b', ['project-a', { focusOutcomes: true }], ['project-a', { focusIntegrity: true }]]);
+  assert.deepEqual(opened, ['project-b', ['project-a', { focusOutcomes: true, focusOutcomeCategory: 'incident' }],
+    ['project-a', { focusOutcomes: true, focusOutcomeCategory: 'support' }], ['project-a', { focusIntegrity: true }]]);
   const exportButton = rendered.children[1].children[0].children.find((child) => child.text === 'Export proposed design JSON');
   exportButton.listeners.get('click')();
   assert.deepEqual(exported, [['project-a', 'Export proposed design JSON']]);
@@ -140,8 +144,55 @@ test('portfolio cards show saved workspace state and access and open the chosen 
   assert.equal(projectPortfolioFacts({}).access, 'Local workspace');
   const returned = renderProjectPortfolio([{ ...projects[0], openIncidentCount: 0, openSupportCount: 0 }], { el, onOpen() {} });
   assert.match(returned.textContent, /Active incidents: 0 · Active support: 0/);
-  assert.equal(returned.children[1].children[0].children.some((child) => child.text === 'Review incident and support inbox'), false,
-    'the refreshed portfolio removes the review action after all incident/support items are closed');
+  assert.equal(returned.children[1].children[0].children.some((child) => /Review (incidents|support)/.test(child.text)), false,
+    'the refreshed portfolio removes category review actions after all incident/support items are closed');
+});
+
+test('portfolio issue actions open the selected workspace and focus the requested inbox category', () => {
+  const opened = [];
+  const portfolio = renderProjectPortfolio([{ id: 'project-issues', name: 'Issue workspace', blueprintVersion: 1,
+    workspaceAccess: 'editor', openIncidentCount: 3, openSupportCount: 2 }], { el,
+    onOpen: (id, options) => opened.push({ id, options }), onExport() {}, onImport() {},
+  });
+  const buttons = portfolio.querySelectorAll('button');
+  buttons.find((button) => button.text === 'Review incidents (3)').listeners.get('click')();
+  buttons.find((button) => button.text === 'Review support (2)').listeners.get('click')();
+  assert.deepEqual(opened, [
+    { id: 'project-issues', options: { focusOutcomes: true, focusOutcomeCategory: 'incident' } },
+    { id: 'project-issues', options: { focusOutcomes: true, focusOutcomeCategory: 'support' } },
+  ]);
+});
+
+test('outcome inbox focuses the requested incident or support category', async () => {
+  const originalStorage = globalThis.localStorage;
+  globalThis.localStorage = storageFixture();
+  try {
+    const outcomes = [
+      { id: 'incident-closed', version: 1, status: 'RESOLVED', title: 'Closed incident', category: 'incident', ownerPrincipal: 'owner',
+        source: { kind: 'manual', summary: 'Resolved.' }, observations: [], proposals: [], events: [] },
+      { id: 'support-open', version: 1, status: 'OPEN', title: 'Open support request', category: 'support', ownerPrincipal: 'owner',
+        source: { kind: 'manual', summary: 'Needs support.' }, observations: [], proposals: [], events: [] },
+      { id: 'incident-open', version: 1, status: 'IN_PROGRESS', title: 'Active incident', category: 'incident', ownerPrincipal: 'owner',
+        source: { kind: 'manual', summary: 'Being reviewed.' }, observations: [], proposals: [], events: [] },
+    ];
+    const api = async () => ({ available: true, outcomes, permissions: { write: false, review: false, assign: false, followUp: false }, sources: {} });
+    const outcomeEl = (tag, options, children) => { const node = el(tag, options, children); node.style = {}; return node; };
+    for (const category of ['incident', 'support']) {
+      const inbox = renderOutcomeInbox({ projectId: 'project-issues', principal: 'owner', el: outcomeEl, api, preferredCategory: category });
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(inbox.attrs['data-focused-category'], category);
+      const focusedId = category === 'incident' ? 'incident-open' : 'support-open';
+      const focused = inbox.querySelectorAll('[data-outcome-id]').find((row) => row.attrs['data-outcome-id'] === focusedId);
+      assert.equal(focused?.attrs.open, 'open', `the first active ${category} item is expanded`);
+      const otherId = category === 'incident' ? 'support-open' : 'incident-open';
+      const other = inbox.querySelectorAll('[data-outcome-id]').find((row) => row.attrs['data-outcome-id'] === otherId);
+      assert.equal(other?.attrs.open, undefined, 'the unrelated category stays collapsed');
+      assert.match(inbox.textContent, new RegExp(`Focused on the first active ${category} item`));
+    }
+  } finally {
+    if (originalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = originalStorage;
+  }
 });
 
 test('portfolio integrity summary requires a valid complete report history', () => {

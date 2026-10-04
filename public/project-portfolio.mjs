@@ -143,10 +143,15 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
       if (file) onImport?.(project.id, file);
     });
     card.append(el('label', { className: 'portfolio-import', text: 'Import proposed design JSON' }, [importFile]));
-    if (facts.incidents || facts.support) {
-      const review = el('button', { className: 'button ghost', text: 'Review incident and support inbox', attrs: { type: 'button' } });
-      review.addEventListener('click', () => onOpen(project.id, { focusOutcomes: true }));
-      card.append(review);
+    if (facts.incidents) {
+      const reviewIncidents = el('button', { className: 'button ghost', text: `Review incidents (${facts.incidents})`, attrs: { type: 'button' } });
+      reviewIncidents.addEventListener('click', () => onOpen(project.id, { focusOutcomes: true, focusOutcomeCategory: 'incident' }));
+      card.append(reviewIncidents);
+    }
+    if (facts.support) {
+      const reviewSupport = el('button', { className: 'button ghost', text: `Review support (${facts.support})`, attrs: { type: 'button' } });
+      reviewSupport.addEventListener('click', () => onOpen(project.id, { focusOutcomes: true, focusOutcomeCategory: 'support' }));
+      card.append(reviewSupport);
     }
     list.append(card);
   }

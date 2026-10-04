@@ -1,8 +1,10 @@
 // Each uncertain command remains an exact, recoverable request after reload.
-export function renderOutcomeInbox({ projectId, principal, el, api, preferredSource = null }) {
+export function renderOutcomeInbox({ projectId, principal, el, api, preferredSource = null, preferredCategory = null }) {
   const base = `/api/v1/projects/${encodeURIComponent(projectId)}/outcomes`;
   const storageKey = `orgward:outcome-command:${encodeURIComponent(principal ?? '')}:${encodeURIComponent(projectId)}`;
-  const root = el('section', { className: 'panel content-section outcome-inbox', attrs: { 'aria-label': 'Project outcome inbox', tabindex: '-1' } });
+  const focusedCategory = ['incident', 'support'].includes(preferredCategory) ? preferredCategory : null;
+  const root = el('section', { className: 'panel content-section outcome-inbox', attrs: { 'aria-label': 'Project outcome inbox', tabindex: '-1',
+    ...(focusedCategory ? { 'data-focused-category': focusedCategory } : {}) } });
   root.style.overflowWrap = 'anywhere'; root.style.minWidth = '0';
   const status = el('p', { attrs: { role: 'status', 'aria-live': 'polite' } });
   const body = el('div');
@@ -273,6 +275,11 @@ export function renderOutcomeInbox({ projectId, principal, el, api, preferredSou
       if (pending) body.append(text('An earlier command has an uncertain response. Recover its saved result before starting another action.'), button(`Retry saved command: ${pending.label}`, () => command(pending.route, pending.payload, pending.label)));
       if (pending && !retainedOnDisk) body.append(text('Browser storage is unavailable. Keep this page open until the saved command is recovered.'));
       if (result.available === false) { body.append(text('The outcome inbox requires the configured durable project store. Ask the workspace operator to enable it.')); return; }
+      if (focusedCategory) {
+        const active = (result.outcomes ?? []).find((outcome) => outcome.category === focusedCategory && ['OPEN', 'IN_PROGRESS'].includes(outcome.status));
+        if (active && !expandedId) expandedId = active.id;
+        status.textContent = active ? `Focused on the first active ${focusedCategory} item.` : `No active ${focusedCategory} items are currently in the inbox.`;
+      }
       body.append(el('details', {}, [el('summary', { text: 'Add an outcome, incident or support item' }), createForm(result)]));
       body.append(importForm(result));
       if (!result.outcomes?.length) body.append(text('No outcomes recorded. Add a saved release, task result or human reported context to begin.'));

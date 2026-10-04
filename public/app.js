@@ -28,6 +28,7 @@ const state = {
   sessionRoles: [],
   sessionPrincipal: null,
   projectAccess: null,
+  outcomeCategoryFocus: null,
   draft: '',
   pendingCreate: null,
   pendingMessage: null,
@@ -450,12 +451,12 @@ function renderPortfolio() {
   if (!target) return;
   target.replaceChildren(renderProjectPortfolio(state.projects, {
     el: element,
-    onOpen: (id, { focusOutcomes = false, focusIntegrity = false } = {}) => {
+    onOpen: (id, { focusOutcomes = false, focusIntegrity = false, focusOutcomeCategory = null } = {}) => {
       if (!allowRouteChange()) return;
       state.draft = '';
       state.pendingMessage = null;
       select.value = id;
-      loadProject(id, { focusOutcomes, focusIntegrity });
+      loadProject(id, { focusOutcomes, focusIntegrity, focusOutcomeCategory });
     },
     onExport: async (id, button) => {
       button.disabled = true;
@@ -543,7 +544,7 @@ async function createProject(event) {
   }
 }
 
-async function loadProject(id, { history = 'push', route = null, focusOutcomes = false, focusIntegrity = false, focusImport = false } = {}) {
+async function loadProject(id, { history = 'push', route = null, focusOutcomes = false, focusIntegrity = false, focusOutcomeCategory = null, focusImport = false } = {}) {
   if (!id) return showWelcome({ history });
   const loadGeneration = ++state.projectLoadGeneration;
   if (state.project?.id !== id) state.enterpriseStatus = '';
@@ -587,6 +588,7 @@ async function loadProject(id, { history = 'push', route = null, focusOutcomes =
       state.activeTypes = new Set(route?.types?.filter((type) => types.includes(type)) ?? types);
       if (!state.activeTypes.size) state.activeTypes = new Set(types);
     }
+    state.outcomeCategoryFocus = focusOutcomeCategory;
     renderStudio();
     if (focusOutcomes) {
       const inbox = document.querySelector('.outcome-inbox');
@@ -617,7 +619,8 @@ function renderStudio() {
   document.querySelector('.studio').classList.toggle('complete', state.project.phase !== 'discovery');
   document.querySelector('#project-title').textContent = state.project.name;
   setupGitHubOnboarding();
-  if (!enterpriseReadOnly()) app.append(renderOutcomeInbox({ projectId: state.project.id, principal: state.sessionPrincipal, el: element, api }));
+  if (!enterpriseReadOnly()) app.append(renderOutcomeInbox({ projectId: state.project.id, principal: state.sessionPrincipal, el: element, api,
+    preferredCategory: state.outcomeCategoryFocus }));
   renderConversation();
   document.querySelector('#message-form').addEventListener('submit', sendMessage);
   const textarea = document.querySelector('#message-input');

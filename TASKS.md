@@ -7379,6 +7379,27 @@ selection then passed 4/4 (0 failures, 0 skips; 3.28s; TAP log:
 `tests/enterprise/view.test.mjs` and `tests/enterprise/server.test.mjs`, and
 `git diff --check` passed. No full check run; PR-15 remains open and active.
 
+PR-15 category-specific portfolio issue triage (2026-10-04): cards now show
+separate incident and support review actions when each persisted count is
+nonzero. Both route to the exact selected workspace and pass the requested
+category through app loading into the existing outcome inbox, which expands
+the first active item of that category and announces the focus. UI coverage
+checks both targets, status refresh removes both when counts reach zero, and
+the inbox fixture checks incident/support focus while leaving an unrelated and
+resolved item collapsed. The existing PostgreSQL membership-list case remains
+in the focused selection for owner/editor/reader count and isolation coverage.
+The portfolio import fixture uses a mocked preview response at the component
+boundary; inspected `public/app.js` wiring persists that staged draft before
+loading the chosen project, restores it by principal/project, then passes it to
+the interchange panel for its current-source API recheck. No browser harness
+was added. The first focused run failed because the new inbox fixture lacked a
+DOM `style` shim; after the local fixture correction the requested selection
+passed 3/3 (0 failures, 0 skips; 2.70s; TAP log:
+`/tmp/orgward-tests-rnPTKJ/node-test.tap.log`). `node --check` passed for
+`public/project-portfolio.mjs`, `public/outcomes.mjs`, `public/app.js`, and
+`tests/enterprise/view.test.mjs`; `git diff --check` passed. No full check run;
+PR-15 remains open and active.
+
 PR-15 restore draft from a saved design version (2026-10-04): when an owner or
 editor selects a historical saved main version, the branch panel offers an
 explicit “Restore this saved version as a draft” action. The draft copies the
