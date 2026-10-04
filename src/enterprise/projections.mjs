@@ -8,6 +8,7 @@ import { projectEconomicPortfolio } from './economics-scenario.mjs';
 import { projectRefinementTrace } from './refinement.mjs';
 import { projectEnterpriseIntegrity } from './integrity.mjs';
 import { projectEnterpriseGovernance } from './governance.mjs';
+import { projectEnterpriseStewardship } from './stewardship.mjs';
 
 export function normalizeEnterpriseQuery(input = {}) {
   const accepted = ['lensId', 'scopeId', 'blueprintVersion', 'selectedId', 'proposalId', 'effectiveAt', 'recordedAt', 'branchId', 'branchRevision', 'simulationId', 'economicEvaluationId'];
@@ -142,6 +143,7 @@ export function projectEnterprise(project, query = {}, authority = {}) {
   const governance = { ...governanceProjection, cases: governanceProjection.cases.map((entry) => ({ ...entry,
     canAppeal: Boolean(isCurrent && authority.write && authority.human && entry.status === 'DECIDED'
       && entry.requestedBy === authority.actor) })) };
+  const stewardship = projectEnterpriseStewardship(project, blueprint, current, savedBy);
   return { context: { projectVersion: project.version, blueprintId: blueprint?.id ?? null, blueprintVersion: blueprint?.version ?? null,
     isCurrent, lensId: context.lensId, scopeId: context.scopeId, branch: context.branchId ?? 'main', proposalId: proposal?.id ?? null,
     branchId: context.branchId, branchRevision: branchContext.revision,
@@ -166,7 +168,7 @@ export function projectEnterprise(project, query = {}, authority = {}) {
       snapshotHash: proposal.snapshotHash, baseStale: proposal.baseStale,
       diff: { before: structuredClone(proposal.snapshot.edit.before), after: structuredClone(proposal.snapshot.edit.after), changedFields: proposal.snapshot.edit.changedFields } } : null,
     branches: branchContext.branches, branch: branchContext.branch, processModel: structuredClone(PROCESS_MODEL), simulations, simulation, economics, integrity, governance,
-    refinementTrace: projectRefinementTrace(objects, selected?.id),
+    refinementTrace: projectRefinementTrace(objects, selected?.id), stewardship,
     permissions: { write: isCurrent && Boolean(authority.write), scopeAdmin: isCurrent && Boolean(authority.scopeAdmin),
       branchCreate: Boolean(blueprint && !context.branchId && authority.write && authority.human),
       branchWrite: Boolean(branchContext.writable && authority.write && authority.human),
@@ -179,7 +181,9 @@ export function projectEnterprise(project, query = {}, authority = {}) {
       integrityException: Boolean(isCurrent && authority.write && authority.human),
       governanceRequest: Boolean(isCurrent && authority.write && authority.human),
       governanceDecide: Boolean(isCurrent && authority.owner && authority.human),
-      governanceReviewAppeal: Boolean(isCurrent && authority.owner && authority.human) },
+      governanceReviewAppeal: Boolean(isCurrent && authority.owner && authority.human),
+      stewardAssign: Boolean(isCurrent && authority.owner && authority.human),
+      stewardReview: Boolean(isCurrent && authority.write && authority.human) },
     exclusions: { totalObjects: objects.length, visibleObjects: visible.size,
       scopeUnknownCount: unknownCount, unscopedCount: objects.filter((object) => scopeState(object) === 'UNSCOPED').length,
       filteredByScope: objects.filter((object) => !inScope(object)).length,

@@ -39,6 +39,7 @@ import { ENTERPRISE_REFINEMENT_KINDS } from './src/enterprise/refinement-command
 import { ENTERPRISE_INTEGRITY_KINDS } from './src/enterprise/integrity.mjs';
 import { ENTERPRISE_SOURCE_ACCEPTANCE_KINDS } from './src/enterprise/source-acceptance.mjs';
 import { ENTERPRISE_GOVERNANCE_KINDS } from './src/enterprise/governance.mjs';
+import { ENTERPRISE_STEWARDSHIP_KINDS } from './src/enterprise/stewardship.mjs';
 import { createEnterpriseInterchangeBundle, ENTERPRISE_INTERCHANGE_KINDS, previewEnterpriseInterchange } from './src/enterprise/interchange.mjs';
 import { previewEnterpriseSourceEvidence } from './src/enterprise/source-onboarding.mjs';
 
@@ -1625,14 +1626,14 @@ export function createApp({
         const payload = normalizeEnterpriseCommand(body.payload);
         const administrative = ['create-scope', 'rename-scope', 'set-validity', 'propose-future-design',
           'set-branch-validity', 'review-merge', 'apply-reviewed-merge', 'abandon-branch'].includes(payload.kind)
-          || ['decide-governance-decision', 'review-governance-appeal'].includes(payload.kind)
+          || ['decide-governance-decision', 'review-governance-appeal', 'assign-information-steward'].includes(payload.kind)
           || (payload.kind === 'record-state' && payload.dimension === 'review')
           || (payload.kind === 'edit-branch-scope' && ['create-scope', 'rename-scope'].includes(payload.change.kind));
         if ((administrative || payload.kind === 'record-state' || ENTERPRISE_BRANCH_KINDS.has(payload.kind)
           || ENTERPRISE_PROCESS_KINDS.has(payload.kind) || ENTERPRISE_ECONOMIC_KINDS.has(payload.kind)
           || ENTERPRISE_REFINEMENT_KINDS.has(payload.kind) || ENTERPRISE_INTERCHANGE_KINDS.has(payload.kind)
           || ENTERPRISE_INTEGRITY_KINDS.has(payload.kind) || ENTERPRISE_SOURCE_ACCEPTANCE_KINDS.has(payload.kind)
-          || ENTERPRISE_GOVERNANCE_KINDS.has(payload.kind)) && request.identity.actorType !== 'human') {
+          || ENTERPRISE_GOVERNANCE_KINDS.has(payload.kind) || ENTERPRISE_STEWARDSHIP_KINDS.has(payload.kind)) && request.identity.actorType !== 'human') {
           throw apiFailure(403, 'ENTERPRISE_HUMAN_OWNER_REQUIRED', 'A current human project member must report state, refine records or import proposed design; a human project owner must review design or define scopes, validity and future proposals.');
         }
         const actor = requestActor(request);
@@ -1668,6 +1669,7 @@ export function createApp({
             project.events.push(projectEvent(project, { type: payload.kind === 'run-integrity-checks' ? 'EnterpriseIntegrityAssessed'
               : payload.kind === 'accept-integrity-exception' ? 'EnterpriseIntegrityExceptionAccepted'
               : ENTERPRISE_GOVERNANCE_KINDS.has(payload.kind) ? 'EnterpriseGovernanceChanged'
+              : ENTERPRISE_STEWARDSHIP_KINDS.has(payload.kind) ? 'EnterpriseStewardshipChanged'
               : ['record-state', 'set-validity', 'propose-future-design'].includes(payload.kind)
               || ENTERPRISE_BRANCH_KINDS.has(payload.kind) || ENTERPRISE_PROCESS_KINDS.has(payload.kind)
               || ENTERPRISE_ECONOMIC_KINDS.has(payload.kind) || ENTERPRISE_REFINEMENT_KINDS.has(payload.kind)
@@ -1684,7 +1686,9 @@ export function createApp({
                 integrityAssessmentId: changed.integrityAssessmentId ?? null,
                 integrityExceptionId: changed.integrityExceptionId ?? null,
                 governanceCaseId: changed.governanceCaseId ?? null, governanceRevision: changed.governanceRevision ?? null,
-                governanceStatus: changed.governanceStatus ?? null, reason: payload.reason } }));
+                governanceStatus: changed.governanceStatus ?? null,
+                stewardshipRoleId: changed.stewardshipRoleId ?? null, stewardshipRevision: changed.stewardshipRevision ?? null,
+                stewardshipOutcome: changed.stewardshipOutcome ?? null, reason: payload.reason } }));
           },
         }, actor, { requiredPrincipalRoles: ['workspace-write'], authzGeneration: request.identity.authzGeneration,
           ...(administrative ? { minimumProjectAccess: 'owner' } : {}) });
@@ -1707,7 +1711,9 @@ export function createApp({
           ...(simulation ? { simulation } : {}), ...(economicEvaluation ? { economicEvaluation } : {}),
           ...(integrityAssessment ? { integrityAssessment } : {}), ...(integrityException ? { integrityException } : {}),
           ...(receipt.governanceCaseId ? { governanceCaseId: receipt.governanceCaseId,
-            governanceRevision: receipt.governanceRevision, governanceStatus: receipt.governanceStatus } : {}) },
+            governanceRevision: receipt.governanceRevision, governanceStatus: receipt.governanceStatus } : {}),
+          ...(ENTERPRISE_STEWARDSHIP_KINDS.has(receipt.kind) ? { stewardshipRoleId: receipt.stewardshipRoleId,
+            stewardshipRevision: receipt.stewardshipRevision, stewardshipOutcome: receipt.stewardshipOutcome } : {}) },
         { correlationId, event: result.project.events.at(-1), meta: { replayed: result.replayed } });
       }
 

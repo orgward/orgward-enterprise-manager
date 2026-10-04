@@ -6713,6 +6713,38 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   `/tmp/orgward-pr14-decision-mode-BGqqFR.tap.log`. Frozen for root review;
   PR-14 remains open.
 
+  Third bounded slice (drafted 2026-10-04; frozen for review): human project
+  owners can assign a saved blueprint role to an information record as its data
+  steward. Human project writers can record a CONFIRMED, NEEDS_ATTENTION or
+  UNKNOWN review against the current assignment revision. Assignment and review
+  events are hash-chained, audited and bound to exact blueprint snapshots;
+  later source changes mark the prior assignment stale and require a fresh
+  assignment. The enterprise detail renderer mounts the panel from the live
+  selected record so map/list selection changes refresh it and non-information
+  selections remove it. History rows include their source references. The
+  enterprise information-record panel exposes assignment,
+  review and history; both actions are disabled while enterprise data is
+  loading/busy, a command is pending, or the selected source is not writable.
+  Role responsibilities and human reporters remain separate
+  from changes to the semantic definition. Pure, UI and PostgreSQL API/restart/
+  permission fixtures are drafted. The UI history fixture includes the source
+  required by history rendering. Static `node --check` and tracked
+  `git diff --check` passed. Untracked modules were syntax-checked explicitly
+  and their `git diff --no-index --check` output was clean (exit 1 only because
+  each file is new). Focused verification (2026-10-04):
+  `npm test -- tests/enterprise/contracts.test.mjs tests/enterprise/view.test.mjs
+  tests/enterprise/server.test.mjs --test-name-pattern='information steward assignment|information stewardship UI|information stewardship assignments'`
+  passed 3/3 with 0 failures and 0 skips; runner duration 2.67s and TAP
+  duration 1.487s. TAP `/tmp/orgward-tests-Sl8vE5/node-test.tap.log`;
+  invocation capture `/tmp/orgward-pr14-stewardship-cY5LSV.tap.log`. Root review
+  then confirmed loading state must disable actions; both forms now use the
+  explicit pending/loading/exact-current-source disabled condition. Final
+  focused rerun after that code change (2026-10-04), using the same command,
+  passed 3/3 with 0 failures and 0 skips; runner duration 2.78s and TAP duration
+  1.449s. TAP `/tmp/orgward-tests-H28wmg/node-test.tap.log`; invocation capture
+  `/tmp/orgward-pr14-stewardship-final-bMfYIM.tap.log`. Frozen for root review;
+  PR-14 remains open.
+
 - [ ] PR-15 — Integrated portfolio round trip and extensibility (T-90–T-105,
   T-107–T-108, then T-106). Join enterprise truth, integrity and SDLC context;
   support multi-repository/legacy delivery, progressive promotion, incidents,

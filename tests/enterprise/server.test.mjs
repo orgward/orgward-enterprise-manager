@@ -135,9 +135,9 @@ test('enterprise scopes retain design identity across sixteen lenses, commands, 
   const ownerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
   const editorView = await currentView(instance.base, 'editor', project.id);
   const readerView = await currentView(instance.base, 'reader', project.id);
-  assert.deepEqual(ownerView.data.permissions, { write: true, scopeAdmin: true, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, simulate: true, economicWrite: true, economicEvaluate: true, integrityRun: true, integrityException: true, governanceRequest: true, governanceDecide: true, governanceReviewAppeal: true });
-  assert.deepEqual(editorView.data.permissions, { write: true, scopeAdmin: false, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, simulate: true, economicWrite: true, economicEvaluate: true, integrityRun: true, integrityException: true, governanceRequest: true, governanceDecide: false, governanceReviewAppeal: false });
-  assert.deepEqual(readerView.data.permissions, { write: false, scopeAdmin: false, branchCreate: false, branchWrite: false, branchAdmin: false, processWrite: false, simulate: false, economicWrite: false, economicEvaluate: false, integrityRun: false, integrityException: false, governanceRequest: false, governanceDecide: false, governanceReviewAppeal: false });
+  assert.deepEqual(ownerView.data.permissions, { write: true, scopeAdmin: true, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, simulate: true, economicWrite: true, economicEvaluate: true, integrityRun: true, integrityException: true, governanceRequest: true, governanceDecide: true, governanceReviewAppeal: true, stewardAssign: true, stewardReview: true });
+  assert.deepEqual(editorView.data.permissions, { write: true, scopeAdmin: false, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, simulate: true, economicWrite: true, economicEvaluate: true, integrityRun: true, integrityException: true, governanceRequest: true, governanceDecide: false, governanceReviewAppeal: false, stewardAssign: false, stewardReview: true });
+  assert.deepEqual(readerView.data.permissions, { write: false, scopeAdmin: false, branchCreate: false, branchWrite: false, branchAdmin: false, processWrite: false, simulate: false, economicWrite: false, economicEvaluate: false, integrityRun: false, integrityException: false, governanceRequest: false, governanceDecide: false, governanceReviewAppeal: false, stewardAssign: false, stewardReview: false });
   assert.equal(ownerView.data.selection.object.id, 'process-deliver');
   assert.equal(ownerView.data.selection.object.enterpriseScope, undefined);
   assert.equal(ownerView.data.selection.visible, true);
@@ -1608,6 +1608,58 @@ test('governance decisions persist through owner review, requester appeal, resta
   assert.equal(finalCase.history.length, 5);
   assert.equal(finalView.data.governance.ledgerHead, finalCase.history.at(-1).hash);
   assert.equal(finalView.data.blueprint.version, versions);
+});
+
+test('information stewardship assignments and reviews persist with owner assignment authority', async (t) => {
+  const postgres = await startPostgres(); let root; let instance;
+  t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-enterprise-stewardship-'));
+  instance = await startApp(postgres, root);
+  for (const identity of identities.values()) await postgres.query(`insert into orgward.oidc_principals
+    (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+  [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  const project = await seedProject(postgres, 'Information stewardship fixture');
+  const current = async (subject) => currentView(instance.base, subject, project.id, { selectedId: 'information-customer-signal' });
+  let ownerView = await current('owner'); let editorView = await current('editor');
+  assert.equal(ownerView.data.permissions.stewardAssign, true);
+  assert.equal(editorView.data.permissions.stewardAssign, false);
+  assert.equal(editorView.data.permissions.stewardReview, true);
+  const blueprintCount = ownerView.data.versions.length;
+  const assignBody = commandBody(ownerView, 'stewardship-assign-current', { kind: 'assign-information-steward',
+    snapshotHash: ownerView.data.context.snapshotHash, objectId: 'information-customer-signal', roleId: 'role-founder',
+    reason: 'The founder role owns the meaning of customer signals.' });
+  const assigned = await postCommand(instance.base, 'owner', project.id, assignBody);
+  assert.equal(assigned.event.type, 'EnterpriseStewardshipChanged');
+  assert.equal(assigned.data.stewardshipRoleId, 'role-founder');
+  assert.equal(assigned.data.stewardshipRevision, 1);
+  const editorAttempt = await postCommand(instance.base, 'editor', project.id,
+    commandBody(editorView, 'stewardship-editor-assignment-denied', { kind: 'assign-information-steward',
+      snapshotHash: editorView.data.context.snapshotHash, objectId: 'information-customer-signal', roleId: 'role-founder',
+      reason: 'Attempt owner-only assignment.' }), 403);
+  assert.equal(editorAttempt.error.code, 'ACTION_FORBIDDEN');
+
+  editorView = await current('editor');
+  const reviewBody = commandBody(editorView, 'stewardship-review-current', { kind: 'record-information-stewardship-review',
+    snapshotHash: editorView.data.context.snapshotHash, objectId: 'information-customer-signal', assignmentRevision: 1,
+    outcome: 'NEEDS_ATTENTION', reason: 'The term needs a provenance example.' });
+  const reviewed = await postCommand(instance.base, 'editor', project.id, reviewBody);
+  assert.equal(reviewed.data.stewardshipOutcome, 'NEEDS_ATTENTION');
+  assert.equal((await postCommand(instance.base, 'editor', project.id, reviewBody)).meta.replayed, true);
+  const readerView = await current('reader');
+  const denied = await postCommand(instance.base, 'reader', project.id,
+    commandBody(readerView, 'stewardship-reader-denied', { kind: 'record-information-stewardship-review',
+      snapshotHash: readerView.data.context.snapshotHash, objectId: 'information-customer-signal', assignmentRevision: 1,
+      outcome: 'CONFIRMED', reason: 'Reader cannot submit review.' }), 403);
+  assert.equal(denied.error.code, 'ACTION_FORBIDDEN');
+  assert.equal((await current('owner')).data.versions.length, blueprintCount);
+  await closeApp(instance); instance = null;
+  instance = await startApp(postgres, root);
+  const recovered = await current('owner');
+  const assignment = recovered.data.stewardship.assignments.find((entry) => entry.objectId === 'information-customer-signal');
+  assert.equal(assignment.roleId, 'role-founder');
+  assert.equal(assignment.latestReview.outcome, 'NEEDS_ATTENTION');
+  assert.equal(assignment.latestReview.actor, identities.get('editor').principal);
+  assert.equal(assignment.history.length, 2);
 });
 
 test('saved integrity assessments bind exact design source, replay, survive restart and stale on design change', async (t) => {

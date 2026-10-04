@@ -11,6 +11,8 @@ import { applyEnterpriseIntegrityCommand, applyEnterpriseIntegrityException, eva
   normalizeEnterpriseIntegrityCommand, projectEnterpriseIntegrity } from '../../src/enterprise/integrity.mjs';
 import { applyEnterpriseGovernanceCommand, normalizeEnterpriseGovernanceCommand,
   projectEnterpriseGovernance } from '../../src/enterprise/governance.mjs';
+import { applyEnterpriseStewardshipCommand, normalizeEnterpriseStewardshipCommand,
+  projectEnterpriseStewardship } from '../../src/enterprise/stewardship.mjs';
 import { addConversationTurn, createProject } from '../../src/model.mjs';
 import { digest } from '../../src/sdlc/contracts.mjs';
 
@@ -207,6 +209,42 @@ test('governance decision requests, owner decisions, appeals and ledger integrit
     { code: 'GOVERNANCE_SOURCE_STALE', statusCode: 409 });
   const corrupt = structuredClone(project); corrupt.enterpriseGovernanceLedger[0].reason = 'tampered';
   assert.throws(() => projectEnterpriseGovernance(corrupt, next), { code: 'GOVERNANCE_LEDGER_CORRUPT', statusCode: 409 });
+});
+
+test('information steward assignment and human review are versioned, source-bound and replayable', () => {
+  const project = createProject('Information stewardship fixture');
+  for (const answer of ['A safe service.', 'Small businesses.', 'Clear status and fees.', 'Humans review stewardship.']) addConversationTurn(project, answer);
+  const blueprint = project.blueprintVersions.at(-1);
+  const source = { blueprintId: blueprint.id, blueprintVersion: blueprint.version, snapshotHash: digest(blueprint) };
+  const auditStart = project.audit.length; const version = project.blueprintVersions.length;
+  const assign = normalizeEnterpriseStewardshipCommand({ kind: 'assign-information-steward', ...source,
+    objectId: 'information-customer-signal', roleId: 'role-founder', reason: 'The founder role stewards customer signal meaning.' });
+  const assigned = applyEnterpriseStewardshipCommand(project, assign, 'oidc:owner', new Date('2026-10-04T10:00:00.000Z'));
+  assert.equal(assigned.stewardshipRevision, 1);
+  const review = normalizeEnterpriseStewardshipCommand({ kind: 'record-information-stewardship-review', ...source,
+    objectId: 'information-customer-signal', assignmentRevision: 1, outcome: 'NEEDS_ATTENTION',
+    reason: 'The current definition needs a clearer source.' });
+  const reviewed = applyEnterpriseStewardshipCommand(project, review, 'oidc:editor', new Date('2026-10-04T11:00:00.000Z'));
+  assert.equal(reviewed.stewardshipOutcome, 'NEEDS_ATTENTION');
+  const projected = projectEnterpriseStewardship(project, blueprint, blueprint);
+  const item = projected.assignments.find((entry) => entry.objectId === 'information-customer-signal');
+  assert.equal(item.roleId, 'role-founder');
+  assert.equal(item.latestReview.actor, 'oidc:editor');
+  assert.equal(item.latestReview.outcome, 'NEEDS_ATTENTION');
+  assert.equal(item.history.length, 2);
+  assert.equal(item.appliesToContext, true);
+  assert.equal(project.audit.length - auditStart, 2);
+  assert.equal(project.blueprintVersions.length, version, 'stewardship records do not edit the semantic definition');
+  assert.throws(() => applyEnterpriseStewardshipCommand(project, { ...review, assignmentRevision: 2 }, 'oidc:editor'),
+    { code: 'STEWARDSHIP_ASSIGNMENT_STALE', statusCode: 409 });
+
+  const next = structuredClone(blueprint); next.id = 'blueprint-00000000-0000-4000-8000-000000000099'; next.version += 1;
+  next.createdAt = '2026-10-04T12:01:00.000Z'; project.blueprintVersions.push(next);
+  const stale = projectEnterpriseStewardship(project, next, next).assignments[0];
+  assert.equal(stale.sourceDrift, true);
+  assert.equal(stale.appliesToContext, false);
+  const corrupt = structuredClone(project); corrupt.enterpriseStewardshipLedger[0].reason = 'tampered';
+  assert.throws(() => projectEnterpriseStewardship(corrupt, next, next), { code: 'STEWARDSHIP_LEDGER_CORRUPT', statusCode: 409 });
 });
 
 test('integrity exceptions remain unresolved, expire, and become stale without carrying to a new report', () => {

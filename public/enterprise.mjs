@@ -5,6 +5,7 @@ import { ENTERPRISE_REFINEMENT_COMMANDS, renderEnterpriseRefinement } from './en
 import { ENTERPRISE_INTERCHANGE_COMMANDS, renderEnterpriseInterchange } from './enterprise-interchange.mjs';
 import { ENTERPRISE_INTEGRITY_COMMANDS, renderEnterpriseIntegrity } from './enterprise-integrity.mjs';
 import { renderEnterpriseGovernance } from './enterprise-governance.mjs';
+import { renderEnterpriseStewardship } from './enterprise-stewardship.mjs';
 const SCOPE_TYPES = new Set(['organization', 'legal-entity', 'unit']);
 const STATE_VALUES = {
   lifecycle: ['UNKNOWN', 'PLANNED', 'ACTIVE', 'RETIRED'],
@@ -323,6 +324,10 @@ export function renderEnterpriseContext({ model, query, loading = false, error =
   root.append(el('details', {}, [el('summary', { text: 'Create an organization, legal entity or unit' }), create]));
   if (!model.permissions?.scopeAdmin && model.context.isCurrent) root.append(el('p', { text: 'A project owner can create or rename proposed design scopes.' }));
   return root;
+}
+
+export function renderEnterpriseStewardshipPanel(options) {
+  return renderEnterpriseStewardship({ ...options, ui: fields(options.el) });
 }
 
 export function renderEnterpriseObject({ projectId = null, model, object, pending = null, loading = false, simulation = null, processDraft = null, economicDraft = null, refinementDraft = null, interchangeDraft = null, selectedSimulationId = null, economicEvaluationId = null, el, api, onCommand, onDraftChange, isCurrentContext, onInspectDraft, onSimulationSelection, onInspectSimulation, onEconomicEvaluationSelection, onInspectEconomicEvaluation }) {

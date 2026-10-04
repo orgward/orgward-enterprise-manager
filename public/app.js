@@ -8,7 +8,7 @@ import { apiErrorFrom, decodeStudioRoute, encodeExecutionRoute, encodeStudioRout
 import { coverageAreaStateLabel, coverageForBlueprint } from './coverage-dashboard.mjs';
 import { compareBlueprintObjectVersions } from './blueprint-comparison.mjs';
 import { renderOutcomeInbox } from './outcomes.mjs';
-import { enterpriseContextFailure, enterpriseContextReadOnly, enterpriseStateSummary, enterpriseSourceAligned, hasEnterpriseContext, enterpriseQuery, enterpriseRequestPath, persistEnterpriseCommand, restoreEnterpriseCommand, persistEnterpriseInterchangeDraft, restoreEnterpriseInterchangeDraft, submitEnterpriseCommand, renderEnterpriseContext, renderEnterpriseObject } from './enterprise.mjs';
+import { enterpriseContextFailure, enterpriseContextReadOnly, enterpriseStateSummary, enterpriseSourceAligned, hasEnterpriseContext, enterpriseQuery, enterpriseRequestPath, persistEnterpriseCommand, restoreEnterpriseCommand, persistEnterpriseInterchangeDraft, restoreEnterpriseInterchangeDraft, submitEnterpriseCommand, renderEnterpriseContext, renderEnterpriseObject, renderEnterpriseStewardshipPanel } from './enterprise.mjs';
 
 const state = {
   projects: [],
@@ -334,6 +334,7 @@ async function saveEnterpriseCommand(payload = null) {
     if (saved.envelope.payload.kind === 'run-integrity-checks') state.enterpriseIntegrityDraft = null;
     if (result.data.simulation) state.enterpriseSimulation = result.data.simulation;
     state.enterpriseStatus = result.data.governanceCaseId ? `Saved governance decision ${saved.envelope.payload.kind.replaceAll('-', ' ')} as ${result.data.governanceStatus} at revision ${result.data.governanceRevision}. The proposed design was unchanged.`
+      : result.data.stewardshipRevision ? `Saved information stewardship ${saved.envelope.payload.kind.replaceAll('-', ' ')} at assignment revision ${result.data.stewardshipRevision}${result.data.stewardshipOutcome ? ` with outcome ${result.data.stewardshipOutcome}` : ''}. The information definition was unchanged.`
       : result.data.integrityException ? `Recorded the human exception for finding ${result.data.integrityException.findingId} in report ${result.data.integrityException.reportId}. The finding remains unresolved and the integrity result is unchanged.`
       : result.data.acceptedClaims ? `Accepted ${result.data.acceptedClaims.length} reviewed source claims into one proposed design version from source snapshot ${result.data.acceptedClaims[0]?.sourceHash ?? 'unknown'}; first claim locator ${result.data.acceptedClaims[0]?.claimLocator ?? 'not supplied'}. No work was run or published.`
       : result.data.integrityAssessment ? `Saved the ${result.data.integrityAssessment.status} integrity and lineage assessment for its exact blueprint source. No design or operational state changed.`
@@ -2221,6 +2222,12 @@ function renderDetail() {
   if (editForm) content.push(editForm);
   const actorBindingPanel = renderActorBindingPanel(node);
   if (actorBindingPanel) content.push(actorBindingPanel);
+  if (state.enterpriseModel && object?.type === 'information') {
+    const stewardshipPanel = renderEnterpriseStewardshipPanel({ model: state.enterpriseModel,
+      pending: state.pendingEnterprise, loading: state.enterpriseLoading || state.enterpriseBusy,
+      el: element, onCommand: saveEnterpriseCommand });
+    if (stewardshipPanel) content.push(stewardshipPanel);
+  }
   detail.replaceChildren(...content);
 }
 

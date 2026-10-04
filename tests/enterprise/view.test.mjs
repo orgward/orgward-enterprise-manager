@@ -13,6 +13,7 @@ import { renderEnterpriseRefinement } from '../../public/enterprise-refinement.m
 import { enterpriseInterchangeCommandPayload, enterpriseInterchangeWritable, renderEnterpriseInterchange } from '../../public/enterprise-interchange.mjs';
 import { enterpriseIntegrityCommandPayload, enterpriseIntegrityExceptionPayload, renderEnterpriseIntegrity } from '../../public/enterprise-integrity.mjs';
 import { enterpriseGovernanceCommandPayload, renderEnterpriseGovernance } from '../../public/enterprise-governance.mjs';
+import { enterpriseStewardshipPayload, renderEnterpriseStewardship } from '../../public/enterprise-stewardship.mjs';
 import { decodeStudioRoute, encodeStudioRoute } from '../../public/shared-interactions.mjs';
 
 class NodeListFixture extends Array {
@@ -874,6 +875,45 @@ test('governance UI guides requests, owner decisions, requester appeals and appe
   const stalePanel = renderEnterpriseGovernance({ model: staleModel, el, ui: branchUi, onCommand() {} });
   assert.match(stalePanel.textContent, /SOURCE DRIFT/);
   assert.equal(stalePanel.querySelectorAll('form').some((entry) => entry.attrs['data-enterprise-action'] === `appeal-governance-decision-${caseId}`), false);
+});
+
+test('information stewardship UI assigns saved roles and records human review against assignment revision', () => {
+  const selected = { id: 'information-customer-signal', type: 'information', name: 'Customer signal' };
+  const source = { blueprintId: 'blueprint-00000000-0000-4000-8000-000000000001', blueprintVersion: 3, snapshotHash: 'a'.repeat(64) };
+  const blueprint = { areas: { peopleAgents: { items: [{ id: 'role-data-steward', type: 'role', name: 'Data steward' }] } } };
+  const model = { selection: { object: selected }, context: { ...source, isCurrent: true, sourceKind: 'MAIN_DESIGN' }, blueprint,
+    permissions: { stewardAssign: true, stewardReview: true }, stewardship: { ledgerLength: 0, ledgerHead: null, roleNames: { 'role-data-steward': 'Data steward' }, assignments: [] } };
+  let submitted = null;
+  const assignmentPanel = renderEnterpriseStewardship({ model, el, ui: branchUi, onCommand: (payload) => { submitted = payload; } });
+  const assignmentForm = assignmentPanel.querySelectorAll('form')[0];
+  const assignmentRole = assignmentForm.querySelectorAll('select')[0];
+  const assignmentReason = assignmentForm.querySelectorAll('textarea')[0];
+  assignmentRole.value = 'role-data-steward'; assignmentReason.value = 'Stewards customer signal definition.';
+  assignmentForm.listeners.get('submit')({ preventDefault() {} });
+  assert.deepEqual(submitted, { kind: 'assign-information-steward', ...source, objectId: selected.id,
+    roleId: 'role-data-steward', reason: 'Stewards customer signal definition.' });
+
+  const assignment = { objectId: selected.id, roleId: 'role-data-steward', assignmentRevision: 1,
+    source, appliesToContext: true, sourceDrift: false, assignedBy: 'oidc:owner', assignedAt: '2026-10-04T10:00:00.000Z',
+    history: [{ sequence: 1, action: 'assign-information-steward', actor: 'oidc:owner', at: '2026-10-04T10:00:00.000Z',
+      assignmentRevision: 1, roleId: 'role-data-steward', reason: 'Stewards customer signal definition.', source }], latestReview: null };
+  const reviewModel = { ...model, stewardship: { ledgerLength: 1, ledgerHead: 'b'.repeat(64), roleNames: { 'role-data-steward': 'Data steward' }, assignments: [assignment] } };
+  const reviewPanel = renderEnterpriseStewardship({ model: reviewModel, el, ui: branchUi, onCommand: (payload) => { submitted = payload; } });
+  assert.match(reviewPanel.textContent, /Current steward role: Data steward/);
+  const reviewForm = reviewPanel.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === 'record-information-stewardship-review');
+  const outcome = reviewForm.querySelectorAll('select')[0]; const reason = reviewForm.querySelectorAll('textarea')[0];
+  outcome.value = 'CONFIRMED'; reason.value = 'Definition reviewed against current usage.';
+  reviewForm.listeners.get('submit')({ preventDefault() {} });
+  assert.deepEqual(submitted, { kind: 'record-information-stewardship-review', ...source, objectId: selected.id,
+    assignmentRevision: 1, outcome: 'CONFIRMED', reason: 'Definition reviewed against current usage.' });
+  assert.equal(enterpriseStewardshipPayload({ ...reviewModel, permissions: { stewardReview: false } },
+    'record-information-stewardship-review', { objectId: selected.id, assignmentRevision: 1, outcome: 'CONFIRMED', reason: 'Denied.' }), null);
+  const staleAssignment = { ...assignment, source: { ...source, blueprintVersion: 2, snapshotHash: 'b'.repeat(64) },
+    appliesToContext: false, sourceDrift: true };
+  const stalePanel = renderEnterpriseStewardship({ model: { ...reviewModel, stewardship: { ...reviewModel.stewardship, assignments: [staleAssignment] } },
+    el, ui: branchUi, onCommand() {} });
+  assert.match(stalePanel.textContent, /does not carry to the selected source/);
+  assert.equal(stalePanel.querySelectorAll('form').some((entry) => entry.attrs['data-enterprise-action'] === 'record-information-stewardship-review'), false);
 });
 
 test('integrity UI keeps findings unresolved and binds exception review to current exact report source', () => {

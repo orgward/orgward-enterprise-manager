@@ -11,6 +11,7 @@ import { applyEnterpriseBulkEdit, ENTERPRISE_INTERCHANGE_KINDS, normalizeEnterpr
 import { applyEnterpriseIntegrityCommand, ENTERPRISE_INTEGRITY_KINDS, normalizeEnterpriseIntegrityCommand } from './integrity.mjs';
 import { applyEnterpriseSourceAcceptance, ENTERPRISE_SOURCE_ACCEPTANCE_KINDS, normalizeEnterpriseSourceAcceptanceCommand } from './source-acceptance.mjs';
 import { applyEnterpriseGovernanceCommand, ENTERPRISE_GOVERNANCE_KINDS, normalizeEnterpriseGovernanceCommand } from './governance.mjs';
+import { applyEnterpriseStewardshipCommand, ENTERPRISE_STEWARDSHIP_KINDS, normalizeEnterpriseStewardshipCommand } from './stewardship.mjs';
 
 const base = ['kind', 'blueprintId', 'blueprintVersion', 'reason'];
 function reference(value, field, { nullable = false } = {}) {
@@ -21,6 +22,7 @@ function reference(value, field, { nullable = false } = {}) {
   return value;
 }
 export function normalizeEnterpriseCommand(input) {
+  if (input && ENTERPRISE_STEWARDSHIP_KINDS.has(input.kind)) return normalizeEnterpriseStewardshipCommand(input);
   if (input && ENTERPRISE_GOVERNANCE_KINDS.has(input.kind)) return normalizeEnterpriseGovernanceCommand(input);
   if (input && ENTERPRISE_INTEGRITY_KINDS.has(input.kind)) return normalizeEnterpriseIntegrityCommand(input);
   if (input && ENTERPRISE_SOURCE_ACCEPTANCE_KINDS.has(input.kind)) return normalizeEnterpriseSourceAcceptanceCommand(input);
@@ -85,6 +87,7 @@ export function normalizeEnterpriseCommand(input) {
   return normalized;
 }
 export function applyEnterpriseCommand(project, command, actor, options = {}) {
+  if (ENTERPRISE_STEWARDSHIP_KINDS.has(command.kind)) return applyEnterpriseStewardshipCommand(project, command, actor);
   if (ENTERPRISE_GOVERNANCE_KINDS.has(command.kind)) return applyEnterpriseGovernanceCommand(project, command, actor);
   if (ENTERPRISE_INTEGRITY_KINDS.has(command.kind)) return applyEnterpriseIntegrityCommand(project, command, actor);
   if (ENTERPRISE_SOURCE_ACCEPTANCE_KINDS.has(command.kind)) return applyEnterpriseSourceAcceptance(project, command, actor);
