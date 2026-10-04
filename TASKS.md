@@ -7474,6 +7474,36 @@ four-case selection passed 4/4 (0 failures, 0 skips; 2.48s; TAP log:
 `public/project-portfolio.mjs`, and `tests/enterprise/view.test.mjs`;
 `git diff --check` passed. No full check run; PR-15 remains open and active.
 
+PR-15 access-management selection continuity and owner gate follow-up
+(2026-10-04): changing the platform project selector now replaces the current
+`projectId` query with the exact selected workspace while retaining the active
+view and other query parameters, so reload restores that selection. Startup and
+dropdown selection share the same access-gated members loader: only a project
+whose authenticated portfolio entry says `owner` calls `/members`; editor and
+reader selection clears member data, keeps the selected project in the URL and
+shows owner-only guidance, with the selector still available to choose another
+workspace. UI/helper acceptance exercises owner selection through URL and reload
+and verifies editor selection skips the members fetch. The requested deep-link
+and PostgreSQL membership-list cases passed 2/2 (0 failures, 0 skips; 2.40s; TAP
+log: `/tmp/orgward-tests-7SPXTy/node-test.tap.log`). `node --check` passed for
+`public/platform.js`, `public/platform-sharing.mjs`,
+`public/project-portfolio.mjs`, and `tests/enterprise/view.test.mjs`;
+`git diff --check` passed. No full check run; PR-15 remains open and active.
+
+PR-15 owner selection gate coverage follow-up (2026-10-04): the URL-writing
+selection helper is now the same shared operation used by initial load and the
+project selector. It writes the selected project ID while preserving other
+query parameters and the active view; a reload parses that ID and resolves the
+same project. Owner selection may load members, while editor and reader
+selection preserve their requested IDs, return an empty member list and skip
+the member fetch. Focused assertions exercise owner URL→reload identity and
+editor/reader fetch suppression. The requested deep-link and PostgreSQL
+membership-list cases passed 2/2 (0 failures, 0 skips; 2.56s; TAP log:
+`/tmp/orgward-tests-yIoTBL/node-test.tap.log`). `node --check` passed for
+`public/platform.js`, `public/platform-sharing.mjs`,
+`public/project-portfolio.mjs`, and `tests/enterprise/view.test.mjs`;
+`git diff --check` passed. No full check run; PR-15 remains open and active.
+
 PR-15 restore draft from a saved design version (2026-10-04): when an owner or
 editor selects a historical saved main version, the branch panel offers an
 explicit “Restore this saved version as a draft” action. The draft copies the

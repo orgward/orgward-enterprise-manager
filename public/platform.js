@@ -1,5 +1,5 @@
 import { apiErrorFrom } from './shared-interactions.mjs';
-import { platformViewUrl, projectAccessSelectionMessage, resolveProjectAccessSelection } from './platform-sharing.mjs';
+import { platformViewUrl, projectAccessIdFromSearch, projectAccessSelectionMessage, projectAccessViewUrl, selectProjectAccess } from './platform-sharing.mjs';
 
 const views = new Set(['command', 'enterprise', 'changes', 'work', 'releases', 'evidence', 'administration']);
 const manageableIdentityRoles = ['workspace-read', 'workspace-write', 'execution-approver', 'release-approver', 'control-owner', 'tenant-admin'];
@@ -128,10 +128,8 @@ function renderEnterprise() {
   const selectedProject = accessDeepLinkMessage ? null : sharing.projects.find((project) => project.id === sharing.projectId);
   const selfMembership = sharing.members.find((member) => member.principal === state.session?.principal);
   const canManageMembers = selfMembership?.access === 'owner';
-  const sharingProjects = accessDeepLinkMessage
-    ? ''
-    : sharing.projects.length
-    ? `<label class="sharing-field" for="sharing-project">Project</label><select id="sharing-project" class="sharing-control" aria-label="Project to manage sharing">${sharing.projects.map((project) => `<option value="${escapeHtml(project.id)}" ${project.id === sharing.projectId ? 'selected' : ''}>${escapeHtml(project.name)}</option>`).join('')}</select>`
+  const sharingProjects = sharing.projects.length
+    ? `<label class="sharing-field" for="sharing-project">Project</label><select id="sharing-project" class="sharing-control" aria-label="Project to manage sharing">${sharing.deepLinkStatus === 'unavailable' ? '<option value="" selected>Choose an owned workspace…</option>' : ''}${sharing.projects.map((project) => `<option value="${escapeHtml(project.id)}" ${project.id === sharing.projectId ? 'selected' : ''}>${escapeHtml(project.name)}</option>`).join('')}</select>`
     : '<p class="muted-copy">No accessible projects yet. Create a project to manage its membership.</p>';
   const memberRows = accessDeepLinkMessage ? '' : sharing.members.length
     ? `<ul class="import-results" aria-label="Project members">${sharing.members.map((member) => `<li><span><b>${escapeHtml(member.displayName)}</b>${member.principal === state.session?.principal ? ' · You' : ''}<br><code title="${escapeHtml(member.principal)}">${escapeHtml(member.principal.slice(0, 23))}…</code></span><span>${escapeHtml(member.access)}${canManageMembers && member.access !== 'owner' ? ` <button class="platform-button" type="button" data-revoke-member="${escapeHtml(member.principal)}" ${sharing.busy ? 'disabled' : ''}>Remove</button>` : ''}</span></li>`).join('')}</ul>`
@@ -145,16 +143,33 @@ function renderEnterprise() {
     <section class="panel panel-spaced"><header class="panel-head"><h2>Current boundary</h2><button type="button" data-capability="enterpriseDesign">View specification</button></header><div class="panel-body"><p class="muted-copy">Generated structures are proposed designs based on founder answers. They are not verified market evidence, legal formation, enabled automation, or proof of business performance.</p></div></section>`;
 }
 
-async function loadProjectMembers(projectId = state.sharing.projectId) {
+async function loadProjectMembers(projectId = state.sharing.projectId, { updateUrl = false } = {}) {
   state.sharing.projectId = projectId;
   state.sharing.members = [];
   state.sharing.error = null;
   state.sharing.message = '';
-  if (!projectId) { render(); return; }
+  state.sharing.deepLinkStatus = null;
+  if (!projectId) {
+    state.sharing.deepLinkStatus = state.sharing.projects.length ? 'unavailable' : null;
+    render(); return;
+  }
   state.sharing.loading = true;
   render();
   try {
-    state.sharing.members = await api(`/api/v1/projects/${encodeURIComponent(projectId)}/members`).then((result) => result.data);
+    const selection = await selectProjectAccess(state.sharing.projects, projectId,
+      (selectedId) => api(`/api/v1/projects/${encodeURIComponent(selectedId)}/members`).then((result) => result.data), {
+        updateUrl,
+        search: window.location.search,
+        view: state.view,
+        onUrlUpdate: (url) => window.history.replaceState(null, '', url),
+        onSelection: (resolved) => {
+          state.sharing.projectId = resolved.projectId;
+          state.sharing.deepLinkStatus = resolved.status === 'owner' ? null : resolved.status;
+        },
+      });
+    state.sharing.projectId = selection.projectId;
+    state.sharing.members = selection.members;
+    state.sharing.deepLinkStatus = selection.status === 'owner' ? null : selection.status;
   } catch (error) {
     state.sharing.error = error.message;
   } finally {
@@ -382,20 +397,11 @@ async function loadFoundation() {
       try {
         const projects = await api('/api/v1/projects');
         state.sharing.projects = projects.data;
-        const requestedProjectId = new URLSearchParams(window.location.search).get('projectId');
-        const selection = requestedProjectId
-          ? resolveProjectAccessSelection(state.sharing.projects, requestedProjectId)
-          : { projectId: state.sharing.projects.some((project) => project.id === state.sharing.projectId)
-            ? state.sharing.projectId : state.sharing.projects[0]?.id ?? '', status: 'default' };
-        state.sharing.projectId = selection.projectId;
-        state.sharing.deepLinkStatus = ['denied', 'unavailable'].includes(selection.status) ? selection.status : null;
-        if (state.sharing.deepLinkStatus) {
-          state.sharing.members = [];
-          state.sharing.loading = false;
-          state.sharing.error = null;
-          state.sharing.message = '';
-          render();
-        } else await loadProjectMembers(selection.projectId);
+        const requestedProjectId = projectAccessIdFromSearch(window.location.search);
+        const selectedProjectId = requestedProjectId
+          ?? (state.sharing.projects.some((project) => project.id === state.sharing.projectId)
+            ? state.sharing.projectId : state.sharing.projects[0]?.id ?? '');
+        await loadProjectMembers(selectedProjectId);
       } catch (error) {
         state.sharing = { ...state.sharing, loading: false, error: error.message };
       }
@@ -798,7 +804,7 @@ document.addEventListener('change', (event) => {
     const verify = document.querySelector(`[data-deepseek-verify="${CSS.escape(profileForm.dataset.profileId)}"]`);
     if (verify) verify.disabled = true;
   }
-  if (event.target.id === 'sharing-project') loadProjectMembers(event.target.value);
+  if (event.target.id === 'sharing-project') loadProjectMembers(event.target.value, { updateUrl: true });
 });
 document.addEventListener('input', (event) => {
   const profileForm = event.target.closest?.('.deepseek-profile-form');

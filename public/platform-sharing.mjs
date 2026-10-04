@@ -1,9 +1,25 @@
 export function resolveProjectAccessSelection(projects, requestedProjectId) {
-  if (!requestedProjectId) return { projectId: projects[0]?.id ?? '', status: 'default' };
+  if (!requestedProjectId) return { projectId: '', status: 'unavailable' };
   const project = projects.find((entry) => entry.id === requestedProjectId);
   if (!project) return { projectId: '', status: 'unavailable' };
   if (project.workspaceAccess !== 'owner') return { projectId: requestedProjectId, status: 'denied' };
   return { projectId: requestedProjectId, status: 'owner' };
+}
+
+export async function selectProjectAccess(projects, requestedProjectId, fetchMembers, {
+  onSelection, updateUrl = false, search = '', view = 'enterprise', onUrlUpdate,
+} = {}) {
+  const selection = resolveProjectAccessSelection(projects, requestedProjectId);
+  onSelection?.(selection);
+  if (updateUrl && selection.status !== 'unavailable') {
+    onUrlUpdate?.(projectAccessViewUrl(selection.projectId, { search, view }));
+  }
+  if (selection.status !== 'owner') return { ...selection, members: [] };
+  return { ...selection, members: await fetchMembers(selection.projectId) };
+}
+
+export function projectAccessIdFromSearch(search = '') {
+  return new URLSearchParams(search).get('projectId');
 }
 
 export function projectAccessSelectionMessage(status) {
@@ -14,4 +30,10 @@ export function projectAccessSelectionMessage(status) {
 
 export function platformViewUrl(view, search = '') {
   return `/platform.html${search}#${view}`;
+}
+
+export function projectAccessViewUrl(projectId, { search = '', view = 'enterprise' } = {}) {
+  const query = new URLSearchParams(search);
+  query.set('projectId', projectId);
+  return `/platform.html?${query.toString()}#${view}`;
 }
