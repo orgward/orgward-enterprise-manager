@@ -1036,7 +1036,9 @@ test('saved manual flow routes audited human choices through a governed local ag
   const executionProfiles = [{ id: 'flow-fixed-agent', label: 'Fixed local flow agent', kind: 'command', version: '1.0.0',
     executable: process.execPath, args: ['-e', "process.stdout.write('fixed local flow result')"], workspaceRoot: profileRoot },
   { id: 'flow-fixed-agent-failure', label: 'Fixed local failing flow agent', kind: 'command', version: '1.0.0',
-    executable: process.execPath, args: ['-e', "process.stderr.write('fixed local flow failure');process.exit(17)"], workspaceRoot: profileRoot }];
+    executable: process.execPath, args: ['-e', "process.stderr.write('fixed local flow failure');process.exit(17)"], workspaceRoot: profileRoot },
+  { id: 'flow-fixed-agent-outside', label: 'Unapproved local flow agent', kind: 'command', version: '1.0.0',
+    executable: process.execPath, args: ['-e', "process.stdout.write('must not execute')"], workspaceRoot: profileRoot }];
   const inMemoryExecution = { status: 'FAILED', omittedByJson: undefined };
   assert.notEqual(digest(inMemoryExecution), persistedDigest(inMemoryExecution));
   assert.equal(persistedDigest(inMemoryExecution), contentHash({ status: 'FAILED' }));
@@ -1104,11 +1106,15 @@ test('saved manual flow routes audited human choices through a governed local ag
     }
     projectRead = await request(instance.base, 'owner', `${bindingRoute}/enable`, { method: 'POST', body: {
       schemaVersion: '1.0', commandId: `manual-agent-enable-${suffix}`, expectedVersion: projectRead.data.version,
-      payload: { actorId, roleId, blueprintVersion: payload.blueprintVersion },
+      payload: { actorId, roleId, blueprintVersion: payload.blueprintVersion,
+        ...(actorId === 'actor-design-assistant' ? { executionProfileIds: ['flow-fixed-agent', 'flow-fixed-agent-failure'] } : {}) },
     } });
   };
   await bind({ actorId: 'actor-founder', roleId: 'role-founder', subject: 'editor', suffix: 'human' });
   await bind({ actorId: 'actor-design-assistant', roleId: 'role-design-assistant', subject: 'flow-agent', suffix: 'agent' });
+  const bindingProjection = await request(instance.base, 'owner', bindingRoute);
+  assert.deepEqual(bindingProjection.data.proposals.find((entry) => entry.actorId === 'actor-design-assistant')?.executionProfileIds,
+    ['flow-fixed-agent', 'flow-fixed-agent-failure']);
   projectRead = await getProject();
   const plansRoute = `/api/v1/projects/${project.id}/process-plans`;
   const planned = await request(instance.base, 'owner', plansRoute, { method: 'POST', body: {
@@ -1192,7 +1198,32 @@ test('saved manual flow routes audited human choices through a governed local ag
   assert.equal(cancelledAgentRuntime.activation.tasks.find((entry) => entry.taskId === task('human-checkpoint').id).state, 'WAITING');
   assert.equal(cancelledAgentRuntime.activation.tasks.find((entry) => entry.taskId === task('agent-failure-handler').id).state, 'WAITING');
 
+  await postgres.query(`update orgward.project_actor_binding_proposals set execution_profile_ids='[]'::jsonb
+    where tenant_id=$1 and project_id=$2 and blueprint_version=$3 and actor_id='actor-design-assistant' and role_id='role-design-assistant'`,
+  [tenantId, project.id, projectRead.data.latestBlueprint.version]);
   const failedInstance = await createInstance('failed', 'AGENT');
+  const legacyEnvelopeDenied = await createAgentRunWithProfile(failedInstance, 'manual-agent-legacy-envelope-denied', 'flow-fixed-agent', 409);
+  assert.equal(legacyEnvelopeDenied.error.code, 'PROCESS_TASK_PROFILE_OUTSIDE_ENVELOPE', 'legacy empty envelopes fail closed');
+  const envelopeRoute = `/api/v1/projects/${project.id}/actor-bindings/envelope`;
+  const envelopePayload = { actorId: 'actor-design-assistant', roleId: 'role-design-assistant',
+    blueprintVersion: projectRead.data.latestBlueprint.version,
+    executionProfileIds: ['flow-fixed-agent', 'flow-fixed-agent-failure'] };
+  const editorEnvelopeDenied = await request(instance.base, 'editor', envelopeRoute, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'manual-agent-editor-envelope-denied', expectedVersion: projectRead.data.version,
+    payload: envelopePayload,
+  } }, 403);
+  assert.equal(editorEnvelopeDenied.error.code, 'ACTION_FORBIDDEN');
+  projectRead = await getProject();
+  const configuredEnvelope = await request(instance.base, 'owner', envelopeRoute, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'manual-agent-owner-envelope-configure', expectedVersion: projectRead.data.version,
+    payload: envelopePayload,
+  } });
+  assert.equal(configuredEnvelope.meta.replayed, false);
+  const configuredProjection = await request(instance.base, 'owner', bindingRoute);
+  assert.deepEqual(configuredProjection.data.proposals.find((entry) => entry.actorId === 'actor-design-assistant')?.executionProfileIds,
+    envelopePayload.executionProfileIds);
+  const outsideEnvelope = await createAgentRunWithProfile(failedInstance, 'manual-agent-request-outside-envelope', 'flow-fixed-agent-outside', 409);
+  assert.equal(outsideEnvelope.error.code, 'PROCESS_TASK_PROFILE_OUTSIDE_ENVELOPE');
   const failedRequest = await createAgentRunWithProfile(failedInstance, 'manual-agent-request-failure', 'flow-fixed-agent-failure');
   let failedRows = await runtimeRead();
   let failedAgentRuntime = failedRows.find((row) => row.planInstanceId === failedInstance && row.taskId === flowAgentTask.id);

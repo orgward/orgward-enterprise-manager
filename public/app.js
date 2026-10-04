@@ -33,6 +33,7 @@ const state = {
   blueprintEditDraft: null,
   pendingActorBinding: null,
   pendingActorBindingEnable: null,
+  pendingAgentEnvelope: null,
   pendingBlueprintPublication: null,
   requestedProjectId: null,
   restoringHistory: false,
@@ -1967,13 +1968,15 @@ function renderActorBindingPanel(node) {
   const panelPending = state.pendingActorBinding?.projectId === projectId && state.pendingActorBinding?.actorId === actor.id ? state.pendingActorBinding : null;
   const load = async () => {
     try {
-      const [rosterResult, proposalsResult] = await Promise.all([
+      const [rosterResult, proposalsResult, executionMetaResult] = await Promise.all([
         api(`/api/v1/projects/${projectId}/members`),
         api(`/api/v1/projects/${projectId}/actor-bindings/proposals`),
+        api('/api/execution/meta'),
       ]);
       if (state.project?.id !== projectId || state.selectedId !== actor.id) return;
       const roster = rosterResult.data.filter((member) => ['owner', 'editor'].includes(member.access) && member.actorType === expectedType);
       const proposals = proposalsResult.data.proposals.filter((proposal) => proposal.actorId === actor.id);
+      const executionProfiles = executionMetaResult.profiles ?? [];
       const linkedRoleIds = new Set([...(actor.assignedRoles ?? []), ...blueprint.relations.filter((relation) => relation.source === actor.id && relation.type === 'assigned-to').map((relation) => relation.target)]);
       const roles = Object.values(blueprint.areas).flatMap((area) => area.items).filter((item) => item.type === 'role' && linkedRoleIds.has(item.id));
       const currentPairs = new Set(proposals.filter((proposal) => proposal.blueprintVersion === blueprint.version).map((proposal) => `${proposal.actorId}\n${proposal.roleId}`));
@@ -2055,7 +2058,7 @@ function renderActorBindingPanel(node) {
           const eligibility = proposal.eligibilityStatus ?? (stale ? ['stale_blueprint'] : proposal.targetStatus === 'active_project_member' ? ['eligible'] : ['no_longer_eligible']);
           const stateLabel = stale ? `Pinned to v${proposal.blueprintVersion}; not carried to current v${proposal.currentBlueprintVersion}.` : 'Pinned to the current blueprint version.';
           const entry = element('li');
-          entry.append(element('span', { text: `${proposal.roleName} → ${proposal.targetName} (${proposal.status === 'enabled' ? 'enabled organizational responsibility' : 'proposed'}; ${eligibility.map((value) => value.replaceAll('_', ' ')).join(', ')}). ${stateLabel}` }));
+          entry.append(element('span', { text: `${proposal.roleName} → ${proposal.targetName} (${proposal.status === 'enabled' ? 'enabled organizational responsibility' : 'proposed'}${proposal.executionProfileIds?.length ? ` · allowed profiles ${proposal.executionProfileIds.join(', ')}` : ''}; ${eligibility.map((value) => value.replaceAll('_', ' ')).join(', ')}). ${stateLabel}` }));
           if (proposal.status === 'proposed' && !stale && eligibility.length === 1 && eligibility[0] === 'eligible') {
             if (state.projectAccess !== 'owner') {
               entry.append(element('p', { className: 'edit-help', text: 'A project owner must enable this identity binding before it can be used by supervised agent runs.' }));
@@ -2065,25 +2068,55 @@ function renderActorBindingPanel(node) {
             const pendingMatch = (candidate) => candidate?.projectId === projectId && candidate.actorId === proposal.actorId
               && candidate.roleId === proposal.roleId && candidate.blueprintVersion === proposal.blueprintVersion;
             let pendingEnable = pendingMatch(state.pendingActorBindingEnable) ? state.pendingActorBindingEnable : null;
+            let profileChecks = [];
+            let profilePicker = null;
+            if (actor.type === 'actor-agent') {
+              profilePicker = element('fieldset', { className: 'actor-agent-profile-envelope' });
+              profilePicker.append(element('legend', { text: 'Allowed execution profiles (choose up to 8)' }));
+              const pendingProfiles = new Set(pendingEnable?.executionProfileIds ?? []);
+              for (const profile of executionProfiles) {
+                const checkbox = element('input', { attrs: { type: 'checkbox', value: profile.id,
+                  ...(pendingProfiles.has(profile.id) ? { checked: true } : {}) } });
+                profileChecks.push(checkbox);
+                profilePicker.append(element('label', {}, [checkbox, element('span', { text: `${profile.label} · ${profile.kind}` })]));
+              }
+              profilePicker.append(element('p', { className: 'edit-help', text: 'The agent may request only a selected profile for tasks assigned to this exact actor, role and blueprint version.' }));
+              entry.append(profilePicker);
+            }
             const enableButton = element('button', { className: 'button ghost', text: pendingEnable ? 'Retry same enable command' : 'Enable organizational assignment', attrs: { type: 'button' } });
+            const selectedExecutionProfileIds = () => profileChecks.filter((checkbox) => checkbox.checked).map((checkbox) => checkbox.value);
+            const updateEnableAvailability = () => {
+              const selectedIds = selectedExecutionProfileIds();
+              for (const checkbox of profileChecks) checkbox.disabled = Boolean(pendingEnable)
+                || (!checkbox.checked && selectedIds.length >= 8);
+              enableButton.disabled = Boolean(actor.type === 'actor-agent' && pendingEnable && !pendingEnable.executionProfileIds?.length)
+                || (actor.type === 'actor-agent' && selectedIds.length < 1);
+            };
+            updateEnableAvailability();
             const enableFeedback = element('p', { className: 'field-error edit-error', attrs: { role: 'status', 'aria-live': 'polite' } });
             const sendEnable = async () => {
               pendingEnable ??= {
                 projectId, actorId: proposal.actorId, roleId: proposal.roleId, blueprintVersion: proposal.blueprintVersion,
+                ...(actor.type === 'actor-agent' ? { executionProfileIds: selectedExecutionProfileIds() } : {}),
                 expectedVersion: state.project.version, commandId: `actor-binding-enable:${crypto.randomUUID()}`,
               };
               state.pendingActorBindingEnable = pendingEnable;
+              updateEnableAvailability();
               enableButton.disabled = true;
               enableFeedback.textContent = '';
               try {
                 const result = await api(`/api/v1/projects/${projectId}/actor-bindings/proposals/enable`, {
                   method: 'POST', body: JSON.stringify(command({ actorId: pendingEnable.actorId, roleId: pendingEnable.roleId,
-                    blueprintVersion: pendingEnable.blueprintVersion }, pendingEnable.expectedVersion, pendingEnable.commandId)),
+                    blueprintVersion: pendingEnable.blueprintVersion,
+                    ...(pendingEnable.executionProfileIds ? { executionProfileIds: pendingEnable.executionProfileIds } : {}) },
+                  pendingEnable.expectedVersion, pendingEnable.commandId)),
                 });
                 if (state.project?.id !== projectId || state.requestedProjectId !== projectId) return;
                 state.pendingActorBindingEnable = null;
                 await loadProject(projectId, { history: 'replace', route: { ...currentRoute(), view: 'map', selectedId: actor.id } });
-                notify(`Organizational responsibility enabled for blueprint v${pendingEnable.blueprintVersion}. No platform permissions or execution authority were granted.`);
+                notify(actor.type === 'actor-agent'
+                  ? `Agent identity enabled for blueprint v${pendingEnable.blueprintVersion} with profiles: ${pendingEnable.executionProfileIds.join(', ')}. Every task run still requires separate approval.`
+                  : `Organizational responsibility enabled for blueprint v${pendingEnable.blueprintVersion}. No platform permissions or approval authority were granted.`);
               } catch (failure) {
                 if (state.project?.id !== projectId || state.requestedProjectId !== projectId) return;
                 enableFeedback.textContent = failure.message;
@@ -2096,7 +2129,63 @@ function renderActorBindingPanel(node) {
               }
             };
             enableButton.addEventListener('click', () => void sendEnable());
+            profileChecks.forEach((checkbox) => checkbox.addEventListener('change', updateEnableAvailability));
             entry.append(enableButton, enableFeedback);
+          }
+          if (proposal.status === 'enabled' && actor.type === 'actor-agent' && !proposal.executionProfileIds?.length) {
+            if (state.projectAccess !== 'owner') {
+              entry.append(element('p', { className: 'edit-help', text: 'This legacy agent binding has no approved execution profiles. A project owner must configure its envelope before it can start agent runs.' }));
+            } else {
+              const pendingMatch = (candidate) => candidate?.projectId === projectId && candidate.actorId === proposal.actorId
+                && candidate.roleId === proposal.roleId && candidate.blueprintVersion === proposal.blueprintVersion;
+              let pendingEnvelope = pendingMatch(state.pendingAgentEnvelope) ? state.pendingAgentEnvelope : null;
+              const picker = element('fieldset', { className: 'actor-agent-profile-envelope' });
+              picker.append(element('legend', { text: 'Configure legacy agent profile envelope (choose up to 8)' }));
+              const pendingProfiles = new Set(pendingEnvelope?.executionProfileIds ?? []);
+              const checks = [];
+              for (const profile of executionProfiles) {
+                const checkbox = element('input', { attrs: { type: 'checkbox', value: profile.id,
+                  ...(pendingProfiles.has(profile.id) ? { checked: true } : {}) } });
+                checks.push(checkbox);
+                picker.append(element('label', {}, [checkbox, element('span', { text: `${profile.label} · ${profile.kind}` })]));
+              }
+              const button = element('button', { className: 'button ghost', text: pendingEnvelope ? 'Retry same envelope command' : 'Save agent profile envelope', attrs: { type: 'button' } });
+              const status = element('p', { className: 'field-error edit-error', attrs: { role: 'status', 'aria-live': 'polite' } });
+              const selectedIds = () => checks.filter((checkbox) => checkbox.checked).map((checkbox) => checkbox.value);
+              const updateAvailability = () => {
+                for (const checkbox of checks) checkbox.disabled = Boolean(pendingEnvelope)
+                  || (!checkbox.checked && selectedIds().length >= 8);
+                button.disabled = pendingEnvelope ? !pendingEnvelope.executionProfileIds?.length : selectedIds().length < 1;
+              };
+              updateAvailability();
+              const configure = async () => {
+                pendingEnvelope ??= { projectId, actorId: proposal.actorId, roleId: proposal.roleId,
+                  blueprintVersion: proposal.blueprintVersion, executionProfileIds: selectedIds(),
+                  expectedVersion: state.project.version, commandId: `actor-envelope:${crypto.randomUUID()}` };
+                state.pendingAgentEnvelope = pendingEnvelope;
+                updateAvailability();
+                button.disabled = true;
+                try {
+                  await api(`/api/v1/projects/${projectId}/actor-bindings/envelope`, { method: 'POST',
+                    body: JSON.stringify(command({ actorId: pendingEnvelope.actorId, roleId: pendingEnvelope.roleId,
+                      blueprintVersion: pendingEnvelope.blueprintVersion,
+                      executionProfileIds: pendingEnvelope.executionProfileIds }, pendingEnvelope.expectedVersion, pendingEnvelope.commandId)) });
+                  if (state.project?.id !== projectId || state.requestedProjectId !== projectId) return;
+                  state.pendingAgentEnvelope = null;
+                  await loadProject(projectId, { history: 'replace', route: { ...currentRoute(), view: 'map', selectedId: actor.id } });
+                } catch (failure) {
+                  if (state.project?.id !== projectId || state.requestedProjectId !== projectId) return;
+                  status.textContent = failure.message;
+                  if (failure.retryable || !failure.code) button.textContent = 'Retry same envelope command';
+                  else { state.pendingAgentEnvelope = null; button.hidden = true; }
+                  button.disabled = false;
+                }
+              };
+              button.addEventListener('click', () => void configure());
+              checks.forEach((checkbox) => checkbox.addEventListener('change', updateAvailability));
+              picker.append(element('p', { className: 'edit-help', text: 'The empty legacy binding remains unusable for agent runs until this owner-selected envelope is saved.' }));
+              entry.append(picker, button, status);
+            }
           }
           list.append(entry);
         }

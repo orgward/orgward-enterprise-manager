@@ -1110,7 +1110,8 @@ export class ExecutionService {
     const result = await this.store.createForProcessTask({
       tenantId: input.tenantId, projectId: input.projectId, principal: input.principal,
       authzGeneration: input.authzGeneration, planId: input.planId, revision: input.revision,
-      planInstanceId: input.planInstanceId, taskId: input.taskId, commandId: input.commandId, requestHash,
+      planInstanceId: input.planInstanceId, taskId: input.taskId, profileId: input.profileId,
+      commandId: input.commandId, requestHash,
       repositoryRef: repositoryBinding,
       buildRun: async ({ project, plan, task, processTaskRef, client }) => {
         let repositorySnapshot = null;

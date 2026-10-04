@@ -6761,6 +6761,38 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   `/tmp/orgward-tests-GQQ2SR/node-test.tap.log`. Frozen for root review; PR-14
   remains open.
 
+  Fifth bounded slice (drafted 2026-10-04; frozen for review): a project owner
+  now chooses up to eight configured execution profiles when enabling an exact
+  actor/role/blueprint agent binding. The approved profile set is persisted on
+  that binding and returned by the authorized binding projection. The task-run
+  persistence transaction checks the requested profile against that set before
+  creating a run or task runtime; out-of-envelope requests are denied. The
+  owner UI presents the profile choices and shows the persisted envelope. The
+  profile catalog response is read from its actual top-level `profiles` field.
+  Migration-created legacy enabled rows have an empty envelope and fail closed;
+  an owner-only, source-pinned, idempotent audited command can configure an
+  empty legacy agent binding after rechecking its linked blueprint actor/role,
+  active workload identity and saved membership/authz generations. The owner
+  UI exposes this one-time configuration action. Human binding retries retain
+  their same-command recovery path without requiring agent profile data.
+  Focused PostgreSQL fixtures now cover empty legacy denial, editor denial,
+  owner configuration, projection, out-of-envelope rejection and allowed
+  profiles. The execution metadata client reads the endpoint's actual
+  top-level profile array. A same-command human retry remains enabled without
+  profile fields. Legacy-envelope profile availability is now validated inside
+  the command apply path, so command replay returns its recorded result without
+  depending on current profile availability. The PG fixture keeps the envelope
+  populated through the earlier cancellation/success path and simulates an
+  empty legacy row immediately before the fail-closed/configuration checks.
+  Static `node --check` on all five changed JavaScript files and
+  `git diff --check` passed; the new migration's no-index whitespace check
+  returned no output (exit 1 because it is untracked). Focused behavior test
+  after Sol review (2026-10-04): `npm test --
+  tests/enterprise/server.test.mjs --test-name-pattern='saved manual flow routes'`
+  passed 1/1 with 0 failures and 0 skips; runner duration 4.83s. TAP:
+  `/tmp/orgward-tests-CAcy7m/node-test.tap.log`. Frozen for root review; PR-14
+  remains open.
+
 - [ ] PR-15 — Integrated portfolio round trip and extensibility (T-90–T-105,
   T-107–T-108, then T-106). Join enterprise truth, integrity and SDLC context;
   support multi-repository/legacy delivery, progressive promotion, incidents,

@@ -636,7 +636,7 @@ function validateActorBindingPayload(payload) {
 }
 
 function validateActorBindingEnablePayload(payload) {
-  const allowed = new Set(['actorId', 'roleId', 'blueprintVersion']);
+  const allowed = new Set(['actorId', 'roleId', 'blueprintVersion', 'executionProfileIds']);
   const unknown = Object.keys(payload).filter((field) => !allowed.has(field));
   if (unknown.length) throw apiFailure(400, 'INVALID_COMMAND', 'The actor binding enable command contains unknown fields.');
   for (const field of ['actorId', 'roleId']) {
@@ -647,7 +647,14 @@ function validateActorBindingEnablePayload(payload) {
   if (!Number.isInteger(payload.blueprintVersion) || payload.blueprintVersion < 1) {
     throw apiFailure(400, 'INVALID_ACTOR_BINDING', 'Provide the pinned blueprint version.');
   }
-  return { actorId: payload.actorId, roleId: payload.roleId, blueprintVersion: payload.blueprintVersion };
+  if (payload.executionProfileIds !== undefined
+    && (!Array.isArray(payload.executionProfileIds) || payload.executionProfileIds.length < 1 || payload.executionProfileIds.length > 8
+      || payload.executionProfileIds.some((id) => typeof id !== 'string' || !/^[a-z0-9][a-z0-9_-]{1,79}$/i.test(id))
+      || new Set(payload.executionProfileIds).size !== payload.executionProfileIds.length)) {
+    throw apiFailure(400, 'INVALID_ACTOR_BINDING', 'Choose one to eight unique execution profiles for the supervised agent identity.');
+  }
+  return { actorId: payload.actorId, roleId: payload.roleId, blueprintVersion: payload.blueprintVersion,
+    ...(payload.executionProfileIds !== undefined ? { executionProfileIds: payload.executionProfileIds } : {}) };
 }
 
 function projectEvent(project, { type, actor, commandId, correlationId, data }) {
@@ -1368,6 +1375,9 @@ export function createApp({
         const payload = validateActorBindingEnablePayload(body.payload);
         const tenantId = requestTenant(request);
         const actorPrincipal = requestActor(request);
+        const availableExecutionProfileIds = new Set((await executionService.capabilitiesForPrincipal({
+          tenantId, principal: actorPrincipal, authzGeneration: request.identity.authzGeneration,
+        })).map((profile) => profile.id));
         const command = {
           operation: 'project.enable-actor-binding',
           commandId: body.commandId,
@@ -1386,6 +1396,16 @@ export function createApp({
                 && relation.target === payload.roleId && relation.type === 'assigned-to');
             if (!blueprintActor || !['actor-human', 'actor-agent'].includes(blueprintActor.type) || !blueprintRole || blueprintRole.type !== 'role' || !linked) {
               throw apiFailure(409, 'BLUEPRINT_ACTOR_OR_ROLE_STALE', 'The actor or linked role no longer exists in the pinned blueprint version.');
+            }
+            const executionProfileIds = blueprintActor.type === 'actor-agent' ? payload.executionProfileIds : [];
+            if (blueprintActor.type === 'actor-agent' && !executionProfileIds?.length) {
+              throw apiFailure(400, 'AGENT_PROFILE_ENVELOPE_REQUIRED', 'Choose one or more allowed execution profiles for this owner-approved agent identity.');
+            }
+            if (executionProfileIds?.some((id) => !availableExecutionProfileIds.has(id))) {
+              throw apiFailure(409, 'AGENT_PROFILE_ENVELOPE_UNAVAILABLE', 'A selected execution profile is no longer available. Reload the profile list and choose current profiles.');
+            }
+            if (blueprintActor.type === 'actor-human' && payload.executionProfileIds) {
+              throw apiFailure(400, 'INVALID_ACTOR_BINDING', 'Execution profile envelopes apply only to supervised agent identities.');
             }
             const proposal = await client.query(`
               select b.target_principal, b.target_membership_generation, b.target_authz_generation,
@@ -1418,11 +1438,11 @@ export function createApp({
             }
             const enabled = await client.query(`
               update orgward.project_actor_binding_proposals
-              set status = 'enabled', enabled_by = $6, enabled_at = now()
+              set status = 'enabled', enabled_by = $6, enabled_at = now(), execution_profile_ids = $7::jsonb
               where tenant_id = $1 and project_id = $2 and blueprint_version = $3 and actor_id = $4 and role_id = $5
                 and status = 'proposed'
               returning enabled_at
-            `, [tenantId, project.id, payload.blueprintVersion, payload.actorId, payload.roleId, actorPrincipal]);
+            `, [tenantId, project.id, payload.blueprintVersion, payload.actorId, payload.roleId, actorPrincipal, JSON.stringify(executionProfileIds ?? [])]);
             if (!enabled.rowCount) throw apiFailure(409, 'ACTOR_BINDING_NOT_PROPOSED', 'Only a proposed binding can be enabled.');
             project.version += 1;
             project.updatedAt = new Date().toISOString();
@@ -1430,11 +1450,99 @@ export function createApp({
             project.events.push(projectEvent(project, {
               type: 'BlueprintActorBindingEnabled', actor: actorPrincipal,
               commandId: body.commandId, correlationId,
-              data: { blueprintVersion: blueprint.version, actorId: payload.actorId, roleId: payload.roleId, status: 'enabled', enabledAt: enabled.rows[0].enabled_at },
+              data: { blueprintVersion: blueprint.version, actorId: payload.actorId, roleId: payload.roleId, status: 'enabled',
+                ...(executionProfileIds?.length ? { executionProfileIds } : {}), enabledAt: enabled.rows[0].enabled_at },
             }));
           },
         };
         const result = await store.updateWithCommandForPrincipal(actorBindingEnableMatch[1], tenantId, command, actorPrincipal, {
+          requiredPrincipalRoles: ['workspace-write'], authzGeneration: request.identity.authzGeneration,
+          minimumProjectAccess: 'owner',
+        });
+        if (!result) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
+        return sendApi(response, 200, projectView(result.project), {
+          correlationId, event: result.project.events.at(-1), meta: { replayed: result.replayed },
+        });
+      }
+
+      const actorBindingEnvelopeMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/actor-bindings\/envelope$/);
+      if (actorBindingEnvelopeMatch && request.method === 'POST') {
+        requireWriteAccess(request);
+        if (!request.identity) throw apiFailure(403, 'AUTHENTICATION_REQUIRED', 'Verified workspace identity is required to configure an agent envelope.');
+        if (typeof store.persistence?.transaction !== 'function') throw apiFailure(503, 'ACTOR_BINDING_UNAVAILABLE', 'Agent envelopes require the PostgreSQL authorization registry.');
+        requirePrincipalStoreMethod(store, 'updateWithCommandForPrincipal');
+        const body = validateCommand(await readJson(request));
+        const payload = validateActorBindingEnablePayload(body.payload);
+        if (!payload.executionProfileIds?.length) throw apiFailure(400, 'AGENT_PROFILE_ENVELOPE_REQUIRED', 'Choose one or more allowed execution profiles.');
+        const tenantId = requestTenant(request);
+        const actorPrincipal = requestActor(request);
+        const availableExecutionProfileIds = new Set((await executionService.capabilitiesForPrincipal({
+          tenantId, principal: actorPrincipal, authzGeneration: request.identity.authzGeneration,
+        })).map((profile) => profile.id));
+        const command = {
+          operation: 'project.configure-agent-envelope',
+          commandId: body.commandId,
+          payloadHash: payloadHash({ schemaVersion: body.schemaVersion, expectedVersion: body.expectedVersion, payload }),
+          expectedVersion: body.expectedVersion,
+          async apply(project, client) {
+            if (payload.executionProfileIds.some((id) => !availableExecutionProfileIds.has(id))) {
+              throw apiFailure(409, 'AGENT_PROFILE_ENVELOPE_UNAVAILABLE', 'A selected execution profile is no longer available. Reload the profile list and choose current profiles.');
+            }
+            const blueprint = project.blueprintVersions?.find((candidate) => candidate.version === payload.blueprintVersion);
+            const objects = Object.values(blueprint?.areas ?? {}).flatMap((area) => area.items ?? []);
+            const actor = objects.find((object) => object.id === payload.actorId);
+            const role = objects.find((object) => object.id === payload.roleId);
+            const linked = actor && role && ((actor.assignedRoles ?? []).includes(role.id)
+              || (blueprint.relations ?? []).some((relation) => relation.source === actor.id
+                && relation.target === role.id && relation.type === 'assigned-to'));
+            if (!blueprint || actor?.type !== 'actor-agent' || role?.type !== 'role' || !linked) {
+              throw apiFailure(409, 'BLUEPRINT_ACTOR_OR_ROLE_STALE', 'The exact pinned blueprint no longer contains this linked agent actor and role.');
+            }
+            const binding = await client.query(`
+              select b.target_principal, b.target_membership_generation, b.target_authz_generation,
+                b.status, b.execution_profile_ids, identity.actor_type, identity.status as identity_status,
+                identity.authz_generation, membership.access, membership.generation, membership.revoked_at
+              from orgward.project_actor_binding_proposals b
+              join orgward.oidc_principals identity
+                on identity.tenant_id=b.tenant_id and identity.principal=b.target_principal
+              join orgward.project_memberships membership
+                on membership.tenant_id=b.tenant_id and membership.project_id=b.project_id and membership.principal=b.target_principal
+              where b.tenant_id=$1 and b.project_id=$2 and b.blueprint_version=$3 and b.actor_id=$4 and b.role_id=$5
+              for update of b, identity, membership
+            `, [tenantId, project.id, payload.blueprintVersion, payload.actorId, payload.roleId]);
+            if (!binding.rowCount) throw apiFailure(404, 'ACTOR_BINDING_PROPOSAL_NOT_FOUND', 'The exact actor binding was not found.');
+            const row = binding.rows[0];
+            if (row.status !== 'enabled' || row.execution_profile_ids?.length) {
+              throw apiFailure(409, 'AGENT_PROFILE_ENVELOPE_ALREADY_SET', 'Only an enabled legacy binding with no profile envelope can be configured.');
+            }
+            if (row.actor_type !== 'workload' || row.identity_status !== 'active' || row.revoked_at !== null
+              || !['owner', 'editor'].includes(row.access)) {
+              throw apiFailure(409, 'ACTOR_BINDING_TARGET_INELIGIBLE', 'The bound workload identity must remain active and an owner or editor in this project.');
+            }
+            if (Number(row.target_authz_generation) !== Number(row.authz_generation)
+              || Number(row.target_membership_generation) !== Number(row.generation)) {
+              throw apiFailure(409, 'ACTOR_BINDING_TARGET_GENERATION_STALE', 'The bound identity or membership changed after approval; review its binding before setting an envelope.');
+            }
+            const updated = await client.query(`
+              update orgward.project_actor_binding_proposals
+              set execution_profile_ids=$6::jsonb
+              where tenant_id=$1 and project_id=$2 and blueprint_version=$3 and actor_id=$4 and role_id=$5
+                and status='enabled' and execution_profile_ids='[]'::jsonb
+              returning enabled_at
+            `, [tenantId, project.id, payload.blueprintVersion, payload.actorId, payload.roleId, JSON.stringify(payload.executionProfileIds)]);
+            if (!updated.rowCount) throw apiFailure(409, 'AGENT_PROFILE_ENVELOPE_ALREADY_SET', 'The legacy binding changed before its envelope could be saved.');
+            project.version += 1;
+            project.updatedAt = new Date().toISOString();
+            project.updatedBy = actorPrincipal;
+            project.events.push(projectEvent(project, {
+              type: 'BlueprintAgentEnvelopeConfigured', actor: actorPrincipal,
+              commandId: body.commandId, correlationId,
+              data: { blueprintId: blueprint.id, blueprintVersion: blueprint.version, actorId: actor.id, roleId: role.id,
+                executionProfileIds: payload.executionProfileIds },
+            }));
+          },
+        };
+        const result = await store.updateWithCommandForPrincipal(actorBindingEnvelopeMatch[1], tenantId, command, actorPrincipal, {
           requiredPrincipalRoles: ['workspace-write'], authzGeneration: request.identity.authzGeneration,
           minimumProjectAccess: 'owner',
         });

@@ -1653,7 +1653,7 @@ export class PostgresProjectStore extends PostgresDocumentStore {
       if (!selected.rowCount) return null;
       const project = verifyAggregateRow(selected.rows[0]);
       const result = await client.query(`
-        select b.blueprint_version, b.actor_id, b.role_id, b.target_principal,
+        select b.blueprint_version, b.actor_id, b.role_id, b.target_principal, b.execution_profile_ids,
           b.target_membership_generation, b.target_authz_generation,
           b.status, b.proposed_by, b.proposed_at, b.enabled_at,
           target.display_name as target_name, target.actor_type as target_type, target.status as identity_status,
@@ -1695,6 +1695,7 @@ export class PostgresProjectStore extends PostgresDocumentStore {
           actorName: actor?.name ?? 'Unknown blueprint actor',
           roleId: row.role_id,
           roleName: role?.name ?? 'Unknown blueprint role',
+          executionProfileIds: row.execution_profile_ids ?? [],
           targetName: row.target_name,
           ...(canReviewExactAssignments ? { targetPrincipal: row.target_principal } : {}),
           targetMembershipGeneration: Number(row.target_membership_generation),
@@ -3049,7 +3050,7 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
 
   async createForProcessTask({
     tenantId, projectId, principal, authzGeneration, planId, revision, planInstanceId = null,
-    taskId, commandId, requestHash, repositoryRef = null, buildRun,
+    taskId, profileId, commandId, requestHash, repositoryRef = null, buildRun,
   }) {
     if (!tenantId || !projectId || !principal || typeof buildRun !== 'function') throw projectAccessDenied();
     const operation = 'execution.process-task.request';
@@ -3194,7 +3195,7 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
           throw conflict('The task assignment does not match an actor and role in its pinned blueprint.', null, 'PROCESS_TASK_ASSIGNMENT_INVALID');
         }
         const binding = await client.query(`
-          select b.status, b.target_principal, b.target_membership_generation, b.target_authz_generation,
+          select b.status, b.execution_profile_ids, b.target_principal, b.target_membership_generation, b.target_authz_generation,
             identity.actor_type, identity.status as identity_status,
             identity.authz_generation as current_authz_generation
           from orgward.project_actor_binding_proposals b
@@ -3208,6 +3209,9 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
           throw conflict('The task requires an enabled actor binding for its pinned blueprint version.', null, 'PROCESS_TASK_ACTOR_BINDING_UNAVAILABLE');
         }
         const target = binding.rows[0];
+        if (!Array.isArray(target.execution_profile_ids) || !target.execution_profile_ids.includes(profileId)) {
+          throw conflict('This agent identity is approved only for its owner-selected execution profiles. Choose a profile shown on its binding.', null, 'PROCESS_TASK_PROFILE_OUTSIDE_ENVELOPE');
+        }
         const membership = await client.query(`
           select access, generation, revoked_at
           from orgward.project_memberships
