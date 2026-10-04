@@ -7518,6 +7518,17 @@ passed for `public/platform.js`, `public/platform-sharing.mjs`,
 `public/project-portfolio.mjs`, and `tests/enterprise/view.test.mjs`;
 `git diff --check` passed. No full check run; PR-15 remains open and active.
 
+PR-15 stale membership rejection regression (2026-10-04): the deferred
+owner-A→reader-B transition now also rejects owner A's members request after
+reader B is selected. Coverage confirms the stale rejection does not publish an
+error, loading state, members or owner controls and cannot change B's selected
+ID/URL. The prior delayed-success assertion remains. Focused deep-link,
+selection-race and PostgreSQL membership-list cases passed 3/3 (0 failures,
+0 skips; 2.54s; TAP log: `/tmp/orgward-tests-G98dRC/node-test.tap.log`).
+`node --check` passed for `public/platform.js`, `public/platform-sharing.mjs`,
+`public/project-portfolio.mjs`, and `tests/enterprise/view.test.mjs`;
+`git diff --check` passed. No full check run; PR-15 remains open and active.
+
 PR-15 restore draft from a saved design version (2026-10-04): when an owner or
 editor selects a historical saved main version, the branch panel offers an
 explicit “Restore this saved version as a draft” action. The draft copies the

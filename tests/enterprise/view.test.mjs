@@ -219,8 +219,10 @@ test('platform access selection ignores a stale members response after a newer n
   const projects = [
     { id: 'workspace-owner-a', workspaceAccess: 'owner' },
     { id: 'workspace-editor-b', workspaceAccess: 'editor' },
+    { id: 'workspace-reader-b', workspaceAccess: 'reader' },
   ];
   let resolveOwnerMembers;
+  let rejectOwnerMembers;
   let currentUrl = '';
   let rendered = null;
   const renderSnapshots = [];
@@ -228,7 +230,7 @@ test('platform access selection ignores a stale members response after a newer n
   const controller = createProjectAccessController({ getProjects: () => projects,
     fetchMembers: (projectId) => {
       fetches.push(projectId);
-      return new Promise((resolve) => { resolveOwnerMembers = resolve; });
+      return new Promise((resolve, reject) => { resolveOwnerMembers = resolve; rejectOwnerMembers = reject; });
     },
     onState: (selection) => {
       rendered = { ...selection, showMembershipControls: selection.status === 'owner' && selection.members.length > 0 };
@@ -261,6 +263,31 @@ test('platform access selection ignores a stale members response after a newer n
   assert.deepEqual(rendered.members, []);
   assert.equal(rendered.loading, false);
   assert.equal(rendered.error, null);
+  assert.equal(rendered.showMembershipControls, false);
+
+  const ownerPendingFailure = controller('workspace-owner-a', { updateUrl: true,
+    onUrlUpdate: (url) => { currentUrl = url; } });
+  const readerSelected = await controller('workspace-reader-b', { updateUrl: true,
+    onUrlUpdate: (url) => { currentUrl = url; } });
+  assert.equal(readerSelected.status, 'denied');
+  assert.equal(currentUrl, '/platform.html?projectId=workspace-reader-b#enterprise');
+  assert.equal(rendered.projectId, 'workspace-reader-b');
+  assert.deepEqual(rendered.members, []);
+  assert.equal(rendered.loading, false);
+  assert.equal(rendered.error, null);
+  assert.equal(rendered.showMembershipControls, false);
+  const readerState = rendered;
+  const readerRenderCount = renderSnapshots.length;
+  rejectOwnerMembers(new Error('stale owner A request failed'));
+  const staleOwnerFailure = await ownerPendingFailure;
+  assert.equal(staleOwnerFailure.stale, true);
+  assert.equal(renderSnapshots.length, readerRenderCount, 'a stale error does not render after the newer selection');
+  assert.equal(rendered, readerState);
+  assert.equal(currentUrl, '/platform.html?projectId=workspace-reader-b#enterprise');
+  assert.equal(rendered.projectId, 'workspace-reader-b');
+  assert.deepEqual(rendered.members, []);
+  assert.equal(rendered.loading, false);
+  assert.equal(rendered.error, null, 'the stale owner error never replaces the newer state');
   assert.equal(rendered.showMembershipControls, false);
 });
 
