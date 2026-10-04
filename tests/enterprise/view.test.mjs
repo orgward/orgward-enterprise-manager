@@ -168,6 +168,22 @@ test('portfolio owner access action opens management for the exact workspace', (
   }
 });
 
+test('portfolio starts a governed change from the exact writable workspace', () => {
+  const portfolio = renderProjectPortfolio([
+    { id: 'project-owner/workspace', name: 'Owner design', blueprintVersion: 4, workspaceAccess: 'owner' },
+    { id: 'project-editor', name: 'Editor design', blueprintVersion: 2, workspaceAccess: 'editor' },
+    { id: 'project-reader', name: 'Reader design', blueprintVersion: 5, workspaceAccess: 'reader' },
+    { id: 'project-no-design', name: 'Unstarted design', workspaceAccess: 'owner' },
+  ], { el, onOpen() {}, onExport() {}, onImport() {} });
+  const cards = portfolio.querySelectorAll('[data-project-id]');
+  const startLink = (id) => cards.find((card) => card.attrs['data-project-id'] === id)
+    .querySelectorAll('a').find((link) => link.text === 'Start governed change');
+  assert.equal(startLink('project-owner/workspace').attrs.href, '/sdlc.html?projectId=project-owner%2Fworkspace');
+  assert.equal(startLink('project-editor').attrs.href, '/sdlc.html?projectId=project-editor');
+  assert.equal(startLink('project-reader'), undefined, 'readers cannot start a writer-authorized case from the portfolio');
+  assert.equal(startLink('project-no-design'), undefined, 'a saved source blueprint is required before starting a case');
+});
+
 test('platform access management deep link selects the requested workspace', async () => {
   const projects = [
     { id: 'workspace-owner-first', workspaceAccess: 'owner' },

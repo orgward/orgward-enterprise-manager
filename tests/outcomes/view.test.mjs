@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { renderOutcomeInbox } from '../../public/outcomes.mjs';
-import { openInitialCase } from '../../public/sdlc-routing.mjs';
+import { openInitialCase, sourceObjectPreview } from '../../public/sdlc-routing.mjs';
 
 class NodeFixture {
   constructor(tagName, options = {}) {
@@ -167,6 +167,33 @@ test('change-case deep link selects its exact saved case on reload and does not 
   assert.deepEqual(unavailable, { state: 'unavailable', caseId: 'change-case-not-owned' });
   assert.deepEqual(selected, ['welcome'], 'an unavailable linked case does not select a different case');
   assert.match(notices.at(-1), /unavailable to your current identity/i);
+});
+
+test('SDLC project deep link previews the exact workspace saved source', async () => {
+  const selectedProject = { id: 'project-selected', name: 'Selected workspace', version: 8,
+    latestBlueprint: { id: 'blueprint-selected', version: 5, areas: {} } };
+  const otherProject = { id: 'project-first', name: 'First workspace' };
+  const selectedObject = { id: 'object-selected', name: 'Selected information', type: 'information', detail: 'Current customer record.' };
+  let welcomeOptions;
+  const openedCases = [];
+  const route = await openInitialCase({ search: '?projectId=project-selected', cases: [{ id: 'case-existing' }],
+    projects: [otherProject, selectedProject], loadCase: async (id) => openedCases.push(id),
+    showWelcome: (options) => { welcomeOptions = options; }, notify() {} });
+  assert.deepEqual(route, { state: 'welcome', projectId: 'project-selected' });
+  assert.deepEqual(welcomeOptions, { requestedProjectId: 'project-selected', exactProjectRequested: true });
+  assert.deepEqual(openedCases, [], 'a project deep link opens the case form without selecting or creating a case');
+  assert.equal(sourceObjectPreview(selectedProject, selectedObject),
+    'Current saved source · Selected information (information) · project v8 · blueprint blueprint-selected v5. Current customer record.');
+
+  let unavailableOptions;
+  const notices = [];
+  const unavailable = await openInitialCase({ search: '?projectId=not-visible', cases: [{ id: 'case-existing' }],
+    projects: [otherProject, selectedProject], loadCase: async (id) => openedCases.push(id),
+    showWelcome: (options) => { unavailableOptions = options; }, notify: (message) => notices.push(message) });
+  assert.deepEqual(unavailable, { state: 'project-unavailable', projectId: 'not-visible' });
+  assert.deepEqual(unavailableOptions, { requestedProjectId: null, exactProjectRequested: true },
+    'an unavailable deep link does not silently default to the first workspace');
+  assert.match(notices[0], /unavailable to your current identity/);
 });
 
 test('historical learning stays visible but cannot be owner-reviewed against a newer observation', async () => {

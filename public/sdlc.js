@@ -1,7 +1,7 @@
 import { caseUiModel, createSourceSelectionGuard, eligibleActorBindings } from './sdlc-view.mjs';
 import { encodeExecutionRoute, encodeStudioRoute } from './shared-interactions.mjs';
 import { clearPendingSoftwareStart, createSoftwareStartFlightGuard, pendingSoftwareStartKey } from './software-runtime-start.mjs';
-import { openInitialCase } from './sdlc-routing.mjs';
+import { openInitialCase, sourceObjectPreview } from './sdlc-routing.mjs';
 
 const state = { meta: null, projects: [], sourceProject: null, activeSourceProject: null, sourceSelectionGuard: createSourceSelectionGuard(), cases: [], changeCase: null, softwareDeliveryPlans: [], actorBindings: [], tab: 'overview', authenticated: false, principal: null, tenantId: '', sessionId: '' };
 const softwareStartFlights = createSoftwareStartFlightGuard();
@@ -57,7 +57,7 @@ function renderCaseList() {
   }
 }
 
-function showWelcome() {
+function showWelcome({ requestedProjectId = null, exactProjectRequested = false } = {}) {
   caseSelectionId += 1;
   syncCaseRoute();
   state.changeCase = null; state.tab = 'overview';
@@ -65,12 +65,14 @@ function showWelcome() {
   const select = document.querySelector('#mutation-select');
   for (const [value, entry] of Object.entries(state.meta.mutations)) select.append(el('option', { text: entry.label, attrs: { value } }));
   const projectSelect = document.querySelector('#case-project');
+  if (exactProjectRequested) projectSelect.append(el('option', { text: 'Choose an available workspace…', attrs: { value: '' } }));
   for (const project of state.projects) projectSelect.append(el('option', { text: project.name, attrs: { value: project.id } }));
+  if (exactProjectRequested) projectSelect.value = state.projects.some((project) => project.id === requestedProjectId) ? requestedProjectId : '';
   if (!state.projects.length) document.querySelector('#case-form button[type="submit"]').disabled = true;
   projectSelect.addEventListener('change', () => loadSourceProject(projectSelect.value));
   select.addEventListener('change', renderMutationExpectation);
   document.querySelector('#case-form').addEventListener('submit', createCase);
-  if (state.projects.length) loadSourceProject(projectSelect.value);
+  if (projectSelect.value) loadSourceProject(projectSelect.value);
   renderMutationExpectation(); renderCaseList();
 }
 
@@ -81,7 +83,7 @@ async function loadSourceProject(projectId) {
   const submitButton = document.querySelector('#case-form button[type="submit"]');
   submitButton.disabled = true;
   preview.textContent = 'Loading the selected project’s current saved design…';
-  objectSelect.replaceChildren(); state.sourceProject = null;
+  objectSelect.replaceChildren(el('option', { text: 'Choose a saved design object…', attrs: { value: '' } })); state.sourceProject = null;
   try {
     const projectResult = await api(`/api/v1/projects/${encodeURIComponent(projectId)}`);
     const project = projectResult.data;
@@ -90,11 +92,12 @@ async function loadSourceProject(projectId) {
     const objects = Object.values(project.latestBlueprint?.areas ?? {}).flatMap((area) => area.items ?? []);
     for (const object of objects) objectSelect.append(el('option', { text: `${object.name} · ${object.type}`, attrs: { value: object.id } }));
     if (!objects.length) {
-      objectSelect.append(el('option', { text: 'No saved blueprint objects', attrs: { value: '' } }));
+      objectSelect.replaceChildren(el('option', { text: 'No saved blueprint objects', attrs: { value: '' } }));
       submitButton.disabled = true;
       preview.textContent = 'This project has no saved blueprint objects yet.';
     } else {
-      submitButton.disabled = false;
+      objectSelect.value = '';
+      submitButton.disabled = true;
       renderSourcePreview();
     }
     objectSelect.onchange = renderSourcePreview;
@@ -109,9 +112,8 @@ function renderSourcePreview() {
   const project = state.sourceProject;
   const selected = document.querySelector('#case-source-object').value;
   const item = Object.values(project?.latestBlueprint?.areas ?? {}).flatMap((area) => area.items ?? []).find((entry) => entry.id === selected);
-  document.querySelector('#source-preview').textContent = item
-    ? `Current saved source · ${item.name} (${item.type}) · project v${project.version} · blueprint ${project.latestBlueprint.id} v${project.latestBlueprint.version}. ${item.detail}`
-    : 'Select a project object from its current saved blueprint.';
+  document.querySelector('#source-preview').textContent = sourceObjectPreview(project, item);
+  document.querySelector('#case-form button[type="submit"]').disabled = !item;
 }
 
 function renderMutationExpectation() {
@@ -148,7 +150,8 @@ async function createCase(event) {
     notify(error.message);
     form.elements.projectId.disabled = false;
     form.elements.sourceObjectId.disabled = false;
-    button.disabled = !(state.sourceProject?.id === submittedProjectId && form.elements.projectId.value === submittedProjectId);
+    button.disabled = !(state.sourceProject?.id === submittedProjectId && form.elements.projectId.value === submittedProjectId
+      && Boolean(form.elements.sourceObjectId.value));
   }
 }
 
@@ -901,5 +904,5 @@ try {
   state.meta = meta; state.projects = projectResult.data; state.authenticated = session.authenticated; state.principal = session.principal ?? null;
   state.tenantId = session.tenantId ?? session.tenant ?? ''; state.sessionId = session.sessionId ?? '';
   await refreshCases();
-  await openInitialCase({ search: window.location.search, cases: state.cases, loadCase, showWelcome, notify });
+  await openInitialCase({ search: window.location.search, cases: state.cases, projects: state.projects, loadCase, showWelcome, notify });
 } catch (error) { notify(error.message); }

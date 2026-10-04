@@ -172,6 +172,10 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
         : `Active governed changes: ${facts.changeCases}` }));
       if (facts.latestChangeCaseId) card.append(el('a', { className: 'button ghost', text: `Open governed change: ${facts.latestChangeCaseTitle}`,
         attrs: { href: `/sdlc.html?case=${encodeURIComponent(facts.latestChangeCaseId)}` } }));
+      if (facts.hasBlueprint && ['owner', 'editor'].includes(project.workspaceAccess)) {
+        card.append(el('a', { className: 'button ghost', text: 'Start governed change',
+          attrs: { href: `/sdlc.html?projectId=${encodeURIComponent(project.id)}` } }));
+      }
       const integrityText = facts.integrityProjectionIncomplete ? 'Integrity report details unavailable'
         : facts.integrityStatus === 'NOT_RUN' ? 'Integrity: not yet checked'
           : facts.integrityStatus === 'UNKNOWN' ? 'Integrity status unavailable'

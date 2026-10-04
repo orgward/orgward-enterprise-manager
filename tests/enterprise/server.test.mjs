@@ -215,6 +215,50 @@ test('project membership changes persist and update the recipient portfolio', as
   assert.equal(roster.data.some((entry) => entry.principal === member), false, 'the refreshed owner roster no longer contains the revoked member');
 });
 
+test('portfolio governed change handoff persists a current-source-bound case', async (t) => {
+  const postgres = await startPostgres();
+  const root = await mkdtemp(path.join(tmpdir(), 'orgward-enterprise-governed-handoff-'));
+  const instance = await startApp(postgres, root);
+  t.after(async () => { await closeApp(instance); await postgres.close(); await rm(root, { recursive: true, force: true }); });
+  for (const identity of identities.values()) {
+    await postgres.query(`insert into orgward.oidc_principals
+      (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+    [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  }
+  const selected = await seedProject(postgres, 'Selected portfolio design');
+  const unrelated = await seedProject(postgres, 'Other portfolio design');
+  const blueprint = selected.blueprintVersions.at(-1);
+  const source = Object.values(blueprint.areas).flatMap((area) => area.items).find((item) => item.type === 'information');
+  assert.ok(source);
+  const selection = { mode: 'golden', projectId: selected.id, sourceObjectId: source.id,
+    expectedProjectVersion: selected.version, expectedBlueprintId: blueprint.id,
+    expectedBlueprintVersion: blueprint.version,
+    rawIntent: 'Review the selected workspace design change through its governed lifecycle.' };
+  await request(instance.base, 'reader', '/api/sdlc/cases', { method: 'POST', body: selection }, 403);
+  assert.equal((await request(instance.base, 'owner', '/api/sdlc/cases')).cases.length, 0,
+    'opening the workspace deep link does not create a case by itself');
+
+  const created = await request(instance.base, 'editor', '/api/sdlc/cases', { method: 'POST', body: selection }, 201);
+  assert.equal(created.projectId, selected.id);
+  assert.equal(created.sourceBinding.projectId, selected.id);
+  assert.equal(created.sourceBinding.blueprintId, blueprint.id);
+  assert.equal(created.sourceBinding.blueprintVersion, blueprint.version);
+  assert.equal(created.sourceBinding.snapshot.id, source.id);
+  assert.equal(created.sourceBinding.snapshot.name, source.name);
+  assert.equal(created.sourceBindingIntegrity.valid, true);
+
+  const reRead = await request(instance.base, 'editor', `/api/sdlc/cases/${created.id}`);
+  assert.equal(reRead.sourceBinding.projectId, selected.id);
+  assert.equal(reRead.sourceBinding.snapshot.id, source.id);
+  const portfolio = await request(instance.base, 'owner', '/api/v1/projects');
+  const selectedCard = portfolio.data.find((entry) => entry.id === selected.id);
+  const unrelatedCard = portfolio.data.find((entry) => entry.id === unrelated.id);
+  assert.equal(selectedCard.activeChangeCaseCount, 1);
+  assert.equal(selectedCard.latestActiveChangeCaseId, created.id);
+  assert.equal(unrelatedCard.activeChangeCaseCount, 0);
+  assert.equal(unrelatedCard.latestActiveChangeCaseId, null);
+});
+
 function enterpriseRoute(projectId, query = {}) {
   const params = new URLSearchParams(query);
   return `/api/v1/projects/${projectId}/enterprise${params.size ? `?${params}` : ''}`;

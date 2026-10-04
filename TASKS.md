@@ -7586,3 +7586,24 @@ log: `/tmp/orgward-tests-5iRy9l/node-test.tap.log`). `node --check` passed for
 `public/platform.js`, `public/platform-sharing.mjs`,
 `tests/enterprise/view.test.mjs`, and `tests/enterprise/server.test.mjs`;
 `git diff --check` passed. No full check run; PR-15 remains open and active.
+
+PR-15 portfolio-to-SDLC governed-change handoff (2026-10-04): workspace cards
+with a saved blueprint expose “Start governed change” only to owners and editors;
+the URL carries the exact project ID. SDLC reads that request against the
+authenticated project list and opens the existing source-selection form for that
+workspace, loading its current saved objects and source preview without opening
+or creating a case. The source selector begins with a required “Choose a saved
+design object…” option, and submission stays disabled until an object is chosen.
+An unavailable project link leaves the selector empty and shows an explanatory
+message instead of falling back to another workspace. The existing submit path
+uses the server's project/version/blueprint/object source pin and writer
+authorization.
+PostgreSQL acceptance verifies reader denial, editor creation, exact saved source
+pin and re-read, and that only the selected workspace's portfolio projection
+shows the new active case. Requested handoff/routing/persistence cases passed
+3/3 (0 failures, 0 skips; 2.25s; TAP log:
+`/tmp/orgward-tests-5OU0rG/node-test.tap.log`). `node --check` passed for
+`public/project-portfolio.mjs`, `public/sdlc-routing.mjs`, `public/sdlc.js`,
+`tests/enterprise/view.test.mjs`, `tests/outcomes/view.test.mjs`, and
+`tests/enterprise/server.test.mjs`; `git diff --check` passed. No full check run;
+PR-15 remains open and active.
