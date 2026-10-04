@@ -6745,6 +6745,22 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   `/tmp/orgward-pr14-stewardship-final-bMfYIM.tap.log`. Frozen for root review;
   PR-14 remains open.
 
+  Fourth bounded slice (drafted 2026-10-04; frozen for review): enabling an
+  actor-to-role identity binding now requires project-owner access in the
+  persisted command path. The binding panel explains that owner enablement is
+  required before a supervised agent run can use the identity, and editors see
+  the requirement without an enable action. The manual agent-flow PostgreSQL
+  fixture now checks that an editor cannot enable the workload identity before
+  the owner does. The enabled binding remains scoped to the pinned blueprint
+  version and grants no general platform permissions. Static `node --check`
+  checks for the changed JavaScript files and `git diff --check` passed. Focused
+  verification after root/Sol review (2026-10-04):
+  `npm test -- tests/enterprise/server.test.mjs
+  --test-name-pattern='saved manual flow routes'` passed 1/1 with 0 failures
+  and 0 skips; runner duration 4.76s. TAP:
+  `/tmp/orgward-tests-GQQ2SR/node-test.tap.log`. Frozen for root review; PR-14
+  remains open.
+
 - [ ] PR-15 — Integrated portfolio round trip and extensibility (T-90–T-105,
   T-107–T-108, then T-106). Join enterprise truth, integrity and SDLC context;
   support multi-repository/legacy delivery, progressive promotion, incidents,

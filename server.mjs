@@ -1436,6 +1436,7 @@ export function createApp({
         };
         const result = await store.updateWithCommandForPrincipal(actorBindingEnableMatch[1], tenantId, command, actorPrincipal, {
           requiredPrincipalRoles: ['workspace-write'], authzGeneration: request.identity.authzGeneration,
+          minimumProjectAccess: 'owner',
         });
         if (!result) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
         return sendApi(response, 200, projectView(result.project), {

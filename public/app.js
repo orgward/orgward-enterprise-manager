@@ -1960,7 +1960,7 @@ function renderActorBindingPanel(node) {
   const expectedType = actor.type === 'actor-human' ? 'human' : 'workload';
   const section = element('section', { className: 'actor-binding-panel', attrs: { 'aria-labelledby': `actor-binding-heading-${node.id}` } });
   section.append(element('h4', { text: 'Propose identity binding', attrs: { id: `actor-binding-heading-${node.id}` } }));
-  section.append(element('p', { className: 'edit-help', text: 'Bindings start proposed and are pinned to a blueprint version. Enabled confirms organizational responsibility only; neither status grants platform access, permissions, approval authority, tool dispatch, or execution authority. New blueprint versions do not inherit a proposal.' }));
+  section.append(element('p', { className: 'edit-help', text: 'Bindings start proposed and are pinned to a blueprint version. A project owner must enable a proposal before the assigned identity can take part in supervised agent runs. This confirms the actor and role only; it does not grant platform access, permissions, approval authority, or tool dispatch. New blueprint versions do not inherit a proposal.' }));
   const message = element('p', { className: 'field-error edit-error', attrs: { role: 'status', 'aria-live': 'polite' } });
   message.textContent = 'Loading authorized workspace roster…';
   section.append(message);
@@ -2057,6 +2057,11 @@ function renderActorBindingPanel(node) {
           const entry = element('li');
           entry.append(element('span', { text: `${proposal.roleName} → ${proposal.targetName} (${proposal.status === 'enabled' ? 'enabled organizational responsibility' : 'proposed'}; ${eligibility.map((value) => value.replaceAll('_', ' ')).join(', ')}). ${stateLabel}` }));
           if (proposal.status === 'proposed' && !stale && eligibility.length === 1 && eligibility[0] === 'eligible') {
+            if (state.projectAccess !== 'owner') {
+              entry.append(element('p', { className: 'edit-help', text: 'A project owner must enable this identity binding before it can be used by supervised agent runs.' }));
+              list.append(entry);
+              continue;
+            }
             const pendingMatch = (candidate) => candidate?.projectId === projectId && candidate.actorId === proposal.actorId
               && candidate.roleId === proposal.roleId && candidate.blueprintVersion === proposal.blueprintVersion;
             let pendingEnable = pendingMatch(state.pendingActorBindingEnable) ? state.pendingActorBindingEnable : null;

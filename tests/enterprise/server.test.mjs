@@ -1095,6 +1095,13 @@ test('saved manual flow routes audited human choices through a governed local ag
     projectRead = await request(instance.base, 'owner', bindingRoute, { method: 'POST', body: {
       schemaVersion: '1.0', commandId: `manual-agent-bind-${suffix}`, expectedVersion: projectRead.data.version, payload,
     } });
+    if (actorId === 'actor-design-assistant') {
+      const editorEnable = await request(instance.base, 'editor', `${bindingRoute}/enable`, { method: 'POST', body: {
+        schemaVersion: '1.0', commandId: `manual-agent-editor-enable-${suffix}`, expectedVersion: projectRead.data.version,
+        payload: { actorId, roleId, blueprintVersion: payload.blueprintVersion },
+      } }, 403);
+      assert.equal(editorEnable.error.code, 'ACTION_FORBIDDEN', 'editors cannot enable a supervised agent identity');
+    }
     projectRead = await request(instance.base, 'owner', `${bindingRoute}/enable`, { method: 'POST', body: {
       schemaVersion: '1.0', commandId: `manual-agent-enable-${suffix}`, expectedVersion: projectRead.data.version,
       payload: { actorId, roleId, blueprintVersion: payload.blueprintVersion },
