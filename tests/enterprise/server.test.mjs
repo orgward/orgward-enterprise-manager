@@ -1055,7 +1055,7 @@ test('saved manual flow routes audited human choices through a governed local ag
   const getProject = (subject = 'owner') => request(instance.base, subject, `/api/v1/projects/${project.id}`);
   let projectRead = await getProject();
   const flowView = await currentView(instance.base, 'owner', project.id, { selectedId: 'process-deliver' });
-  const decisionTable = { schemaVersion: '1.0', hitPolicy: 'UNIQUE', defaultOutcome: null,
+  const decisionTable = { schemaVersion: '1.0', hitPolicy: 'UNIQUE', decisionMode: 'ENFORCED', defaultOutcome: null,
     inputs: [{ informationId: 'information-customer-signal', valueType: 'number' }], rules: [
       { id: 'route-human', conditions: [{ informationId: 'information-customer-signal', operator: 'eq', value: 0 }], outcome: 'HUMAN' },
       { id: 'route-agent', conditions: [{ informationId: 'information-customer-signal', operator: 'eq', value: 1 }], outcome: 'AGENT' },
@@ -1163,6 +1163,9 @@ test('saved manual flow routes audited human choices through a governed local ag
     await startTask('gate', instanceId, `${suffix}-gate`);
     const decisionChoice = { outcome: gateOutcome, observations: [{ informationId: 'information-customer-signal', value: gateOutcome === 'AGENT' ? 1 : 0 }],
       reason: `Human owner selects ${gateOutcome} for this instance.` };
+    const conflictingChoice = { ...decisionChoice, outcome: gateOutcome === 'AGENT' ? 'HUMAN' : 'AGENT' };
+    const blocked = await completeTask('gate', instanceId, `${suffix}-gate-policy-blocked`, { decisionChoice: conflictingChoice }, 409);
+    assert.equal(blocked.error.code, 'PROCESS_DECISION_POLICY_BLOCKED');
     await completeTask('gate', instanceId, `${suffix}-gate`, { decisionChoice });
     return instanceId;
   };

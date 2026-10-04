@@ -73,8 +73,13 @@ export function normalizeHumanDecisionChoice(task, choice, result) {
     seen.add(input.informationId); return { informationId: input.informationId, value: entry.value };
   }).sort((a, b) => a.informationId.localeCompare(b.informationId));
   const byId = new Map(ref.decisionInputs.map((input) => [input.informationId, { id: input.informationId, type: 'information' }]));
+  const advisory = evaluateDecisionTable(ref.decisionTable, observations, byId);
+  if (ref.decisionTable.decisionMode === 'ENFORCED'
+    && (advisory.status !== 'RESOLVED' || advisory.outcome !== choice.outcome)) {
+    fail('The recorded outcome must match a resolved outcome from this enforced decision table.', 'PROCESS_DECISION_POLICY_BLOCKED', 409);
+  }
   const core = { decisionId: ref.decisionId, decisionHash: ref.decisionHash, outcome: choice.outcome,
-    observations, reason: choice.reason.trim(), advisory: evaluateDecisionTable(ref.decisionTable, observations, byId), meaning: 'HUMAN_REPORTED_CHOICE' };
+    observations, reason: choice.reason.trim(), advisory, meaning: 'HUMAN_REPORTED_CHOICE' };
   return { ...core, choiceHash: digest(core) };
 }
 export function projectManualFlowActivation(plan, outcomes = new Map(), { planInstanceId = null, control = null } = {}) {

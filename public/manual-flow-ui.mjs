@@ -67,7 +67,9 @@ export function renderManualFlowDecisionChoice({ project, plan, task, el }) {
   const table = manualFlowDecisionDefinition(plan, project, task);
   const node = el('fieldset', { className: 'manual-flow-decision-choice' }, [
     el('legend', { text: `Human decision — ${task.title ?? 'Declared choice'}` }),
-    el('p', { className: 'muted', text: 'Record your observed inputs, explicit declared outcome and reason. Table evaluation is advice; your saved choice controls this occurrence.' }),
+    el('p', { className: 'muted', text: table?.decisionMode === 'ENFORCED'
+      ? 'Record observed inputs and an outcome resolved by this pinned enforced decision table. A conflicting, unknown or different outcome cannot be saved.'
+      : 'Record your observed inputs, explicit declared outcome and reason. Table evaluation is advice; your saved choice controls this occurrence.' }),
   ]);
   const outcome = el('select', { attrs: { name: 'decisionOutcome', required: 'required', 'aria-label': `Declared human outcome for ${task.title}` } }, [
     el('option', { text: 'Choose a declared outcome', attrs: { value: '' } }),
@@ -95,7 +97,9 @@ export function renderManualFlowDecisionChoice({ project, plan, task, el }) {
     try {
       if (fields.some((entry) => entry.known.value === 'known' && !entry.control.value.trim())) { advice.textContent = 'Table advice: UNKNOWN — observed inputs are incomplete.'; return; }
       const evaluation = evaluateManualFlowAdvice(table, observations());
-      advice.textContent = `Table advice: ${evaluation.status}${evaluation.outcome ? ` — ${evaluation.outcome}` : ''}. Choose the human outcome explicitly.`;
+      advice.textContent = table?.decisionMode === 'ENFORCED'
+        ? `Enforced table result: ${evaluation.status}${evaluation.outcome ? ` — ${evaluation.outcome}` : ''}.${evaluation.status === 'RESOLVED' ? ' Choose this outcome to continue.' : ' A resolved outcome is required.'}`
+        : `Table advice: ${evaluation.status}${evaluation.outcome ? ` — ${evaluation.outcome}` : ''}. Choose the human outcome explicitly.`;
     } catch { advice.textContent = 'Table advice: UNKNOWN — enter valid typed observations.'; }
   };
   let choiceRequired = true;
@@ -117,6 +121,10 @@ export function renderManualFlowDecisionChoice({ project, plan, task, el }) {
       if (!table) throw new Error('The pinned decision table is unavailable. Reload before recording a decision.');
       if (!outcome.value || !reason.value.trim()) throw new Error('Choose a declared human outcome and enter its reason.');
       if (fields.some((field) => field.known.value === 'known' && !field.control.value.trim())) throw new Error('Record every declared observed input or mark it explicitly unknown.');
+      if (table.decisionMode === 'ENFORCED') {
+        const evaluation = evaluateManualFlowAdvice(table, observations());
+        if (evaluation.status !== 'RESOLVED' || evaluation.outcome !== outcome.value) throw new Error('The recorded outcome must match a resolved outcome from this enforced decision table.');
+      }
       return { outcome: outcome.value, observations: observations(), reason: reason.value.trim() };
     },
     restore(choice) {

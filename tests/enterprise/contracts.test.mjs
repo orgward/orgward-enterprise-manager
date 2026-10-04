@@ -6,7 +6,7 @@ import { normalizeEnterpriseQuery, projectEnterprise } from '../../src/enterpris
 import { effectiveStatus, enterpriseInstant, enterpriseInterval, objectBasisHash, objectStates } from '../../src/enterprise/state.mjs';
 import { normalizeDecisionTable, normalizeProcessFlow } from '../../src/enterprise/process-model.mjs';
 import { evaluateDecisionTable, simulateProcessFlow } from '../../src/enterprise/process-simulation.mjs';
-import { planManualProcessFlow, projectManualFlowActivation } from '../../src/enterprise/process-runtime.mjs';
+import { normalizeHumanDecisionChoice, planManualProcessFlow, projectManualFlowActivation } from '../../src/enterprise/process-runtime.mjs';
 import { applyEnterpriseIntegrityCommand, applyEnterpriseIntegrityException, evaluateEnterpriseIntegrity,
   normalizeEnterpriseIntegrityCommand, projectEnterpriseIntegrity } from '../../src/enterprise/integrity.mjs';
 import { applyEnterpriseGovernanceCommand, normalizeEnterpriseGovernanceCommand,
@@ -290,6 +290,15 @@ test('enterprise decision tables preserve typed input identity and reject malfor
   })) }, byId), { code: 'INVALID_DECISION_TABLE' });
   assert.throws(() => normalizeDecisionTable({ ...table, rules: [{ id: 'rule-typed', conditions: [
     { informationId: input.id, operator: 'gt', value: '5' }], outcome: 'APPROVE' }] }, byId), { code: 'INVALID_DECISION_TABLE' });
+  assert.throws(() => normalizeDecisionTable({ ...table, decisionMode: 'AUTONOMOUS' }, byId), { code: 'INVALID_DECISION_TABLE' });
+  const enforced = normalizeDecisionTable({ ...table, decisionMode: 'ENFORCED' }, byId);
+  const enforcedTask = { flowRef: { decisionId: decision.id, decisionHash: digest(enforced), decisionTable: enforced,
+    outcomes: ['APPROVE', 'REVIEW'], decisionInputs: [{ informationId: input.id, valueType: 'number' }] } };
+  assert.equal(normalizeHumanDecisionChoice(enforcedTask, { outcome: 'APPROVE', observations: [{ informationId: input.id, value: 8 }], reason: 'Rules resolve approve.' }, 'succeeded').outcome, 'APPROVE');
+  assert.throws(() => normalizeHumanDecisionChoice(enforcedTask, { outcome: 'REVIEW', observations: [{ informationId: input.id, value: 8 }], reason: 'Try to choose another route.' }, 'succeeded'),
+    { code: 'PROCESS_DECISION_POLICY_BLOCKED', statusCode: 409 });
+  assert.throws(() => normalizeHumanDecisionChoice(enforcedTask, { outcome: 'APPROVE', observations: [{ informationId: input.id, value: null }], reason: 'Input is unknown.' }, 'succeeded'),
+    { code: 'PROCESS_DECISION_POLICY_BLOCKED', statusCode: 409 });
   assert.equal(decision.type, 'decision');
 });
 

@@ -6696,6 +6696,23 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   cursor; this first slice is reviewed and checkpointed, with remaining PR-14
   outcome still open.
 
+  Second bounded slice (drafted 2026-10-04; frozen for review): decision tables
+  now carry a versioned advisory/enforced mode. In enforced mode, a human task
+  may be recorded as succeeded only when the typed observations resolve the
+  exact pinned table and the selected outcome matches it; unknown, conflicted,
+  or overridden outcomes are rejected by both the decision form and the
+  persistence completion path. The UI exposes the mode during design and names
+  its effect during task completion. Pure/runtime, UI and PostgreSQL task-flow
+  regression fixtures are drafted. Static `node --check` checks and
+  `git diff --check` passed. Focused verification (2026-10-04):
+  `npm test -- tests/enterprise/contracts.test.mjs tests/enterprise/view.test.mjs
+  tests/enterprise/server.test.mjs --test-name-pattern='enterprise decision tables|manual-flow UI binds|saved manual flow routes'`
+  passed 3/3, with 0 failures and 0 skips; runner duration 4.75s and TAP
+  duration 3.586s. TAP:
+  `/tmp/orgward-tests-dyp1ap/node-test.tap.log`; invocation capture:
+  `/tmp/orgward-pr14-decision-mode-BGqqFR.tap.log`. Frozen for root review;
+  PR-14 remains open.
+
 - [ ] PR-15 — Integrated portfolio round trip and extensibility (T-90–T-105,
   T-107–T-108, then T-106). Join enterprise truth, integrity and SDLC context;
   support multi-repository/legacy delivery, progressive promotion, incidents,

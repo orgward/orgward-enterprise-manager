@@ -1061,7 +1061,7 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
         if (savedChoice) item.append(el('section', { className: 'manual-flow-saved-choice', attrs: { 'aria-label': `Recorded human decision for ${task.title}` } }, [
           el('p', { text: `Recorded human choice: ${savedChoice.outcome}. Reason: ${savedChoice.reason}` }),
           el('ul', {}, (savedChoice.observations ?? []).map((entry) => el('li', { text: `${manualFlowInputLabel(task, entry.informationId)}: ${entry.value === null ? 'Explicitly unknown' : JSON.stringify(entry.value)}` }))),
-          el('p', { text: `Saved table advice: ${savedChoice.advisory?.status ?? 'unavailable'}${savedChoice.advisory?.outcome ? ` — ${savedChoice.advisory.outcome}` : ''}.` }),
+          el('p', { text: `${task.flowRef.decisionTable?.decisionMode === 'ENFORCED' ? 'Enforced table result' : 'Saved table advice'}: ${savedChoice.advisory?.status ?? 'unavailable'}${savedChoice.advisory?.outcome ? ` — ${savedChoice.advisory.outcome}` : ''}.` }),
           el('details', {}, [el('summary', { text: 'Saved choice reference' }), el('p', { text: savedChoice.choiceHash ?? 'Unavailable' })]),
           el('p', { className: 'muted', text: 'This saved human choice drives routing. Table advice and simulations do not establish completed work.' }),
         ]));

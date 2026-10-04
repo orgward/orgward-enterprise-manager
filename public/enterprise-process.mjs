@@ -189,6 +189,7 @@ function decisionEditor({ model, object, el, ui, onCommand, disabled, reasonValu
   const inputList = el('div', { className: 'enterprise-editor-rows', attrs: { 'data-enterprise-decision-inputs': '' } });
   const ruleList = el('div', { className: 'enterprise-editor-rows', attrs: { 'data-enterprise-decision-rules': '' } });
   const policy = field('hitPolicy', 'Rule hit policy', { entries: [['FIRST_MATCH', 'First matching rule in order'], ['UNIQUE', 'Exactly one matching rule; overlapping matches conflict']], value: saved?.hitPolicy ?? 'UNIQUE' });
+  const decisionMode = field('decisionMode', 'Decision enforcement', { entries: [['ADVISORY', 'Advisory · human may choose any declared outcome'], ['ENFORCED', 'Enforced · human choice must match the resolved table outcome']], value: saved?.decisionMode ?? 'ADVISORY' });
   const informationOptions = () => [['', 'Choose declared information input'], ...inputs.filter((input) => input.information.control.value).map((input) => [input.information.control.value, information.find((entry) => entry.id === input.information.control.value)?.name ?? 'Saved information'])];
   const refreshConditions = () => conditions.forEach((entry) => replaceOptions(el, entry.information, informationOptions()));
   const addInput = (input = {}) => {
@@ -219,11 +220,12 @@ function decisionEditor({ model, object, el, ui, onCommand, disabled, reasonValu
   for (const rule of saved?.rules ?? []) addRule(rule);
   const defaultOutcome = field('defaultOutcome', 'Default outcome when no rule matches (optional)', { required: false, value: saved?.defaultOutcome ?? '', maximum: 60 });
   const reason = field('reason', 'Reason for this decision table', { multiline: true, maximum: 500, value: reasonValue });
-  return form('define-decision-table', 'Save typed decision table', [el('p', { text: 'Rules use typed saved information records. All conditions in a rule must match. Each rule needs at least one condition; UNIQUE treats overlapping matches as a conflict.' }), policy.node, inputList,
+  return form('define-decision-table', 'Save typed decision table', [el('p', { text: 'Rules use typed saved information records. All conditions in a rule must match. Each rule needs at least one condition; UNIQUE treats overlapping matches as a conflict. Enforcement mode is versioned with this saved table.' }), policy.node, decisionMode.node, inputList,
     action(el, 'Add information input', () => { if (inputs.length < 12) addInput(); }, disabled), ruleList, action(el, 'Add rule', () => { if (rules.length < 20) addRule(); }, disabled), defaultOutcome.node, reason.node], () => {
       if (!inputs.length || !rules.length || rules.some((rule) => !rule.conditions.length)) throw new Error('Declare at least one input, one rule and one condition per rule.');
       const types = new Map(inputs.map((input) => [input.information.control.value, input.type.control.value]));
       onCommand({ kind: 'define-decision-table', objectId: object.id, decisionTable: { schemaVersion: '1.0', hitPolicy: policy.control.value,
+        decisionMode: decisionMode.control.value,
         inputs: inputs.map((input) => ({ informationId: input.information.control.value, valueType: input.type.control.value })),
         rules: rules.map((rule) => ({ id: rule.id, outcome: rule.outcome.control.value.trim(), conditions: rule.conditions.map((condition) => ({ informationId: condition.information.control.value, operator: condition.operator.control.value, value: enterpriseTypedValue(types.get(condition.information.control.value), condition.value.control.value, condition.operator.control.value === 'in') })) })), defaultOutcome: defaultOutcome.control.value.trim() || null }, reason: reason.control.value.trim() });
     }, disabled);

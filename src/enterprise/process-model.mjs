@@ -23,8 +23,9 @@ function typedValue(value, type) {
 }
 export function normalizeDecisionTable(input, byId) {
   const code = 'INVALID_DECISION_TABLE';
-  keys(input, ['schemaVersion', 'hitPolicy', 'inputs', 'rules', 'defaultOutcome'], code);
+  keys(input, ['schemaVersion', 'hitPolicy', 'decisionMode', 'inputs', 'rules', 'defaultOutcome'], code);
   if (input.schemaVersion !== '1.0' || !['FIRST_MATCH', 'UNIQUE'].includes(input.hitPolicy)
+    || (input.decisionMode !== undefined && !['ADVISORY', 'ENFORCED'].includes(input.decisionMode))
     || !Array.isArray(input.inputs) || input.inputs.length < 1 || input.inputs.length > 12
     || !Array.isArray(input.rules) || input.rules.length < 1 || input.rules.length > 20
     || (input.defaultOutcome !== null && !outcome(input.defaultOutcome))) fail('Provide a supported decision table with 1–12 typed inputs, 1–20 rules and an explicit default outcome or null.', code);
@@ -51,7 +52,8 @@ export function normalizeDecisionTable(input, byId) {
       return structuredClone(condition);
     }) };
   });
-  return { schemaVersion: '1.0', hitPolicy: input.hitPolicy, inputs, rules, defaultOutcome: input.defaultOutcome };
+  return { schemaVersion: '1.0', hitPolicy: input.hitPolicy,
+    ...(input.decisionMode ? { decisionMode: input.decisionMode } : {}), inputs, rules, defaultOutcome: input.defaultOutcome };
 }
 export function decisionOutcomes(table) {
   return [...new Set([...(table?.rules ?? []).map((rule) => rule.outcome), ...(table?.defaultOutcome ? [table.defaultOutcome] : [])])];

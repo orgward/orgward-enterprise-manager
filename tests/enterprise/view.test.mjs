@@ -549,6 +549,17 @@ test('manual-flow UI binds activation, decisions and task occurrences to the exa
   assert.equal(restored.node.querySelectorAll('select').find((control) => control.attrs.name === 'known:information-score').value, 'unknown');
   assert.equal(restored.node.querySelectorAll('input').find((control) => control.attrs.name === 'information-score').disabled, true);
   assert.deepEqual(restored.read(), unknownChoice);
+
+  const enforcedTask = { ...task, flowRef: { ...task.flowRef, decisionTable: { ...decisionTable, decisionMode: 'ENFORCED' } } };
+  const enforcedChoice = renderManualFlowDecisionChoice({ project, plan, task: enforcedTask, el });
+  assert.match(enforcedChoice.node.textContent, /pinned enforced decision table/);
+  const enforcedScore = enforcedChoice.node.querySelectorAll('input').find((control) => control.attrs.name === 'information-score');
+  const enforcedOutcome = enforcedChoice.node.querySelectorAll('select').find((control) => control.attrs.name === 'decisionOutcome');
+  const enforcedReason = enforcedChoice.node.querySelectorAll('textarea').find((control) => control.attrs.name === 'decisionReason');
+  enforcedScore.value = '8'; enforcedOutcome.value = 'LOW'; enforcedReason.value = 'An inconsistent route.';
+  assert.throws(() => enforcedChoice.read(), /must match a resolved outcome/);
+  enforcedOutcome.value = 'HIGH';
+  assert.equal(enforcedChoice.read().outcome, 'HIGH');
 });
 
 test('manual-flow agent requests are limited to the exact supported READY occurrence', () => {
