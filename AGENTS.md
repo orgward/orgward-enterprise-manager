@@ -11,12 +11,12 @@ required for working product paths: keep tenant isolation, server-only secrets,
 exact candidate identity, explicit approval/effect authority, intervention and
 audit controls where those flows need them.
 
-For this continuation, GPT-6.1 Sol owns implementation, orchestration, design and
-code review. Luna is the sole verifier/test runner and may provide focused
-text/document support. Keep tool use, context and reads concise and bounded to
-the active slice; Luna runs focused tests only when a slice is ready and the
-integrator coordinates verification, then runs one full check against the frozen
-parent task tree. Preserve historical receipts and completed PR-01–PR-07 status.
+For this continuation, Luna 6 owns implementation, tests, documentation and
+integration. GPT-6.1 Sol is read-only reviewer and may provide design feedback.
+Keep tool use, context and reads concise and bounded to the active slice; Luna
+runs focused tests only when a slice is ready, then runs one full check against
+the frozen parent task tree. Preserve historical receipts and completed
+PR-01–PR-07 status.
 
 Build the private product in this repository. The user outcome is a working
 enterprise-design workspace: conversation, saved blueprint, interactive maps,
@@ -75,7 +75,7 @@ findings in code and tests. Do not create review loops around metadata.
 - Preserve unrelated user changes. Work in bounded increments and report what is
   actually implemented and tested.
 
-Luna is the sole verifier and test runner. Keep logs on disk; report counts,
+Luna owns implementation and is the sole test runner. Keep logs on disk; report counts,
 elapsed time, skips and relevant failures accurately. The runner's shared
 PostgreSQL cluster per invocation, per-fixture database isolation and
 `--test-concurrency=2` remain unchanged: this VPS has 2 CPUs and limited `/tmp`

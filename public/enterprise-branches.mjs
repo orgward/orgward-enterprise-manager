@@ -48,9 +48,11 @@ export function enterpriseCommandResultRoute(route, payload, result = null) {
     branchId: payload.branchId ?? null, branchRevision: payload.branchRevision ?? null, proposalId: payload.proposalId ?? null,
     selectedId: payload.processId,
     ...(!route.recordedAt || Date.parse(result.simulation?.createdAt) <= Date.parse(route.recordedAt) ? { simulationId: result.simulation?.id ?? route.simulationId } : {}) };
-  const reset = { blueprintVersion: null, proposalId: null, effectiveAt: null, recordedAt: null, branchId: null, branchRevision: null, ...(Object.hasOwn(route, 'simulationId') ? { simulationId: null } : {}) };
+  const reset = { blueprintVersion: null, proposalId: null, effectiveAt: null, recordedAt: null, branchId: null, branchRevision: null,
+    ...(Object.hasOwn(route, 'simulationId') ? { simulationId: null } : {}),
+    ...(Object.hasOwn(route, 'economicEvaluationId') ? { economicEvaluationId: null } : {}) };
   if ((ENTERPRISE_BRANCH_COMMANDS.includes(payload.kind) && payload.kind !== 'apply-reviewed-merge')
-    || (['define-process-flow', 'define-decision-table'].includes(payload.kind) && payload.branchId)) return {
+    || (['define-process-flow', 'define-decision-table', 'define-economic-scenario', 'define-resource-plan', 'define-value-lifecycle'].includes(payload.kind) && payload.branchId)) return {
     ...route, ...reset, branchId: result.branchId ?? payload.branchId, branchRevision: result.branchRevision ?? payload.branchRevision,
     selectedId: result.affectedObjectId ?? route.selectedId, view: 'map',
     ...(payload.kind === 'edit-branch-scope' && payload.change?.kind === 'create-scope' ? { lensId: 'all', scopeId: null, types: [], area: null } : {}),

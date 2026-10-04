@@ -34,6 +34,7 @@ import { applyEnterpriseCommand, normalizeEnterpriseCommand } from './src/enterp
 import { normalizeEnterpriseQuery, projectEnterprise } from './src/enterprise/projections.mjs';
 import { ENTERPRISE_BRANCH_KINDS, enterpriseMergeApproval } from './src/enterprise/branches.mjs';
 import { ENTERPRISE_PROCESS_KINDS } from './src/enterprise/process-commands.mjs';
+import { ENTERPRISE_ECONOMIC_KINDS } from './src/enterprise/economics-commands.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -1575,7 +1576,7 @@ export function createApp({
           || (payload.kind === 'record-state' && payload.dimension === 'review')
           || (payload.kind === 'edit-branch-scope' && ['create-scope', 'rename-scope'].includes(payload.change.kind));
         if ((administrative || payload.kind === 'record-state' || ENTERPRISE_BRANCH_KINDS.has(payload.kind)
-          || ENTERPRISE_PROCESS_KINDS.has(payload.kind)) && request.identity.actorType !== 'human') {
+          || ENTERPRISE_PROCESS_KINDS.has(payload.kind) || ENTERPRISE_ECONOMIC_KINDS.has(payload.kind)) && request.identity.actorType !== 'human') {
           throw apiFailure(403, 'ENTERPRISE_HUMAN_OWNER_REQUIRED', 'A current human project member must report state; a human project owner must review design or define scopes, validity and future proposals.');
         }
         const actor = requestActor(request);
@@ -1609,13 +1610,13 @@ export function createApp({
               membershipGeneration: reviewMembershipGeneration });
             project.version += 1; project.updatedAt = changed.recordedAt ?? changed.blueprint.createdAt; project.updatedBy = actor;
             project.events.push(projectEvent(project, { type: ['record-state', 'set-validity', 'propose-future-design'].includes(payload.kind)
-              || ENTERPRISE_BRANCH_KINDS.has(payload.kind) || ENTERPRISE_PROCESS_KINDS.has(payload.kind)
+              || ENTERPRISE_BRANCH_KINDS.has(payload.kind) || ENTERPRISE_PROCESS_KINDS.has(payload.kind) || ENTERPRISE_ECONOMIC_KINDS.has(payload.kind)
               ? 'EnterpriseDesignChanged' : 'EnterpriseScopeChanged', actor, commandId: body.commandId, correlationId,
               data: { kind: payload.kind, blueprintId: changed.blueprint.id, blueprintVersion: changed.blueprint.version,
                 objectId: changed.affectedObjectId, proposalId: changed.proposalId ?? null,
                 branchId: changed.branchId ?? null, branchRevision: changed.branchRevision ?? null,
                 candidateId: changed.candidateId ?? null, candidateHash: changed.candidateHash ?? null,
-                simulationId: changed.simulationId ?? null, reason: payload.reason } }));
+                simulationId: changed.simulationId ?? null, economicEvaluationId: changed.economicEvaluationId ?? null, reason: payload.reason } }));
           },
         }, actor, { requiredPrincipalRoles: ['workspace-write'], authzGeneration: request.identity.authzGeneration,
           ...(administrative ? { minimumProjectAccess: 'owner' } : {}) });
@@ -1623,11 +1624,12 @@ export function createApp({
         const blueprint = latestBlueprint(result.project);
         const receipt = result.project.events.at(-1).data;
         const simulation = receipt.simulationId ? result.project.enterpriseSimulations.find((entry) => entry.id === receipt.simulationId) : null;
-        return sendApi(response, 200, { projectVersion: result.project.version, blueprintId: simulation?.source.blueprintId ?? blueprint.id,
-          blueprintVersion: simulation?.source.blueprintVersion ?? blueprint.version, affectedObjectId: receipt.objectId, proposalId: receipt.proposalId ?? null,
+        const economicEvaluation = receipt.economicEvaluationId ? result.project.enterpriseEconomicEvaluations?.find((entry) => entry.id === receipt.economicEvaluationId) : null;
+        return sendApi(response, 200, { projectVersion: result.project.version, blueprintId: simulation?.source.blueprintId ?? economicEvaluation?.source.blueprintId ?? blueprint.id,
+          blueprintVersion: simulation?.source.blueprintVersion ?? economicEvaluation?.source.blueprintVersion ?? blueprint.version, affectedObjectId: receipt.objectId, proposalId: receipt.proposalId ?? null,
           branchId: receipt.branchId ?? null, branchRevision: receipt.branchRevision ?? null,
           candidateId: receipt.candidateId ?? null, candidateHash: receipt.candidateHash ?? null,
-          ...(simulation ? { simulation } : {}) },
+          ...(simulation ? { simulation } : {}), ...(economicEvaluation ? { economicEvaluation } : {}) },
         { correlationId, event: result.project.events.at(-1), meta: { replayed: result.replayed } });
       }
 

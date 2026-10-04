@@ -95,10 +95,10 @@ export function projectManualFlowActivation(plan, outcomes = new Map(), { planIn
       visited.add(key); const task = tasksByKey.get(key); const outcome = task && outcomes.get(task.id);
       if (!task) { emit(token, 'WAITING', 'The saved occurrence is unavailable.'); blocked = true; continue; }
       if (!outcome) { pending.push(token); emit(token, 'READY', 'Reached by verified saved outcomes.'); continue; }
-      if (!outcome.verified) { pending.push(token); emit(token, 'WAITING', 'Work is active or its durable outcome is unverified.'); continue; }
+      if (!outcome.verified) { pending.push(token); emit(token, 'WAITING', outcome.reason ?? 'Work is active or its durable outcome is unverified.'); continue; }
       if (!['succeeded', 'failed'].includes(outcome.result) || (outcome.result === 'succeeded' && step.decisionId
         && !task.flowRef.outcomes.includes(outcome.decisionChoice?.outcome))) { blocked = true; emit(token, 'WAITING', 'The verified outcome has no declared human decision choice.'); continue; }
-      emit(token, outcome.result === 'succeeded' ? 'SUCCEEDED' : 'FAILED', 'Verified durable human outcome.');
+      emit(token, outcome.result === 'succeeded' ? 'SUCCEEDED' : 'FAILED', outcome.runId ? 'Verified durable governed agent execution result.' : 'Verified durable human outcome.');
       if (outcome.result === 'failed') { if (step.exceptionStepId) go(token, step.exceptionStepId); else failed = true; continue; }
       if (step.kind === 'decision') {
         const target = step.routes.find((route) => route.outcome === outcome.decisionChoice?.outcome)?.targetStepId;

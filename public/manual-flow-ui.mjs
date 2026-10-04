@@ -1,7 +1,15 @@
 import { enterpriseTypedValue } from './enterprise-process.mjs';
 
 export const isManualFlowPlan = (plan) => plan?.kind === 'manual_process_flow_plan';
-export const manualFlowKindLabel = (kind) => ({ manual: 'Human activity', 'manual-exception': 'Exception handler', decision: 'Human decision', fork: 'Parallel branches', join: 'Branch join', loop: 'Bounded loop decision', 'loop-return': 'Return to loop', end: 'Flow end' })[kind] ?? 'Flow step';
+export const manualFlowKindLabel = (kind) => ({ manual: 'Assigned activity', 'manual-exception': 'Exception handler', decision: 'Human decision', fork: 'Parallel branches', join: 'Branch join', loop: 'Bounded loop decision', 'loop-return': 'Return to loop', end: 'Flow end' })[kind] ?? 'Flow step';
+export const manualFlowAllowsAgent = (task) => ['manual', 'manual-exception'].includes(task?.flowRef?.kind);
+
+export function manualFlowAgentRequestReady(plan, instanceRows, task, instanceId) {
+  return isManualFlowPlan(plan) && manualFlowAllowsAgent(task)
+    && plan.tasks.some((saved) => saved.id === task.id && saved.flowRef?.stepId === task.flowRef.stepId
+      && saved.flowRef?.iteration === task.flowRef.iteration && saved.flowRef?.kind === task.flowRef.kind)
+    && activationForTask(plan, instanceRows, task.id, instanceId)?.state === 'READY';
+}
 export const manualFlowInputLabel = (task, informationId) => task.inputs?.find((input) => input.objectId === informationId)?.label ?? 'Declared information input';
 
 export function mergeProcessPlanActivation(savedPlans, runtimePlans) {

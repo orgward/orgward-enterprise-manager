@@ -7,6 +7,7 @@ import test from 'node:test';
 import { createApp } from '../../server.mjs';
 import { addConversationTurn, createProject } from '../../src/model.mjs';
 import { contentHash } from '../../src/platform/postgres.mjs';
+import { digest, persistedDigest } from '../../src/sdlc/contracts.mjs';
 import { startPostgres } from '../helpers/postgres.mjs';
 
 const tenantId = 'tenant-enterprise-test';
@@ -54,15 +55,15 @@ async function seedProject(postgres, name) {
   return project;
 }
 
-async function startApp(postgres, root) {
+async function startApp(postgres, root, { additionalIdentities = new Map(), executionProfiles } = {}) {
   const oidcAuthenticator = { authenticate: async (request) => {
     const subject = request.headers.authorization?.slice('Bearer '.length);
-    return identities.get(subject) ?? null;
+    return identities.get(subject) ?? additionalIdentities.get(subject) ?? null;
   } };
   const app = createApp({ databaseUrl: postgres.databaseUrl,
     dataDirectory: path.join(root, 'projects'), sdlcDirectory: path.join(root, 'sdlc'),
     executionDirectory: path.join(root, 'executions'), executionWorkspaceDirectory: path.join(root, 'workspaces'),
-    oidcAuthenticator });
+    oidcAuthenticator, ...(executionProfiles ? { executionProfiles } : {}) });
   await app.init();
   await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
   return { app, base: `http://127.0.0.1:${app.server.address().port}` };
@@ -947,6 +948,330 @@ test('manual process flow gates actual human work by audited decision routes, fo
   const gateReplay = await taskAction('complete', 'editor', gateCompletion.body.commandId, gateCompletion.body.payload, 200);
   assert.equal(gateReplay.meta.replayed, true);
   assert.equal(gateReplay.outcome.decisionChoice.choiceHash, highChoiceHash);
+});
+
+test('saved manual flow routes audited human choices through a governed local agent to a restarted human checkpoint', async (t) => {
+  const postgres = await startPostgres();
+  let root;
+  let instance;
+  t.after(async () => {
+    await closeApp(instance);
+    if (root) await rm(root, { recursive: true, force: true });
+    await postgres.close();
+  });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-manual-agent-flow-'));
+  const extraIdentity = (subject, actorType, identityRoles) => ({ issuer, subject,
+    principal: `oidc:${createHash('sha256').update(`${issuer}\n${subject}`).digest('hex')}`,
+    tenantId, actorType, displayName: subject, roles: identityRoles, expiresAt: Math.floor(Date.now() / 1000) + 300 });
+  const additionalIdentities = new Map([
+    ['flow-agent', extraIdentity('flow-agent', 'workload', ['workspace-read', 'workspace-write'])],
+    ['flow-approver', extraIdentity('flow-approver', 'human', ['workspace-read', 'workspace-write', 'execution-approver'])],
+  ]);
+  const profileRoot = path.join(root, 'fixed-agent-profile');
+  const executionProfiles = [{ id: 'flow-fixed-agent', label: 'Fixed local flow agent', kind: 'command', version: '1.0.0',
+    executable: process.execPath, args: ['-e', "process.stdout.write('fixed local flow result')"], workspaceRoot: profileRoot },
+  { id: 'flow-fixed-agent-failure', label: 'Fixed local failing flow agent', kind: 'command', version: '1.0.0',
+    executable: process.execPath, args: ['-e', "process.stderr.write('fixed local flow failure');process.exit(17)"], workspaceRoot: profileRoot }];
+  const inMemoryExecution = { status: 'FAILED', omittedByJson: undefined };
+  assert.notEqual(digest(inMemoryExecution), persistedDigest(inMemoryExecution));
+  assert.equal(persistedDigest(inMemoryExecution), contentHash({ status: 'FAILED' }));
+  instance = await startApp(postgres, root, { additionalIdentities, executionProfiles });
+  for (const identity of [...identities.values(), ...additionalIdentities.values()]) {
+    await postgres.query(`insert into orgward.oidc_principals
+      (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+    [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  }
+  const project = await seedProject(postgres, 'Governed manual agent flow fixture');
+  for (const subject of ['flow-agent', 'flow-approver']) {
+    await postgres.query(`insert into orgward.project_memberships
+      (tenant_id,project_id,principal,access,granted_by) values ($1,$2,$3,'editor',$4)`,
+    [tenantId, project.id, additionalIdentities.get(subject).principal, identities.get('owner').principal]);
+  }
+  const getProject = (subject = 'owner') => request(instance.base, subject, `/api/v1/projects/${project.id}`);
+  let projectRead = await getProject();
+  const flowView = await currentView(instance.base, 'owner', project.id, { selectedId: 'process-deliver' });
+  const decisionTable = { schemaVersion: '1.0', hitPolicy: 'UNIQUE', defaultOutcome: null,
+    inputs: [{ informationId: 'information-customer-signal', valueType: 'number' }], rules: [
+      { id: 'route-human', conditions: [{ informationId: 'information-customer-signal', operator: 'eq', value: 0 }], outcome: 'HUMAN' },
+      { id: 'route-agent', conditions: [{ informationId: 'information-customer-signal', operator: 'eq', value: 1 }], outcome: 'AGENT' },
+      { id: 'loop-continue', conditions: [{ informationId: 'information-customer-signal', operator: 'eq', value: 2 }], outcome: 'CONTINUE' },
+      { id: 'loop-stop', conditions: [{ informationId: 'information-customer-signal', operator: 'eq', value: 3 }], outcome: 'STOP' },
+    ] };
+  const savedTable = await postCommand(instance.base, 'owner', project.id,
+    commandBody(flowView, 'manual-agent-flow-table', { kind: 'define-decision-table', objectId: 'decision-priority', decisionTable,
+      reason: 'Pin explicit human routes and bounded-loop outcomes.' }));
+  const latestView = await currentView(instance.base, 'owner', project.id, { selectedId: 'process-deliver' });
+  const manual = (id, title, roleId, nextStepId, { kind = 'manual', exceptionStepId = null } = {}) => ({ id, kind, title,
+    processId: 'process-deliver', roleId, inputIds: ['information-customer-signal'], outputIds: [], nextStepId, exceptionStepId });
+  const processFlow = { schemaVersion: '1.0', startStepId: 'start', steps: [
+    manual('start', 'Review transfer request', 'role-founder', 'gate'),
+    { id: 'gate', kind: 'decision', title: 'Choose review route', decisionId: 'decision-priority', routes: [
+      { outcome: 'AGENT', targetStepId: 'agent-work' }, { outcome: 'HUMAN', targetStepId: 'human-alternate' }] },
+    manual('agent-work', 'Prepare a bounded review result', 'role-design-assistant', 'human-checkpoint', { exceptionStepId: 'agent-failure-handler' }),
+    manual('human-checkpoint', 'Verify the agent result', 'role-founder', 'loop'),
+    manual('human-alternate', 'Review without agent assistance', 'role-founder', 'flow-end'),
+    manual('agent-failure-handler', 'Review the agent failure', 'role-founder', 'flow-end', { kind: 'manual-exception' }),
+    { id: 'loop', kind: 'loop', title: 'Human correction decision', decisionId: 'decision-priority', continueOutcome: 'CONTINUE',
+      bodyStepId: 'correction', exitStepId: 'flow-end', maxIterations: 1 },
+    manual('correction', 'Record a bounded correction', 'role-founder', 'loop-return'),
+    { id: 'loop-return', kind: 'loop-return', title: 'Return to correction decision', loopStepId: 'loop' },
+    { id: 'flow-end', kind: 'end', title: 'Review complete' },
+  ] };
+  const savedFlow = await postCommand(instance.base, 'owner', project.id,
+    commandBody(latestView, 'manual-agent-flow-save', { kind: 'define-process-flow', objectId: 'process-deliver', processFlow,
+      reason: 'Route one human decision through a fixed local agent and a human checkpoint.' }));
+  assert.ok(savedTable.data.blueprintVersion < savedFlow.data.blueprintVersion);
+
+  projectRead = await getProject();
+  const bindingRoute = `/api/v1/projects/${project.id}/actor-bindings/proposals`;
+  const bind = async ({ actorId, roleId, subject, suffix }) => {
+    const payload = { actorId, roleId, targetPrincipal: additionalIdentities.get(subject)?.principal ?? identities.get(subject).principal,
+      blueprintVersion: projectRead.data.latestBlueprint.version };
+    projectRead = await request(instance.base, 'owner', bindingRoute, { method: 'POST', body: {
+      schemaVersion: '1.0', commandId: `manual-agent-bind-${suffix}`, expectedVersion: projectRead.data.version, payload,
+    } });
+    projectRead = await request(instance.base, 'owner', `${bindingRoute}/enable`, { method: 'POST', body: {
+      schemaVersion: '1.0', commandId: `manual-agent-enable-${suffix}`, expectedVersion: projectRead.data.version,
+      payload: { actorId, roleId, blueprintVersion: payload.blueprintVersion },
+    } });
+  };
+  await bind({ actorId: 'actor-founder', roleId: 'role-founder', subject: 'editor', suffix: 'human' });
+  await bind({ actorId: 'actor-design-assistant', roleId: 'role-design-assistant', subject: 'flow-agent', suffix: 'agent' });
+  projectRead = await getProject();
+  const plansRoute = `/api/v1/projects/${project.id}/process-plans`;
+  const planned = await request(instance.base, 'owner', plansRoute, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'manual-agent-flow-compile', expectedVersion: projectRead.data.version,
+    payload: { processId: 'process-deliver', mode: 'manual-flow', blueprintId: savedFlow.data.blueprintId,
+      blueprintVersion: savedFlow.data.blueprintVersion },
+  } }, 201);
+  const plan = planned.data.processPlans.at(-1);
+  const task = (stepId, iteration = 0) => plan.tasks.find((entry) => entry.flowRef.stepId === stepId && entry.flowRef.iteration === iteration);
+  const assignments = (override = {}) => plan.tasks.map((entry) => {
+    const assignment = override[entry.flowRef.stepId] ?? (entry.flowRef.stepId === 'agent-work'
+      ? { roleId: 'role-design-assistant', actorId: 'actor-design-assistant' }
+      : { roleId: 'role-founder', actorId: 'actor-founder' });
+    return { taskId: entry.id, title: entry.title, detail: entry.detail, dependencies: entry.dependencies, ...assignment };
+  });
+  const revisionRoute = `${plansRoute}/${plan.id}/revisions`;
+  for (const stepId of ['gate', 'loop']) {
+    const invalid = await request(instance.base, 'owner', revisionRoute, { method: 'POST', body: {
+      schemaVersion: '1.0', commandId: `manual-agent-deny-agent-${stepId}`, expectedVersion: planned.data.version,
+      payload: { tasks: assignments({ [stepId]: { roleId: 'role-design-assistant', actorId: 'actor-design-assistant' } }) },
+    } }, 409);
+    assert.equal(invalid.error.code, 'PROCESS_FLOW_HUMAN_DECISION_REQUIRED');
+  }
+  const assigned = await request(instance.base, 'owner', revisionRoute, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'manual-agent-flow-human-and-agent-assignments', expectedVersion: planned.data.version,
+    payload: { tasks: assignments() },
+  } }, 200);
+  const planRevision = assigned.data.processPlans.filter((entry) => entry.id === plan.id).at(-1);
+  assert.equal(planRevision.revision, 2);
+  const flowAgentTask = planRevision.tasks.find((entry) => entry.flowRef.stepId === 'agent-work');
+  assert.equal(flowAgentTask.assignee.actorId, 'actor-design-assistant');
+
+  const runtimeRoute = `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`;
+  const runtimeRead = async (subject = 'owner') => (await request(instance.base, subject, runtimeRoute)).instances;
+  const action = (name, subject, commandId, payload, status = 201) => request(instance.base, subject,
+    `/api/execution/process-task-instances/${name}`, { method: 'POST', body: { schemaVersion: '1.0', commandId, payload } }, status);
+  const startTask = (stepId, instanceId, suffix, status = 201) => action('start', 'editor', `manual-agent-start-${suffix}`, {
+    projectId: project.id, planId: plan.id, revision: planRevision.revision, planInstanceId: instanceId, taskId: task(stepId).id,
+  }, status);
+  const completeTask = (stepId, instanceId, suffix, options = {}, status = 201) => action('complete', 'editor', `manual-agent-complete-${suffix}`, {
+    projectId: project.id, planId: plan.id, revision: planRevision.revision, planInstanceId: instanceId, taskId: task(stepId).id,
+    result: 'succeeded', evidence: [`Verified ${stepId} in the authored flow.`], ...options,
+  }, status);
+  const createAgentRun = (instanceId, commandId, status = 201) => request(instance.base, 'editor', '/api/execution/process-task-runs', { method: 'POST', body: {
+    schemaVersion: '1.0', commandId, payload: { projectId: project.id, planId: plan.id, revision: planRevision.revision,
+      ...(instanceId === null ? {} : { planInstanceId: instanceId }), taskId: flowAgentTask.id, profileId: 'flow-fixed-agent' },
+  } }, status);
+  const createAgentRunWithProfile = (instanceId, commandId, profileId, status = 201) => request(instance.base, 'editor', '/api/execution/process-task-runs', { method: 'POST', body: {
+    schemaVersion: '1.0', commandId, payload: { projectId: project.id, planId: plan.id, revision: planRevision.revision,
+      planInstanceId: instanceId, taskId: flowAgentTask.id, profileId },
+  } }, status);
+  const denyBeforeRoute = await createAgentRun(null, 'manual-agent-request-before-root', 409);
+  assert.equal(denyBeforeRoute.error.code, 'PROCESS_TASK_DEPENDENCY_UNSATISFIED');
+
+  const createInstance = async (suffix, gateOutcome) => {
+    const started = await startTask('start', null, `${suffix}-root`);
+    const instanceId = started.planInstanceId;
+    await completeTask('start', instanceId, `${suffix}-root`);
+    await startTask('gate', instanceId, `${suffix}-gate`);
+    const decisionChoice = { outcome: gateOutcome, observations: [{ informationId: 'information-customer-signal', value: gateOutcome === 'AGENT' ? 1 : 0 }],
+      reason: `Human owner selects ${gateOutcome} for this instance.` };
+    await completeTask('gate', instanceId, `${suffix}-gate`, { decisionChoice });
+    return instanceId;
+  };
+  const alternateInstance = await createInstance('alternate', 'HUMAN');
+  const denyUnselected = await createAgentRun(alternateInstance, 'manual-agent-request-unselected', 409);
+  assert.equal(denyUnselected.error.code, 'PROCESS_TASK_DEPENDENCY_UNSATISFIED');
+
+  const cancelledInstance = await createInstance('cancelled', 'AGENT');
+  const cancelledRequest = await createAgentRun(cancelledInstance, 'manual-agent-request-cancelled');
+  const cancelledRun = await request(instance.base, 'editor', `/api/execution/runs/${cancelledRequest.id}/cancel`, { method: 'POST', body: {
+    commandId: 'manual-agent-cancel-before-approval', projectId: project.id, version: cancelledRequest.version,
+  } });
+  assert.equal(cancelledRun.status, 'CANCELLED');
+  let cancelledRows = await runtimeRead();
+  const cancelledAgentRuntime = cancelledRows.find((row) => row.planInstanceId === cancelledInstance && row.taskId === flowAgentTask.id);
+  assert.equal(cancelledAgentRuntime.status, 'CANCELLED');
+  assert.equal(cancelledAgentRuntime.activation.tasks.find((entry) => entry.taskId === task('human-checkpoint').id).state, 'WAITING');
+  assert.equal(cancelledAgentRuntime.activation.tasks.find((entry) => entry.taskId === task('agent-failure-handler').id).state, 'WAITING');
+
+  const failedInstance = await createInstance('failed', 'AGENT');
+  const failedRequest = await createAgentRunWithProfile(failedInstance, 'manual-agent-request-failure', 'flow-fixed-agent-failure');
+  let failedRows = await runtimeRead();
+  let failedAgentRuntime = failedRows.find((row) => row.planInstanceId === failedInstance && row.taskId === flowAgentTask.id);
+  assert.equal(failedAgentRuntime.activation.tasks.find((entry) => entry.taskId === task('agent-failure-handler').id).state, 'WAITING');
+  assert.equal(failedAgentRuntime.activation.tasks.find((entry) => entry.taskId === task('human-checkpoint').id).state, 'WAITING');
+  const failedApproval = await request(instance.base, 'flow-approver', `/api/execution/runs/${failedRequest.id}/approve`, { method: 'POST', body: { version: failedRequest.version } });
+  const failedRun = await request(instance.base, 'editor', `/api/execution/runs/${failedRequest.id}/execute`, { method: 'POST', body: { version: failedApproval.version } });
+  assert.equal(failedRun.status, 'FAILED');
+  assert.equal(failedRun.execution.status, 'FAILED');
+  assert.equal(failedRun.execution.exitCode, 17, 'the configured local command, rather than startup or sandbox failure, produced the declared failed result');
+  const failedEvent = failedRun.events.find((entry) => entry.type === 'ExecutionFailed');
+  const failedStoredExecution = await postgres.query(`select state->'execution' as execution from orgward.aggregates
+    where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2`, [tenantId, failedRun.id]);
+  assert.equal(failedStoredExecution.rowCount, 1);
+  assert.equal(failedEvent.data.executionHash, contentHash(failedStoredExecution.rows[0].execution));
+  const failedAudit = await postgres.query(`select aggregate_version from orgward.audit_log
+    where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2 and event_type='ExecutionFailed'`,
+  [tenantId, failedRun.id]);
+  assert.equal(failedAudit.rowCount, 1);
+  failedRows = await runtimeRead();
+  failedAgentRuntime = failedRows.find((row) => row.planInstanceId === failedInstance && row.taskId === flowAgentTask.id);
+  const failedStatusEvent = failedAgentRuntime.events.find((entry) => entry.type === 'ProcessTaskRunStatusChanged'
+    && entry.data.runId === failedRun.id && entry.data.status === 'FAILED');
+  assert.equal(Number(failedAudit.rows[0].aggregate_version), Number(failedStatusEvent.data.runVersion));
+  assert.equal(failedAgentRuntime.activation.tasks.find((entry) => entry.taskId === task('agent-failure-handler').id).state, 'READY');
+  assert.equal(failedAgentRuntime.activation.tasks.find((entry) => entry.taskId === task('human-checkpoint').id).state, 'SKIPPED');
+
+  const activeInstance = await createInstance('successful', 'AGENT');
+  const agentRequest = await createAgentRun(activeInstance, 'manual-agent-request-success');
+  assert.equal(agentRequest.status, 'AWAITING_APPROVAL');
+  assert.equal(agentRequest.processTaskRef.flowBinding.snapshotHash, planRevision.snapshotHash);
+  assert.equal(agentRequest.processTaskRef.flowBinding.definitionHash, planRevision.flow.definitionHash);
+  assert.match(agentRequest.processTaskRef.flowBinding.activationIdentity, /^[a-f0-9]{64}$/);
+  const approved = await request(instance.base, 'flow-approver', `/api/execution/runs/${agentRequest.id}/approve`, { method: 'POST', body: { version: agentRequest.version } });
+  const executed = await request(instance.base, 'editor', `/api/execution/runs/${agentRequest.id}/execute`, { method: 'POST', body: { version: approved.version } });
+  assert.equal(executed.status, 'SUCCEEDED');
+  assert.equal(executed.execution.stdout, 'fixed local flow result');
+  const succeededEvent = executed.events.find((entry) => entry.type === 'ExecutionSucceeded');
+  const succeededStoredExecution = await postgres.query(`select state->'execution' as execution from orgward.aggregates
+    where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2`, [tenantId, executed.id]);
+  assert.equal(succeededStoredExecution.rowCount, 1);
+  assert.equal(succeededEvent.data.executionHash, contentHash(succeededStoredExecution.rows[0].execution));
+  const terminalAudit = await postgres.query(`select aggregate_version from orgward.audit_log
+    where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2 and event_type='ExecutionSucceeded'`,
+  [tenantId, executed.id]);
+  assert.equal(terminalAudit.rowCount, 1);
+  let rows = await runtimeRead();
+  const agentRuntime = rows.find((row) => row.planInstanceId === activeInstance && row.taskId === flowAgentTask.id);
+  assert.equal(agentRuntime.status, 'SUCCEEDED');
+  const statusEvent = agentRuntime.events.find((entry) => entry.type === 'ProcessTaskRunStatusChanged'
+    && entry.data.runId === executed.id && entry.data.status === 'SUCCEEDED');
+  assert.equal(Number(terminalAudit.rows[0].aggregate_version), Number(statusEvent.data.runVersion),
+    'terminal run audit version matches the linked task status receipt');
+  assert.equal(agentRuntime.activation.tasks.find((entry) => entry.taskId === task('human-checkpoint').id).state, 'READY');
+  await closeApp(instance);
+  instance = await startApp(postgres, root, { additionalIdentities, executionProfiles });
+  rows = await runtimeRead();
+  const restartedAgent = rows.find((row) => row.planInstanceId === activeInstance && row.taskId === flowAgentTask.id);
+  assert.equal(restartedAgent.activation.tasks.find((entry) => entry.taskId === task('human-checkpoint').id).state, 'READY');
+  await startTask('human-checkpoint', activeInstance, 'after-restart-human');
+  await completeTask('human-checkpoint', activeInstance, 'after-restart-human');
+  rows = await runtimeRead();
+  assert.equal(rows.find((row) => row.planInstanceId === activeInstance && row.taskId === task('human-checkpoint').id).status, 'SUCCEEDED');
+  assert.equal(rows.find((row) => row.planInstanceId === cancelledInstance && row.taskId === flowAgentTask.id).activation.tasks
+    .find((entry) => entry.taskId === task('human-checkpoint').id).state, 'WAITING');
+});
+
+test('enterprise economics save typed capacity, evaluate exact sources and keep omitted demand unknown', async (t) => {
+  const postgres = await startPostgres(); let root; let instance;
+  t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-enterprise-economics-'));
+  instance = await startApp(postgres, root);
+  for (const identity of identities.values()) {
+    await postgres.query(`insert into orgward.oidc_principals
+      (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+    [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  }
+  const project = await seedProject(postgres, 'Enterprise economics fixture');
+  let view = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'economics-launch' });
+  const send = async (payload, commandId, subject = 'owner', expectedStatus = 200) => {
+    const response = await request(instance.base, subject, `/api/v1/projects/${project.id}/enterprise/commands`, {
+      method: 'POST', body: commandBody(view, commandId, payload),
+    }, expectedStatus);
+    if (expectedStatus < 400) view = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'economics-launch' });
+    return response;
+  };
+  const interval = { start: '2026-10-01T00:00:00.000Z', end: '2026-10-02T00:00:00.000Z', timezone: 'UTC' };
+  const quantity = (value, unit) => ({ value, unit, source: 'Fixture owner report' });
+  const money = (minorUnits, perUnit = undefined) => ({ minorUnits, currency: 'USD', decimalPlaces: 2,
+    ...(perUnit ? { perUnit } : {}), source: 'Fixture accounting assumption' });
+  await send({ kind: 'define-resource-plan', objectId: 'resource-operating-capacity', reason: 'Record the whole-window capacity basis.', resourcePlan: {
+    schemaVersion: '1.0', provider: 'Owner-reported staffing plan', windows: [{ id: 'delivery-window', window: interval,
+      capacity: quantity(40, 'hours'), available: quantity(40, 'hours'), allocations: [] }],
+  } }, 'enterprise-economics-resource-plan');
+  await send({ kind: 'define-economic-scenario', objectId: 'economics-launch', reason: 'Model declared launch assumptions.', economicScenario: {
+    schemaVersion: '1.0', offeringId: 'offering-core', processIds: ['process-deliver'], window: interval,
+    volume: quantity(100, 'transfers'), unitPrice: money(0, 'transfers'), unitVariableCost: money(0, 'transfers'),
+    fixedCost: money(0), availableFunding: money(0), resourceDemands: [],
+  } }, 'enterprise-economics-scenario');
+  const evaluationResponse = await send({ kind: 'evaluate-economic-scenario', objectId: 'economics-launch', reason: 'Review the saved declared scenario.' },
+    'enterprise-economics-evaluation');
+  const evaluation = evaluationResponse.data.economicEvaluation;
+  assert.match(evaluation.id, /^economic-evaluation-[0-9a-f-]{36}$/);
+  assert.equal(evaluation.status, 'UNKNOWN');
+  assert.equal(evaluation.metrics.breakEvenVolume.status, 'CALCULATED');
+  assert.equal(evaluation.metrics.breakEvenVolume.value, 0);
+  assert.equal(evaluation.resources[0].metrics.required.status, 'UNKNOWN');
+  assert.ok(evaluation.warnings.some((warning) => warning.code === 'RESOURCE_DEMAND_UNKNOWN'
+    && warning.processId === 'process-deliver' && warning.resourceId === 'resource-operating-capacity'));
+  assert.equal(evaluation.sourceLabels.records['process-deliver'], 'Deliver the core offering');
+  const exact = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'economics-launch', economicEvaluationId: evaluation.id });
+  assert.equal(exact.data.economics.evaluation.id, evaluation.id);
+  assert.equal(exact.data.economics.evaluation.matchesSelectedSource, true);
+  assert.equal(exact.data.economics.evaluations.length, 1);
+  const createBranchBody = branchCommandBody(view, 'enterprise-economics-create-branch', { kind: 'create-branch',
+    title: 'Capacity alternative', reason: 'Review an isolated capacity assumption.' });
+  const createdBranch = await postCommand(instance.base, 'owner', project.id, createBranchBody);
+  const branchId = createdBranch.data.branchId;
+  let branchView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', branchId, selectedId: 'resource-operating-capacity' });
+  const branchPlan = structuredClone(branchView.data.blueprint.areas.resources.items.find((entry) => entry.id === 'resource-operating-capacity').resourcePlan);
+  branchPlan.provider = 'Branch-specific staffing report';
+  const branchPlanBody = branchCommandBody(branchView, 'enterprise-economics-branch-resource-plan', { kind: 'define-resource-plan',
+    objectId: 'resource-operating-capacity', reason: 'Record the branch-specific staffing basis.', resourcePlan: branchPlan });
+  const branchPlanResult = await postCommand(instance.base, 'owner', project.id, branchPlanBody);
+  assert.equal(branchPlanResult.data.branchRevision, 2);
+  const branchPlanReplay = await postCommand(instance.base, 'owner', project.id, branchPlanBody);
+  assert.equal(branchPlanReplay.meta.replayed, true);
+  branchView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', branchId, selectedId: 'resource-operating-capacity' });
+  assert.equal(branchView.data.branch.revision, 2);
+
+  const readerView = await currentView(instance.base, 'reader', project.id, { lensId: 'all', selectedId: 'economics-launch' });
+  await request(instance.base, 'reader', `/api/v1/projects/${project.id}/enterprise/commands`, {
+    method: 'POST', body: commandBody(readerView, 'enterprise-economics-reader-denied', { kind: 'evaluate-economic-scenario',
+      objectId: 'economics-launch', reason: 'Attempt unauthorized evaluation.' }),
+  }, 403);
+  view = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'economics-launch' });
+  const staleScenario = { ...view.data.blueprint.areas.customersOfferingsValueEconomics.items.find((entry) => entry.id === 'economics-launch').economicScenario,
+    fixedCost: money(100) };
+  await send({ kind: 'define-economic-scenario', objectId: 'economics-launch', reason: 'Revise the current assumptions after the saved evaluation.', economicScenario: staleScenario },
+    'enterprise-economics-revise-after-evaluation');
+  const newerSource = await currentView(instance.base, 'owner', project.id,
+    { lensId: 'all', selectedId: 'economics-launch', economicEvaluationId: evaluation.id });
+  assert.equal(newerSource.data.economics.evaluation.matchesSelectedSource, false);
+  const beforeEvaluation = new Date(Date.parse(evaluation.createdAt) - 1).toISOString();
+  const cutoff = await currentView(instance.base, 'owner', project.id,
+    { lensId: 'all', selectedId: 'economics-launch', economicEvaluationId: evaluation.id, recordedAt: beforeEvaluation }, 404);
+  assert.equal(cutoff.error.code, 'ENTERPRISE_CONTEXT_NOT_RECORDED');
+  await closeApp(instance);
+  instance = await startApp(postgres, root);
+  const restored = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'economics-launch',
+    blueprintVersion: evaluation.source.blueprintVersion, economicEvaluationId: evaluation.id });
+  assert.equal(restored.data.economics.evaluation.id, evaluation.id);
+  assert.equal(restored.data.economics.evaluation.resultHash, evaluation.resultHash);
+  assert.equal(restored.data.economics.evaluation.matchesSelectedSource, true);
 });
 
 test('enterprise branches merge exact typed changes only after a current owner review', async (t) => {

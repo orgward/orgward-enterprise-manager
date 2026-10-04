@@ -4,6 +4,7 @@ import { enterpriseScopeErrors, enterpriseScopeRelations } from './enterprise/ty
 import { enterpriseStateErrors } from './enterprise/state.mjs';
 import { manualFlowSnapshotHash, verifyManualFlowPlan } from './enterprise/process-runtime.mjs';
 import { processModelErrors, processModelRelations } from './enterprise/process-model.mjs';
+import { economicModelErrors, economicModelRelations } from './enterprise/economics-model.mjs';
 
 export const AREA_DEFINITIONS = [
   ['purposeStrategy', 'Purpose & strategy'],
@@ -1015,7 +1016,7 @@ export function editProcessTaskGraph(project, planId, payload, actor) {
     }
     if (edit.actorId !== null) {
       const actor = blueprintById.get(edit.actorId);
-      if (current.kind === 'manual_process_flow_plan' && actor?.type === 'actor-agent') throw Object.assign(new Error('Advanced flows currently support explicit human assignments only.'), { code: 'PROCESS_FLOW_AGENT_RUNTIME_UNSUPPORTED', statusCode: 409 });
+      if (current.kind === 'manual_process_flow_plan' && actor?.type === 'actor-agent' && !['manual', 'manual-exception'].includes(currentById.get(edit.taskId).flowRef?.kind)) throw Object.assign(new Error('Advanced flow decisions and loops require a human assignment.'), { code: 'PROCESS_FLOW_HUMAN_DECISION_REQUIRED', statusCode: 409 });
       const linked = actor && edit.roleId && ['actor-human', 'actor-agent'].includes(actor.type)
         && ((actor.assignedRoles ?? []).includes(edit.roleId)
           || (blueprint.relations ?? []).some((relation) => relation.source === edit.actorId
@@ -1160,6 +1161,7 @@ export function buildRelations(areas) {
   }
   relations.push(...enterpriseScopeRelations(objects));
   relations.push(...processModelRelations(objects));
+  relations.push(...economicModelRelations(objects));
   return [...new Map(relations.map((relation) => [relation.id, relation])).values()];
 }
 
@@ -1202,6 +1204,7 @@ export function validateBlueprint(blueprint) {
   errors.push(...enterpriseScopeErrors(objects));
   errors.push(...enterpriseStateErrors(objects));
   errors.push(...processModelErrors(objects));
+  errors.push(...economicModelErrors(objects));
 
   return {
     valid: errors.length === 0,

@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import http from 'node:http';
 import https from 'node:https';
-import { digest } from '../sdlc/contracts.mjs';
+import { digest, persistedDigest } from '../sdlc/contracts.mjs';
 import { CommandExecutionAdapter } from '../sdlc/execution-adapter.mjs';
 import { captureLocalRepositorySnapshot, localRepositoryDiff, materializeLocalRepositorySnapshot } from './local-repository-snapshot.mjs';
 import { captureGitRepositorySnapshot } from './git-repository-snapshot.mjs';
@@ -2026,6 +2026,7 @@ export class ExecutionService {
           candidate.status = result.status === 'COMPLETED' ? 'SUCCEEDED' : 'FAILED';
           executionEvent(candidate, candidate.status === 'SUCCEEDED' ? 'ExecutionSucceeded' : 'ExecutionFailed', command.principal ?? 'execution-worker', {
             evidenceHash: result.evidenceHash, exitCode: result.exitCode,
+            ...(candidate.processTaskRef?.flowBinding ? { executionHash: persistedDigest(candidate.execution) } : {}),
             ...(result.repositoryCandidate?.candidateEvidence ? { candidateEvidenceHash: result.repositoryCandidate.candidateEvidence.hash } : {}),
           });
           return candidate;
@@ -2219,7 +2220,7 @@ export class ExecutionService {
       candidate.status = terminalStatus;
       candidate.execution = execution;
       candidate.version += 1;
-      executionEvent(candidate, eventType, commandPrincipal, details);
+      executionEvent(candidate, eventType, commandPrincipal, { ...details, ...(candidate.processTaskRef?.flowBinding ? { executionHash: persistedDigest(execution) } : {}) });
       return candidate;
     };
     const failed = () => build('FAILED', {

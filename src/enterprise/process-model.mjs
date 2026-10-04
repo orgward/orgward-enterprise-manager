@@ -198,5 +198,5 @@ export function processModelRelations(objects) {
 export const PROCESS_MODEL = { supportedStepKinds: PROCESS_STEP_KINDS, operators: DECISION_OPERATORS,
   limits: { steps: 32, forkBranches: 4, loops: 1, loopIterations: 10, simulationSteps: 200, decisionInputs: 12, decisionRules: 20 },
   gaps: ['Simulation is a declared scenario, not actual work or verified business performance.',
-    'Advanced flow routing requires an explicitly compiled pinned manual-flow plan and assigned human work.',
-    'Nested loops, advanced agent automation and timed activation are unsupported.'] };
+    'Advanced flow routing requires an explicitly compiled pinned plan and enabled human or governed agent activity assignments.',
+    'Nested loops, automatic agent dispatch and timed activation are unsupported.'] };

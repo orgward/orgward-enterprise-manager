@@ -1,9 +1,9 @@
 # Customer functionality queue
 
-**Latest scope and model override (2026-10-03):** This queue contains the 17
-stable functionality IDs PR-01–PR-10 and PR-12–PR-18. GPT-6.1 Sol owns
-implementation, orchestration, design and code review. Luna is the sole
-verifier/test runner and may provide focused text support. PR-11 and PR-19 remain pending in
+**Latest scope and model override (2026-10-04):** This queue contains the 17
+stable functionality IDs PR-01–PR-10 and PR-12–PR-18. Luna 6 owns
+implementation, tests, documentation and integration. GPT-6.1 Sol is read-only
+reviewer and may provide design feedback. PR-11 and PR-19 remain pending in
 `HARDENING-TASKS.md`; broad hardening and release qualification follow this
 functionality queue. Required runtime integrity and customer operations remain
 part of the relevant functionality paths.
@@ -14,9 +14,9 @@ coverage; they do not create paperwork gates. Historical roadmaps, task indexes,
 vectors and packet instructions under `docs/production/` remain reference
 material, not a competing cursor.
 
-Work the first unchecked, dependency-ready item. Sol implements and reviews;
-Luna is the sole verifier/test runner and runs focused tests when the slice is
-ready and the integrator coordinates it. Freeze the source and run `npm run check`
+Work the first unchecked, dependency-ready item. Luna implements and runs
+focused tests when the slice is ready; Sol reviews the resulting source and test
+contracts without editing or running tests. Freeze the source and run `npm run check`
 once at parent-task completion. Do not duplicate checks. Preserve skip and failure
 details; specification validators and vectors are not product acceptance.
 Unrequested live effects, deployments, purchases and external communications are
@@ -6097,6 +6097,43 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   provider request, live effect or gate promotion occurred. PR-12 remains open
   for governed agent runtime, economics/resources/value, refinement/reverse
   trace, bulk/interchange and scoped multi-axis completeness.
+
+  Governed agent integration verified (2026-10-04): one saved manual-flow
+  fixture routes an audited human decision to an assigned workload actor,
+  independently approved local execution, saved success or failure evidence,
+  exception routing, cancellation blocking and a restarted human checkpoint.
+  The event execution hash now normalizes to the persisted JSON shape before
+  hashing, matching PostgreSQL verification when in-memory fields are undefined;
+  the test checks saved JSONB and preserves the transformed HTTP view contract.
+  Two pure/UI helper cases and the PG journey passed. Initial focused run:
+  2 passed/1 failed/0 skipped (2.78s runner, 1.683s TAP), log
+  `/tmp/orgward-tests-MAKtSs/node-test.tap.log`; first failed-only run:
+  0 passed/1 failed/0 skipped (3.57s runner, 2.483s TAP), log
+  `/tmp/orgward-tests-fQVqSD/node-test.tap.log`; second failed-only run exposed
+  an HTTP-view fixture assumption: 0 passed/1 failed/0 skipped (3.88s runner,
+  2.252s TAP), log `/tmp/orgward-tests-BOOpcm/node-test.tap.log`. Final
+  failed-case-only run passed 1/1, 0 failures/skips (4.95s runner, 3.801s TAP),
+  log `/tmp/orgward-tests-p7rQKR/node-test.tap.log`; wrapper
+  `/tmp/orgward-pr12-authored-agent-pg-final2.log`. The two passing helper cases
+  were not rerun. Changed-source syntax and `git diff --check` passed. Sol
+  reviewed the fixture contracts and canonical hash repair read-only. No full
+  parent check, provider request, browser, live effect or gate promotion.
+
+  Economics/resources/value typed scenario slice verified (2026-10-04): saved
+  exact-source commands and projections now cover typed money/quantities, finite
+  UTC windows, process/resource allocation, human-reported lifecycle observations,
+  immutable evaluation hashes and branch/restart/cutoff reads. Missing demand for
+  a linked process/resource is explicit UNKNOWN and blocks COMPLETE; value report
+  basis binds the parent offering/customer; zero fixed cost and zero contribution
+  report zero output break-even. Saved allocation rows identify their process and
+  source. Definitive rejected typed drafts remain available for repair, and
+  successful branch definitions retain branch context. Four new focused cases
+  passed (4/4, 0 failures/skips; runner 3.15s, TAP 2.012s), log
+  `/tmp/orgward-tests-GLuL5C/node-test.tap.log`, wrapper
+  `/tmp/orgward-pr12-economics-focused.log`. Sol reviewed the implementation and
+  fixtures read-only before the run. Changed-source syntax checks and
+  `git diff --check` passed. No full parent check, browser, provider, live effect
+  or gate promotion.
 
   Process/decision authoring and simulation verified (2026-10-04, branch base
   `d81f9e4`): GPT-6.1 Sol added canonical typed activity, exception, decision,

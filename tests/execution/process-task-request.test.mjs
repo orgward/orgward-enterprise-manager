@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { acceptProcessTaskRequest, clearPendingProcessTaskRequest, findPendingProcessTaskRequest,
-  processTaskRequestPresentation, processTaskRequestReconciled, processTaskRequestStorageKey,
+  processTaskRequestPresentation, processTaskRequestReconciled, processTaskRequestScopeMatches, processTaskRequestStorageKey,
   readPendingProcessTaskRequest, reconciledSavedProcessTaskRequests, savePendingProcessTaskRequest } from '../../public/process-task-request.mjs';
 
 function memoryStorage() {
@@ -139,4 +139,33 @@ test('recovery lookup cannot adopt another tenant or principal pending request',
       principal: other.principal, projectId: other.projectId, runs: [], instances: [] }), [],
     'reload reconciliation cannot adopt another tenant or principal receipt');
   }
+});
+
+test('pending agent request recovery matches its exact tenant, caller, plan revision, task and instance', () => {
+  const scope = { tenantId: 'tenant-a', principal: 'oidc:editor', projectId: 'project-agent-flow',
+    planId: 'process-plan-agent-flow', revision: 4, taskId: 'task-flow-review', planInstanceId: 'instance-agent-flow' };
+  const pending = { commandId: 'process-task-request:agent-flow-1', tenantId: scope.tenantId, principal: scope.principal,
+    payload: { projectId: scope.projectId, planId: scope.planId, revision: scope.revision,
+      taskId: scope.taskId, planInstanceId: scope.planInstanceId, profileId: 'fixed-local-agent' } };
+  assert.equal(processTaskRequestScopeMatches(pending, scope), true);
+  for (const patch of [
+    { tenantId: 'tenant-other' }, { principal: 'oidc:other' }, { projectId: 'project-other' },
+    { planId: 'process-plan-other' }, { revision: 3 }, { taskId: 'task-flow-other' }, { planInstanceId: 'instance-other' },
+  ]) assert.equal(processTaskRequestScopeMatches(pending, { ...scope, ...patch }), false,
+    `saved request cannot be recovered in ${JSON.stringify(patch)} scope`);
+  const legacy = { commandId: 'process-task-request:legacy-agent', payload: {
+    projectId: scope.projectId, planId: scope.planId, revision: scope.revision, taskId: scope.taskId,
+  } };
+  assert.equal(processTaskRequestScopeMatches(legacy, { ...scope, planInstanceId: undefined }), true,
+    'legacy pending request envelopes retain their documented unscoped compatibility');
+  assert.equal(processTaskRequestScopeMatches(legacy, scope), true,
+    'a legacy uncertain new-instance request can still be retried after an instance ID was created');
+  const acceptedNewIntent = { ...legacy, tenantId: scope.tenantId, principal: scope.principal, status: 'accepted',
+    acceptedRunId: 'execution-run-flow-agent', acceptedProcessTaskRef: { tenantId: scope.tenantId, principal: scope.principal,
+      projectId: scope.projectId, processPlanId: scope.planId, revision: scope.revision, taskId: scope.taskId,
+      planInstanceId: scope.planInstanceId } };
+  assert.equal(processTaskRequestScopeMatches(acceptedNewIntent, scope), true,
+    'an accepted original new-instance intent matches only its confirmed created instance');
+  assert.equal(processTaskRequestScopeMatches(acceptedNewIntent, { ...scope, planInstanceId: 'instance-other' }), false,
+    'an accepted new-instance intent cannot be adopted by another displayed instance');
 });

@@ -45,6 +45,13 @@ export function digest(value) {
   return createHash('sha256').update(typeof value === 'string' ? value : canonical(value)).digest('hex');
 }
 
+// Hash the JSON representation used by persisted records and HTTP responses.
+// This drops undefined object properties before canonical key ordering, matching
+// JSONB persistence even when callers built the value in memory.
+export function persistedDigest(value) {
+  return digest(JSON.parse(JSON.stringify(value)));
+}
+
 export function id(prefix) {
   return `${prefix}-${randomUUID()}`;
 }

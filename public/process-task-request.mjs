@@ -32,13 +32,20 @@ export function clearPendingProcessTaskRequest(storage, key) {
   try { storage?.removeItem(key); } catch { /* The server receipt remains authoritative if browser storage is unavailable. */ }
 }
 
+export function processTaskRequestScopeMatches(pending, { tenantId, principal, projectId, planId, revision, taskId, planInstanceId }) {
+  const instanceMatches = planInstanceId === undefined || (planInstanceId === 'new'
+    ? pending?.payload?.planInstanceId === undefined
+    : pending?.payload?.planInstanceId === planInstanceId || (pending?.payload?.planInstanceId === undefined
+      && (pending?.status !== 'accepted' || pending?.acceptedProcessTaskRef?.planInstanceId === planInstanceId)));
+  return Boolean(pending && (pending.tenantId === undefined || pending.tenantId === tenantId)
+    && (pending.principal === undefined || pending.principal === principal)
+    && pending.payload?.projectId === projectId && pending.payload.planId === planId
+    && pending.payload.revision === revision && pending.payload.taskId === taskId && instanceMatches);
+}
+
 export function findPendingProcessTaskRequest(storage, { key, tenantId, principal, projectId, planId, revision, planInstanceId, taskId }) {
   const direct = readPendingProcessTaskRequest(storage, key);
-  const matchesTask = (candidate) => candidate?.payload?.projectId === projectId
-    && candidate.payload.planId === planId && candidate.payload.revision === revision
-    && candidate.payload.taskId === taskId
-    && (candidate.tenantId === undefined || candidate.tenantId === tenantId)
-    && (candidate.principal === undefined || candidate.principal === principal);
+  const matchesTask = (candidate) => processTaskRequestScopeMatches(candidate, { tenantId, principal, projectId, planId, revision, taskId });
   const directInstanceMatches = planInstanceId === 'new'
     ? direct?.payload?.planInstanceId === undefined
     : direct?.payload?.planInstanceId === planInstanceId;

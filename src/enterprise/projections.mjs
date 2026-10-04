@@ -4,9 +4,10 @@ import { digest } from '../sdlc/contracts.mjs';
 import { effectiveStatus, enterpriseInstant, objectStates } from './state.mjs';
 import { projectEnterpriseBranches } from './branches.mjs';
 import { PROCESS_MODEL } from './process-model.mjs';
+import { projectEconomicPortfolio } from './economics-scenario.mjs';
 
 export function normalizeEnterpriseQuery(input = {}) {
-  const accepted = ['lensId', 'scopeId', 'blueprintVersion', 'selectedId', 'proposalId', 'effectiveAt', 'recordedAt', 'branchId', 'branchRevision', 'simulationId'];
+  const accepted = ['lensId', 'scopeId', 'blueprintVersion', 'selectedId', 'proposalId', 'effectiveAt', 'recordedAt', 'branchId', 'branchRevision', 'simulationId', 'economicEvaluationId'];
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !accepted.includes(key))) {
     throw enterpriseFailure('INVALID_ENTERPRISE_CONTEXT', 'Choose a supported lens, scope, saved blueprint version and selection.');
   }
@@ -17,10 +18,12 @@ export function normalizeEnterpriseQuery(input = {}) {
   const query = { lensId, scopeId: input.scopeId || null, selectedId: input.selectedId || null, blueprintVersion: null,
     proposalId: input.proposalId ?? null, effectiveAt: input.effectiveAt == null ? null : enterpriseInstant(input.effectiveAt, 'Effective time'),
     recordedAt: input.recordedAt == null ? null : enterpriseInstant(input.recordedAt, 'Recorded-time cutoff'),
-    branchId: input.branchId ?? null, branchRevision: null, simulationId: input.simulationId ?? null };
+    branchId: input.branchId ?? null, branchRevision: null, simulationId: input.simulationId ?? null,
+    economicEvaluationId: input.economicEvaluationId ?? null };
   if (query.proposalId !== null && !/^enterprise-proposal-[0-9a-f-]{36}$/.test(query.proposalId)) throw enterpriseFailure('INVALID_ENTERPRISE_CONTEXT', 'Choose a saved future proposal identifier.');
   if (query.branchId !== null && !/^enterprise-branch-[0-9a-f-]{36}$/.test(query.branchId)) throw enterpriseFailure('INVALID_ENTERPRISE_CONTEXT', 'Choose a saved branch identifier.');
   if (query.simulationId !== null && !/^process-simulation-[0-9a-f-]{36}$/.test(query.simulationId)) throw enterpriseFailure('INVALID_ENTERPRISE_CONTEXT', 'Choose an exact saved simulation identifier.');
+  if (query.economicEvaluationId !== null && !/^economic-evaluation-[0-9a-f-]{36}$/.test(query.economicEvaluationId)) throw enterpriseFailure('INVALID_ENTERPRISE_CONTEXT', 'Choose an exact saved economic evaluation identifier.');
   if (input.branchRevision != null) {
     if (!query.branchId || !/^[1-9][0-9]*$/.test(String(input.branchRevision)) || !Number.isSafeInteger(Number(input.branchRevision))) {
       throw enterpriseFailure('INVALID_ENTERPRISE_CONTEXT', 'Choose a positive saved revision within the selected branch.');
@@ -97,7 +100,7 @@ export function projectEnterprise(project, query = {}, authority = {}) {
   const gaps = [
     { code: 'PROPOSED_DESIGN_ONLY', message: 'These perspectives show saved organizational design. They do not establish enabled operations or verified outcomes.' },
     { code: 'PROPOSED_MERGE_ONLY', message: 'Reviewed branch merges change current proposed design. Internal publication and work or effect approvals remain separate.' },
-    { code: 'DOMAIN_DETAILS_PARTIAL', message: 'Advanced manual runtime routing, economic scenarios, capacity calendars, refinement and bulk collaboration need further implementation.' },
+    { code: 'DOMAIN_DETAILS_PARTIAL', message: 'Refinement and bulk collaboration need further implementation.' },
   ];
   if (!blueprint) gaps.unshift({ code: current ? 'TEMPORAL_CONTEXT_UNKNOWN' : 'BLUEPRINT_REQUIRED',
     message: current ? 'No saved main snapshot has known applicability at these dates. Missing effective dates remain unknown; no current-design fallback was used.'
@@ -128,6 +131,9 @@ export function projectEnterprise(project, query = {}, authority = {}) {
     }
     simulation = structuredClone(simulation);
   }
+  const economics = projectEconomicPortfolio(project, blueprint, { selectedId: context.selectedId, recordedAtCutoff: context.recordedAt,
+    economicEvaluationId: context.economicEvaluationId, branchId: context.branchId, branchRevision: branchContext.revision,
+    proposalId: proposal?.id ?? null });
   return { context: { projectVersion: project.version, blueprintId: blueprint?.id ?? null, blueprintVersion: blueprint?.version ?? null,
     isCurrent, lensId: context.lensId, scopeId: context.scopeId, branch: context.branchId ?? 'main', proposalId: proposal?.id ?? null,
     branchId: context.branchId, branchRevision: branchContext.revision,
@@ -151,13 +157,15 @@ export function projectEnterprise(project, query = {}, authority = {}) {
       baseBlueprintId: proposal.baseBlueprintId, baseBlueprintVersion: proposal.baseBlueprintVersion, baseSnapshotHash: proposal.baseSnapshotHash,
       snapshotHash: proposal.snapshotHash, baseStale: proposal.baseStale,
       diff: { before: structuredClone(proposal.snapshot.edit.before), after: structuredClone(proposal.snapshot.edit.after), changedFields: proposal.snapshot.edit.changedFields } } : null,
-    branches: branchContext.branches, branch: branchContext.branch, processModel: structuredClone(PROCESS_MODEL), simulations, simulation,
+    branches: branchContext.branches, branch: branchContext.branch, processModel: structuredClone(PROCESS_MODEL), simulations, simulation, economics,
     permissions: { write: isCurrent && Boolean(authority.write), scopeAdmin: isCurrent && Boolean(authority.scopeAdmin),
       branchCreate: Boolean(blueprint && !context.branchId && authority.write && authority.human),
       branchWrite: Boolean(branchContext.writable && authority.write && authority.human),
       branchAdmin: Boolean(branchContext.writable && authority.scopeAdmin && authority.human),
       processWrite: Boolean((isCurrent || branchContext.writable) && authority.write && authority.human),
-      simulate: Boolean(blueprint && authority.write && authority.human) },
+      simulate: Boolean(blueprint && authority.write && authority.human),
+      economicWrite: Boolean((isCurrent || branchContext.writable) && authority.write && authority.human),
+      economicEvaluate: Boolean(blueprint && authority.write && authority.human) },
     exclusions: { totalObjects: objects.length, visibleObjects: visible.size,
       scopeUnknownCount: unknownCount, unscopedCount: objects.filter((object) => scopeState(object) === 'UNSCOPED').length,
       filteredByScope: objects.filter((object) => !inScope(object)).length,

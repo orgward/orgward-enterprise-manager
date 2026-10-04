@@ -6,8 +6,9 @@ import { enterpriseCommandStorageKey, enterpriseContextFailure, enterpriseContex
 import { enterpriseBranchCommandPayload, enterpriseBranchWritable, enterpriseCandidateCurrent, enterpriseCommandResultRoute,
   renderEnterpriseBranches } from '../../public/enterprise-branches.mjs';
 import { enterpriseProcessCommandPayload, enterpriseTypedValue, renderEnterpriseProcess, renderEnterpriseSimulation } from '../../public/enterprise-process.mjs';
-import { activationForTask, evaluateManualFlowAdvice, manualFlowActivation, manualFlowDecisionDefinition,
+import { activationForTask, evaluateManualFlowAdvice, manualFlowActivation, manualFlowAllowsAgent, manualFlowAgentRequestReady, manualFlowDecisionDefinition,
   mergeProcessPlanActivation, renderManualFlowDecisionChoice } from '../../public/manual-flow-ui.mjs';
+import { renderEnterpriseEconomics } from '../../public/enterprise-economics.mjs';
 import { decodeStudioRoute, encodeStudioRoute } from '../../public/shared-interactions.mjs';
 
 class NodeListFixture extends Array {
@@ -410,6 +411,40 @@ test('manual-flow UI binds activation, decisions and task occurrences to the exa
   assert.deepEqual(restored.read(), unknownChoice);
 });
 
+test('manual-flow agent requests are limited to the exact supported READY occurrence', () => {
+  const instanceId = '9f2ac136-bfe2-496f-8502-1eaee607d75e';
+  const agentTask = { id: 'task-agent-review', flowRef: { stepId: 'review', iteration: 1, kind: 'manual' } };
+  const plan = { id: 'process-plan-manual-agent', kind: 'manual_process_flow_plan', revision: 2,
+    source: { projectId: 'project-manual-agent', blueprintId: 'blueprint-1', blueprintVersion: 4 }, tasks: [agentTask],
+    activation: { planInstanceId: null, tasks: [{ taskId: agentTask.id, state: 'READY' }] } };
+  const runtimeTask = { ...agentTask, activation: undefined };
+  const instanceActivation = { planInstanceId: instanceId, tasks: [{ taskId: agentTask.id, state: 'READY' }] };
+  const rows = [{ projectId: plan.source.projectId, processPlanId: plan.id, revision: plan.revision,
+    planInstanceId: instanceId, taskId: agentTask.id, activation: instanceActivation }];
+  assert.equal(manualFlowAllowsAgent(agentTask), true);
+  assert.equal(manualFlowAllowsAgent({ ...agentTask, flowRef: { ...agentTask.flowRef, kind: 'manual-exception' } }), true);
+  for (const kind of ['decision', 'loop', 'fork', 'join', 'end', 'legacy-dag']) {
+    assert.equal(manualFlowAllowsAgent({ ...agentTask, flowRef: { ...agentTask.flowRef, kind } }), false, `${kind} cannot be assigned to an agent`);
+  }
+  assert.equal(manualFlowAgentRequestReady(plan, [], agentTask, null), true);
+  assert.equal(manualFlowAgentRequestReady(plan, rows, agentTask, instanceId), true);
+  assert.equal(manualFlowAgentRequestReady({ ...plan, kind: 'process_plan' }, rows, agentTask, instanceId), false);
+  assert.equal(manualFlowAgentRequestReady(plan, rows, { ...agentTask, id: 'task-copied-elsewhere' }, instanceId), false);
+  for (const patch of [
+    { stepId: 'other-step' }, { iteration: 2 }, { kind: 'decision' },
+  ]) assert.equal(manualFlowAgentRequestReady(plan, rows, { ...agentTask, flowRef: { ...agentTask.flowRef, ...patch } }, instanceId), false,
+    `the pinned occurrence rejects ${JSON.stringify(patch)}`);
+  assert.equal(manualFlowAgentRequestReady(plan, [{ ...rows[0], projectId: 'project-other' }], agentTask, instanceId), false);
+  assert.equal(manualFlowAgentRequestReady(plan, [{ ...rows[0], processPlanId: 'process-plan-other' }], agentTask, instanceId), false);
+  assert.equal(manualFlowAgentRequestReady(plan, [{ ...rows[0], revision: 1 }], agentTask, instanceId), false);
+  assert.equal(manualFlowAgentRequestReady(plan, [{ ...rows[0], planInstanceId: '9f2ac136-bfe2-496f-8502-1eaee607d75f' }], agentTask, instanceId), false);
+  for (const state of ['WAITING', 'SKIPPED', 'BLOCKED', 'SUCCEEDED', 'FAILED']) {
+    const notReady = [{ ...rows[0], activation: { ...instanceActivation, tasks: [{ taskId: agentTask.id, state }] } }];
+    assert.equal(manualFlowAgentRequestReady(plan, notReady, agentTask, instanceId), false, `${state} does not authorize a new agent request`);
+  }
+  assert.equal(runtimeTask.flowRef.kind, 'manual');
+});
+
 test('an unavailable requested enterprise context stays explicit and offers an intentional reset', () => {
   const requested = { lensId: 'L-99', scopeId: 'missing-scope', blueprintVersion: 42 };
   const root = renderEnterpriseContext({ model: null, query: requested, error: 'Requested context is unavailable', el,
@@ -556,4 +591,27 @@ test('first-run enterprise context gives blueprint guidance without rendering sc
     onContext: () => {}, onCommand: () => {}, onRetry: () => {} });
   assert.match(root.textContent, /Save the initial blueprint to explore and define enterprise scopes/);
   assert.equal(root.querySelectorAll('form').length, 0);
+});
+
+test('saved economics UI explains each allocation with its process identity and source', () => {
+  const process = { id: 'process-deliver', type: 'process', name: 'Deliver the core offering', detail: 'Complete the service.' };
+  const resource = { id: 'resource-capacity', type: 'resource', name: 'Delivery capacity', detail: 'Staffing.' };
+  const economics = { id: 'economics-launch', type: 'economics', name: 'Launch economics', detail: 'Declared assumptions.' };
+  const evaluation = { id: 'economic-evaluation-00000000-0000-4000-8000-000000000001', economicsId: economics.id,
+    createdAt: '2026-10-04T00:00:00.000Z', createdBy: 'oidc:owner', reason: 'Review reported allocation.', status: 'CONSTRAINED',
+    source: { blueprintId: model().context.blueprintId, blueprintVersion: 3, snapshotHash: 'a'.repeat(64), branchId: null, branchRevision: null, proposalId: null },
+    sourceLabels: { records: { [economics.id]: economics.name, [process.id]: process.name } },
+    scenario: { window: { start: '2026-10-01T00:00:00.000Z', end: '2026-10-02T00:00:00.000Z' } }, metrics: {},
+    resources: [{ resourceId: resource.id, resourceName: resource.name, status: 'CONSTRAINED',
+      window: { start: '2026-10-01T00:00:00.000Z', end: '2026-10-02T00:00:00.000Z' }, metrics: {}, constraints: [], demands: [],
+      allocations: [{ id: 'allocation-staffing', processId: process.id, state: 'COMMITTED_REPORTED',
+        quantity: { value: 12, unit: 'hours', source: 'Human staffing forecast' } }],
+    }], constraints: [], explanations: [] };
+  const sourceModel = model({ context: { ...model().context, snapshotHash: 'a'.repeat(64) },
+    blueprint: { areas: { responsibilityAuthority: { items: [economics] }, capabilitiesProcesses: { items: [process] }, resources: { items: [resource] } } },
+    permissions: { economicWrite: true, economicEvaluate: true }, economics: { evaluation } });
+  const panel = renderEnterpriseEconomics({ model: sourceModel, object: economics, el, ui: branchUi, onCommand() {} });
+  assert.match(panel.textContent, /allocation-staffing/);
+  assert.match(panel.textContent, /Deliver the core offering/);
+  assert.match(panel.textContent, /Human staffing forecast/);
 });

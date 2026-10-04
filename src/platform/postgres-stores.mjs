@@ -145,7 +145,9 @@ function verifyRuntimePlanTasks(plan, runtimes) {
       || runtime.blueprint_id !== plan.source.blueprintId || Number(runtime.blueprint_version) !== Number(plan.source.blueprintVersion)) {
       throw persistenceIntegrity('A process task runtime does not match its immutable graph snapshot.');
     }
-    if (plan.kind === 'manual_process_flow_plan' && (runtime.actor_type !== 'human' || runtime.execution_run_id
+    if (plan.kind === 'manual_process_flow_plan' && (!['human', 'workload'].includes(runtime.actor_type)
+      || (runtime.actor_type === 'human' && runtime.execution_run_id)
+      || (runtime.actor_type === 'workload' && !['manual', 'manual-exception'].includes(task.flowRef?.kind))
       || runtime.actor_id !== task.assignee?.actorId || runtime.role_id !== task.assignee?.roleId
       || runtime.process_id !== plan.source.processId)) throw persistenceIntegrity('A manual flow runtime does not match its pinned human assignment.');
     if (plan.kind === 'software_delivery_runtime_plan'
@@ -469,6 +471,80 @@ async function verifiedManualFlowOutcome(client, plan, runtime) {
   [runtime.tenant_id, `${runtime.plan_instance_id}:${runtime.task_id}`, event.type, event.actor, canonicalJson(event), contentHash(event)]);
   return { verified: audit.rowCount === 1, result, ...(choice ? { decisionChoice: choice } : {}), eventHash: contentHash(event) };
 }
+function verifyAdvancedFlowRunRef(plan, runtime, run) {
+  assertLinkedWorkloadRuntime(runtime, run);
+  const requested = run.events?.find((event) => event.type === 'ExecutionRequested');
+  const { contentHash: requestedHash, ...requestCore } = requested ?? {};
+  if (!requestedHash || requestedHash !== contentHash(requestCore)
+    || contentHash(requested.data?.processTaskRef?.flowBinding ?? null) !== contentHash(run.processTaskRef?.flowBinding ?? null)) throw persistenceIntegrity('The agent flow binding differs from its saved request event.');
+  if (run.processTaskRef?.flowBinding?.snapshotHash !== plan.snapshotHash
+    || run.processTaskRef.flowBinding.definitionHash !== plan.flow.definitionHash
+    || !/^[a-f0-9]{64}$/.test(run.processTaskRef.flowBinding.activationIdentity ?? '')) throw persistenceIntegrity('The agent run does not match its pinned advanced flow identity.');
+}
+async function verifiedAdvancedAgentOutcome(client, plan, runtime) {
+  const pending = { verified: false, result: null, status: runtime.status, version: Number(runtime.version),
+    ...(runtime.status === 'CANCELLED' || runtime.status === 'INTERRUPTED' ? { reason: `${runtime.status === 'CANCELLED' ? 'Cancelled' : 'Interrupted'} agent work has no verified business outcome; no success or exception route is authorized.` } : {}) };
+  if (!runtime.execution_run_id) return pending;
+  const selected = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2 for share`, [runtime.tenant_id, runtime.execution_run_id]);
+  if (!selected.rowCount) throw persistenceIntegrity('An advanced agent occurrence has no saved linked execution run.');
+  const run = verifyAggregateRow(selected.rows[0]); verifyAdvancedFlowRunRef(plan, runtime, run);
+  if (!['SUCCEEDED', 'FAILED'].includes(run.status) || !runtime.completed_at || !run.execution) return pending;
+  const unresolved = await client.query(`select status from orgward.provider_dispatch_attempts where tenant_id=$1 and run_id=$2 and status in ('reserved','handed_off','outcome_unknown')`, [run.tenantId, run.id]);
+  if (unresolved.rowCount) return { ...pending, reason: 'Provider outcome remains unresolved; no business result or exception route is verified.' };
+  const type = run.status === 'SUCCEEDED' ? 'ExecutionSucceeded' : 'ExecutionFailed';
+  const terminals = (run.events ?? []).filter((event) => event.type === type);
+  if (terminals.length !== 1) return pending;
+  const event = terminals[0]; const { contentHash: hash, ...core } = event;
+  if (hash !== contentHash(core) || event.data?.executionHash !== contentHash(run.execution)) return pending;
+  if (run.status === 'SUCCEEDED' && (run.execution.status !== 'COMPLETED'
+    || !/^[a-f0-9]{64}$/.test(run.execution.evidenceHash ?? '') || event.data?.evidenceHash !== run.execution.evidenceHash)) return pending;
+  if (run.status === 'FAILED' && run.execution.status !== 'FAILED') return pending;
+  const runtimeEvents = (runtime.events ?? []).filter((entry) => entry.type === 'ProcessTaskRunStatusChanged'
+    && entry.data?.runId === run.id && entry.data.status === run.status && Number.isSafeInteger(Number(entry.data.runVersion)) && Number(entry.data.runVersion) <= Number(run.version)
+    && contentHash(entry.data.flowBinding ?? null) === contentHash(run.processTaskRef.flowBinding));
+  if (runtimeEvents.length !== 1) return pending;
+  const runtimeEvent = runtimeEvents[0]; const { contentHash: runtimeHash, ...runtimeCore } = runtimeEvent;
+  if (runtimeHash !== contentHash(runtimeCore)) return pending;
+  for (const [kind, id, auditedEvent] of [['execution_run', run.id, run.events.find((entry) => entry.type === 'ExecutionRequested')], ['execution_run', run.id, event], ['process_task_instance', `${runtime.plan_instance_id}:${runtime.task_id}`, runtimeEvent]]) {
+    const audit = await client.query(`select aggregate_version from orgward.audit_log where tenant_id=$1 and aggregate_kind=$2 and aggregate_id=$3
+      and event_type=$4 and actor=$5 and event=$6::jsonb and event_hash=$7`,
+    [run.tenantId, kind, id, auditedEvent.type, auditedEvent.actor, canonicalJson(auditedEvent), contentHash(auditedEvent)]);
+    if (audit.rowCount !== 1 || (auditedEvent === event && Number(audit.rows[0].aggregate_version) !== Number(runtimeEvent.data.runVersion))) return pending;
+  }
+  return { verified: true, result: run.status === 'SUCCEEDED' ? 'succeeded' : 'failed', runId: run.id,
+    eventHash: contentHash(event), executionHash: contentHash(run.execution), runtimeEventHash: contentHash(runtimeEvent) };
+}
+async function requireAdvancedLinkedRunActivation(client, run, suppliedControl = null) {
+  const ref = run.processTaskRef; if (!ref) return;
+  const plan = await resolveRuntimeProcessPlan(client, { tenantId: run.tenantId, projectId: run.projectId, planId: ref.processPlanId, revision: ref.revision });
+  if (plan?.kind !== 'manual_process_flow_plan') return;
+  const rows = await client.query(`select * from orgward.process_task_instances where tenant_id=$1 and plan_instance_id=$2 order by task_id for share`, [run.tenantId, ref.planInstanceId]);
+  const runtime = rows.rows.find((row) => row.task_id === ref.taskId);
+  if (!runtime) throw persistenceIntegrity('The advanced agent run has no runtime occurrence.');
+  // The saved run is still at its prior version during a state mutation; verify immutable linkage here.
+  const stored = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2 for share`, [run.tenantId, run.id]);
+  if (!stored.rowCount) throw persistenceIntegrity('The advanced agent run is missing.');
+  const current = verifyAggregateRow(stored.rows[0]); verifyAdvancedFlowRunRef(plan, runtime, current);
+  if (contentHash(current.processTaskRef) !== contentHash(run.processTaskRef)) throw persistenceIntegrity('The advanced agent linkage cannot change.');
+  const binding = await client.query(`select b.status,b.target_principal,b.target_membership_generation,b.target_authz_generation,
+    p.status as principal_status,p.actor_type,p.authz_generation,m.access,m.generation,m.revoked_at
+    from orgward.project_actor_binding_proposals b
+    join orgward.oidc_principals p on p.tenant_id=b.tenant_id and p.principal=b.target_principal
+    join orgward.project_memberships m on m.tenant_id=b.tenant_id and m.project_id=b.project_id and m.principal=b.target_principal
+    where b.tenant_id=$1 and b.project_id=$2 and b.blueprint_version=$3 and b.actor_id=$4 and b.role_id=$5 for share of b,p,m`,
+  [run.tenantId, run.projectId, ref.blueprintVersion, ref.actorId, ref.roleId]);
+  const actorBinding = binding.rows[0];
+  if (binding.rowCount !== 1 || actorBinding.status !== 'enabled' || actorBinding.principal_status !== 'active'
+    || actorBinding.actor_type !== 'workload' || actorBinding.revoked_at || !['owner','editor'].includes(actorBinding.access)
+    || actorBinding.target_principal !== runtime.assigned_principal
+    || Number(actorBinding.target_authz_generation) !== Number(actorBinding.authz_generation)
+    || Number(actorBinding.target_membership_generation) !== Number(actorBinding.generation)
+    || Number(runtime.assigned_authz_generation) !== Number(actorBinding.authz_generation)
+    || Number(runtime.assigned_membership_generation) !== Number(actorBinding.generation)) throw conflict('The pinned agent identity, binding or project membership is no longer current.', run.version, 'PROCESS_TASK_ACTOR_BINDING_STALE');
+  const control = suppliedControl ?? await lockProcessTaskControl(client, run.tenantId, ref.planInstanceId);
+  requireActiveProcessTaskControl(control, run.version);
+  await requireManualFlowTaskReady(client, plan, ref.taskId, rows.rows.filter((row) => row.task_id !== ref.taskId), control, ref.planInstanceId);
+}
 async function verifyManualFlowControl(client, plan, control, instanceId) {
   if (!control) return;
   if (control.project_id !== plan.source.projectId || control.process_plan_id !== plan.id
@@ -495,7 +571,7 @@ async function manualFlowActivation(client, plan, rows, control = null, instance
   if (rows.length && !control) throw persistenceIntegrity('The manual flow rows have no durable instance control.');
   await verifyManualFlowControl(client, plan, control, instanceId);
   const outcomes = new Map();
-  for (const row of rows) outcomes.set(row.task_id, await verifiedManualFlowOutcome(client, plan, row));
+  for (const row of rows) outcomes.set(row.task_id, row.actor_type === 'workload' ? await verifiedAdvancedAgentOutcome(client, plan, row) : await verifiedManualFlowOutcome(client, plan, row));
   return projectManualFlowActivation(plan, outcomes, { planInstanceId: instanceId, control: control ? { status: control.status, version: Number(control.version), boundary: control.pause_boundary, eventsHash: contentHash(control.events) } : null });
 }
 async function requireManualFlowTaskReady(client, plan, taskId, rows, control, instanceId) {
@@ -595,6 +671,7 @@ async function syncProcessTaskRuntimeFromRun(client, run, { commandId = null } =
   if (current.status === run.status && current.execution_run_id === run.id) return;
   const runtimeEvent = processTaskRuntimeEvent('ProcessTaskRunStatusChanged', 'execution run', {
     runId: run.id, status: run.status, runVersion: run.version,
+    ...(ref.flowBinding ? { flowBinding: structuredClone(ref.flowBinding) } : {}),
   }, commandId);
   const terminal = ['SUCCEEDED', 'FAILED', 'INTERRUPTED', 'CANCELLED'].includes(run.status);
   await client.query(`
@@ -929,6 +1006,7 @@ class PostgresDocumentStore {
         });
       }
       if (this.kind === 'execution_run' && state.processTaskRef && expectedVersion !== null) {
+        await client.query(`select aggregate_id from orgward.aggregates where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2 for share`, [state.tenantId, state.projectId]);
         const control = await lockProcessTaskControl(client, state.tenantId, state.processTaskRef.planInstanceId);
         if (!control) throw persistenceIntegrity('A linked process task has no durable instance control record.');
         if (workerFinalization && ['ABANDONED_UNVERIFIED', 'CANCELLED'].includes(control.status)) {
@@ -937,6 +1015,7 @@ class PostgresDocumentStore {
         }
         if (!instanceControlMutation && ['AWAITING_APPROVAL', 'APPROVED', 'RUNNING'].includes(state.status)) {
           requireActiveProcessTaskControl(control, state.version);
+          await requireAdvancedLinkedRunActivation(client, state, control);
         }
       }
       if (this.kind === 'execution_run' && principal && requiredPrincipalRoles?.includes('execution-approver')) {
@@ -1051,9 +1130,11 @@ class PostgresDocumentStore {
         throw conflict('Execution dispatch no longer matches the authorized run version.', hint.version, 'DISPATCH_CONFLICT');
       }
       if (hint.processTaskRef) {
+        await client.query(`select aggregate_id from orgward.aggregates where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2 for share`, [tenantId, projectId]);
         const control = await lockProcessTaskControl(client, tenantId, hint.processTaskRef.planInstanceId);
         if (!control) throw persistenceIntegrity('A linked process task has no durable instance control record.');
         requireActiveProcessTaskControl(control, hint.version);
+        await requireAdvancedLinkedRunActivation(client, hint, control);
       }
       const approvalPrincipal = hint.approval?.principal;
       const lockedIdentities = await lockIdentityRows(client, tenantId, [principal, approvalPrincipal]);
@@ -3021,7 +3102,6 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         const project = verifyAggregateRow(selectedProject.rows[0]);
         const plan = await resolveRuntimeProcessPlan(client, { tenantId, projectId, project, planId, revision });
         if (!plan) throw conflict('The saved process plan revision was not found.', null, 'PROCESS_PLAN_REVISION_NOT_FOUND');
-        if (plan.kind === 'manual_process_flow_plan') throw conflict('Advanced flows currently support explicit human work only.', null, 'PROCESS_FLOW_AGENT_RUNTIME_UNSUPPORTED');
         if (plan.kind === 'software_delivery_runtime_plan') throw conflict('Owner-promoted software work contains human checkpoints only; it cannot create a model execution run.', null, 'SOFTWARE_AGENT_RUNTIME_UNSUPPORTED');
         const revisions = (project.processPlans ?? []).filter((candidate) => candidate.id === planId)
           .sort((left, right) => (left.revision ?? 1) - (right.revision ?? 1));
@@ -3074,6 +3154,8 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
           throw conflict('The plan belongs to another project.', null, 'PROCESS_PLAN_PROJECT_MISMATCH');
         }
         if (!Array.isArray(task.dependencies)) throw persistenceIntegrity('A saved process task has invalid dependencies.');
+        if (plan.kind === 'manual_process_flow_plan' && !['manual', 'manual-exception'].includes(task.flowRef?.kind)) throw conflict('Advanced flow decisions and loops require human work.', null, 'PROCESS_FLOW_HUMAN_DECISION_REQUIRED');
+        const flowActivation = plan.kind === 'manual_process_flow_plan' ? await requireManualFlowTaskReady(client, plan, taskId, taskInstances, instanceControl, instanceId) : null;
         const duplicateTask = taskInstances.some((runtime) => runtime.task_id === taskId);
         if (duplicateTask) throw conflict('This task already has an approval request in this plan instance.', null, 'PROCESS_TASK_ALREADY_REQUESTED');
         if (!instanceExists && task.dependencies.length) {
@@ -3150,6 +3232,7 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
           blueprintId: plan.source.blueprintId, blueprintVersion: plan.source.blueprintVersion,
           processId: plan.source.processId, processName: plan.source.processName,
           actorId: actor.id, roleId: role.id,
+          ...(flowActivation ? { flowBinding: { snapshotHash: plan.snapshotHash, definitionHash: plan.flow.definitionHash, activationIdentity: flowActivation.identity } } : {}),
           ...(repositoryRef ? { repository: structuredClone(repositoryRef) } : {}),
         };
         const run = await buildRun({ project, plan, task, processTaskRef, client });
@@ -3574,7 +3657,7 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         || plan.source?.blueprintVersion !== ref.blueprintVersion || plan.source?.processId !== ref.processId) {
         throw conflict('The immutable plan revision pinned to this paused task is no longer available.', run.version, 'PROCESS_PLAN_REVISION_NOT_FOUND');
       }
-      if (plan.kind === 'manual_process_flow_plan') throw conflict('Advanced flows currently support explicit human work only.', null, 'PROCESS_FLOW_AGENT_RUNTIME_UNSUPPORTED');
+      if (plan.kind === 'manual_process_flow_plan') await requireAdvancedLinkedRunActivation(client, run);
       const task = plan.tasks?.find((candidate) => candidate.id === ref.taskId);
       const assignee = task?.assignee;
       if (!task || assignee?.kind !== 'blueprint-actor' || assignee.actorId !== ref.actorId || assignee.roleId !== ref.roleId) {
@@ -3681,6 +3764,9 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2 for share`, [tenantId, projectId]);
       if (!projectResult.rowCount) return null;
       const project = verifyAggregateRow(projectResult.rows[0]);
+      const advancedControls = (project.processPlans ?? []).some((plan) => plan.kind === 'manual_process_flow_plan')
+        ? await client.query(`select * from orgward.process_task_instance_controls where tenant_id=$1 and project_id=$2 order by plan_instance_id for share`, [tenantId, projectId]) : { rows: [] };
+      const controlsById = new Map(advancedControls.rows.map((control) => [control.plan_instance_id, control]));
       const result = await client.query(`
         select r.*, c.status as instance_control_status, c.version as instance_control_version,
           c.initiated_by as instance_control_initiated_by, c.pause_reason as instance_control_pause_reason,
@@ -3822,9 +3908,9 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         const plan = plans.get(`${row.process_plan_id}\n${Number(row.plan_revision)}`);
         if (plan?.kind !== 'manual_process_flow_plan') continue;
         if (!activations.has(row.plan_instance_id)) {
-          const controls = await client.query(`select * from orgward.process_task_instance_controls where tenant_id=$1 and plan_instance_id=$2 for share`, [tenantId, row.plan_instance_id]);
-          if (!controls.rowCount) throw persistenceIntegrity('The manual flow instance has no durable control.');
-          activations.set(row.plan_instance_id, await manualFlowActivation(client, plan, result.rows.filter((candidate) => candidate.plan_instance_id === row.plan_instance_id), controls.rows[0], row.plan_instance_id));
+          const control = controlsById.get(row.plan_instance_id);
+          if (!control) throw persistenceIntegrity('The manual flow instance has no durable control.');
+          activations.set(row.plan_instance_id, await manualFlowActivation(client, plan, result.rows.filter((candidate) => candidate.plan_instance_id === row.plan_instance_id), control, row.plan_instance_id));
         }
         row.manual_flow_activation = activations.get(row.plan_instance_id);
       }

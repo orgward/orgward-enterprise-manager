@@ -6,8 +6,8 @@ Development workspace with enterprise-design, synthetic SDLC-reference, and cont
 
 [TASKS.md](TASKS.md) is the authoritative functionality queue. Run
 `npm run task:next` to locate its first open task and check the continuation
-pointer. GPT-6.1 Sol implements and reviews bounded customer journeys; Luna is
-the sole verifier and test runner. Complete functionality before the broad
+pointer. Luna 6 implements and verifies bounded customer journeys; GPT-6.1 Sol
+provides read-only review. Complete functionality before the broad
 hardening and qualification tracked in
 [HARDENING-TASKS.md](HARDENING-TASKS.md).
 
@@ -255,11 +255,13 @@ Advanced flows compile explicitly through the process-plan endpoint with
 `mode: "manual-flow"`, `processId`, `blueprintId` and `blueprintVersion` in the
 normal versioned command payload. The saved manual plan pins its complete source,
 flow and expanded occurrences (maximum 32 including structural steps). Assign
-human blueprint actors through the existing plan editor and enabled actor bindings.
+human or agent blueprint actors through the existing plan editor and enabled
+actor bindings. Decisions and loop choices require human actors; activity and
+exception occurrences may use governed agents.
 Routing is fixed; changing a flow requires a new design and compile.
 
 Execution projects ready, waiting and skipped occurrences from audited human
-outcomes. Manual failures activate only declared exception handlers. Forks activate
+outcomes and linked agent execution results. Manual failures activate only declared exception handlers. Forks activate
 all branches; ALL/ANY joins release one continuation according to their saved mode.
 Loop decisions require an explicit human choice for each bounded occurrence, with
 no body work beyond the saved bound. A saved continue choice at the final bound
@@ -271,8 +273,12 @@ routes the instance. Skipped routes never create human success records.
 Existing pause, escalation, reassignment and restart paths apply. Owners must resume
 or reassign a decision for its assigned human to save a choice; terminal owner
 success cannot invent one. Runtime projections retain activation identities and
-trace; source, choice and terminal event hashes bind durable routing. Advanced
-agent execution remains an explicit unsupported functionality gap. The legacy
+trace; source, choice and terminal event hashes bind durable routing. Agent activities
+reuse explicit work requests, independent approval, bounded profiles and intervention;
+request, approval, dispatch and resume recheck saved-flow activation and current
+agent authority. Audited success or resolved failure routes the flow. Cancelled,
+interrupted and uncertain provider results remain blocked; they do not authorize an
+exception handler. Automatic agent dispatch and nested loops remain unsupported. The legacy
 planner rejects advanced flows; baseline DAG and software delivery paths remain
 available.
 

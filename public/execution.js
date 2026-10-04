@@ -1,5 +1,5 @@
 import { getOrCreatePlanRevisionCommand, getOrCreateProcessPlanCommand, processPlanCommandKey, processPlanFailureDisposition } from './process-plan-command.mjs';
-import { activationForTask, isManualFlowPlan, manualFlowActivation, manualFlowInputLabel, manualFlowKindLabel, mergeProcessPlanActivation, renderManualFlowDecisionChoice } from './manual-flow-ui.mjs';
+import { activationForTask, isManualFlowPlan, manualFlowActivation, manualFlowAgentRequestReady, manualFlowAllowsAgent, manualFlowInputLabel, manualFlowKindLabel, mergeProcessPlanActivation, renderManualFlowDecisionChoice } from './manual-flow-ui.mjs';
 import { deriveProcessTaskState } from './process-task-state.mjs';
 import { processTaskStatusAnnouncement, scheduleProcessTaskAnnouncement, summarizeBlockedTaskTransitions } from './process-task-announcement.mjs';
 import { humanTaskHistoryEntries } from './human-task-history.mjs';
@@ -32,7 +32,7 @@ import { processTaskSourceReview } from './process-task-source-review.mjs';
 import { deriveBlueprintProposalReviewState, HUMAN_PROPOSAL_RUBRIC, proposalApplyFailureDisposition, proposalDesignLink } from './proposal-review-state.mjs';
 import { acceptProcessTaskRequest, clearPendingProcessTaskRequest, findPendingProcessTaskRequest,
   processTaskRequestPresentation, processTaskRequestReconciled, processTaskRequestStorageKey,
-  readPendingProcessTaskRequest, reconciledSavedProcessTaskRequests, savePendingProcessTaskRequest } from './process-task-request.mjs';
+  processTaskRequestScopeMatches, readPendingProcessTaskRequest, reconciledSavedProcessTaskRequests, savePendingProcessTaskRequest } from './process-task-request.mjs';
 import { acceptHumanTaskStart, clearHumanTaskStart, humanTaskStartCommandKey, humanTaskStartPresentation,
   humanTaskStartReconciled, humanTaskStartStorageKey, readHumanTaskStart, restoreHumanTaskStarts,
   saveHumanTaskStart } from './human-task-start-recovery.mjs';
@@ -633,7 +633,7 @@ async function createProcessPlan(event) {
         await loadPlanningProject(projectId);
         return notify('The saved blueprint changed. Review the current process list and submit again.');
       }
-      if (mode === 'manual-flow' && !sourceProcess.processFlow) return notify('Save a typed process flow in Enterprise Design before compiling human work.');
+      if (mode === 'manual-flow' && !sourceProcess.processFlow) return notify('Save a typed process flow in Enterprise Design before compiling assigned work.');
       pending = getOrCreateProcessPlanCommand(state.pendingProcessPlans, projectId, processId, project, () => `process-plan-${crypto.randomUUID()}`, mode);
     }
     const result = await api(`/api/v1/projects/${encodeURIComponent(projectId)}/process-plans`, {
@@ -652,7 +652,7 @@ async function createProcessPlan(event) {
       }
     }
     updatePlanButtonLabel();
-    notify(mode === 'manual-flow' ? 'Saved flow compiled. Ready steps require the assigned human to start and record work.' : 'Planning graph saved. No execution run was created and no work was dispatched.');
+    notify(mode === 'manual-flow' ? 'Saved flow compiled. Ready human steps require recorded work; ready agent activities require independent approval before execution.' : 'Planning graph saved. No execution run was created and no work was dispatched.');
   } catch (error) {
     const disposition = processPlanFailureDisposition(error);
     if (disposition === 'reload') {
@@ -678,7 +678,7 @@ function updatePlanButtonLabel() {
   if (!button) return;
   button.textContent = projectId && processId
     && state.pendingProcessPlans.has(processPlanCommandKey(projectId, processId, mode))
-    ? 'Retry exact plan save' : mode === 'manual-flow' ? 'Compile human work flow' : 'Create planning graph';
+    ? 'Retry exact plan save' : mode === 'manual-flow' ? 'Compile assigned work flow' : 'Create planning graph';
 }
 
 function renderProcessPlans(container, plans, project, { allowNewInstances = true, showHistory = true, skipBlockedAnnouncement = false } = {}) {
@@ -705,7 +705,7 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
       'data-plan-revision': plan.revision ?? 1,
     } }, [
       el('h4', { text: `${plan.source.processName} · blueprint v${plan.source.blueprintVersion} · graph revision ${plan.revision ?? 1}` }),
-      el('p', { text: isManualFlowPlan(plan) ? 'Pinned human work flow · no automatic dispatch' : 'Proposed design · planned only · not dispatched' }),
+      el('p', { text: isManualFlowPlan(plan) ? 'Pinned assigned work flow · no automatic dispatch' : 'Proposed design · planned only · not dispatched' }),
     ]);
     const planControls = el('div', { className: 'process-plan-controls' });
     const sourceLink = sourceProcessDesignLink(plan, project);
@@ -719,7 +719,7 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
       if (freshness.link) planControls.append(el('a', { className: 'button', text: freshness.link.label, attrs: { href: freshness.link.href } }));
     }
     if (canStartNewInstances) {
-      const editButton = el('button', { className: 'button', text: isManualFlowPlan(plan) ? 'Assign human flow work' : 'Edit planned graph', attrs: { type: 'button' } });
+      const editButton = el('button', { className: 'button', text: isManualFlowPlan(plan) ? 'Assign flow work' : 'Edit planned graph', attrs: { type: 'button' } });
       editButton.addEventListener('click', () => openPlanEditor(card, plan, project));
       planControls.append(editButton);
     }
@@ -775,12 +775,12 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
       card.append(el('details', {}, [el('summary', { text: 'Exact saved source and instance references' }),
         el('p', { text: `Exact source: ${plan.source.blueprintId} v${plan.source.blueprintVersion} · plan ${plan.id} revision ${plan.revision} · instance ${selectedInstance === 'new' ? 'not started' : selectedInstance}` }),
       ]));
-      card.append(el('p', { className: 'muted', text: 'Activation follows recorded work and human choices. Failed activities may enter the declared exception handler. Joins follow the saved ALL or ANY rule; loops stop at their saved iteration bound. Advanced agent automation requires a later implementation.' }));
+      card.append(el('p', { className: 'muted', text: 'Activation follows recorded work and human choices. Failed activities may enter the declared exception handler. Joins follow the saved ALL or ANY rule; loops stop at their saved iteration bound. Agent activities need independent approval; unresolved or cancelled work cannot prove successful completion.' }));
       if (!flowActivation) card.append(el('p', { className: 'muted', text: 'Activation is unavailable. Reload the saved runtime before starting work.' }));
       else {
         const progress = el('details', { className: 'manual-flow-progress' }, [
           el('summary', { text: `Actual flow progress — ${flowActivation.state}` }),
-          el('p', { text: selectedInstance === 'new' ? 'Entry activation before any human work is started.' : 'Derived from durable outcomes in this selected instance.' }),
+          el('p', { text: selectedInstance === 'new' ? 'Entry activation before any work is started.' : 'Derived from durable outcomes in this selected instance.' }),
         ]);
         progress.append(el('ol', {}, (flowActivation.steps ?? []).map((step) => {
           const definition = plan.flow.definition.steps.find((saved) => saved.id === step.stepId);
@@ -1152,26 +1152,44 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
             startButton, startStatus,
           );
         }
-      } else if (isManualFlowPlan(plan)) {
-        item.append(el('p', { className: 'muted', text: 'This flow occurrence requires an enabled human assignment. Use Assign human flow work to save a new revision. Advanced agent execution is unsupported in this mode.' }));
+      } else if (isManualFlowPlan(plan) && (!manualFlowAllowsAgent(task) || taskActor?.type !== 'actor-agent')) {
+        item.append(el('p', { className: 'muted', text: manualFlowAllowsAgent(task)
+          ? 'Assign an enabled human or agent to this activity in a new plan revision before starting work.'
+          : 'This decision or loop requires an enabled human assignment. Assign flow work in a new revision before starting.' }));
       } else if (instanceCancelled) {
         item.append(el('p', { className: 'muted', text: 'This process instance is cancelled. No further task work can start.' }));
       } else {
         const assignment = currentTaskAssignment(task, plan, project, selectedInstance !== 'new');
         const hasProposalInputs = task.inputs?.length > 0 && task.outputs?.some((output) => output.type === 'information');
         const profileOptions = (state.meta?.profiles ?? []).filter((profile) => !['provider-openai', 'provider-deepseek'].includes(profile.kind) || hasProposalInputs);
-        const canStartNew = canStartNewInstances && selectedInstance === 'new' && task.dependencies.length === 0
+        const canStartNew = canStartNewInstances && selectedInstance === 'new'
+          && (isManualFlowPlan(plan) ? manualFlowAgentRequestReady(plan, [], task, null) : task.dependencies.length === 0)
           && entries.at(-1)?.revision === plan.revision
           && project.latestBlueprint?.version === plan.source.blueprintVersion;
-        const eligibleInInstance = selectedInstance !== 'new' && dependenciesSucceeded;
+        const eligibleInInstance = selectedInstance !== 'new' && (isManualFlowPlan(plan)
+          ? manualFlowAgentRequestReady(plan, selectedRuntimes, task, selectedInstance) : dependenciesSucceeded);
         const canRequest = state.authenticated && !instanceFenced && assignment.available && profileOptions.length > 0
           && (canStartNew || eligibleInInstance);
+        const requestLookup = {
+          tenantId: project.tenantId, principal: state.currentPrincipal, projectId: project.id, planId: plan.id,
+          revision: plan.revision, planInstanceId: selectedInstance, taskId: task.id,
+        };
+        const directRequestKey = processTaskRequestStorageKey(requestLookup);
+        const pendingRequestEntry = findPendingProcessTaskRequest(processTaskIntentStorage(), {
+          ...requestLookup, key: directRequestKey,
+        });
+        const requestKey = pendingRequestEntry?.key ?? directRequestKey;
+        const storedRequest = state.pendingTaskRuns.get(requestKey) ?? pendingRequestEntry?.pending ?? null;
+        const pendingRequest = processTaskRequestScopeMatches(storedRequest, requestLookup) ? storedRequest : null;
+        const recoverableRequest = state.authenticated && isManualFlowPlan(plan) && pendingRequest;
         if (selectedInstance !== 'new' && blockedDependencyText) {
           item.append(el('p', { className: 'muted', text: blockedDependencyText }));
         } else if (!assignment.available) {
           item.append(el('p', { className: 'muted', text: assignment.reason }));
         } else if (!state.authenticated) {
           item.append(el('p', { className: 'muted', text: 'Sign in with workspace write access to request approval for an assigned task.' }));
+        } else if (isManualFlowPlan(plan) && activation?.state !== 'READY') {
+          item.append(el('p', { className: 'muted', text: activation?.reason ?? 'Activation unavailable. Reload before requesting work.' }));
         } else if (selectedInstance === 'new' && task.dependencies.length) {
           item.append(el('p', { className: 'muted', text: 'Start a root task first; dependent tasks join its instance after their dependencies succeed.' }));
         } else if (selectedInstance === 'new' && !canStartNew) {
@@ -1179,21 +1197,12 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
         } else if (selectedInstance !== 'new' && !dependenciesSucceeded) {
           item.append(el('p', { className: 'muted', text: 'Dependencies must succeed in this instance before this task can start.' }));
         }
-        if (!state.meta?.profiles?.length) {
+        if (!state.meta?.profiles?.length && !recoverableRequest) {
           item.append(el('p', { className: 'muted', text: 'No execution profile is configured. Ask an OrgWard administrator to configure one before requesting approval.' }));
-        } else if (!profileOptions.length) {
+        } else if (!profileOptions.length && !recoverableRequest) {
           item.append(el('p', { className: 'muted', text: 'No configured execution profile supports this task. Model profiles need at least one input and one information output; add those to the task or ask an OrgWard administrator to configure a non-model profile.' }));
-        } else if (canRequest) {
-          const requestLookup = {
-            tenantId: project.tenantId, principal: state.currentPrincipal, projectId: project.id, planId: plan.id,
-            revision: plan.revision, planInstanceId: selectedInstance, taskId: task.id,
-          };
-          const directRequestKey = processTaskRequestStorageKey(requestLookup);
-          const pendingRequestEntry = findPendingProcessTaskRequest(processTaskIntentStorage(), {
-            ...requestLookup, key: directRequestKey,
-          });
-          const requestKey = pendingRequestEntry?.key ?? directRequestKey;
-          const pendingRequest = state.pendingTaskRuns.get(requestKey) ?? pendingRequestEntry?.pending ?? null;
+        } else if (canRequest || recoverableRequest) {
+          if (recoverableRequest && !canRequest) item.append(el('p', { className: 'muted', text: 'Recover the original saved approval request only. Its profile, task occurrence and instance intent remain locked; current readiness does not authorize a new request.' }));
           if (pendingRequest) state.pendingTaskRuns.set(requestKey, pendingRequest);
           const isSubmittingTaskRequest = state.submittingTaskRequests.has(requestKey);
           const recoveringNewInstance = selectedInstance !== 'new' && pendingRequest?.status !== 'accepted'
@@ -1336,10 +1345,11 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
             const pendingPaths = pendingRequest?.payload?.githubSnapshotId === selected?.snapshotId
               ? pendingRequest.payload.githubSelectedPaths : null;
             const selectedCount = pendingPaths?.length ?? (selectionKey ? (state.githubFileSelections.get(selectionKey)?.size ?? 0) : 0);
-            const disabledRemote = selected?.kind === 'github'
+            const disabledRemote = !requestPresentation.locked && selected?.kind === 'github'
               && (!state.githubExecutionAvailable || !hasModelProfile || selectedCount < 1);
             requestButton.disabled = requestPresentation.buttonDisabled || disabledRemote;
-            if (selected?.kind === 'github' && !state.githubExecutionAvailable) requestStatus.textContent = 'GitHub candidate execution is unavailable until a fixed verifier and brokered model profile are configured.';
+            if (requestPresentation.locked) requestStatus.textContent = requestPresentation.status;
+            else if (selected?.kind === 'github' && !state.githubExecutionAvailable) requestStatus.textContent = 'GitHub candidate execution is unavailable until a fixed verifier and brokered model profile are configured.';
             else if (selected?.kind === 'github' && !hasModelProfile) requestStatus.textContent = 'Select a broker-backed OpenAI or DeepSeek profile to request a GitHub candidate.';
             else if (selected?.kind === 'github' && selectedCount < 1) requestStatus.textContent = 'Select at least one bounded text file for the GitHub candidate.';
             else requestStatus.textContent = requestPresentation.status;
@@ -2069,9 +2079,22 @@ function currentTaskAssignment(task, plan, project, pinnedInstance = false) {
 
 async function requestTaskApproval({ project, plan, task, selectedInstance, profileId, repositorySelectionId,
   requestButton, profileSelect, repositorySelect, requestStatus, requestKey }) {
+  const requestPrincipal = state.currentPrincipal;
+  const selectionKey = `${plan.id}\n${plan.revision}`;
+  const selectionAtStart = state.selectedPlanInstances.get(selectionKey) ?? selectedInstance;
+  const routeAtStart = `${window.location.pathname}${window.location.search}`;
+  const selectionUnchanged = () => requestPrincipal === state.currentPrincipal
+    && state.planningProject?.id === project.id && document.querySelector('#plan-project')?.value === project.id
+    && (state.selectedPlanInstances.get(selectionKey) ?? selectionAtStart) === selectionAtStart;
   const key = requestKey ?? processTaskRequestStorageKey({ tenantId: project.tenantId, principal: state.currentPrincipal,
     projectId: project.id, planId: plan.id, revision: plan.revision, planInstanceId: selectedInstance, taskId: task.id });
+  if (state.submittingTaskRequests.has(key)) return;
   let pending = state.pendingTaskRuns.get(key) ?? readPendingProcessTaskRequest(processTaskIntentStorage(), key);
+  if (pending && !processTaskRequestScopeMatches(pending, { tenantId: project.tenantId, principal: requestPrincipal,
+    projectId: project.id, planId: plan.id, revision: plan.revision, taskId: task.id, planInstanceId: selectedInstance })) {
+    notify('The saved request belongs to a different identity or task. Reload its original selection to recover it.');
+    return;
+  }
   if (pending) {
     pending = { ...pending, tenantId: project.tenantId, principal: state.currentPrincipal };
     state.pendingTaskRuns.set(key, pending);
@@ -2084,6 +2107,19 @@ async function requestTaskApproval({ project, plan, task, selectedInstance, prof
     submitting: true, recoveringNewInstance });
   try {
     if (!pending) {
+      if (isManualFlowPlan(plan)) {
+        const currentPlan = processPlansFor().find((saved) => saved.id === plan.id && saved.revision === plan.revision);
+        const currentTask = currentPlan?.tasks.find((saved) => saved.id === task.id);
+        const instanceId = selectedInstance === 'new' ? null : selectedInstance;
+        const newestRevision = Math.max(...processPlansFor().filter((saved) => saved.id === plan.id).map((saved) => saved.revision));
+        if (!selectionUnchanged() || !currentTask || !manualFlowAgentRequestReady(currentPlan, state.taskInstances, currentTask, instanceId)
+          || (instanceId === null && (plan.revision !== newestRevision
+            || currentPlan.source.blueprintVersion !== state.planningProject.latestBlueprint?.version))
+          || !currentTaskAssignment(currentTask, currentPlan, state.planningProject, instanceId !== null).available) {
+          notify('This activity is not ready for a new agent request in the selected saved flow. Reload its activation and assignment.');
+          return;
+        }
+      }
       const payload = {
         projectId: project.id, planId: plan.id, revision: plan.revision,
         taskId: task.id, profileId,
@@ -2114,6 +2150,7 @@ async function requestTaskApproval({ project, plan, task, selectedInstance, prof
       state.pendingTaskRuns.set(key, pending);
       savePendingProcessTaskRequest(processTaskIntentStorage(), key, pending);
     }
+    if (requestPrincipal !== state.currentPrincipal) throw Object.assign(new Error('The signed-in identity changed. The exact request remains saved for its original requester.'), { retryable: true });
     const run = await api('/api/execution/process-task-runs', {
       method: 'POST',
       body: JSON.stringify({ schemaVersion: '1.0', commandId: pending.commandId, payload: pending.payload }),
@@ -2123,11 +2160,13 @@ async function requestTaskApproval({ project, plan, task, selectedInstance, prof
     pending = accepted;
     state.pendingTaskRuns.set(key, pending);
     savePendingProcessTaskRequest(processTaskIntentStorage(), key, pending);
-    state.run = run;
-    syncExecutionRunRoute(run);
-    const refreshed = await refresh();
-    renderRun();
-    renderList();
+    let refreshed = false;
+    if (selectionUnchanged() && routeAtStart === `${window.location.pathname}${window.location.search}`) {
+      state.run = run;
+      syncExecutionRunRoute(run);
+      refreshed = await refresh();
+      if (selectionUnchanged() && state.run?.id === run.id) { renderRun(); renderList(); }
+    }
     if (refreshed && !state.pendingTaskRuns.has(key)) notify(run.meta?.replayed
       ? 'Recovered the existing approval request and confirmed its saved process task. No work was dispatched; independent approval is still required.'
       : 'Approval request created and linked to the saved process task. No work was dispatched; independent approval is still required.');
@@ -2161,7 +2200,7 @@ function openPlanEditor(container, plan, project) {
   form.append(el('p', { text: pendingRevision
     ? 'Retrying the same graph revision command. Its submitted values are locked to avoid changing an uncertain request.'
     : `Editing graph revision ${plan.revision ?? 1}. Save creates an immutable revision; every task stays planned and no person or execution authority is assigned.` }));
-  if (isManualFlowPlan(plan)) form.append(el('p', { text: 'Select an enabled human for each flow occurrence. Routing, loop bounds and checkpoints stay pinned to the saved process flow. To change that flow, edit Enterprise Design and compile a new plan.' }));
+  if (isManualFlowPlan(plan)) form.append(el('p', { text: 'Select an enabled human or agent for activities and exception handlers. Decisions and loops require a human. Routing, loop bounds and checkpoints stay pinned to the saved process flow. To change that flow, edit Enterprise Design and compile a new plan.' }));
   const blueprint = project.blueprintVersions?.find((entry) => entry.id === plan.source.blueprintId && entry.version === plan.source.blueprintVersion);
   const pinnedObjects = Object.values(blueprint?.areas ?? {}).flatMap((area) => area.items ?? []);
   const roles = pinnedObjects.filter((item) => item.type === 'role');
@@ -2197,7 +2236,8 @@ function openPlanEditor(container, plan, project) {
       const bindingRows = state.actorBindingRows.filter((row) => row.blueprintVersion === plan.source.blueprintVersion
         && row.roleId === roleId && row.status === 'enabled'
         && row.eligibilityStatus?.length === 1 && row.eligibilityStatus[0] === 'eligible'
-        && (!isManualFlowPlan(plan) || pinnedObjects.find((item) => item.id === row.actorId)?.type === 'actor-human'));
+        && (!isManualFlowPlan(plan) || pinnedObjects.find((item) => item.id === row.actorId)?.type === 'actor-human'
+          || (manualFlowAllowsAgent(task) && pinnedObjects.find((item) => item.id === row.actorId)?.type === 'actor-agent')));
       for (const row of bindingRows) {
         const boundActor = pinnedObjects.find((item) => item.id === row.actorId);
         const option = el('option', {
