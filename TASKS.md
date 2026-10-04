@@ -7236,6 +7236,24 @@ portfolio UI and PostgreSQL access acceptance are both accounted for passing;
 the PostgreSQL case passed after the fixture correction. No full check was run.
 PR-15 remains open and active.
 
+PR-15 portfolio-to-governed-change handoff (2026-10-04): authenticated
+membership-scoped project cards now include the count and latest destination of
+active persisted SDLC change cases. Case summaries are hash-verified from the
+project-scoped aggregate relation; terminal PASSED/STOPPED cases are excluded,
+and a corrupt case marks the summary incomplete instead of appearing as absent.
+Portfolio cards link directly to the existing `/sdlc.html?case=...` review
+workspace. PostgreSQL acceptance creates a source-pinned change case and checks
+the owner/editor/reader portfolio projections; UI acceptance checks count,
+title and navigation. Focused verification after Sol review passed 2/2 (0
+failures, 0 skips; PostgreSQL list 1.057s, portfolio card 44.5ms; TAP 1.457s,
+runner 2.66s; `/tmp/orgward-tests-TOWgzx/node-test.tap.log`). The selected test
+names were `portfolio project list returns each caller’s persisted workspace
+access` (exercised the new API projection) and `portfolio cards show saved
+workspace state and access and open the chosen project` (exercised the new card
+link). No full check run. Proposed focused command:
+`npm test -- tests/enterprise/view.test.mjs tests/enterprise/server.test.mjs --test-name-pattern='portfolio cards show saved workspace state and access and open the chosen project|portfolio project list returns each caller’s persisted workspace access'`.
+PR-15 remains open and active.
+
 PR-15 active incident/support portfolio slice (2026-10-04): the authenticated
 PostgreSQL project listing now includes per-project counts for OPEN or
 IN_PROGRESS incidents and support outcomes. Portfolio cards display both counts

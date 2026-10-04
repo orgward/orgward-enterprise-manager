@@ -1433,6 +1433,40 @@ export class PostgresProjectStore extends PostgresDocumentStore {
         order by a.updated_at desc, a.aggregate_id
         for share of a, m
       `, [tenantId, principal]);
+      const caseRows = await client.query(`
+        select a.*, s.project_id as scoped_project_id
+        from orgward.aggregates a
+        join orgward.aggregate_project_scopes s
+          on s.tenant_id=a.tenant_id and s.aggregate_kind=a.aggregate_kind and s.aggregate_id=a.aggregate_id
+        join orgward.project_memberships m
+          on m.tenant_id=s.tenant_id and m.project_kind='project'
+          and m.project_id=s.project_id and m.principal=$2 and m.revoked_at is null
+        where a.tenant_id=$1 and a.aggregate_kind='change_case'
+        order by a.updated_at desc, a.aggregate_id
+        for share of a, m
+      `, [tenantId, principal]);
+      const caseSummaryByProject = new Map(result.rows.map((row) => [row.aggregate_id, {
+        activeChangeCaseCount: 0, latestActiveChangeCaseId: null, latestActiveChangeCaseTitle: null,
+        changeCaseProjectionIncomplete: false,
+      }]));
+      for (const row of caseRows.rows) {
+        const summary = caseSummaryByProject.get(row.scoped_project_id);
+        if (!summary) continue;
+        try {
+          const changeCase = verifyAggregateRow(row);
+          if (Object.hasOwn(changeCase, 'projectId') && changeCase.projectId !== row.scoped_project_id) {
+            throw persistenceIntegrity('Change case project scope does not match aggregate state.');
+          }
+          if (['PASSED', 'STOPPED'].includes(changeCase.status)) continue;
+          summary.activeChangeCaseCount += 1;
+          if (!summary.latestActiveChangeCaseId) {
+            summary.latestActiveChangeCaseId = changeCase.id;
+            summary.latestActiveChangeCaseTitle = changeCase.title;
+          }
+        } catch {
+          summary.changeCaseProjectionIncomplete = true;
+        }
+      }
       const records = [];
       let corruptRecords = 0;
       for (const row of result.rows) {
@@ -1445,6 +1479,7 @@ export class PostgresProjectStore extends PostgresDocumentStore {
             workspaceAccess: row.scoped_membership_access,
             openIncidentCount: row.open_incident_count,
             openSupportCount: row.open_support_count,
+            ...caseSummaryByProject.get(project.id),
           });
         } catch { corruptRecords += 1; }
       }

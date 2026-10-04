@@ -10,6 +10,11 @@ export function projectPortfolioFacts(project) {
     access: accessLabels[project?.workspaceAccess] ?? 'Local workspace',
     incidents: Number.isSafeInteger(project?.openIncidentCount) && project.openIncidentCount > 0 ? project.openIncidentCount : 0,
     support: Number.isSafeInteger(project?.openSupportCount) && project.openSupportCount > 0 ? project.openSupportCount : 0,
+    changeCases: Number.isSafeInteger(project?.activeChangeCaseCount) && project.activeChangeCaseCount > 0 ? project.activeChangeCaseCount : 0,
+    latestChangeCaseId: typeof project?.latestActiveChangeCaseId === 'string' && /^change-case-[0-9a-f-]{36}$/.test(project.latestActiveChangeCaseId)
+      ? project.latestActiveChangeCaseId : null,
+    latestChangeCaseTitle: typeof project?.latestActiveChangeCaseTitle === 'string' ? project.latestActiveChangeCaseTitle : 'Governed change',
+    changeCaseProjectionIncomplete: project?.changeCaseProjectionIncomplete === true,
     updated: typeof project?.updatedAt === 'string' && Number.isFinite(Date.parse(project.updatedAt))
       ? new Date(project.updatedAt).toLocaleString() : 'No saved activity time',
   };
@@ -99,6 +104,11 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
     card.append(el('p', { className: 'portfolio-blueprint', text: facts.blueprint }));
     card.append(el('p', { className: 'portfolio-updated', text: `Last saved ${facts.updated}` }));
     card.append(el('p', { className: 'portfolio-issues', text: `Active incidents: ${facts.incidents} · Active support: ${facts.support}` }));
+    card.append(el('p', { className: 'portfolio-changes', text: facts.changeCaseProjectionIncomplete
+      ? `${facts.changeCases} active governed changes · some case details are unavailable`
+      : `Active governed changes: ${facts.changeCases}` }));
+    if (facts.latestChangeCaseId) card.append(el('a', { className: 'button ghost', text: `Open governed change: ${facts.latestChangeCaseTitle}`,
+      attrs: { href: `/sdlc.html?case=${encodeURIComponent(facts.latestChangeCaseId)}` } }));
     const open = el('button', { className: 'button secondary', text: 'Open workspace', attrs: { type: 'button' } });
     open.addEventListener('click', () => onOpen(project.id));
     card.append(open);

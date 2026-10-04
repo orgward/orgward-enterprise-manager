@@ -97,6 +97,14 @@ test('portfolio project list returns each caller’s persisted workspace access'
     [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
   }
   const project = await seedProject(postgres, 'Portfolio access fixture');
+  const savedBlueprint = project.blueprintVersions.at(-1);
+  const sourceObject = Object.values(savedBlueprint.areas).flatMap((area) => area.items).find((item) => item.type === 'information');
+  assert.ok(sourceObject);
+  const changeCase = await request(instance.base, 'owner', '/api/sdlc/cases', { method: 'POST', body: {
+    mode: 'golden', projectId: project.id, sourceObjectId: sourceObject.id,
+    expectedProjectVersion: project.version, expectedBlueprintId: savedBlueprint.id,
+    expectedBlueprintVersion: savedBlueprint.version, rawIntent: 'Review a governed design change from the project portfolio.',
+  } }, 201);
   const exportRoute = `/api/v1/projects/${project.id}/enterprise/export`;
   const expectedBlueprint = project.blueprintVersions.at(-1);
   let readerBundle;
@@ -139,6 +147,9 @@ test('portfolio project list returns each caller’s persisted workspace access'
     assert.equal(visible?.workspaceAccess, access, `${subject} sees their authoritative project access`);
     assert.equal(visible?.openIncidentCount, 1);
     assert.equal(visible?.openSupportCount, 1);
+    assert.equal(visible?.activeChangeCaseCount, 1);
+    assert.equal(visible?.latestActiveChangeCaseId, changeCase.id);
+    assert.equal(visible?.latestActiveChangeCaseTitle, changeCase.title);
   }
   const unrelated = await request(instance.base, 'outsider', '/api/v1/projects');
   assert.equal(unrelated.data.some((record) => record.id === project.id), false,

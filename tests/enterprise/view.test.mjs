@@ -95,7 +95,9 @@ test('portfolio cards show saved workspace state and access and open the chosen 
   const imported = [];
   const projects = [
     { id: 'project-a', name: 'Northstar', phase: 'design', blueprintVersion: 3,
-      workspaceAccess: 'editor', openIncidentCount: 2, openSupportCount: 1, updatedAt: '2026-10-03T12:00:00.000Z' },
+      workspaceAccess: 'editor', openIncidentCount: 2, openSupportCount: 1, activeChangeCaseCount: 2,
+      latestActiveChangeCaseId: 'change-case-00000000-0000-4000-8000-000000000012',
+      latestActiveChangeCaseTitle: 'Customer data migration', updatedAt: '2026-10-03T12:00:00.000Z' },
     { id: 'project-b', name: 'Harbor', phase: 'discovery', blueprintVersion: null,
       workspaceAccess: 'reader', updatedAt: '2026-10-02T12:00:00.000Z' },
   ];
@@ -107,6 +109,7 @@ test('portfolio cards show saved workspace state and access and open the chosen 
   assert.match(rendered.textContent, /Your portfolio Workspaces/);
   assert.match(rendered.textContent, /Northstar Editor access design Blueprint version 3/);
   assert.match(rendered.textContent, /Active incidents: 2 · Active support: 1/);
+  assert.match(rendered.textContent, /Active governed changes: 2/);
   assert.match(rendered.textContent, /Harbor Reader access discovery No saved blueprint yet/);
   const secondCard = rendered.children[1].children[1];
   const openButton = secondCard.children.find((child) => child.tagName === 'button');
@@ -117,6 +120,9 @@ test('portfolio cards show saved workspace state and access and open the chosen 
   const exportButton = rendered.children[1].children[0].children.find((child) => child.text === 'Export proposed design JSON');
   exportButton.listeners.get('click')();
   assert.deepEqual(exported, [['project-a', 'Export proposed design JSON']]);
+  const governedChange = rendered.children[1].children[0].children.find((child) => child.tagName === 'a');
+  assert.equal(governedChange.text, 'Open governed change: Customer data migration');
+  assert.equal(governedChange.attrs.href, '/sdlc.html?case=change-case-00000000-0000-4000-8000-000000000012');
   const importLabel = rendered.children[1].children[0].children.find((child) => child.tagName === 'label');
   const importInput = importLabel.children[0];
   importInput.files = [{ name: 'customer-design.json', size: 42 }];
