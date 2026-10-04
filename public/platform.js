@@ -45,7 +45,7 @@ const capabilityCopy = {
   },
 };
 
-const state = { view: 'command', foundation: null, error: null, loading: true, inspectorTrigger: null, importBusy: false, importResult: null, importCommand: null, identityAdmin: null, identityAction: null, secretAdmin: null, secretAction: null, deepSeekAdmin: null, deepSeekAction: null, session: null, sharing: { projects: [], projectId: '', members: [], loading: false, error: null, message: '', busy: false } };
+const state = { view: 'command', foundation: null, error: null, loading: true, inspectorTrigger: null, importBusy: false, importResult: null, importCommand: null, identityAdmin: null, identityAction: null, secretAdmin: null, secretAction: null, deepSeekAdmin: null, deepSeekAction: null, modelBudget: null, modelBudgetAction: null, session: null, sharing: { projects: [], projectId: '', members: [], loading: false, error: null, message: '', busy: false } };
 const canvas = document.querySelector('#platform-canvas');
 const inspector = document.querySelector('#spec-inspector');
 const dialog = document.querySelector('#command-dialog');
@@ -255,10 +255,20 @@ function renderAdministration() {
       return `<li><div><b>${escapeHtml(profile.label)}</b> · <code>${escapeHtml(profile.id)}</code><br>${escapeHtml(profile.model)} · ${escapeHtml(profile.maxOutputTokens)} output tokens · revision ${profile.revision} · ${profile.enabled ? 'enabled' : 'disabled'}<br><small>Credential reference ${escapeHtml(profile.credentialReference)} · updated ${escapeHtml(new Date(profile.updatedAt).toLocaleString())}. Credential values are never displayed.</small><p class="muted-copy" data-deepseek-verification="${escapeHtml(profile.id)}" role="status" aria-live="polite">${escapeHtml(verificationText)}</p>${profile.enabled ? `<button class="platform-button" type="button" data-deepseek-verify="${escapeHtml(profile.id)}" data-profile-revision="${profile.revision}" ${busy ? 'disabled' : ''}>${busy ? 'Checking provider…' : 'Verify provider access'}</button>` : ''}<form class="deepseek-profile-form" data-profile-id="${escapeHtml(profile.id)}"><input type="hidden" name="expectedRevision" value="${profile.revision}"><label>Display name<input name="label" maxlength="120" value="${escapeHtml(profile.label)}" required></label><label>DeepSeek model ID<input name="model" maxlength="100" value="${escapeHtml(profile.model)}" required pattern="[A-Za-z0-9._:-]+"></label><label>Existing generic credential reference<input name="credentialReference" maxlength="87" value="${escapeHtml(profile.credentialReference)}" required pattern="secret-[a-z0-9][a-z0-9._-]{0,79}"></label><label>Maximum output tokens<input name="maxOutputTokens" type="number" min="64" max="512" step="1" value="${profile.maxOutputTokens}" required></label><label><input type="checkbox" name="enabled" ${profile.enabled ? 'checked' : ''}> Enabled</label><label>Reason<input name="reason" maxlength="500" required></label><button class="platform-button" type="submit" ${state.deepSeekAction?.busy ? 'disabled' : ''}>Save revision ${profile.revision + 1}</button></form></div></li>`;
     }).join('')}</ul>`
     : state.deepSeekAdmin?.profiles ? '<p class="muted-copy">No tenant DeepSeek profiles are configured.</p>' : '';
+  const modelBudget = state.modelBudget && !state.modelBudget.error ? state.modelBudget : null;
+  const modelBudgetSummary = state.modelBudget?.error
+    ? `<p class="muted-copy" role="status">Shared model budget unavailable: ${escapeHtml(state.modelBudget.error)}</p>`
+    : modelBudget?.dailyOutputTokenLimit === null
+      ? '<p class="muted-copy">No daily token budget is set; model-provider output remains uncapped across this tenant.</p>'
+      : modelBudget
+        ? `<p class="muted-copy">Shared UTC-day output tokens: ${escapeHtml(modelBudget.usedOutputTokens)} used of ${escapeHtml(modelBudget.dailyOutputTokenLimit)}; ${escapeHtml(modelBudget.remainingOutputTokens)} remain. Requests reserve their configured output ceiling; completed calls use reported output tokens, and unresolved or unreported calls retain the reservation. Provider dollar cost remains unknown.</p>`
+        : '<p class="muted-copy">Loading shared model budget…</p>';
+  const modelBudgetForm = modelBudget
+    ? `<form id="tenant-model-output-budget-form"><h3>Set shared daily model budget</h3><label>Maximum output tokens per UTC day<input name="dailyOutputTokenLimit" type="number" min="1" max="10000000" step="1" value="${escapeHtml(modelBudget.dailyOutputTokenLimit ?? 10000)}" required></label><label>Reason<input name="reason" maxlength="500" required></label><button class="platform-button primary" type="submit" ${state.modelBudgetAction?.busy ? 'disabled' : ''}>Save revision ${modelBudget.revision + 1}</button><p class="muted-copy" role="status" aria-live="polite">${state.modelBudgetAction?.message ? escapeHtml(state.modelBudgetAction.message) : `Budget window begins ${escapeHtml(modelBudget.windowStartsAt)}.`}</p></form>` : '';
   const deepSeekAdminContent = state.deepSeekAdmin?.error
     ? `<p class="muted-copy" role="status">${escapeHtml(state.deepSeekAdmin.error)}</p>`
     : state.deepSeekAdmin?.profiles
-      ? `<p class="muted-copy">Tenant model budget: not configured; no tenant token or dollar cap is enforced. OrgWard allows one active model-provider handoff at a time across this tenant. Provider cost remains unknown; reported tokens are counts, not prices.</p>${deepSeekRows}`
+      ? `<p class="muted-copy">OrgWard allows one active model-provider handoff at a time across this tenant.</p>${modelBudgetSummary}${modelBudgetForm}${deepSeekRows}`
       : '<p class="muted-copy">Tenant DeepSeek profile management is available to tenant administrators.</p>';
   const itemDetails = importResult?.data?.items?.length
     ? `<ul class="import-results" aria-label="Legacy import record results">${importResult.data.items.slice(0, 20).map((item) => `<li><code>${escapeHtml(item.sourcePath)}</code><span>${escapeHtml(item.status)}${item.errorCode ? ` · ${escapeHtml(item.errorCode)}` : ''}</span></li>`).join('')}</ul>${importResult.data.items.length > 20 ? `<p class="muted-copy">Showing 20 of ${escapeHtml(importResult.data.items.length)} records.</p>` : ''}`
@@ -352,14 +362,17 @@ async function loadFoundation() {
     state.identityAdmin = null;
     state.secretAdmin = null;
     state.deepSeekAdmin = null;
+    state.modelBudget = null;
     if (sessionResponse.roles?.includes('tenant-admin')) {
-      const [identities, secrets, deepSeekProfiles] = await Promise.allSettled([
-        api('/api/v1/identities'), api('/api/v1/secrets'), api('/api/execution/deepseek-profiles'),
+      const [identities, secrets, deepSeekProfiles, modelBudget] = await Promise.allSettled([
+        api('/api/v1/identities'), api('/api/v1/secrets'), api('/api/execution/deepseek-profiles'), api('/api/execution/model-budget'),
       ]);
       state.identityAdmin = identities.status === 'fulfilled' ? { records: identities.value.data } : { error: identities.reason.message };
       state.secretAdmin = secrets.status === 'fulfilled' ? { records: secrets.value.data } : { error: secrets.reason.message };
       state.deepSeekAdmin = deepSeekProfiles.status === 'fulfilled'
         ? { profiles: deepSeekProfiles.value.profiles } : { error: deepSeekProfiles.reason.message };
+      state.modelBudget = modelBudget.status === 'fulfilled'
+        ? modelBudget.value.budget : { error: modelBudget.reason.message };
     }
     if (authenticated) {
       try {
@@ -592,6 +605,28 @@ async function saveDeepSeekProfile(event) {
   }
 }
 
+async function saveTenantModelOutputBudget(event) {
+  event.preventDefault();
+  const form = event.target;
+  if (state.modelBudgetAction?.busy || !state.modelBudget) return;
+  const dailyOutputTokenLimit = Number(form.elements.dailyOutputTokenLimit.value);
+  const reason = form.elements.reason.value.trim();
+  if (!Number.isSafeInteger(dailyOutputTokenLimit) || dailyOutputTokenLimit < 1 || dailyOutputTokenLimit > 10_000_000 || !reason) return;
+  state.modelBudgetAction = { busy: true, message: 'Saving shared tenant model budget…' };
+  render();
+  try {
+    const result = await api('/api/execution/model-budget', { method: 'PUT', body: JSON.stringify({
+      schemaVersion: '1.0', commandId: `tenant-model-budget:${crypto.randomUUID()}`,
+      expectedVersion: state.modelBudget.revision, payload: { dailyOutputTokenLimit, reason },
+    }) });
+    state.modelBudgetAction = { busy: false, message: `Shared daily output-token cap saved at revision ${result.budget.revision}.` };
+    await loadFoundation();
+  } catch (error) {
+    state.modelBudgetAction = { busy: false, message: `Budget save failed: ${error.message}. Reload before resolving a version conflict.` };
+    render();
+  }
+}
+
 async function createDeepSeekProfileWithKey(event) {
   event.preventDefault();
   const form = event.target;
@@ -735,6 +770,7 @@ document.addEventListener('submit', (event) => {
   if (event.target.id === 'secret-reference-form') storeSecretReference(event);
   if (event.target.id === 'deepseek-profile-create' || event.target.matches('.deepseek-profile-form')) saveDeepSeekProfile(event);
   if (event.target.id === 'deepseek-key-profile-create') createDeepSeekProfileWithKey(event);
+  if (event.target.id === 'tenant-model-output-budget-form') saveTenantModelOutputBudget(event);
   if (event.target.id === 'openai-candidate-form') stageOpenAiCandidate(event);
   if (event.target.matches('.secret-revoke-form')) revokeSecretReference(event);
 });

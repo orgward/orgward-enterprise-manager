@@ -1174,29 +1174,49 @@ export class PostgresSecretStore {
           || modelBudgetEnvelope.profileRevision !== row.run.profile.version))) {
         throw failure(409, 'MODEL_HANDOFF_ENVELOPE_MISMATCH', 'The bounded model handoff envelope does not match the approved run profile.');
       }
+      let reservationAt = null;
       if (modelRun) {
         await client.query(`insert into orgward.tenant_model_handoff_controls (tenant_id)
           values ($1) on conflict (tenant_id) do nothing`, [tenantId]);
-        const control = await client.query(`select active_run_id,active_attempt_id,active_status
+        const control = await client.query(`select active_run_id,active_attempt_id,active_status,daily_output_token_limit
           from orgward.tenant_model_handoff_controls where tenant_id=$1 for update`, [tenantId]);
         if (!control.rowCount) throw failure(503, 'TENANT_MODEL_HANDOFF_CONTROL_UNAVAILABLE', 'Tenant model handoff control is unavailable.');
         if (control.rows[0].active_attempt_id !== null) {
           throw failure(409, 'TENANT_MODEL_HANDOFF_ACTIVE', 'This run was stopped before provider dispatch because another model-provider handoff is active for this tenant. After it finishes, request and approve a fresh run.');
         }
+        const reservationClock = await client.query(`select clock_timestamp() as reserved_at`);
+        reservationAt = reservationClock.rows[0].reserved_at;
+        if (control.rows[0].daily_output_token_limit !== null) {
+          const usage = await client.query(`select coalesce(sum(case
+              when usage_status='reported' then usage_output_tokens
+              when usage_status='dispatch_not_started' then 0
+              else requested_output_tokens end),0)::bigint as used_output_tokens
+            from orgward.provider_dispatch_attempts
+            where tenant_id=$1 and model_provider is not null
+              and created_at >= (date_trunc('day',$2::timestamptz at time zone 'UTC') at time zone 'UTC')`, [tenantId, reservationAt]);
+          const usedOutputTokens = Number(usage.rows[0]?.used_output_tokens ?? 0);
+          const outputTokenLimit = Number(control.rows[0].daily_output_token_limit);
+          const requestedOutputTokens = modelBudgetEnvelope.requestedOutputTokens;
+          if (usedOutputTokens + requestedOutputTokens > outputTokenLimit) {
+            throw failure(409, 'TENANT_MODEL_OUTPUT_BUDGET_EXCEEDED',
+              `This tenant's shared UTC-day output-token budget would be exceeded (${usedOutputTokens}/${outputTokenLimit} used; this request reserves ${requestedOutputTokens}).`);
+          }
+        }
       }
       const inserted = await client.query(`insert into orgward.provider_dispatch_attempts
         (tenant_id,run_id,project_id,principal,worker_id,attempt_id,credential_reference,credential_version,status,
           model_provider,model_id,profile_revision,prompt_bytes,prompt_byte_ceiling,requested_output_tokens,timeout_ms,tool_count,
-          usage_status,cost_status)
+          usage_status,cost_status,created_at)
         values ($1,$2,$3,$4,$5,$6,$7,$8,'reserved',$9,$10,$11,$12,$13,$14,$15,$16,
           case when $9::text is null then null else 'reserved' end,
-          case when $9::text is null then null else 'unknown' end)
+          case when $9::text is null then null else 'unknown' end,
+          coalesce($17::timestamptz,clock_timestamp()))
         on conflict (tenant_id,run_id) do nothing returning attempt_id`,
       [tenantId, runId, projectId, principal, workerId, attemptId, reference, expectedVersion,
         modelBudgetEnvelope?.provider ?? null, modelBudgetEnvelope?.model ?? null,
         modelBudgetEnvelope?.profileRevision ?? null, modelBudgetEnvelope?.promptBytes ?? null,
         modelBudgetEnvelope?.promptByteCeiling ?? null, modelBudgetEnvelope?.requestedOutputTokens ?? null,
-        modelBudgetEnvelope?.timeoutMs ?? null, modelBudgetEnvelope?.toolCount ?? null]);
+        modelBudgetEnvelope?.timeoutMs ?? null, modelBudgetEnvelope?.toolCount ?? null, modelRun ? reservationAt : null]);
       if (!inserted.rowCount) throw failure(409, 'PROVIDER_ATTEMPT_EXISTS', 'This run already has a provider dispatch attempt. Create and approve a new run before retrying.');
       if (modelRun) {
         const reservedControl = await client.query(`update orgward.tenant_model_handoff_controls

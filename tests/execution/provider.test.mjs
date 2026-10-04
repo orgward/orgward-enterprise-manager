@@ -791,6 +791,54 @@ test('tenant-wide model handoff is single-flight across projects and profile rev
   assert.equal(providerCalls, 2, 'restart reads the persisted attempt without redispatch');
 });
 
+test('tenant shared output-token budget reserves requests and blocks later cross-profile dispatch', async (t) => {
+  let providerCalls = 0;
+  const fixture = await setup(t, async ({ response }) => {
+    providerCalls += 1;
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ status: 'completed', usage: { input_tokens: 20, output_tokens: 8, total_tokens: 28 },
+      output: [{ type: 'message', content: [{ type: 'output_text', text: 'Budgeted model result.' }] }] }));
+  }, { deepSeek: true });
+  const { app, projectId } = fixture;
+  const initial = await api(app, '/api/execution/model-budget', 'admin');
+  assert.equal(initial.status, 200);
+  assert.equal(initial.body.budget.dailyOutputTokenLimit, null);
+  const workerReadDenied = await api(app, '/api/execution/model-budget', 'worker');
+  assert.equal(workerReadDenied.status, 403);
+  const command = { schemaVersion: '1.0', commandId: 'tenant-model-budget-test', expectedVersion: 0,
+    payload: { dailyOutputTokenLimit: 136, reason: 'Share a bounded daily token allowance across all tenant model profiles.' } };
+  const configured = await api(app, '/api/execution/model-budget', 'admin', { method: 'PUT', body: command });
+  assert.equal(configured.status, 201, JSON.stringify(configured.body));
+  assert.equal(configured.body.budget.revision, 1);
+  const replay = await api(app, '/api/execution/model-budget', 'admin', { method: 'PUT', body: command });
+  assert.equal(replay.status, 200);
+  assert.equal(replay.body.replayed, true);
+  assert.equal(replay.body.budget.dailyOutputTokenLimit, 136);
+
+  const execute = async (suffix) => {
+    const run = await createApprovedRun(app, projectId, `Shared budget ${suffix}`, 'deepseek-current');
+    return api(app, `/api/execution/runs/${run.id}/execute`, 'worker', { method: 'POST', body: { version: run.version } });
+  };
+  const first = await execute('first');
+  assert.equal(first.body.status, 'SUCCEEDED');
+  const second = await execute('second');
+  assert.equal(second.body.status, 'SUCCEEDED');
+  const blocked = await execute('over-cap');
+  assert.equal(blocked.body.status, 'FAILED');
+  assert.match(blocked.body.execution.error, /shared UTC-day output-token budget would be exceeded/i);
+  assert.equal(providerCalls, 2, 'the rejected third request never reaches the provider');
+  const blockedAttempt = await app.persistence.query(`select count(*)::int as count from orgward.provider_dispatch_attempts
+    where tenant_id='tenant-a' and run_id=$1`, [blocked.body.id]);
+  assert.equal(blockedAttempt.rows[0].count, 0);
+  const current = await api(app, '/api/execution/model-budget', 'admin');
+  assert.equal(current.body.budget.usedOutputTokens, 16);
+  assert.equal(current.body.budget.remainingOutputTokens, 120);
+  const audit = await app.persistence.query(`select count(*)::int as count from orgward.audit_log
+    where tenant_id='tenant-a' and aggregate_kind='tenant_model_handoff_control'
+      and aggregate_id='tenant-a' and event_type='TenantModelOutputBudgetConfigured'`);
+  assert.equal(audit.rows[0].count, 1);
+});
+
 test('pre-handoff cancellation releases the tenant model slot without provider contact', async (t) => {
   let providerCalls = 0;
   let markReserved;

@@ -468,6 +468,18 @@ export class ExecutionService {
     });
     return this.store.listTenantDeepSeekProfiles({ tenantId, principal, authzGeneration, tenantAdminOnly: true });
   }
+  async tenantModelOutputBudget({ tenantId, principal, authzGeneration }) {
+    if (typeof this.store.getTenantModelOutputBudget !== 'function') throw Object.assign(new Error('Tenant model budgets require PostgreSQL execution storage.'), {
+      statusCode: 503, code: 'TENANT_MODEL_BUDGET_UNAVAILABLE', retryable: false,
+    });
+    return this.store.getTenantModelOutputBudget({ tenantId, principal, authzGeneration });
+  }
+  async configureTenantModelOutputBudget(input) {
+    if (typeof this.store.configureTenantModelOutputBudget !== 'function') throw Object.assign(new Error('Tenant model budgets require PostgreSQL execution storage.'), {
+      statusCode: 503, code: 'TENANT_MODEL_BUDGET_UNAVAILABLE', retryable: false,
+    });
+    return this.store.configureTenantModelOutputBudget(input);
+  }
   async saveTenantDeepSeekProfile(input) {
     if (typeof this.store.saveTenantDeepSeekProfile !== 'function' || !this.secretStore) {
       throw Object.assign(new Error('Tenant DeepSeek profiles require PostgreSQL and the encrypted credential broker.'), {
@@ -2186,7 +2198,7 @@ export class ExecutionService {
     } catch (error) {
       if (error?.code === 'PROVIDER_OUTPUT_QUARANTINED') throw error;
       if (['PROCESS_INSTANCE_PAUSED', 'PROVIDER_ATTEMPT_CANCELLED'].includes(error?.code)) throw error;
-      if (error?.code === 'TENANT_MODEL_HANDOFF_ACTIVE') throw error;
+      if (['TENANT_MODEL_HANDOFF_ACTIVE', 'TENANT_MODEL_OUTPUT_BUDGET_EXCEEDED'].includes(error?.code)) throw error;
       if (error?.code === 'PROVIDER_OUTCOME_UNKNOWN') {
         active.modelAttemptEvidence = modelAttemptEvidence(modelBudgetEnvelope, { status: 'outcome_unknown' });
         const upstreamHttpStatus = error.upstreamHttpStatus;

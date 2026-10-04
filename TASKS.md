@@ -6793,6 +6793,32 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   `/tmp/orgward-tests-CAcy7m/node-test.tap.log`. Frozen for root review; PR-14
   remains open.
 
+  Sixth bounded slice (drafted 2026-10-04; frozen for review): tenant
+  administrators can set a revisioned, audited shared daily output-token cap
+  across all provider profiles. The provider reservation transaction locks the
+  same tenant single-flight control row, totals output tokens used during the
+  current UTC day, and denies a request before dispatch when its requested
+  output ceiling would exceed the cap. Reported completed usage charges actual
+  output tokens; unresolved or unreported attempts retain their requested
+  ceiling reservation; pre-dispatch cancellations do not consume tokens.
+  Tenant administrators can inspect used/remaining tokens and configure the
+  cap in the existing platform profile administration UI. No cap remains
+  unlimited, preserving current tenant behavior until configured. Focused
+  provider and UI fixtures cover tenant-admin permission, command replay,
+  revision/audit, cross-profile usage and pre-dispatch denial. Repaired the
+  composite tenant/principal FK, preserved typed budget denials through the
+  execution result, and use one post-lock UTC reservation timestamp for both
+  the usage window and persisted attempt; GET usage/window also share one clock
+  sample. The reservation timestamp is scoped across the transaction callback
+  so it is available when inserting the attempt. Static syntax and diff checks
+  passed. Focused behavior test after Sol review (2026-10-04):
+  `npm test -- tests/execution/provider.test.mjs tests/foundation.test.mjs
+  --test-name-pattern='tenant shared output-token budget|served tenant DeepSeek setup'`
+  passed 2/2 with 0 failures, skips, cancellations or todos; runner duration
+  2.70s. TAP duration 1.53s. TAP log:
+  `/tmp/orgward-tests-SSybXs/node-test.tap.log`. No full check run; PR-14
+  remains open pending root review.
+
 - [ ] PR-15 — Integrated portfolio round trip and extensibility (T-90–T-105,
   T-107–T-108, then T-106). Join enterprise truth, integrity and SDLC context;
   support multi-repository/legacy delivery, progressive promotion, incidents,

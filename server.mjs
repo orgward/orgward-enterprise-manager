@@ -2424,6 +2424,25 @@ export function createApp({
         return sendJson(response, 200, { profiles });
       }
 
+      if (request.method === 'GET' && pathname === '/api/execution/model-budget') {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified tenant administrator identity is required.');
+        const budget = await executionService.tenantModelOutputBudget({ tenantId: requestTenant(request),
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration });
+        return sendJson(response, 200, { budget });
+      }
+
+      if (request.method === 'PUT' && pathname === '/api/execution/model-budget') {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified tenant administrator identity is required.');
+        const body = validateCommand(await readJson(request));
+        const unknown = Object.keys(body.payload).filter((field) => !['dailyOutputTokenLimit', 'reason'].includes(field));
+        if (unknown.length) throw apiFailure(400, 'INVALID_TENANT_MODEL_BUDGET', 'The tenant budget accepts only a daily output-token limit and reason.');
+        const result = await executionService.configureTenantModelOutputBudget({ tenantId: requestTenant(request),
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration,
+          commandId: body.commandId, expectedRevision: body.expectedVersion,
+          dailyOutputTokenLimit: body.payload.dailyOutputTokenLimit, reason: body.payload.reason });
+        return sendJson(response, result.replayed ? 200 : 201, result);
+      }
+
       const deepSeekVerifyMatch = pathname.match(/^\/api\/execution\/deepseek-profiles\/([a-z0-9][a-z0-9_-]{1,79})\/verify$/);
       if (request.method === 'POST' && deepSeekVerifyMatch) {
         if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified tenant administrator identity is required.');

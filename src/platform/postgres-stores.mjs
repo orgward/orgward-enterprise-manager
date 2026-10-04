@@ -2499,6 +2499,90 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
     });
   }
 
+  async getTenantModelOutputBudget({ tenantId, principal, authzGeneration }) {
+    return this.persistence.transaction(async (client) => {
+      await requirePrincipalAuthority(client, { tenantId, principal, roles: ['tenant-admin'], actorType: 'human', authzGeneration });
+      const control = await client.query(`select daily_output_token_limit,budget_revision,budget_updated_by,budget_reason,budget_updated_at
+        from orgward.tenant_model_handoff_controls where tenant_id=$1`, [tenantId]);
+      const usage = await client.query(`with sampled as (
+          select clock_timestamp() as sampled_at
+        ), budget_window as (
+          select date_trunc('day',sampled_at at time zone 'UTC') at time zone 'UTC' as window_start
+          from sampled
+        )
+        select coalesce(sum(case
+          when d.usage_status='reported' then d.usage_output_tokens
+          when d.usage_status='dispatch_not_started' then 0
+          else d.requested_output_tokens end),0)::bigint as used_output_tokens,
+          budget_window.window_start as window_starts_at
+        from budget_window left join orgward.provider_dispatch_attempts d
+          on d.tenant_id=$1 and d.model_provider is not null and d.created_at >= budget_window.window_start
+        group by budget_window.window_start`, [tenantId]);
+      const row = control.rows[0] ?? {};
+      const dailyOutputTokenLimit = row.daily_output_token_limit === null || row.daily_output_token_limit === undefined
+        ? null : Number(row.daily_output_token_limit);
+      const usedOutputTokens = Number(usage.rows[0]?.used_output_tokens ?? 0);
+      return { dailyOutputTokenLimit, revision: Number(row.budget_revision ?? 0), usedOutputTokens,
+        remainingOutputTokens: dailyOutputTokenLimit === null ? null : Math.max(0, dailyOutputTokenLimit - usedOutputTokens),
+        windowStartsAt: usage.rows[0]?.window_starts_at?.toISOString?.() ?? String(usage.rows[0]?.window_starts_at ?? ''),
+        updatedBy: row.budget_updated_by ?? null, reason: row.budget_reason ?? null,
+        updatedAt: row.budget_updated_at?.toISOString?.() ?? row.budget_updated_at ?? null };
+    });
+  }
+
+  async configureTenantModelOutputBudget({ tenantId, principal, authzGeneration, commandId,
+    expectedRevision, dailyOutputTokenLimit, reason }) {
+    if (!tenantId || !principal || !/^[a-z0-9][a-z0-9_.:-]{0,159}$/i.test(commandId ?? '')
+      || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0
+      || !Number.isSafeInteger(dailyOutputTokenLimit) || dailyOutputTokenLimit < 1 || dailyOutputTokenLimit > 10_000_000
+      || typeof reason !== 'string' || !reason.trim() || reason.trim().length > 500) {
+      throw Object.assign(new Error('Provide a valid daily output-token limit and reason.'), { statusCode: 400, code: 'INVALID_TENANT_MODEL_BUDGET' });
+    }
+    const operation = 'execution.tenant-model-output-budget.put';
+    const payload = { expectedRevision, dailyOutputTokenLimit, reason: reason.trim() };
+    const requestHash = contentHash(canonicalJson({ tenantId, principal, operation, ...payload }));
+    return this.persistence.transaction(async (client) => {
+      await requirePrincipalAuthority(client, { tenantId, principal, roles: ['tenant-admin'], actorType: 'human', authzGeneration });
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${tenantId}:${operation}:${commandId}`]);
+      const prior = await client.query(`select * from orgward.command_results
+        where tenant_id=$1 and operation=$2 and command_id=$3`, [tenantId, operation, commandId]);
+      if (prior.rowCount) {
+        if (prior.rows[0].payload_hash !== requestHash) throw conflict('This command ID was already used with different budget input.', null, 'IDEMPOTENCY_CONFLICT');
+        const recorded = verifyCommandRow(prior.rows[0]);
+        if (recorded.budget?.tenantId !== tenantId || recorded.budget?.revision !== expectedRevision + 1) {
+          throw persistenceIntegrity('A tenant model budget command result does not match its revision.');
+        }
+        return { budget: recorded.budget, replayed: true };
+      }
+      await client.query(`insert into orgward.tenant_model_handoff_controls (tenant_id)
+        values ($1) on conflict (tenant_id) do nothing`, [tenantId]);
+      const current = await client.query(`select budget_revision from orgward.tenant_model_handoff_controls
+        where tenant_id=$1 for update`, [tenantId]);
+      if (!current.rowCount) throw conflict('Tenant model budget control is unavailable.', null, 'TENANT_MODEL_HANDOFF_CONTROL_UNAVAILABLE');
+      const revision = Number(current.rows[0].budget_revision);
+      if (revision !== expectedRevision) throw conflict('The tenant model budget changed. Reload it before saving.', revision, 'VERSION_CONFLICT');
+      const updated = await client.query(`update orgward.tenant_model_handoff_controls
+        set daily_output_token_limit=$2,budget_revision=$3,budget_updated_by=$4,budget_reason=$5,budget_updated_at=now()
+        where tenant_id=$1 and budget_revision=$6 returning budget_updated_at`,
+      [tenantId, dailyOutputTokenLimit, revision + 1, principal, reason.trim(), revision]);
+      if (!updated.rowCount) throw conflict('The tenant model budget changed. Reload it before saving.', revision, 'VERSION_CONFLICT');
+      const event = { eventId: `event-${randomUUID()}`, schemaVersion: '1.0', tenantId, aggregateId: tenantId,
+        aggregateVersion: revision + 1, type: 'TenantModelOutputBudgetConfigured', actor: principal,
+        occurredAt: updated.rows[0].budget_updated_at.toISOString(), causationId: commandId,
+        data: { revision: revision + 1, dailyOutputTokenLimit, reason: reason.trim() }, evidenceRefs: [] };
+      await recordEvent(client, { tenantId, kind: 'tenant_model_handoff_control', id: tenantId,
+        version: revision + 1, commandId, event });
+      const budget = { tenantId, dailyOutputTokenLimit, revision: revision + 1, updatedBy: principal,
+        reason: reason.trim(), updatedAt: event.occurredAt };
+      const result = { budget };
+      await client.query(`insert into orgward.command_results
+        (tenant_id,operation,command_id,payload_hash,aggregate_kind,aggregate_id,result,result_hash)
+        values ($1,$2,$3,$4,'tenant_model_handoff_control',$5,$6::jsonb,$7)`,
+      [tenantId, operation, commandId, requestHash, tenantId, canonicalJson(result), contentHash(result)]);
+      return { ...result, replayed: false };
+    });
+  }
+
   async getTenantDeepSeekProfile({ client = null, tenantId, profileId }) {
     if (!tenantId || !profileId) return null;
     const read = async (queryable) => {
