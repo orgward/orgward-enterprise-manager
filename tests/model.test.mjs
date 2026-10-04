@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { AREA_DEFINITIONS, addConversationTurn, applyBlueprintProposal, createProject, editBlueprintObject, editProcessTaskGraph, latestBlueprint, planProcessTaskGraph, validateBlueprint } from '../src/model.mjs';
 import { createGeneratedBlueprintProposal, createProcessTaskProposalContext } from '../src/execution/proposals.mjs';
-import { coverageAreaStateLabel, coverageForBlueprint } from '../public/coverage-dashboard.mjs';
+import { coverageAreaStateLabel, coverageForBlueprint, ENTERPRISE_COVERAGE_PERSPECTIVES } from '../public/coverage-dashboard.mjs';
+import { ENTERPRISE_LENSES } from '../src/enterprise/types.mjs';
 import { compareBlueprintObjectVersions } from '../public/blueprint-comparison.mjs';
 import { getOrCreatePlanRevisionCommand, getOrCreateProcessPlanCommand, processPlanCommandKey, processPlanFailureDisposition } from '../public/process-plan-command.mjs';
 
@@ -112,6 +113,9 @@ test('coverage dashboard reports proposed scope, unknowns, gaps, confidence and 
   blueprint.integrity.gaps.push({ id: 'gap-example-critical', severity: 'critical', area: 'purposeStrategy', action: 'Confirm the intended strategic scope.' });
   const dashboard = coverageForBlueprint(blueprint);
   assert.equal(dashboard.lenses.length, 6);
+  assert.equal(dashboard.perspectives.length, 16);
+  assert.deepEqual(dashboard.perspectives.map((lens) => lens.id), ENTERPRISE_COVERAGE_PERSPECTIVES.map((lens) => lens.id));
+  assert.deepEqual(ENTERPRISE_COVERAGE_PERSPECTIVES, ENTERPRISE_LENSES.map(({ id, label, types }) => ({ id, label, types })));
   assert.equal(dashboard.areaCounts.designed, 8);
   assert.equal(dashboard.areaCounts.unknown, 1);
   assert.equal(dashboard.areaCounts.outOfScope, 1);
@@ -135,6 +139,71 @@ test('coverage dashboard reports proposed scope, unknowns, gaps, confidence and 
   const missingArea = missingCoverage.lenses.find((lens) => lens.id === 'technology-information').areas[0];
   assert.equal(missingArea.status, 'unknown');
   assert.equal(coverageAreaStateLabel(missingArea), 'not represented');
+});
+
+test('multi-axis completeness scopes each of sixteen perspectives and keeps model, relation, provenance and time axes separate', () => {
+  const blueprint = structuredClone(completeDiscovery().blueprintVersions[0]);
+  const objects = Object.values(blueprint.areas).flatMap((area) => area.items);
+  for (const object of objects) delete object.enterpriseScope;
+  const makeScope = (id, name) => ({ id, type: 'organization', name, detail: 'Canonical test scope record.',
+    status: 'designed', confidence: 'medium', provenance: [{ source: 'test' }],
+    enterpriseScope: { organizationId: id, legalEntityId: null, unitId: null } });
+  const organization = makeScope('coverage-org-a', 'North service group');
+  const otherOrganization = makeScope('coverage-org-b', 'South service group');
+  blueprint.areas.peopleAgents.items.push(organization, otherOrganization);
+  const delivery = objects.find((object) => object.id === 'process-deliver');
+  const otherProcess = structuredClone(delivery); otherProcess.id = 'process-coverage-peer'; otherProcess.name = 'Scoped peer process';
+  otherProcess.status = 'out_of_scope'; otherProcess.confidence = 'low'; otherProcess.provenance = [];
+  otherProcess.enterpriseScope = { organizationId: organization.id, legalEntityId: null, unitId: null };
+  const unknownProcess = structuredClone(otherProcess); unknownProcess.id = 'process-coverage-unknown';
+  unknownProcess.name = 'Unknown scoped process'; unknownProcess.status = 'unknown'; unknownProcess.confidence = 'medium';
+  unknownProcess.provenance = [{ source: 'test' }];
+  const unscopedProcess = structuredClone(otherProcess); unscopedProcess.id = 'process-coverage-unscoped';
+  unscopedProcess.name = 'Unscoped process'; unscopedProcess.status = 'designed';
+  unscopedProcess.enterpriseScope = { organizationId: null, legalEntityId: null, unitId: null };
+  blueprint.areas.capabilitiesProcesses.items.push(otherProcess, unknownProcess, unscopedProcess);
+  delivery.status = 'designed'; delivery.confidence = 'high'; delivery.provenance = [{ source: 'test' }];
+  delivery.enterpriseScope = { organizationId: organization.id, legalEntityId: null, unitId: null };
+  const otherExistingProcess = objects.find((object) => object.id === 'process-review');
+  otherExistingProcess.enterpriseScope = { organizationId: otherOrganization.id, legalEntityId: null, unitId: null };
+  unknownProcess.enterpriseScope = { organizationId: organization.id, legalEntityId: null, unitId: null };
+  blueprint.enterpriseValidity = { effectiveFrom: '2026-01-01T00:00:00.000Z', effectiveTo: null, evidenceKind: 'HUMAN_PROPOSED' };
+  blueprint.integrity.gaps = [
+    { id: `gap-owner-${delivery.id}`, objectId: delivery.id, severity: 'high', area: 'capabilitiesProcesses', action: 'Assign delivery owner.' },
+    { id: `gap-owner-${otherExistingProcess.id}`, objectId: otherExistingProcess.id, severity: 'critical', area: 'capabilitiesProcesses', action: 'Assign another process owner.' },
+    { id: 'gap-process-area-context', severity: 'medium', area: 'capabilitiesProcesses', action: 'Review process area assumptions.' },
+  ];
+  blueprint.relations = [
+    { id: 'coverage-internal', source: delivery.id, target: otherProcess.id, type: 'supports' },
+    { id: 'coverage-scope-crossing', source: delivery.id, target: otherExistingProcess.id, type: 'supports' },
+    { id: 'coverage-lens-crossing', source: delivery.id, target: organization.id, type: 'within-organization' },
+    { id: 'coverage-dangling', source: delivery.id, target: 'missing-coverage-object', type: 'supports' },
+  ];
+  const deliveryLens = ENTERPRISE_COVERAGE_PERSPECTIVES.find((lens) => lens.id === 'L-04');
+  const all = coverageForBlueprint(blueprint);
+  const scoped = coverageForBlueprint(blueprint, { scopeId: organization.id });
+  const perspective = scoped.perspectives.find((lens) => lens.id === 'L-04');
+  assert.equal(deliveryLens.label, perspective.label);
+  assert.equal(scoped.scope.id, organization.id);
+  assert.equal(perspective.objectCount, 3);
+  assert.equal(perspective.typeCounts.process, 3);
+  assert.ok(perspective.missingTypes.includes('decision'));
+  assert.equal(perspective.scope.scoped, 4);
+  assert.equal(perspective.scope.unscoped, 1);
+  assert.ok(perspective.scope.unknown > 0);
+  assert.equal(perspective.scope.totalPerspectiveRecords, perspective.scope.scoped + perspective.scope.unscoped + perspective.scope.unknown);
+  assert.deepEqual(perspective.relationships, { internal: 1, crossingLens: 1, crossingScope: 1, crossingBoth: 0, dangling: 1 });
+  assert.deepEqual(perspective.design.recordStatus, { designed: 1, unknown: 1, out_of_scope: 1 });
+  assert.equal(perspective.design.gaps, 2);
+  assert.equal(perspective.design.objectSpecificGaps, 1, 'an excluded process gap must not leak into this selected scope');
+  assert.equal(perspective.design.areaContextGaps, 1);
+  assert.equal(perspective.design.highSeverityGaps, 1);
+  assert.deepEqual(perspective.design.confidence, { low: 1, medium: 1, high: 1 });
+  assert.equal(perspective.design.provenanceRecords, 2);
+  assert.deepEqual(perspective.time, { status: 'DECLARED', validity: blueprint.enterpriseValidity });
+  assert.ok(all.excludedByScope === 0);
+  assert.equal(scoped.excludedByScope, Object.values(blueprint.areas).flatMap((area) => area.items).length - scoped.scope.objectCount);
+  assert.equal(coverageForBlueprint(blueprint, { scopeId: 'missing-scope' }).scope, null);
 });
 
 test('coverage read model follows an edited immutable version and retains proposed epistemic status', () => {

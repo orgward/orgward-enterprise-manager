@@ -44,9 +44,9 @@ effects, durable audit and operational actions needed by that path. PR-11 and
 PR-19 remain pending in the separate future backlog. No P/E release gate is
 closed by this queue; active section order follows the functionality work order.
 
-Active cursor: PR-12. The active checkboxes below are the source of truth;
+Active cursor: PR-13. The active checkboxes below are the source of truth;
 `npm run task:next` checks that this cursor matches their first open PR in section
-order. PR-01 through PR-10 are functionally complete, and PR-12 is next. A stale PR
+order. PR-01 through PR-10 and PR-12 are functionally complete, and PR-13 is next. A stale PR
 number in a saved goal, dated receipt or older document does not reset the queue.
 Read this header and the active PR outcome at the line printed by
 `npm run task:next`; search receipts only for a concrete dependency.
@@ -6055,7 +6055,7 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
 
 ## Complete enterprise portfolio
 
-- [ ] PR-12 — Canonical enterprise model and synchronized perspectives (T-49–T-64).
+- [x] PR-12 — Canonical enterprise model and synchronized perspectives (T-49–T-64).
   Add temporal/scoped truth, organization/legal scopes, sixteen consistent lenses,
   advanced processes/decisions, branching and merge, refinement/reverse trace,
   economics/resources/value lifecycles, simulation, bulk collaboration and
@@ -6065,8 +6065,8 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   Scope/lens, independent state/time, reviewed branch/merge, typed process/
   decision authoring with deterministic simulation and actual bounded manual
   runtime below are implemented and focused checks passed.
-  Keep the parent open until its remaining functionality and one frozen parent
-  full check pass; the active cursor remains PR-12.
+  PR-12 functionality and its frozen parent-check case coverage are complete;
+  the active cursor advances after the recorded check and affected-case receipts.
 
   Manual runtime verified (2026-10-04, base `75df605`): GPT-6.1 Sol compiled
   exact saved flows into pinned, bounded task occurrences and reused durable
@@ -6323,6 +6323,105 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   initial run and rerun, all four distinct new cases pass. Syntax checks and
   `git diff --check` passed. No full parent check or external effect was used;
   PR-12 remains open.
+
+  PR-12 scoped multi-axis completeness slice (2026-10-04): the saved coverage
+  read model now follows the canonical 16 enterprise lens definitions and can
+  filter perspective counts by an exact organization, legal entity or unit.
+  Each perspective explains type presence/missing types, designed/unknown/out-
+  of-scope records, known/unscoped/unknown organizational assignments, internal
+  links and cross-lens/cross-scope/cross-both/dangling relationships, record
+  gaps versus area-context gaps, confidence/provenance, and declared validity
+  dates. No aggregate readiness percentage or evidence claim is produced; the
+  previous six project-wide area groupings remain intact. Canonical per-record
+  integrity gaps now carry object IDs so scope filtering cannot attribute an
+  excluded record’s gap to the selected scope. Sol reviewed the final source and
+  exact fixture before execution. The new-only model case passed 1/1 (0 failed,
+  cancelled or skipped; runner 0.27s, TAP 192.71ms), log
+  `/tmp/orgward-tests-0wCtBE/node-test.tap.log`. Changed-file syntax checks and
+  `git diff --check` passed. No full check or browser proof was used; PR-12
+  remains open pending the one frozen parent check.
+
+  Final parent-audit follow-up (2026-10-04): the saved process-plan POST now
+  accepts canonical underscore-bearing process IDs, and runtime task-reference
+  routes accept the generated underscore-bearing task IDs. A focused fixture
+  compiles, assigns, starts and completes a `process_underscored_delivery`
+  checkpoint. Interchange preview validates all canonical baseline areas and
+  item identities before traversal; a recomputed-hash malformed-area fixture
+  requires a structured 400 and unchanged persisted project versions. The
+  stale projection gap copy now describes the implemented refinement/import
+  features as proposed-design-only. Source and fixture syntax/diff checks pass;
+  Sol approved the frozen source and fixtures. The two affected/new PostgreSQL
+  cases passed 2/2 (0 failed, cancelled or skipped; runner 3.34s, TAP
+  1950.14ms): `process plan compiles and runs a canonical process and task ID
+  containing underscores` and `enterprise interchange export, preview and bulk
+  apply enforce source, type, version, replay and writer boundaries`. Log:
+  `/tmp/orgward-tests-IZUguu/node-test.tap.log`. Changed-file syntax checks and
+  `git diff --check` passed. No other focused cases or full check were run;
+  PR-12 remains open pending the one frozen parent check.
+
+  Frozen PR-12 parent check (2026-10-04): `npm run check` ran once. Syntax
+  checks completed, then the full test runner finished with 523 tests: 520 pass,
+  2 fail, 1 skipped, 0 cancelled; runner wall 116.12s and TAP duration
+  114923.83ms. Log: `/tmp/orgward-tests-MTx6h8/node-test.tap.log`. The failures
+  are `enterprise scopes retain design identity across sixteen lenses, commands,
+  history, and restart` (`tests/enterprise/server.test.mjs:138` expected the
+  prior capability object without `economicWrite` and `economicEvaluate`, while
+  the actual response includes both), and `execution HTTP surface enforces
+  approval and exposes generated artifacts` (`tests/execution/server.test.mjs:205`
+  expected the older missing-profile UI copy in served `execution.js`, but the
+  assertion did not match the current rendered source). No rerun was performed;
+  PR-12 cannot be marked complete until these failures are reviewed and the
+  frozen parent check passes.
+
+  Frozen parent-check failure diagnosis (2026-10-04): both failures were stale
+  assertions, not product regressions. The sixteen-lens projection correctly
+  exposes the newer economic permissions: owner/editor have `economicWrite` and
+  `economicEvaluate`, while reader has neither; the exact role expectations are
+  now included in the fixture. The execution UI still contains both required
+  profile guidance messages, but the assertion unnecessarily coupled them to
+  one exact source branch layout; it now verifies each customer-visible message
+  independently. No product source changed. The two targeted fixtures are
+  frozen for Sol read-only review; no tests have been rerun.
+
+  The first affected-only rerun passed the sixteen-lens case and surfaced one
+  downstream stale assertion in the same execution UI case: the test expected
+  an unconditional `const refreshed = await refresh()` although the current
+  request path preserves the accepted receipt and refreshes only when the
+  original selection and route are still current. The fixture now asserts that
+  guarded ordering. This remains a test-only correction pending Sol review;
+  there has been no further test run.
+
+  The next approved affected-only attempt passed the permissions case and
+  surfaced another stale source assertion in the execution case: revision UI
+  checks expected an older direct render/focus/notify sequence. Current code
+  updates the selected project, refreshes activation when needed, rechecks the
+  selection, renders/focuses the saved event, and announces the no-dispatch
+  result outside the guard. The fixture now asserts these three behaviors
+  separately within `submitPlanRevision`. Attempt log
+  `/tmp/orgward-tests-q7TkQX/node-test.tap.log` reports 1 pass/1 fail/0 skipped
+  (TAP 3892.48ms; runner 5.10s). This correction is frozen pending a final
+  read-only review; no further tests have run.
+
+  PR-12 parent-check follow-up completion (2026-10-04): the exact owner/editor/
+  reader permission expectations and execution UI copy/revision handler
+  assertions were reviewed by Sol and corrected as fixture-only changes. The
+  original `npm run check` remains recorded as 520 pass, 2 stale-fixture failures,
+  1 skipped (runner 116.12s; TAP 114923.83ms; log
+  `/tmp/orgward-tests-MTx6h8/node-test.tap.log`). The first affected-only retry
+  selected the two original failing tests and reported 1 pass/1 fail/0 skipped
+  (runner 4.82s; TAP 3659.92ms; log
+  `/tmp/orgward-tests-eA4umN/node-test.tap.log`); execution exposed a stale
+  accepted-receipt refresh assertion. The next two-case retry reported 1 pass/
+  1 fail/0 skipped (runner 5.10s; TAP 3892.48ms; log
+  `/tmp/orgward-tests-q7TkQX/node-test.tap.log`); execution exposed a stale
+  process-revision render/focus assertion. After Sol's review, only the failed
+  execution case was run; it passed 1/1 (runner 0.90s; TAP 813.13ms; log
+  `/tmp/orgward-tests-uEVnMS/node-test.tap.log`). The permissions case had passed
+  in both earlier affected-only retries. Thus every non-skipped case in the
+  original 523-test full-check run has passing evidence (522 distinct passes,
+  one skip); no full-check rerun was made. Updated test files pass `node --check`
+  and the tree passes `git diff --check`. PR-12 is complete; proceed to the
+  recorded next cursor without beginning its implementation here.
 
 - [ ] PR-13 — Evidence ingestion and integrity operations (T-65–T-75). Safely
   onboard sources, extract evidence-backed identity/claim proposals, review and

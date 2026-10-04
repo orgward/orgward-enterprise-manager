@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { createApp } from '../../server.mjs';
-import { addConversationTurn, createProject } from '../../src/model.mjs';
+import { addConversationTurn, buildRelations, createProject, validateBlueprint } from '../../src/model.mjs';
 import { contentHash } from '../../src/platform/postgres.mjs';
 import { digest, persistedDigest } from '../../src/sdlc/contracts.mjs';
 import { startPostgres } from '../helpers/postgres.mjs';
@@ -26,7 +26,7 @@ const identities = new Map(subjects.map((subject) => {
     actorType: 'human', displayName: subject, roles: roles[subject], expiresAt: Math.floor(Date.now() / 1000) + 300 }];
 }));
 
-async function seedProject(postgres, name) {
+async function seedProject(postgres, name, { mutate = null } = {}) {
   const project = createProject(name);
   for (const answer of [
     'A service that moves customer transfers safely.',
@@ -34,6 +34,7 @@ async function seedProject(postgres, name) {
     'We charge a per-transfer fee and focus on transparent status.',
     'Human approval remains required for exceptions and regulated controls.',
   ]) addConversationTurn(project, answer);
+  mutate?.(project);
   const owner = identities.get('owner').principal;
   const editor = identities.get('editor').principal;
   const reader = identities.get('reader').principal;
@@ -134,9 +135,9 @@ test('enterprise scopes retain design identity across sixteen lenses, commands, 
   const ownerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
   const editorView = await currentView(instance.base, 'editor', project.id);
   const readerView = await currentView(instance.base, 'reader', project.id);
-  assert.deepEqual(ownerView.data.permissions, { write: true, scopeAdmin: true, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, simulate: true });
-  assert.deepEqual(editorView.data.permissions, { write: true, scopeAdmin: false, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, simulate: true });
-  assert.deepEqual(readerView.data.permissions, { write: false, scopeAdmin: false, branchCreate: false, branchWrite: false, branchAdmin: false, processWrite: false, simulate: false });
+  assert.deepEqual(ownerView.data.permissions, { write: true, scopeAdmin: true, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, simulate: true, economicWrite: true, economicEvaluate: true });
+  assert.deepEqual(editorView.data.permissions, { write: true, scopeAdmin: false, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, simulate: true, economicWrite: true, economicEvaluate: true });
+  assert.deepEqual(readerView.data.permissions, { write: false, scopeAdmin: false, branchCreate: false, branchWrite: false, branchAdmin: false, processWrite: false, simulate: false, economicWrite: false, economicEvaluate: false });
   assert.equal(ownerView.data.selection.object.id, 'process-deliver');
   assert.equal(ownerView.data.selection.object.enterpriseScope, undefined);
   assert.equal(ownerView.data.selection.visible, true);
@@ -480,6 +481,70 @@ test('enterprise state and time views keep human reports independent and future 
   assert.equal(proposalReplay.data.proposalId, proposalId);
   const mainAfterReplay = await currentView(instance.base, 'owner', project.id);
   assert.equal(mainAfterReplay.data.context.blueprintId, mainEditResult.data.blueprintId);
+});
+
+test('process plan compiles and runs a canonical process and task ID containing underscores', async (t) => {
+  const postgres = await startPostgres(); let root; let instance;
+  t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-process-underscore-'));
+  instance = await startApp(postgres, root);
+  for (const identity of identities.values()) {
+    await postgres.query(`insert into orgward.oidc_principals
+      (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+    [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  }
+  const processId = 'process_underscored_delivery';
+  const project = await seedProject(postgres, 'Underscore process runtime fixture', { mutate(projectValue) {
+    const blueprint = projectValue.blueprintVersions.at(-1);
+    const source = blueprint.areas.capabilitiesProcesses.items.find((object) => object.id === 'process-deliver');
+    const authored = structuredClone(source);
+    Object.assign(authored, { id: processId, name: 'Underscored delivery process', owner: 'role-founder',
+      detail: 'Run one simple human checkpoint through the canonical task runtime.', trigger: 'A qualified request arrives.', inputs: [], outputs: [] });
+    delete authored.processFlow;
+    blueprint.areas.capabilitiesProcesses.items.push(authored);
+    blueprint.relations = buildRelations(blueprint.areas);
+    blueprint.integrity = validateBlueprint(blueprint);
+    blueprint.summary.objectCount += 1;
+    blueprint.summary.relationCount = blueprint.relations.length;
+  } });
+
+  let projectView = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  const bindingRoute = `/api/v1/projects/${project.id}/actor-bindings/proposals`;
+  const binding = { actorId: 'actor-founder', roleId: 'role-founder',
+    targetPrincipal: identities.get('editor').principal, blueprintVersion: projectView.data.latestBlueprint.version };
+  projectView = await request(instance.base, 'owner', bindingRoute, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'underscore-process-human-binding', expectedVersion: projectView.data.version, payload: binding,
+  } });
+  projectView = await request(instance.base, 'owner', `${bindingRoute}/enable`, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'underscore-process-human-binding-enable', expectedVersion: projectView.data.version,
+    payload: { actorId: binding.actorId, roleId: binding.roleId, blueprintVersion: binding.blueprintVersion },
+  } });
+  const compiled = await request(instance.base, 'owner', `/api/v1/projects/${project.id}/process-plans`, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'underscore-process-compile', expectedVersion: projectView.data.version,
+    payload: { processId },
+  } }, 201);
+  const plan = compiled.data.processPlans.at(-1);
+  assert.equal(plan.source.processId, processId);
+  assert.equal(plan.tasks.length, 1);
+  assert.equal(plan.tasks[0].id, `task-${processId}`);
+  const revisionRoute = `/api/v1/projects/${project.id}/process-plans/${plan.id}/revisions`;
+  const assigned = await request(instance.base, 'owner', revisionRoute, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'underscore-process-assignment', expectedVersion: compiled.data.version,
+    payload: { tasks: plan.tasks.map((task) => ({ taskId: task.id, title: task.title, detail: task.detail,
+      dependencies: task.dependencies, roleId: 'role-founder', actorId: 'actor-founder' })) },
+  } });
+  const assignedPlan = assigned.data.processPlans.filter((entry) => entry.id === plan.id).at(-1);
+  const runtimeAction = (action, commandId, payload, status = 201) => request(instance.base, 'editor',
+    `/api/execution/process-task-instances/${action}`, { method: 'POST', body: { schemaVersion: '1.0', commandId, payload } }, status);
+  const started = await runtimeAction('start', 'underscore-process-task-start', { projectId: project.id, planId: plan.id,
+    revision: assignedPlan.revision, planInstanceId: null, taskId: `task-${processId}` });
+  assert.match(started.planInstanceId, /^[0-9a-f-]{36}$/i);
+  const completed = await runtimeAction('complete', 'underscore-process-task-complete', { projectId: project.id, planId: plan.id,
+    revision: assignedPlan.revision, planInstanceId: started.planInstanceId, taskId: `task-${processId}`,
+    result: 'succeeded', evidence: ['Underscored process task completed by its assigned human.'] });
+  assert.equal(completed.status, 'SUCCEEDED');
+  const runtime = await request(instance.base, 'owner', `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`);
+  assert.equal(runtime.instances.find((entry) => entry.planInstanceId === started.planInstanceId)?.taskId, `task-${processId}`);
 });
 
 test('enterprise process definitions and simulations stay typed, bounded, source-bound and separate from actual work', async (t) => {
@@ -1293,6 +1358,17 @@ test('enterprise interchange export, preview and bulk apply enforce source, type
   assert.equal(bundle.source.blueprintId, view.data.context.blueprintId);
   assert.equal(bundle.source.blueprintVersion, view.data.context.blueprintVersion);
   assert.match(bundle.source.snapshotHash, /^[a-f0-9]{64}$/);
+  const malformedBundle = structuredClone(bundle);
+  malformedBundle.baseline.areas.purposeStrategy.items = null;
+  malformedBundle.source.snapshotHash = digest(malformedBundle.baseline);
+  const beforeMalformedPreview = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  const malformedPreview = await request(instance.base, 'reader', `/api/v1/projects/${project.id}/enterprise/import-preview`, {
+    method: 'POST', body: { bundle: malformedBundle },
+  }, 400);
+  assert.equal(malformedPreview.error.code, 'INVALID_ENTERPRISE_BUNDLE_BASELINE');
+  const afterMalformedPreview = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  assert.equal(afterMalformedPreview.data.version, beforeMalformedPreview.data.version);
+  assert.equal(afterMalformedPreview.data.blueprintVersions.length, beforeMalformedPreview.data.blueprintVersions.length);
   const customer = bundle.records.find((record) => record.type === 'customer');
   customer.fields.name = `${customer.fields.name} (reviewed import)`;
   const preview = await request(instance.base, 'reader', `/api/v1/projects/${project.id}/enterprise/import-preview`, {

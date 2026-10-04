@@ -18,6 +18,7 @@ const state = {
   mapAreaFilter: null,
   mapSearch: '',
   coverageReturnContext: null,
+  coverageScopeId: null,
   activeTypes: new Set(),
   selectedId: null,
   transform: { x: 0, y: 0, k: 1 },
@@ -877,7 +878,11 @@ function renderCoverage() {
   const target = document.querySelector('#coverage-view');
   if (!target) return;
   if (!viewedBlueprint()) { target.replaceChildren(); return; }
-  const coverage = coverageForBlueprint(viewedBlueprint());
+  let coverage = coverageForBlueprint(viewedBlueprint(), { scopeId: state.coverageScopeId });
+  if (state.coverageScopeId && !coverage.scope) {
+    state.coverageScopeId = null;
+    coverage = coverageForBlueprint(viewedBlueprint());
+  }
   target.replaceChildren();
   if (!enterpriseReadOnly()) target.append(renderBlueprintPublication(coverage));
   else target.append(element('p', { text: 'This saved context is read only. Publication requires the current saved design.' }));
@@ -890,6 +895,39 @@ function renderCoverage() {
     totals.append(element('div', {}, [element('strong', { text: value }), element('span', { text: label })]));
   }
   target.append(totals);
+  const scopeLabel = element('label', { text: 'Organizational scope for the 16 perspective summaries' });
+  const scopeSelect = element('select', { attrs: { 'aria-label': 'Organizational scope for completeness' } });
+  scopeSelect.append(element('option', { text: 'All saved design objects', attrs: { value: '' } }));
+  for (const scope of coverage.availableScopes) scopeSelect.append(element('option', {
+    text: `${scope.type.replaceAll('-', ' ')} · ${scope.name}`, attrs: { value: scope.id },
+  }));
+  scopeSelect.value = coverage.scope?.id ?? '';
+  scopeSelect.addEventListener('change', () => { state.coverageScopeId = scopeSelect.value || null; renderCoverage(); });
+  scopeLabel.append(scopeSelect);
+  target.append(scopeLabel, element('p', { className: 'coverage-scope-note', text: 'The six legacy area groupings below remain project-wide; the scope selector applies to the 16 perspective summaries only.' }));
+  if (coverage.scope) target.append(element('p', { className: 'coverage-scope-note', text: `Showing ${coverage.scope.objectCount} objects assigned to ${coverage.scope.type} “${coverage.scope.name}”. ${coverage.excludedByScope} other design objects are outside this scope.` }));
+  target.append(element('section', { className: 'coverage-multiaxis', attrs: { 'aria-label': 'Explainable multi-axis completeness across 16 enterprise perspectives' } }, [
+    element('h4', { text: 'Multi-axis completeness · 16 enterprise perspectives' }),
+    element('p', { text: 'Each perspective reports separate model, organizational scope, relationship, design-gap, provenance/confidence and declared-time axes. Counts overlap across perspectives and are not a readiness score or verification claim.' }),
+  ]));
+  const axes = target.querySelector('.coverage-multiaxis');
+  const perspectiveGrid = element('div', { className: 'coverage-perspective-grid' });
+  for (const perspective of coverage.perspectives) {
+    const card = element('details', { className: 'coverage-perspective' });
+    const missing = perspective.missingTypes.length ? ` · absent types: ${perspective.missingTypes.join(', ')}` : '';
+    card.append(element('summary', { text: `${perspective.id} · ${perspective.label} · ${perspective.objectCount} scoped objects${missing}` }));
+    const list = element('ul');
+    const typeCoverage = Object.entries(perspective.typeCounts).map(([type, count]) => `${type} ${count}`).join(' · ') || 'No typed records';
+    list.append(element('li', { text: `Model types: ${typeCoverage}. Counts are records in the selected perspective.` }));
+    list.append(element('li', { text: `Organizational scope across ${perspective.scope.totalPerspectiveRecords} records in this lens: ${perspective.scope.scoped} assigned · ${perspective.scope.unscoped} explicitly unscoped · ${perspective.scope.unknown} unknown. The selected scope filters the records shown above.` }));
+    list.append(element('li', { text: `Relationships: ${perspective.relationships.internal} within selected perspective/scope · ${perspective.relationships.crossingLens} cross-lens · ${perspective.relationships.crossingScope} cross-scope · ${perspective.relationships.crossingBoth} crossing both boundaries · ${perspective.relationships.dangling} with a missing endpoint.` }));
+    list.append(element('li', { text: `Design records: ${perspective.design.recordStatus.designed} designed · ${perspective.design.recordStatus.unknown} explicitly unknown · ${perspective.design.recordStatus.out_of_scope} out of scope; ${perspective.design.objectSpecificGaps} record-specific gaps · ${perspective.design.areaContextGaps} area-level context gaps (${perspective.design.highSeverityGaps} high/critical) · ${perspective.design.provenanceRecords} provenance records.` }));
+    list.append(element('li', { text: `Recorded confidence: ${perspective.design.confidence.low} low, ${perspective.design.confidence.medium} medium, ${perspective.design.confidence.high} high. Confidence is not evidence strength.` }));
+    list.append(element('li', { text: `Time applicability: ${perspective.time.status === 'DECLARED' ? `${perspective.time.validity.effectiveFrom ?? 'start unspecified'} to ${perspective.time.validity.effectiveTo ?? 'end unspecified'}; ${perspective.time.validity.evidenceKind ?? 'declared'}` : 'unknown; no validity interval is declared.'}` }));
+    if (perspective.scope.assignments.length) list.append(element('li', { text: `Scope records: ${perspective.scope.assignments.map((scope) => `${scope.type} “${scope.name}” (${scope.objectCount})`).join('; ')}.` }));
+    card.append(list); perspectiveGrid.append(card);
+  }
+  axes.append(perspectiveGrid);
   target.append(element('p', { className: 'coverage-overlap', text: 'Lens area counts overlap: Customers, offerings, value & economics appears in both Commercial and Financial & resources. Do not add lens totals.' }));
   const lenses = element('div', { className: 'coverage-lenses' });
   for (const lens of coverage.lenses) {

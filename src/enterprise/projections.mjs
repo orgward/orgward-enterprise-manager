@@ -101,7 +101,7 @@ export function projectEnterprise(project, query = {}, authority = {}) {
   const gaps = [
     { code: 'PROPOSED_DESIGN_ONLY', message: 'These perspectives show saved organizational design. They do not establish enabled operations or verified outcomes.' },
     { code: 'PROPOSED_MERGE_ONLY', message: 'Reviewed branch merges change current proposed design. Internal publication and work or effect approvals remain separate.' },
-    { code: 'DOMAIN_DETAILS_PARTIAL', message: 'Refinement and bulk collaboration need further implementation.' },
+    { code: 'PROPOSED_DESIGN_RELATIONSHIPS_ONLY', message: 'Refinement links and imported edits describe proposed-design relationships only; they do not establish execution or independent evidence.' },
   ];
   if (!blueprint) gaps.unshift({ code: current ? 'TEMPORAL_CONTEXT_UNKNOWN' : 'BLUEPRINT_REQUIRED',
     message: current ? 'No saved main snapshot has known applicability at these dates. Missing effective dates remain unknown; no current-design fallback was used.'

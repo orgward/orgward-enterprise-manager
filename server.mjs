@@ -1762,7 +1762,7 @@ export function createApp({
         if (!/^(?:process-plan-[0-9a-f-]{36}|software-delivery-[a-f0-9]{32})$/i.test(payload.planId ?? '')
           || !Number.isSafeInteger(payload.revision) || payload.revision < 1
           || !/^[0-9a-f-]{36}$/i.test(payload.planInstanceId ?? '')
-          || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(payload.taskId ?? '')
+          || !/^[a-z0-9][a-z0-9_-]{0,119}$/i.test(payload.taskId ?? '')
           || !/^[a-z0-9][a-z0-9_-]{0,119}$/i.test(payload.outputObjectId ?? '')
           || typeof payload.blueprintId !== 'string' || !payload.blueprintId.trim()
           || !Number.isSafeInteger(payload.blueprintVersion) || payload.blueprintVersion < 1
@@ -2068,7 +2068,7 @@ export function createApp({
         if ((manualFlow ? keys.length !== 4 || keys.some((key) => !['processId', 'mode', 'blueprintId', 'blueprintVersion'].includes(key))
           || typeof body.payload.blueprintId !== 'string' || !Number.isSafeInteger(body.payload.blueprintVersion)
           : keys.length !== 1 || keys[0] !== 'processId') || typeof body.payload.processId !== 'string'
-          || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(body.payload.processId)) {
+          || !/^[a-z0-9][a-z0-9_-]{0,119}$/i.test(body.payload.processId)) {
           throw apiFailure(400, 'INVALID_COMMAND', 'Choose one valid saved process.', {
             fieldErrors: [{ field: 'payload.processId', message: 'Only a valid processId is accepted.' }],
           });
@@ -2554,7 +2554,7 @@ export function createApp({
           || !/^(?:process-plan-[0-9a-f-]{36}|software-delivery-[a-f0-9]{32})$/i.test(planId ?? '')
           || !Number.isSafeInteger(revision) || revision < 1
           || (planInstanceId !== undefined && !/^[0-9a-f-]{36}$/i.test(planInstanceId ?? ''))
-          || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(taskId ?? '')
+          || !/^[a-z0-9][a-z0-9_-]{0,119}$/i.test(taskId ?? '')
           || !/^[a-z0-9][a-z0-9_-]{1,79}$/i.test(profileId ?? '')
           || (body.payload.profileRevision !== undefined && (!Number.isSafeInteger(body.payload.profileRevision) || body.payload.profileRevision < 1))) {
           throw apiFailure(400, 'INVALID_PROCESS_TASK_REQUEST', 'Choose a valid saved project, graph revision, task, and configured profile.');
@@ -2766,7 +2766,7 @@ export function createApp({
           || !Number.isSafeInteger(revision) || revision < 1
           || (startingHumanTask && planInstanceId != null && !/^[0-9a-f-]{36}$/i.test(planInstanceId))
           || (!startingHumanTask && !/^[0-9a-f-]{36}$/i.test(planInstanceId ?? ''))
-          || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(taskId ?? '')) {
+          || !/^[a-z0-9][a-z0-9_-]{0,119}$/i.test(taskId ?? '')) {
           throw apiFailure(400, 'INVALID_PROCESS_TASK_REFERENCE', 'Choose a valid saved plan revision, instance, and task.');
         }
         const command = {

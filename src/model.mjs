@@ -1238,10 +1238,10 @@ export function validateBlueprint(blueprint) {
     ids.add(object.id);
     if (!VALID_STATUSES.has(object.status)) errors.push({ code: 'OBJECT_STATUS_INVALID', path: object.id, message: 'Object status is invalid.' });
     if (!VALID_CONFIDENCE.has(object.confidence)) errors.push({ code: 'CONFIDENCE_INVALID', path: object.id, message: 'Confidence must be low, medium, or high.' });
-    if (!Array.isArray(object.provenance) || object.provenance.length === 0) gaps.push({ id: `gap-provenance-${object.id}`, severity: 'medium', area: object.area, action: `Add provenance to ${object.name}.` });
-    if (['goal', 'capability', 'process', 'risk', 'control', 'metric', 'lifecycle'].includes(object.type) && !object.owner) gaps.push({ id: `gap-owner-${object.id}`, severity: 'high', area: object.area, action: `Assign an accountable owner to ${object.name}.` });
-    if (object.type === 'role' && (!(object.proposedScopeStatements?.length || object.authority?.length) || !object.responsibilities?.length)) gaps.push({ id: `gap-authority-${object.id}`, severity: 'high', area: object.area, action: `Define responsibility and proposed scope for ${object.name}.` });
-    if (object.type === 'process' && (!object.trigger || !object.inputs?.length || !object.outputs?.length)) gaps.push({ id: `gap-flow-${object.id}`, severity: 'high', area: object.area, action: `Define trigger, inputs, and outputs for ${object.name}.` });
+    if (!Array.isArray(object.provenance) || object.provenance.length === 0) gaps.push({ id: `gap-provenance-${object.id}`, objectId: object.id, severity: 'medium', area: object.area, action: `Add provenance to ${object.name}.` });
+    if (['goal', 'capability', 'process', 'risk', 'control', 'metric', 'lifecycle'].includes(object.type) && !object.owner) gaps.push({ id: `gap-owner-${object.id}`, objectId: object.id, severity: 'high', area: object.area, action: `Assign an accountable owner to ${object.name}.` });
+    if (object.type === 'role' && (!(object.proposedScopeStatements?.length || object.authority?.length) || !object.responsibilities?.length)) gaps.push({ id: `gap-authority-${object.id}`, objectId: object.id, severity: 'high', area: object.area, action: `Define responsibility and proposed scope for ${object.name}.` });
+    if (object.type === 'process' && (!object.trigger || !object.inputs?.length || !object.outputs?.length)) gaps.push({ id: `gap-flow-${object.id}`, objectId: object.id, severity: 'high', area: object.area, action: `Define trigger, inputs, and outputs for ${object.name}.` });
   }
 
   for (const relation of blueprint.relations ?? []) {

@@ -202,8 +202,10 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(humanOutputHelperSource, /kind: 'applied'/);
   assert.doesNotMatch(executionSource, /detail\.value\s*=\s*.*runtime\.evidence/,
     'human evidence cannot automatically populate owner-entered output detail');
-  assert.match(executionSource, /if \(!state\.meta\?\.profiles\?\.length\) \{[\s\S]*?No execution profile is configured\. Ask an OrgWard administrator to configure one before requesting approval\.[\s\S]*?\} else if \(!profileOptions\.length\) \{[\s\S]*?No configured execution profile supports this task\. Model profiles need at least one input and one information output; add those to the task or ask an OrgWard administrator to configure a non-model profile\./,
-    'the task request explains missing server profile configuration separately from task/profile incompatibility');
+  assert.ok(executionSource.includes('No execution profile is configured. Ask an OrgWard administrator to configure one before requesting approval.'),
+    'the task request explains when the server has no configured execution profile');
+  assert.ok(executionSource.includes('No configured execution profile supports this task. Model profiles need at least one input and one information output; add those to the task or ask an OrgWard administrator to configure a non-model profile.'),
+    'the task request explains when configured profiles are incompatible with the task');
   assert.match(executionSource, /profileSelect\.disabled = requestPresentation\.locked/);
   assert.match(executionSource, /repositorySelect\.disabled = requestPresentation\.locked/);
   assert.match(executionSource, /profileSelect\.value = savedProfileId/);
@@ -233,8 +235,8 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(executionSource, /role: 'status', 'aria-live': 'polite'/,
     'saved and uncertain request state is announced accessibly');
   const taskRequestHandler = executionSource.slice(executionSource.indexOf('async function requestTaskApproval'), executionSource.indexOf('function openPlanEditor'));
-  assert.match(taskRequestHandler, /const accepted = acceptProcessTaskRequest\(pending, run\)[\s\S]*?savePendingProcessTaskRequest[\s\S]*?const refreshed = await refresh\(\)/,
-    'the exact accepted receipt remains persisted until the follow-up snapshot is checked');
+  assert.match(taskRequestHandler, /const accepted = acceptProcessTaskRequest\(pending, run\)[\s\S]*?savePendingProcessTaskRequest\(processTaskIntentStorage\(\), key, pending\)[\s\S]*?let refreshed = false;[\s\S]*?if \(selectionUnchanged\(\) && routeAtStart === `\$\{window\.location\.pathname\}\$\{window\.location\.search\}`\) \{[\s\S]*?refreshed = await refresh\(\)/,
+    'the accepted receipt remains saved before a refresh guarded by the original selection and route');
   const acceptedReceiptPath = taskRequestHandler.slice(taskRequestHandler.indexOf('const run = await api'), taskRequestHandler.indexOf('} catch (error)'));
   assert.doesNotMatch(acceptedReceiptPath, /clearPendingProcessTaskRequest/,
     'the accepted-request path does not discard its receipt before authoritative reconciliation');
@@ -699,7 +701,13 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(executionSource, /\.\.\.\(!canStartNewInstances \? \{ disabled: 'disabled' \} : \{\}\)/);
   assert.match(executionSource, /const canStartNew = canStartNewInstances && selectedInstance === 'new'/);
   assert.match(executionSource, /focusProcessPlanCard\(currentProcessPlanFocusTarget\(result\.data, processId, result\.event\?\.data\?\.planId\)\)/);
-  assert.match(executionSource, /renderProcessPlans\(document\.querySelector\('#process-plans'\), processPlansFor\(result\.data\), result\.data\);\s*focusProcessPlanCard\(processPlanRevisionFocusTarget\(result\.event\)\);\s*notify\('Immutable graph revision saved\. Tasks remain planned; no work was dispatched\.'\)/);
+  const planRevisionHandler = executionSource.slice(executionSource.indexOf('async function submitPlanRevision'), executionSource.indexOf('async function createRun'));
+  assert.match(planRevisionHandler, /if \(document\.querySelector\('#plan-project'\)\?\.value === projectId\) \{\s*state\.planningProject = result\.data;\s*if \(isManualFlowPlan\(plan\)\) await refresh\(\);/,
+    'the revision result updates only the selected project and refreshes manual-flow activation');
+  assert.match(planRevisionHandler, /if \(document\.querySelector\('#plan-project'\)\?\.value === projectId && state\.planningProject\?\.id === projectId\) \{\s*renderProcessPlans\(document\.querySelector\('#process-plans'\), processPlansFor\(\), state\.planningProject\);\s*focusProcessPlanCard\(processPlanRevisionFocusTarget\(result\.event\)\);/,
+    'after refresh the current selected project is rendered and the saved revision event receives focus');
+  assert.match(planRevisionHandler, /notify\('Immutable graph revision saved\. Tasks remain planned; no work was dispatched\.'\)/,
+    'saving a revision remains clearly separate from dispatching work');
   assert.match(executionSource, /card\.scrollIntoView\?\.\(\{ block: 'nearest' \}\)/);
   assert.match(executionSource, /card\.focus\(\{ preventScroll: true \}\)/);
   assert.match(executionSource, /tabindex: '-1'/);

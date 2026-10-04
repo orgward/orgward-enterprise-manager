@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { blueprintObjectEditInput, buildRelations, editBlueprintObject, latestBlueprint, validateBlueprint } from '../model.mjs';
+import { AREA_DEFINITIONS, blueprintObjectEditInput, buildRelations, editBlueprintObject, latestBlueprint, validateBlueprint } from '../model.mjs';
 import { digest } from '../sdlc/contracts.mjs';
 import { blueprintObjects, enterpriseFailure, enterpriseText } from './types.mjs';
 
@@ -10,6 +10,24 @@ const recordId = (value) => typeof value === 'string' && /^[a-z0-9][a-z0-9_-]{0,
 const objectMap = (blueprint) => new Map(blueprintObjects(blueprint).map((object) => [object.id, object]));
 const plainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 const jsonSize = (value) => Buffer.byteLength(JSON.stringify(value), 'utf8');
+function canonicalBaselineAreas(baseline) {
+  if (!plainObject(baseline?.areas)) return false;
+  const requiredKeys = AREA_DEFINITIONS.map(([key]) => key).sort();
+  const actualKeys = Object.keys(baseline.areas).sort();
+  if (JSON.stringify(actualKeys) !== JSON.stringify(requiredKeys)) return false;
+  const ids = new Set();
+  for (const [key] of AREA_DEFINITIONS) {
+    const area = baseline.areas[key];
+    if (!plainObject(area) || typeof area.label !== 'string' || !area.label.trim()
+      || !['designed', 'unknown', 'out_of_scope'].includes(area.status) || !Array.isArray(area.items)) return false;
+    for (const object of area.items) {
+      if (!plainObject(object) || !recordId(object.id) || typeof object.type !== 'string' || !object.type.trim()
+        || typeof object.name !== 'string' || typeof object.detail !== 'string' || ids.has(object.id)) return false;
+      ids.add(object.id);
+    }
+  }
+  return true;
+}
 const rawEditableKeys = new Set(['id', 'type', 'name', 'detail', 'owner', 'goals', 'serves', 'enabledBy', 'metrics', 'trigger', 'capability',
   'inputs', 'outputs', 'resources', 'systems', 'responsibilities', 'proposedInstructions', 'proposedScopeStatements',
   'proposedToolStatements', 'proposedEscalationRules', 'authority', 'by', 'scope', 'assignedRoles', 'evidence', 'goal',
@@ -51,6 +69,9 @@ export function previewEnterpriseInterchange(project, bundle) {
     fail('INVALID_ENTERPRISE_BUNDLE', 'Choose a supported enterprise blueprint JSON bundle of at most 1 MB and 500 records.');
   }
   const source = bundle.source; const baseline = bundle.baseline;
+  if (!canonicalBaselineAreas(baseline)) {
+    fail('INVALID_ENTERPRISE_BUNDLE_BASELINE', 'The source baseline must contain each canonical enterprise area and well-formed, uniquely identified records.', 400);
+  }
   if (!recordId(source.projectId) || !/^blueprint-[0-9a-f-]{36}$/.test(source.blueprintId ?? '')
     || !Number.isSafeInteger(source.blueprintVersion) || source.blueprintVersion < 1
     || !/^[a-f0-9]{64}$/.test(source.snapshotHash ?? '')
