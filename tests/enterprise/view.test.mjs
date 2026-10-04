@@ -16,7 +16,8 @@ import { enterpriseIntegrityCommandPayload, enterpriseIntegrityExceptionPayload,
 import { enterpriseGovernanceCommandPayload, renderEnterpriseGovernance } from '../../public/enterprise-governance.mjs';
 import { enterpriseStewardshipPayload, renderEnterpriseStewardship } from '../../public/enterprise-stewardship.mjs';
 import { downloadPortfolioDesign, portfolioDesignExportFilename, projectPortfolioFacts, readPortfolioImportFile, renderProjectPortfolio,
-  portfolioImportWorkspaceRoute, verifyPortfolioDesignBundle } from '../../public/project-portfolio.mjs';
+  portfolioImportWorkspaceRoute, portfolioManageAccessRoute, verifyPortfolioDesignBundle } from '../../public/project-portfolio.mjs';
+import { platformViewUrl, projectAccessSelectionMessage, resolveProjectAccessSelection } from '../../public/platform-sharing.mjs';
 import { digest } from '../../src/sdlc/contracts.mjs';
 import { isValidEnterpriseIntegrityAssessment, projectEnterpriseIntegrity } from '../../src/enterprise/integrity.mjs';
 import { projectPortfolioIntegritySummary } from '../../src/platform/postgres-stores.mjs';
@@ -147,6 +148,43 @@ test('portfolio cards show saved workspace state and access and open the chosen 
   assert.match(returned.textContent, /Active incidents: 0 · Active support: 0/);
   assert.equal(returned.children[1].children[0].children.some((child) => /Review (incidents|support)/.test(child.text)), false,
     'the refreshed portfolio removes category review actions after all incident/support items are closed');
+});
+
+test('portfolio owner access action opens management for the exact workspace', () => {
+  const portfolio = renderProjectPortfolio([
+    { id: 'workspace-owner/a', name: 'Owner workspace', workspaceAccess: 'owner' },
+    { id: 'workspace-editor', name: 'Editor workspace', workspaceAccess: 'editor' },
+    { id: 'workspace-reader', name: 'Reader workspace', workspaceAccess: 'reader' },
+  ], { el, onOpen() {}, onExport() {}, onImport() {} });
+  const cards = portfolio.querySelectorAll('[data-project-id]');
+  const ownerCard = cards.find((card) => card.attrs['data-project-id'] === 'workspace-owner/a');
+  const ownerAction = ownerCard.querySelectorAll('a').find((link) => link.text === 'Manage workspace access');
+  assert.equal(ownerAction.attrs.href, '/platform.html?projectId=workspace-owner%2Fa#enterprise');
+  for (const id of ['workspace-editor', 'workspace-reader']) {
+    const card = cards.find((entry) => entry.attrs['data-project-id'] === id);
+    assert.equal(card.querySelectorAll('a').some((link) => link.text === 'Manage workspace access'), false,
+      `${id} cannot see an owner access-management action`);
+  }
+});
+
+test('platform access management deep link selects the requested workspace', () => {
+  const projects = [
+    { id: 'workspace-owner-first', workspaceAccess: 'owner' },
+    { id: 'workspace-editor', workspaceAccess: 'editor' },
+    { id: 'workspace-owner-requested', workspaceAccess: 'owner' },
+  ];
+  assert.deepEqual(resolveProjectAccessSelection(projects, 'workspace-owner-requested'),
+    { projectId: 'workspace-owner-requested', status: 'owner' });
+  assert.deepEqual(resolveProjectAccessSelection(projects, 'workspace-editor'),
+    { projectId: 'workspace-editor', status: 'denied' });
+  assert.match(projectAccessSelectionMessage('denied'), /only to the owner.*No other workspace was selected/);
+  assert.deepEqual(resolveProjectAccessSelection(projects, 'workspace-missing'),
+    { projectId: '', status: 'unavailable' });
+  assert.match(projectAccessSelectionMessage('unavailable'), /not available to your account.*No other workspace was selected/);
+  assert.deepEqual(resolveProjectAccessSelection(projects, null),
+    { projectId: 'workspace-owner-first', status: 'default' });
+  assert.equal(platformViewUrl('enterprise', '?projectId=workspace-owner-requested'),
+    '/platform.html?projectId=workspace-owner-requested#enterprise');
 });
 
 test('portfolio search and access filter find the matching workspace and preserve its identity', () => {

@@ -53,6 +53,10 @@ export function portfolioImportWorkspaceRoute(blueprint) {
   return { view: 'map', selectedId: target?.id ?? null };
 }
 
+export function portfolioManageAccessRoute(projectId) {
+  return `/platform.html?projectId=${encodeURIComponent(projectId)}#enterprise`;
+}
+
 function canonicalPortfolioJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalPortfolioJson).join(',')}]`;
   if (value && typeof value === 'object') {
@@ -163,6 +167,10 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
       const open = el('button', { className: 'button secondary', text: 'Open workspace', attrs: { type: 'button' } });
       open.addEventListener('click', () => onOpen(project.id));
       card.append(open);
+      if (project.workspaceAccess === 'owner') {
+        card.append(el('a', { className: 'button ghost', text: 'Manage workspace access',
+          attrs: { href: portfolioManageAccessRoute(project.id) } }));
+      }
       const hasWorkspaceAccess = ['owner', 'editor', 'reader'].includes(project.workspaceAccess);
       const exportButton = el('button', { className: 'button ghost', text: 'Export proposed design JSON', attrs: { type: 'button', ...(!facts.hasBlueprint || !hasWorkspaceAccess ? { disabled: 'disabled' } : {}) } });
       exportButton.addEventListener('click', () => onExport(project.id, exportButton));

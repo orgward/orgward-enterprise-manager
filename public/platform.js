@@ -1,4 +1,5 @@
 import { apiErrorFrom } from './shared-interactions.mjs';
+import { platformViewUrl, projectAccessSelectionMessage, resolveProjectAccessSelection } from './platform-sharing.mjs';
 
 const views = new Set(['command', 'enterprise', 'changes', 'work', 'releases', 'evidence', 'administration']);
 const manageableIdentityRoles = ['workspace-read', 'workspace-write', 'execution-approver', 'release-approver', 'control-owner', 'tenant-admin'];
@@ -123,21 +124,24 @@ function renderCommand() {
 function renderEnterprise() {
   const source = state.foundation.sources.projects;
   const sharing = state.sharing;
-  const selectedProject = sharing.projects.find((project) => project.id === sharing.projectId);
+  const accessDeepLinkMessage = projectAccessSelectionMessage(sharing.deepLinkStatus);
+  const selectedProject = accessDeepLinkMessage ? null : sharing.projects.find((project) => project.id === sharing.projectId);
   const selfMembership = sharing.members.find((member) => member.principal === state.session?.principal);
   const canManageMembers = selfMembership?.access === 'owner';
-  const sharingProjects = sharing.projects.length
+  const sharingProjects = accessDeepLinkMessage
+    ? ''
+    : sharing.projects.length
     ? `<label class="sharing-field" for="sharing-project">Project</label><select id="sharing-project" class="sharing-control" aria-label="Project to manage sharing">${sharing.projects.map((project) => `<option value="${escapeHtml(project.id)}" ${project.id === sharing.projectId ? 'selected' : ''}>${escapeHtml(project.name)}</option>`).join('')}</select>`
     : '<p class="muted-copy">No accessible projects yet. Create a project to manage its membership.</p>';
-  const memberRows = sharing.members.length
+  const memberRows = accessDeepLinkMessage ? '' : sharing.members.length
     ? `<ul class="import-results" aria-label="Project members">${sharing.members.map((member) => `<li><span><b>${escapeHtml(member.displayName)}</b>${member.principal === state.session?.principal ? ' · You' : ''}<br><code title="${escapeHtml(member.principal)}">${escapeHtml(member.principal.slice(0, 23))}…</code></span><span>${escapeHtml(member.access)}${canManageMembers && member.access !== 'owner' ? ` <button class="platform-button" type="button" data-revoke-member="${escapeHtml(member.principal)}" ${sharing.busy ? 'disabled' : ''}>Remove</button>` : ''}</span></li>`).join('')}</ul>`
     : selectedProject ? '<p class="muted-copy">No active project members were returned.</p>' : '';
-  const memberControls = canManageMembers
+  const memberControls = accessDeepLinkMessage ? '' : canManageMembers
     ? `<form id="project-member-form"><label for="member-principal">Verified tenant principal</label><input class="sharing-control" id="member-principal" name="principal" required pattern="oidc:[a-f0-9]{64}" maxlength="69" placeholder="oidc:…" aria-describedby="member-principal-help"><small id="member-principal-help">The colleague must sign in once first. Then use the principal ID shown in Administration → Identity access. Only active identities in this tenant can be added.</small><label for="member-access">Project access</label><select class="sharing-control" id="member-access" name="access"><option value="reader">Reader · view project and linked work</option><option value="editor">Editor · view and change project work</option></select><button class="platform-button primary" type="submit" ${sharing.busy ? 'disabled' : ''}>${sharing.busy ? 'Saving…' : 'Add member'}</button></form>`
     : selectedProject ? '<p class="muted-copy">Only a project owner can add or remove members.</p>' : '';
   return `${heading('Real persisted slice', 'Enterprise design', 'Create a project, answer the guided questions, and inspect the saved proposed blueprint in graph or list form.', '<a class="platform-button primary" href="/">Open workspace</a>')}
     <div class="metric-grid metric-grid-three"><article class="metric"><span>Actual projects</span><strong>${count(source)}</strong><small>${freshness(source)}</small></article><article class="metric amber"><span>Maturity</span><strong>Foundation</strong><small>Conversation and proposed blueprint only</small></article><article class="metric red"><span>Enabled assignments</span><strong>Unavailable</strong><small>Planned for a later product task</small></article></div>
-    <section class="panel panel-spaced"><header class="panel-head"><h2>Project access</h2><span>${selectedProject ? escapeHtml(selectedProject.name) : 'OIDC project memberships'}</span></header><div class="panel-body">${sharingProjects}${sharing.loading ? '<p class="muted-copy" role="status">Loading project members…</p>' : ''}${sharing.error ? `<p class="muted-copy" role="status">${escapeHtml(sharing.error)}</p>` : ''}${memberRows}${memberControls}<p class="muted-copy" role="status" aria-live="polite">${escapeHtml(sharing.message)}</p></div></section>
+    <section class="panel panel-spaced" id="project-access"><header class="panel-head"><h2>Project access</h2><span>${selectedProject ? escapeHtml(selectedProject.name) : accessDeepLinkMessage ? 'Access unavailable' : 'OIDC project memberships'}</span></header><div class="panel-body">${accessDeepLinkMessage ? `<p class="muted-copy" role="status" aria-live="polite">${escapeHtml(accessDeepLinkMessage)}</p>` : ''}${sharingProjects}${sharing.loading ? '<p class="muted-copy" role="status">Loading project members…</p>' : ''}${sharing.error ? `<p class="muted-copy" role="status">${escapeHtml(sharing.error)}</p>` : ''}${memberRows}${memberControls}<p class="muted-copy" role="status" aria-live="polite">${escapeHtml(sharing.message)}</p></div></section>
     <section class="panel panel-spaced"><header class="panel-head"><h2>Current boundary</h2><button type="button" data-capability="enterpriseDesign">View specification</button></header><div class="panel-body"><p class="muted-copy">Generated structures are proposed designs based on founder answers. They are not verified market evidence, legal formation, enabled automation, or proof of business performance.</p></div></section>`;
 }
 
@@ -308,7 +312,7 @@ function setView(view, { history = 'push' } = {}) {
   if (!views.has(view)) return;
   state.view = view;
   render();
-  if (history) window.history[history === 'replace' ? 'replaceState' : 'pushState'](null, '', `/platform.html#${view}`);
+  if (history) window.history[history === 'replace' ? 'replaceState' : 'pushState'](null, '', platformViewUrl(view, window.location.search));
 }
 
 function showInspector(id, trigger) {
@@ -378,9 +382,20 @@ async function loadFoundation() {
       try {
         const projects = await api('/api/v1/projects');
         state.sharing.projects = projects.data;
-        const selected = state.sharing.projects.some((project) => project.id === state.sharing.projectId)
-          ? state.sharing.projectId : state.sharing.projects[0]?.id ?? '';
-        await loadProjectMembers(selected);
+        const requestedProjectId = new URLSearchParams(window.location.search).get('projectId');
+        const selection = requestedProjectId
+          ? resolveProjectAccessSelection(state.sharing.projects, requestedProjectId)
+          : { projectId: state.sharing.projects.some((project) => project.id === state.sharing.projectId)
+            ? state.sharing.projectId : state.sharing.projects[0]?.id ?? '', status: 'default' };
+        state.sharing.projectId = selection.projectId;
+        state.sharing.deepLinkStatus = ['denied', 'unavailable'].includes(selection.status) ? selection.status : null;
+        if (state.sharing.deepLinkStatus) {
+          state.sharing.members = [];
+          state.sharing.loading = false;
+          state.sharing.error = null;
+          state.sharing.message = '';
+          render();
+        } else await loadProjectMembers(selection.projectId);
       } catch (error) {
         state.sharing = { ...state.sharing, loading: false, error: error.message };
       }

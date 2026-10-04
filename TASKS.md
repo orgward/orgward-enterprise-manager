@@ -7456,6 +7456,24 @@ outside that list. Final four-case selection passed 4/4 (0 failures, 0 skips;
 passed for `public/project-portfolio.mjs` and `tests/enterprise/view.test.mjs`;
 `git diff --check` passed. No full check run; PR-15 remains open and active.
 
+PR-15 owner portfolio access-management handoff (2026-10-04): owner cards now
+link to `/platform.html?projectId=<exact-id>#enterprise`; editor and reader
+cards omit the action. The platform resolves a requested ID against the
+authenticated project list and requires its projected access to be owner
+before calling the existing membership-list API. An unknown project or
+non-owner request leaves selection on the requested/empty state, loads no
+membership data, and shows explicit unavailable/owner-only guidance instead of
+falling back to another workspace. Navigation preserves the project query
+while initializing the enterprise view. Focused view/helper coverage checks the
+exact encoded owner URL, hidden non-owner actions, exact owner selection,
+non-owner denial, unavailable ID, status copy and query preservation; the
+existing PostgreSQL membership-list case remains selected. The requested
+four-case selection passed 4/4 (0 failures, 0 skips; 2.48s; TAP log:
+`/tmp/orgward-tests-pIusm8/node-test.tap.log`). `node --check` passed for
+`public/platform.js`, `public/platform-sharing.mjs`,
+`public/project-portfolio.mjs`, and `tests/enterprise/view.test.mjs`;
+`git diff --check` passed. No full check run; PR-15 remains open and active.
+
 PR-15 restore draft from a saved design version (2026-10-04): when an owner or
 editor selects a historical saved main version, the branch panel offers an
 explicit “Restore this saved version as a draft” action. The draft copies the
