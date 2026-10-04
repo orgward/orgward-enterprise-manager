@@ -148,6 +148,54 @@ test('portfolio cards show saved workspace state and access and open the chosen 
     'the refreshed portfolio removes category review actions after all incident/support items are closed');
 });
 
+test('portfolio search and access filter find the matching workspace and preserve its identity', () => {
+  const opened = []; const exported = []; const imported = [];
+  const projects = [
+    { id: 'project-harbor', name: 'Harbor Services', workspaceAccess: 'reader', blueprintVersion: 1 },
+    { id: 'project-north', name: 'Northstar', workspaceAccess: 'editor', blueprintVersion: 2, openIncidentCount: 1 },
+    { id: 'project-studio', name: 'Studio', workspaceAccess: 'owner', blueprintVersion: 3 },
+  ];
+  const portfolio = renderProjectPortfolio(projects, { el,
+    onOpen: (id, options) => opened.push({ id, options }), onExport: (id) => exported.push(id), onImport: (id, file) => imported.push([id, file.name]),
+  });
+  const search = portfolio.querySelectorAll('input').find((input) => input.attrs.type === 'search');
+  const access = portfolio.querySelectorAll('select').find((select) => select.attrs.name === 'workspace-access');
+  assert.equal(search.attrs['aria-label'], 'Search workspaces by name');
+  assert.equal(access.attrs['aria-label'], 'Filter workspaces by access');
+
+  search.value = '  HARBOR '; search.listeners.get('input')();
+  assert.deepEqual(Array.from(portfolio.querySelectorAll('[data-project-id]'), (card) => card.attrs['data-project-id']), ['project-harbor']);
+  assert.match(portfolio.textContent, /Showing 1 of 3 workspaces/);
+  access.value = 'reader'; access.listeners.get('change')();
+  assert.deepEqual(Array.from(portfolio.querySelectorAll('[data-project-id]'), (card) => card.attrs['data-project-id']), ['project-harbor']);
+  access.value = 'owner'; access.listeners.get('change')();
+  assert.match(portfolio.textContent, /No workspaces match these filters/);
+  const clear = portfolio.querySelectorAll('button').find((button) => button.text === 'Clear workspace filters');
+  assert.ok(clear);
+  clear.listeners.get('click')();
+  assert.equal(search.value, '');
+  assert.equal(access.value, 'all');
+  assert.equal(portfolio.querySelectorAll('[data-project-id]').length, 3);
+  assert.match(portfolio.textContent, /3 workspaces/);
+
+  access.value = 'editor'; access.listeners.get('change')();
+  const cards = portfolio.querySelectorAll('[data-project-id]');
+  assert.deepEqual(Array.from(cards, (card) => card.attrs['data-project-id']), ['project-north']);
+  const open = cards[0].querySelectorAll('button').find((button) => button.text === 'Open workspace');
+  open.listeners.get('click')();
+  const incidents = cards[0].querySelectorAll('button').find((button) => button.text === 'Review incidents (1)');
+  incidents.listeners.get('click')();
+  const exportButton = cards[0].querySelectorAll('button').find((button) => button.text === 'Export proposed design JSON');
+  exportButton.listeners.get('click')();
+  const importFile = cards[0].querySelectorAll('input').find((input) => input.attrs.type === 'file');
+  importFile.files = [{ name: 'filtered-import.json' }];
+  importFile.listeners.get('change')();
+  assert.deepEqual(opened, [{ id: 'project-north', options: undefined },
+    { id: 'project-north', options: { focusOutcomes: true, focusOutcomeCategory: 'incident' } }]);
+  assert.deepEqual(exported, ['project-north']);
+  assert.deepEqual(imported, [['project-north', 'filtered-import.json']]);
+});
+
 test('portfolio issue actions open the selected workspace and focus the requested inbox category', () => {
   const opened = [];
   const portfolio = renderProjectPortfolio([{ id: 'project-issues', name: 'Issue workspace', blueprintVersion: 1,

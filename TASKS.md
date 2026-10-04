@@ -7414,6 +7414,22 @@ staging, restore and current-source recheck wiring was inspected and left as-is.
 `tests/enterprise/view.test.mjs`; `git diff --check` passed. No full check run;
 PR-15 remains open and active.
 
+PR-15 portfolio name search and access filter (2026-10-04): the authenticated
+workspace cards can be searched by case-insensitive name and filtered in memory
+by all, owner, editor or reader access. A no-match state explains that filters
+are active and provides a clear-filters action. Filtered cards retain the exact
+workspace ID and their existing open, issue-review and export handlers. UI
+coverage exercises search, reader/owner/editor/all filter states, no-match and
+reset behavior, and exact project actions. The existing PostgreSQL membership
+list case remains selected to retain owner/editor/reader access and visibility
+coverage. The first focused run failed because the NodeList fixture inherits
+Array with an incompatible species constructor; assertions now use
+`Array.from`. The requested three-case selection passed 3/3 (0 failures, 0
+skips; 2.58s; TAP log: `/tmp/orgward-tests-Yq8gLd/node-test.tap.log`).
+`node --check` passed for `public/project-portfolio.mjs` and
+`tests/enterprise/view.test.mjs`; `git diff --check` passed. No full check run;
+PR-15 remains open and active.
+
 PR-15 restore draft from a saved design version (2026-10-04): when an owner or
 editor selects a historical saved main version, the branch panel offers an
 explicit “Restore this saved version as a draft” action. The draft copies the

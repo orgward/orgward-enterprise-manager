@@ -94,67 +94,103 @@ export async function downloadPortfolioDesign(projectId, { api, el, createObject
 
 export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImport }) {
   const section = el('section', { className: 'portfolio-list', attrs: { 'aria-labelledby': 'portfolio-heading' } });
-  section.append(el('div', { className: 'portfolio-heading' }, [
-    el('div', {}, [el('span', { className: 'eyebrow', text: 'Your portfolio' }),
-      el('h2', { text: 'Workspaces' }),
-      el('p', { text: 'Choose a workspace to continue. Access and saved design state are shown for each one.' })]),
-    el('span', { className: 'portfolio-count', text: `${projects.length} ${projects.length === 1 ? 'workspace' : 'workspaces'}` }),
-  ]));
+  const headingContent = el('div', {}, [el('span', { className: 'eyebrow', text: 'Your portfolio' }),
+    el('h2', { text: 'Workspaces' }),
+    el('p', { text: 'Choose a workspace to continue. Access and saved design state are shown for each one.' })]);
+  const count = el('span', { className: 'portfolio-count', text: `${projects.length} ${projects.length === 1 ? 'workspace' : 'workspaces'}` });
+  const heading = el('div', { className: 'portfolio-heading' }, [
+    headingContent, count,
+  ]);
+  const search = el('input', { attrs: { type: 'search', name: 'workspace-search', 'aria-label': 'Search workspaces by name', placeholder: 'Search workspaces' } });
+  const access = el('select', { attrs: { name: 'workspace-access', 'aria-label': 'Filter workspaces by access' } }, [
+    ['all', 'All access levels'], ['owner', 'Owner access'], ['editor', 'Editor access'], ['reader', 'Reader access'],
+  ].map(([value, label]) => el('option', { text: label, attrs: { value } })));
+  const filters = el('div', { className: 'portfolio-filters' }, [
+    el('label', { text: 'Search workspaces by name' }, [search]),
+    el('label', { text: 'Filter by access' }, [access]),
+  ]);
+  headingContent.append(filters);
+  section.append(heading);
   const list = el('div', { className: 'portfolio-cards', attrs: { role: 'list' } });
-  if (!projects.length) list.append(el('p', { className: 'portfolio-empty', text: 'No workspaces are available to your account yet.' }));
-  for (const project of projects) {
-    const facts = projectPortfolioFacts(project);
-    const card = el('article', { className: 'portfolio-card', attrs: { role: 'listitem', 'data-project-id': project.id } });
-    card.append(el('div', { className: 'portfolio-card-heading' }, [
-      el('div', {}, [el('h3', { text: facts.name }), el('span', { className: 'portfolio-access', text: facts.access })]),
-      el('span', { className: 'portfolio-phase', text: facts.phase }),
-    ]));
-    card.append(el('p', { className: 'portfolio-blueprint', text: facts.blueprint }));
-    card.append(el('p', { className: 'portfolio-updated', text: `Last saved ${facts.updated}` }));
-    card.append(el('p', { className: 'portfolio-issues', text: `Active incidents: ${facts.incidents} · Active support: ${facts.support}` }));
-    card.append(el('p', { className: 'portfolio-changes', text: facts.changeCaseProjectionIncomplete
-      ? `${facts.changeCases} active governed changes · some case details are unavailable`
-      : `Active governed changes: ${facts.changeCases}` }));
-    if (facts.latestChangeCaseId) card.append(el('a', { className: 'button ghost', text: `Open governed change: ${facts.latestChangeCaseTitle}`,
-      attrs: { href: `/sdlc.html?case=${encodeURIComponent(facts.latestChangeCaseId)}` } }));
-    const integrityText = facts.integrityProjectionIncomplete ? 'Integrity report details unavailable'
-      : facts.integrityStatus === 'NOT_RUN' ? 'Integrity: not yet checked'
-        : facts.integrityStatus === 'UNKNOWN' ? 'Integrity status unavailable'
-          : `Integrity ${facts.integrityStatus} · ${facts.integrityFindingCount ?? 'unknown'} findings · ${facts.integritySourceCurrent
-            ? `current blueprint v${facts.integrityBlueprintVersion}` : `last checked blueprint v${facts.integrityBlueprintVersion ?? 'unknown'} (stale)`}`;
-    card.append(el('p', { className: 'portfolio-integrity', text: integrityText }));
-    if (facts.integrityReportId && !facts.integrityProjectionIncomplete) {
-      const reviewIntegrity = el('button', { className: 'button ghost', text: 'Review integrity report', attrs: { type: 'button' } });
-      reviewIntegrity.addEventListener('click', () => onOpen(project.id, { focusIntegrity: true }));
-      card.append(reviewIntegrity);
-    }
-    const open = el('button', { className: 'button secondary', text: 'Open workspace', attrs: { type: 'button' } });
-    open.addEventListener('click', () => onOpen(project.id));
-    card.append(open);
-    const hasWorkspaceAccess = ['owner', 'editor', 'reader'].includes(project.workspaceAccess);
-    const exportButton = el('button', { className: 'button ghost', text: 'Export proposed design JSON', attrs: { type: 'button', ...(!facts.hasBlueprint || !hasWorkspaceAccess ? { disabled: 'disabled' } : {}) } });
-    exportButton.addEventListener('click', () => onExport(project.id, exportButton));
-    card.append(exportButton);
-    const importFile = el('input', { attrs: { type: 'file', accept: '.json,application/json',
-      'aria-label': `Import proposed design JSON for ${facts.name}`,
-      ...(!facts.hasBlueprint || !hasWorkspaceAccess ? { disabled: 'disabled' } : {}) } });
-    importFile.addEventListener('change', () => {
-      const file = importFile.files?.[0];
-      if (file) onImport?.(project.id, file);
+  const renderCards = () => {
+    list.replaceChildren();
+    const term = search.value.trim().toLocaleLowerCase();
+    const filtered = projects.filter((project) => {
+      const matchesName = !term || projectPortfolioFacts(project).name.toLocaleLowerCase().includes(term);
+      const matchesAccess = access.value === 'all' || project.workspaceAccess === access.value;
+      return matchesName && matchesAccess;
     });
-    card.append(el('label', { className: 'portfolio-import', text: 'Import proposed design JSON' }, [importFile]));
-    if (facts.incidents) {
-      const reviewIncidents = el('button', { className: 'button ghost', text: `Review incidents (${facts.incidents})`, attrs: { type: 'button' } });
-      reviewIncidents.addEventListener('click', () => onOpen(project.id, { focusOutcomes: true, focusOutcomeCategory: 'incident' }));
-      card.append(reviewIncidents);
+    count.textContent = filtered.length === projects.length
+      ? `${projects.length} ${projects.length === 1 ? 'workspace' : 'workspaces'}`
+      : `Showing ${filtered.length} of ${projects.length} workspaces`;
+    if (!filtered.length) {
+      list.append(el('p', { className: 'portfolio-empty', text: projects.length
+        ? 'No workspaces match these filters. Adjust the search or access level, or clear filters.'
+        : 'No workspaces are available to your account yet.' }));
+      if (projects.length && (term || access.value !== 'all')) {
+        const clear = el('button', { className: 'button ghost', text: 'Clear workspace filters', attrs: { type: 'button' } });
+        clear.addEventListener('click', () => { search.value = ''; access.value = 'all'; renderCards(); search.focus?.(); });
+        list.append(clear);
+      }
+      return;
     }
-    if (facts.support) {
-      const reviewSupport = el('button', { className: 'button ghost', text: `Review support (${facts.support})`, attrs: { type: 'button' } });
-      reviewSupport.addEventListener('click', () => onOpen(project.id, { focusOutcomes: true, focusOutcomeCategory: 'support' }));
-      card.append(reviewSupport);
+    for (const project of filtered) {
+      const facts = projectPortfolioFacts(project);
+      const card = el('article', { className: 'portfolio-card', attrs: { role: 'listitem', 'data-project-id': project.id } });
+      card.append(el('div', { className: 'portfolio-card-heading' }, [
+        el('div', {}, [el('h3', { text: facts.name }), el('span', { className: 'portfolio-access', text: facts.access })]),
+        el('span', { className: 'portfolio-phase', text: facts.phase }),
+      ]));
+      card.append(el('p', { className: 'portfolio-blueprint', text: facts.blueprint }));
+      card.append(el('p', { className: 'portfolio-updated', text: `Last saved ${facts.updated}` }));
+      card.append(el('p', { className: 'portfolio-issues', text: `Active incidents: ${facts.incidents} · Active support: ${facts.support}` }));
+      card.append(el('p', { className: 'portfolio-changes', text: facts.changeCaseProjectionIncomplete
+        ? `${facts.changeCases} active governed changes · some case details are unavailable`
+        : `Active governed changes: ${facts.changeCases}` }));
+      if (facts.latestChangeCaseId) card.append(el('a', { className: 'button ghost', text: `Open governed change: ${facts.latestChangeCaseTitle}`,
+        attrs: { href: `/sdlc.html?case=${encodeURIComponent(facts.latestChangeCaseId)}` } }));
+      const integrityText = facts.integrityProjectionIncomplete ? 'Integrity report details unavailable'
+        : facts.integrityStatus === 'NOT_RUN' ? 'Integrity: not yet checked'
+          : facts.integrityStatus === 'UNKNOWN' ? 'Integrity status unavailable'
+            : `Integrity ${facts.integrityStatus} · ${facts.integrityFindingCount ?? 'unknown'} findings · ${facts.integritySourceCurrent
+              ? `current blueprint v${facts.integrityBlueprintVersion}` : `last checked blueprint v${facts.integrityBlueprintVersion ?? 'unknown'} (stale)`}`;
+      card.append(el('p', { className: 'portfolio-integrity', text: integrityText }));
+      if (facts.integrityReportId && !facts.integrityProjectionIncomplete) {
+        const reviewIntegrity = el('button', { className: 'button ghost', text: 'Review integrity report', attrs: { type: 'button' } });
+        reviewIntegrity.addEventListener('click', () => onOpen(project.id, { focusIntegrity: true }));
+        card.append(reviewIntegrity);
+      }
+      const open = el('button', { className: 'button secondary', text: 'Open workspace', attrs: { type: 'button' } });
+      open.addEventListener('click', () => onOpen(project.id));
+      card.append(open);
+      const hasWorkspaceAccess = ['owner', 'editor', 'reader'].includes(project.workspaceAccess);
+      const exportButton = el('button', { className: 'button ghost', text: 'Export proposed design JSON', attrs: { type: 'button', ...(!facts.hasBlueprint || !hasWorkspaceAccess ? { disabled: 'disabled' } : {}) } });
+      exportButton.addEventListener('click', () => onExport(project.id, exportButton));
+      card.append(exportButton);
+      const importFile = el('input', { attrs: { type: 'file', accept: '.json,application/json',
+        'aria-label': `Import proposed design JSON for ${facts.name}`,
+        ...(!facts.hasBlueprint || !hasWorkspaceAccess ? { disabled: 'disabled' } : {}) } });
+      importFile.addEventListener('change', () => {
+        const file = importFile.files?.[0];
+        if (file) onImport?.(project.id, file);
+      });
+      card.append(el('label', { className: 'portfolio-import', text: 'Import proposed design JSON' }, [importFile]));
+      if (facts.incidents) {
+        const reviewIncidents = el('button', { className: 'button ghost', text: `Review incidents (${facts.incidents})`, attrs: { type: 'button' } });
+        reviewIncidents.addEventListener('click', () => onOpen(project.id, { focusOutcomes: true, focusOutcomeCategory: 'incident' }));
+        card.append(reviewIncidents);
+      }
+      if (facts.support) {
+        const reviewSupport = el('button', { className: 'button ghost', text: `Review support (${facts.support})`, attrs: { type: 'button' } });
+        reviewSupport.addEventListener('click', () => onOpen(project.id, { focusOutcomes: true, focusOutcomeCategory: 'support' }));
+        card.append(reviewSupport);
+      }
+      list.append(card);
     }
-    list.append(card);
-  }
+  };
+  search.addEventListener('input', renderCards);
+  access.addEventListener('change', renderCards);
+  renderCards();
   section.append(list);
   return section;
 }
