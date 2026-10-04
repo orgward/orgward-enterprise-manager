@@ -6428,6 +6428,33 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   publish atomic snapshots, run typed integrity/lineage rules, manage exceptions,
   and provide an actionable remediation inbox with drift and coverage feedback.
 
+  Current slice: a deterministic, versioned integrity/lineage assessment runs on
+  an exact current blueprint ID/version/hash and persists a report through the
+  existing project command/audit store. It separates typed-structure failures,
+  canonical relationship drift and actionable completeness findings; reports do
+  not edit the design or claim operational evidence. The enterprise UI provides
+  a current-source run action, findings and saved-source history, and marks prior
+  reports as inapplicable after the design changes. Pure, UI and PG restart/replay/
+  stale-source/permission fixtures are drafted. Source and fixtures are frozen
+  for Sol read-only review; no behavior tests have run for this slice. The first
+  review found and the current repair addresses four issues: stale UI copy,
+  malformed area item traversal, missing typed-reference rule attribution, and
+  loss of the latest saved report details when its source becomes stale. Added
+  pure fixtures cover dangling refs and malformed item lists; UI fixture checks
+  the stale report's source hash and finding details. Syntax and diff checks
+  pass. Sol's re-review also caught an uninitialized canonical-finding list and
+  a current UI fixture missing its applicability flag; both are corrected and
+  rechecked. The source/fixtures are frozen for another read-only review;
+  Sol approved the final repair, then the new-only focused run
+  `node ops/run-tests.mjs tests/enterprise/contracts.test.mjs tests/enterprise/view.test.mjs tests/enterprise/server.test.mjs '--test-name-pattern=typed integrity assessment detects canonical relation drift and keeps design gaps separate|integrity UI binds each run to the current saved snapshot and labels report findings|saved integrity assessments bind exact design source, replay, survive restart and stale on design change'`
+  passed 3/3 (0 failed, cancelled, skipped; runner 2.65s; TAP
+  1497.232ms; log `/tmp/orgward-tests-H4rFwl/node-test.tap.log`). Case durations
+  were 72.163ms pure, 6.271ms UI and 1133.514ms PostgreSQL persistence/replay.
+  Next bounded slice: source onboarding through a retained, inspectable import
+  preview that extracts typed identity/claim proposals with explicit provenance,
+  unknowns and collisions; no source publication or business effect occurs in
+  preview.
+
 - [ ] PR-14 — Governance and supervised agents (T-76–T-89). Implement versioned
   policy decisions/enforcement, decision rights and appeals, semantic/data
   stewardship, verifiable governance ledger, agent identities/autonomy envelopes,

@@ -1,0 +1,139 @@
+import { randomUUID } from 'node:crypto';
+import { buildRelations, latestBlueprint, validateBlueprint } from '../model.mjs';
+import { digest } from '../sdlc/contracts.mjs';
+import { blueprintObjects, enterpriseFailure, enterpriseText } from './types.mjs';
+
+export const ENTERPRISE_INTEGRITY_KINDS = new Set(['run-integrity-checks']);
+export const ENTERPRISE_INTEGRITY_ENGINE = 'enterprise-integrity-1.0';
+export const ENTERPRISE_INTEGRITY_LIMITS = Object.freeze({ assessments: 50, findings: 2000, bytes: 262144 });
+
+const fail = (code, message, status = 400) => { throw enterpriseFailure(code, message, status); };
+
+export function normalizeEnterpriseIntegrityCommand(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input) || input.kind !== 'run-integrity-checks'
+    || !/^blueprint-[0-9a-f-]{36}$/.test(input.blueprintId ?? '')
+    || !Number.isSafeInteger(input.blueprintVersion) || input.blueprintVersion < 1
+    || !/^[a-f0-9]{64}$/.test(input.snapshotHash ?? '')) {
+    fail('INVALID_INTEGRITY_COMMAND', 'Bind integrity checks to an exact saved blueprint ID, version and snapshot hash.');
+  }
+  const allowed = ['kind', 'blueprintId', 'blueprintVersion', 'snapshotHash', 'reason'];
+  if (Object.keys(input).some((key) => !allowed.includes(key))) fail('INVALID_INTEGRITY_COMMAND', 'The integrity command contains unsupported fields.');
+  return { kind: input.kind, blueprintId: input.blueprintId, blueprintVersion: input.blueprintVersion,
+    snapshotHash: input.snapshotHash, reason: enterpriseText(input.reason, 'Assessment reason', 500) };
+}
+
+function finding({ ruleId, code, path, objectId = null, severity, message, action }) {
+  return { id: `finding-${digest({ ruleId, code, path, objectId, message }).slice(0, 32)}`,
+    ruleId, code, path: path ?? null, objectId, severity, message, action };
+}
+
+function relationOrder(entries) {
+  return [...entries].map((entry) => structuredClone(entry)).sort((left, right) =>
+    `${left.id}\n${left.source}\n${left.type}\n${left.target}`.localeCompare(`${right.id}\n${right.source}\n${right.type}\n${right.target}`));
+}
+
+export function evaluateEnterpriseIntegrity(blueprint) {
+  if (!blueprint || typeof blueprint !== 'object' || !blueprint.areas || typeof blueprint.areas !== 'object'
+    || Array.isArray(blueprint.areas) || Object.values(blueprint.areas).some((area) => !area || typeof area !== 'object'
+      || Array.isArray(area) || !Array.isArray(area.items)
+      || area.items.some((item) => !item || typeof item !== 'object' || Array.isArray(item)))
+    || (blueprint.relations !== undefined && (!Array.isArray(blueprint.relations)
+      || blueprint.relations.some((relation) => !relation || typeof relation !== 'object' || Array.isArray(relation))))) {
+    fail('INTEGRITY_BLUEPRINT_INVALID', 'A saved blueprint is required to run integrity checks.', 409);
+  }
+  const checkedBlueprint = structuredClone(blueprint);
+  const validation = validateBlueprint(checkedBlueprint);
+  const objects = blueprintObjects(checkedBlueprint);
+  const byId = new Map(objects.map((object) => [object.id, object]));
+  const structuralErrors = validation.errors.filter((error) => error.code !== 'DANGLING_REFERENCE');
+  const referenceErrors = validation.errors.filter((error) => error.code === 'DANGLING_REFERENCE');
+  const lineageFindings = [];
+  const storedRelations = relationOrder(checkedBlueprint.relations ?? []);
+  const derivedRelations = relationOrder(buildRelations(checkedBlueprint.areas));
+  const storedById = new Map(storedRelations.map((relation) => [relation.id, relation]));
+  const derivedById = new Map(derivedRelations.map((relation) => [relation.id, relation]));
+  const typedReferenceFindings = referenceErrors.map((error) => finding({ ruleId: 'lineage.typed-references', code: error.code,
+    path: error.path, severity: 'high', message: error.message, action: 'Restore or remove the missing typed relationship, then rerun these checks.' }));
+  for (const relation of derivedRelations) if (!storedById.has(relation.id) || digest(storedById.get(relation.id)) !== digest(relation)) {
+    lineageFindings.push(finding({ ruleId: 'lineage.canonical-relations', code: 'RELATION_MISSING_OR_MISMATCHED',
+      path: relation.id, objectId: relation.source, severity: 'high',
+      message: `The saved relationship ${relation.type} from ${relation.source} to ${relation.target} differs from canonical design links.`,
+      action: 'Rebuild saved relationships from the typed design references and rerun these checks.' }));
+  }
+  for (const relation of storedRelations) if (!derivedById.has(relation.id)) {
+    lineageFindings.push(finding({ ruleId: 'lineage.canonical-relations', code: 'RELATION_UNEXPECTED',
+      path: relation.id, objectId: relation.source, severity: 'high',
+      message: `The saved relationship ${relation.type} from ${relation.source} to ${relation.target} has no matching typed design reference.`,
+      action: 'Remove the unsupported relationship or add its canonical typed reference, then rerun these checks.' }));
+  }
+  if (storedById.size !== storedRelations.length) lineageFindings.push(finding({ ruleId: 'lineage.canonical-relations',
+    code: 'RELATION_ID_DUPLICATE', path: 'relations', severity: 'high',
+    message: 'The saved relationship list contains duplicate canonical relation IDs.',
+    action: 'Remove duplicate relationship entries and rerun these checks.' }));
+  const structuralFindings = structuralErrors.map((error) => finding({ ruleId: 'design.typed-structure', code: error.code,
+    path: error.path, objectId: byId.has(error.path) ? error.path : null,
+    severity: /INVALID|CYCLE|AMBIGUOUS/.test(error.code) ? 'high' : 'medium', message: error.message,
+    action: 'Repair the reported typed design structure and rerun these checks.' }));
+  const completenessFindings = validation.gaps.map((gap) => finding({ ruleId: 'design.completeness', code: gap.code ?? 'DESIGN_GAP',
+    path: gap.path ?? gap.objectId ?? gap.area ?? null, objectId: gap.objectId ?? null,
+    severity: gap.severity ?? 'medium', message: gap.action ?? gap.message ?? 'A design gap needs review.',
+    action: gap.action ?? 'Review the missing design information and rerun these checks.' }));
+  const findings = [...structuralFindings, ...typedReferenceFindings, ...lineageFindings, ...completenessFindings]
+    .sort((left, right) => `${left.ruleId}\n${left.id}`.localeCompare(`${right.ruleId}\n${right.id}`));
+  if (findings.length > ENTERPRISE_INTEGRITY_LIMITS.findings) fail('INTEGRITY_FINDING_LIMIT', 'The integrity report exceeds its 2,000 finding limit; reduce source complexity before rerunning.', 409);
+  const rules = [
+    { id: 'design.typed-structure', status: structuralFindings.length ? 'FAIL' : 'PASS', findingCount: structuralFindings.length,
+      summary: 'Canonical blueprint structure, typed scope, process and economic definitions.' },
+    { id: 'lineage.typed-references', status: typedReferenceFindings.length ? 'FAIL' : 'PASS', findingCount: typedReferenceFindings.length,
+      summary: 'Saved relationship endpoints resolve to objects in this blueprint.' },
+    { id: 'lineage.canonical-relations', status: lineageFindings.length ? 'FAIL' : 'PASS', findingCount: lineageFindings.length,
+      summary: 'Saved relations match typed references and all relation endpoints exist.' },
+    { id: 'design.completeness', status: completenessFindings.length ? 'REVIEW' : 'PASS', findingCount: completenessFindings.length,
+      summary: 'Existing owner, provenance, responsibility and process-definition gaps remain visible for remediation.' },
+  ];
+  const status = rules.some((rule) => rule.status === 'FAIL') ? 'FAIL'
+    : rules.some((rule) => rule.status === 'REVIEW') ? 'REVIEW' : 'PASS';
+  const counts = { rules: rules.length, passedRules: rules.filter((rule) => rule.status === 'PASS').length,
+    failedRules: rules.filter((rule) => rule.status === 'FAIL').length,
+    reviewRules: rules.filter((rule) => rule.status === 'REVIEW').length,
+    findings: findings.length, high: findings.filter((entry) => entry.severity === 'high').length,
+    medium: findings.filter((entry) => entry.severity === 'medium').length,
+    low: findings.filter((entry) => entry.severity === 'low').length };
+  return { engineVersion: ENTERPRISE_INTEGRITY_ENGINE, status, counts, rules, findings };
+}
+
+export function applyEnterpriseIntegrityCommand(project, command, actor) {
+  const blueprint = latestBlueprint(project);
+  if (!blueprint || blueprint.id !== command.blueprintId || blueprint.version !== command.blueprintVersion
+    || digest(blueprint) !== command.snapshotHash) {
+    fail('INTEGRITY_SOURCE_STALE', 'The saved design changed. Reload the current blueprint before running integrity checks.', 409);
+  }
+  const assessments = project.enterpriseIntegrityAssessments ?? [];
+  if (assessments.length >= ENTERPRISE_INTEGRITY_LIMITS.assessments) fail('INTEGRITY_ASSESSMENT_LIMIT', 'This project reached its 50-assessment history limit.', 409);
+  const at = new Date().toISOString();
+  const source = { projectId: project.id, blueprintId: blueprint.id, blueprintVersion: blueprint.version, snapshotHash: command.snapshotHash };
+  const result = evaluateEnterpriseIntegrity(blueprint);
+  const core = { source, ...result };
+  const assessment = { ...core, id: `enterprise-integrity-${randomUUID()}`, createdAt: at, createdBy: actor, reason: command.reason };
+  assessment.reportHash = digest(assessment);
+  if (Buffer.byteLength(JSON.stringify(assessment), 'utf8') > ENTERPRISE_INTEGRITY_LIMITS.bytes) {
+    fail('INTEGRITY_REPORT_TOO_LARGE', 'The integrity report exceeds its 256 KiB storage limit.', 409);
+  }
+  project.enterpriseIntegrityAssessments ??= []; project.enterpriseIntegrityAssessments.push(assessment);
+  project.audit ??= []; project.audit.push({ at, action: 'enterprise.run-integrity-checks', actor,
+    detail: `Recorded a ${assessment.status.toLowerCase()} typed integrity and lineage assessment for blueprint v${blueprint.version}; no design or operational state changed.` });
+  return { blueprint, affectedObjectId: null, integrityAssessmentId: assessment.id, integrityAssessment: assessment, recordedAt: at };
+}
+
+export function projectEnterpriseIntegrity(project, blueprint, savedBy = () => true) {
+  const selectedSourceHash = blueprint ? digest(blueprint) : null;
+  const assessments = (project.enterpriseIntegrityAssessments ?? []).filter((entry) => savedBy(entry.createdAt)).map((entry) => {
+    const { reportHash, ...core } = entry;
+    if (digest(core) !== reportHash) fail('INTEGRITY_REPORT_CORRUPT', 'A saved integrity assessment failed its immutable report hash check.', 409);
+    return { ...structuredClone(entry), appliesToContext: Boolean(blueprint && entry.source.blueprintId === blueprint.id
+      && entry.source.blueprintVersion === blueprint.version && entry.source.snapshotHash === selectedSourceHash) };
+  });
+  return { engineVersion: ENTERPRISE_INTEGRITY_ENGINE, assessments: assessments.slice(-10),
+    latest: assessments.at(-1) ?? null,
+    current: assessments.filter((entry) => entry.appliesToContext).at(-1) ?? null };
+}

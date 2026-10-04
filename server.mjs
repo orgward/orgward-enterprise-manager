@@ -36,6 +36,7 @@ import { ENTERPRISE_BRANCH_KINDS, enterpriseMergeApproval } from './src/enterpri
 import { ENTERPRISE_PROCESS_KINDS } from './src/enterprise/process-commands.mjs';
 import { ENTERPRISE_ECONOMIC_KINDS } from './src/enterprise/economics-commands.mjs';
 import { ENTERPRISE_REFINEMENT_KINDS } from './src/enterprise/refinement-commands.mjs';
+import { ENTERPRISE_INTEGRITY_KINDS } from './src/enterprise/integrity.mjs';
 import { createEnterpriseInterchangeBundle, ENTERPRISE_INTERCHANGE_KINDS, previewEnterpriseInterchange } from './src/enterprise/interchange.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -1616,7 +1617,8 @@ export function createApp({
           || (payload.kind === 'edit-branch-scope' && ['create-scope', 'rename-scope'].includes(payload.change.kind));
         if ((administrative || payload.kind === 'record-state' || ENTERPRISE_BRANCH_KINDS.has(payload.kind)
           || ENTERPRISE_PROCESS_KINDS.has(payload.kind) || ENTERPRISE_ECONOMIC_KINDS.has(payload.kind)
-          || ENTERPRISE_REFINEMENT_KINDS.has(payload.kind) || ENTERPRISE_INTERCHANGE_KINDS.has(payload.kind)) && request.identity.actorType !== 'human') {
+          || ENTERPRISE_REFINEMENT_KINDS.has(payload.kind) || ENTERPRISE_INTERCHANGE_KINDS.has(payload.kind)
+          || ENTERPRISE_INTEGRITY_KINDS.has(payload.kind)) && request.identity.actorType !== 'human') {
           throw apiFailure(403, 'ENTERPRISE_HUMAN_OWNER_REQUIRED', 'A current human project member must report state, refine records or import proposed design; a human project owner must review design or define scopes, validity and future proposals.');
         }
         const actor = requestActor(request);
@@ -1649,7 +1651,8 @@ export function createApp({
             const changed = applyEnterpriseCommand(project, payload, actor, { authzGeneration: request.identity.authzGeneration,
               membershipGeneration: reviewMembershipGeneration });
             project.version += 1; project.updatedAt = changed.recordedAt ?? changed.blueprint.createdAt; project.updatedBy = actor;
-            project.events.push(projectEvent(project, { type: ['record-state', 'set-validity', 'propose-future-design'].includes(payload.kind)
+            project.events.push(projectEvent(project, { type: ENTERPRISE_INTEGRITY_KINDS.has(payload.kind) ? 'EnterpriseIntegrityAssessed'
+              : ['record-state', 'set-validity', 'propose-future-design'].includes(payload.kind)
               || ENTERPRISE_BRANCH_KINDS.has(payload.kind) || ENTERPRISE_PROCESS_KINDS.has(payload.kind)
               || ENTERPRISE_ECONOMIC_KINDS.has(payload.kind) || ENTERPRISE_REFINEMENT_KINDS.has(payload.kind)
               || ENTERPRISE_INTERCHANGE_KINDS.has(payload.kind)
@@ -1660,7 +1663,8 @@ export function createApp({
                 candidateId: changed.candidateId ?? null, candidateHash: changed.candidateHash ?? null,
                 importedRecordIds: changed.importedRecordIds ?? null,
                 importSource: changed.source ?? null, importSourceHash: changed.sourceHash ?? null,
-                simulationId: changed.simulationId ?? null, economicEvaluationId: changed.economicEvaluationId ?? null, reason: payload.reason } }));
+                simulationId: changed.simulationId ?? null, economicEvaluationId: changed.economicEvaluationId ?? null,
+                integrityAssessmentId: changed.integrityAssessmentId ?? null, reason: payload.reason } }));
           },
         }, actor, { requiredPrincipalRoles: ['workspace-write'], authzGeneration: request.identity.authzGeneration,
           ...(administrative ? { minimumProjectAccess: 'owner' } : {}) });
@@ -1669,13 +1673,16 @@ export function createApp({
         const receipt = result.project.events.at(-1).data;
         const simulation = receipt.simulationId ? result.project.enterpriseSimulations.find((entry) => entry.id === receipt.simulationId) : null;
         const economicEvaluation = receipt.economicEvaluationId ? result.project.enterpriseEconomicEvaluations?.find((entry) => entry.id === receipt.economicEvaluationId) : null;
+        const integrityAssessment = receipt.integrityAssessmentId
+          ? result.project.enterpriseIntegrityAssessments?.find((entry) => entry.id === receipt.integrityAssessmentId) : null;
         return sendApi(response, 200, { projectVersion: result.project.version, blueprintId: simulation?.source.blueprintId ?? economicEvaluation?.source.blueprintId ?? blueprint.id,
           blueprintVersion: simulation?.source.blueprintVersion ?? economicEvaluation?.source.blueprintVersion ?? blueprint.version, affectedObjectId: receipt.objectId, proposalId: receipt.proposalId ?? null,
           branchId: receipt.branchId ?? null, branchRevision: receipt.branchRevision ?? null,
           candidateId: receipt.candidateId ?? null, candidateHash: receipt.candidateHash ?? null,
           importedRecordIds: receipt.importedRecordIds ?? null, importSource: receipt.importSource ?? null,
           importSourceHash: receipt.importSourceHash ?? null,
-          ...(simulation ? { simulation } : {}), ...(economicEvaluation ? { economicEvaluation } : {}) },
+          ...(simulation ? { simulation } : {}), ...(economicEvaluation ? { economicEvaluation } : {}),
+          ...(integrityAssessment ? { integrityAssessment } : {}) },
         { correlationId, event: result.project.events.at(-1), meta: { replayed: result.replayed } });
       }
 

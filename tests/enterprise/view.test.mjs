@@ -11,6 +11,7 @@ import { activationForTask, evaluateManualFlowAdvice, manualFlowActivation, manu
 import { renderEnterpriseEconomics } from '../../public/enterprise-economics.mjs';
 import { renderEnterpriseRefinement } from '../../public/enterprise-refinement.mjs';
 import { enterpriseInterchangeCommandPayload, enterpriseInterchangeWritable, renderEnterpriseInterchange } from '../../public/enterprise-interchange.mjs';
+import { enterpriseIntegrityCommandPayload, renderEnterpriseIntegrity } from '../../public/enterprise-integrity.mjs';
 import { decodeStudioRoute, encodeStudioRoute } from '../../public/shared-interactions.mjs';
 
 class NodeListFixture extends Array {
@@ -676,4 +677,37 @@ test('refinement UI names both reverse trace directions and saves selected exist
   const form = panel.querySelectorAll('form')[0];
   form.listeners.get('submit')({ preventDefault() {} });
   assert.deepEqual(submitted, { kind: 'define-refinement', objectId: selected.id, refines: [parent.id], reason: '' });
+});
+
+test('integrity UI binds each run to the current saved snapshot and labels report findings', () => {
+  const assessment = { id: 'enterprise-integrity-00000000-0000-4000-8000-000000000001', status: 'REVIEW',
+    source: { blueprintVersion: 3, snapshotHash: 'a'.repeat(64) }, appliesToContext: true,
+    createdAt: '2026-10-04T10:00:00.000Z', createdBy: 'owner', reason: 'Check proposed design.',
+    counts: { failedRules: 0, reviewRules: 1, findings: 1 },
+    rules: [{ id: 'design.completeness', status: 'REVIEW', findingCount: 1, summary: 'Completeness gaps remain.' }],
+    findings: [{ id: 'finding-one', severity: 'high', code: 'gap-owner', objectId: 'process-deliver', message: 'Assign an owner.', action: 'Choose an owner.' }] };
+  const sourceModel = model({ context: { ...model().context, snapshotHash: 'a'.repeat(64), sourceKind: 'MAIN_DESIGN' },
+    permissions: { integrityRun: true }, integrity: { current: assessment, latest: assessment, assessments: [assessment] } });
+  const exactPayload = enterpriseIntegrityCommandPayload(sourceModel, ' Recheck ');
+  assert.deepEqual(exactPayload, { kind: 'run-integrity-checks', blueprintId: sourceModel.context.blueprintId,
+    blueprintVersion: 3, snapshotHash: 'a'.repeat(64), reason: 'Recheck' });
+  assert.equal(enterpriseIntegrityCommandPayload({ ...sourceModel, context: { ...sourceModel.context, isCurrent: false } }, 'Recheck'), null);
+
+  let submitted = null;
+  const panel = renderEnterpriseIntegrity({ model: sourceModel, el, ui: branchUi, onCommand: (payload) => { submitted = payload; } });
+  assert.equal(panel.attrs['aria-label'], 'Integrity and lineage assessment');
+  assert.match(panel.textContent, /never changes design, grants authority or verifies business outcomes/);
+  assert.match(panel.textContent, /gap-owner/);
+  const form = panel.querySelectorAll('form')[0];
+  form.querySelectorAll('textarea')[0].value = 'Recheck';
+  form.listeners.get('submit')({ preventDefault() {} });
+  assert.deepEqual(submitted, exactPayload);
+
+  const staleAssessment = { ...assessment, appliesToContext: false };
+  const staleModel = { ...sourceModel, context: { ...sourceModel.context, snapshotHash: 'b'.repeat(64) },
+    integrity: { current: null, latest: staleAssessment, assessments: [staleAssessment] } };
+  const stalePanel = renderEnterpriseIntegrity({ model: staleModel, el, ui: branchUi, onCommand() {} });
+  assert.match(stalePanel.textContent, /STALE · This saved assessment/);
+  assert.match(stalePanel.textContent, new RegExp(assessment.source.snapshotHash));
+  assert.match(stalePanel.textContent, /Assign an owner\./);
 });

@@ -6,6 +6,7 @@ import { projectEnterpriseBranches } from './branches.mjs';
 import { PROCESS_MODEL } from './process-model.mjs';
 import { projectEconomicPortfolio } from './economics-scenario.mjs';
 import { projectRefinementTrace } from './refinement.mjs';
+import { projectEnterpriseIntegrity } from './integrity.mjs';
 
 export function normalizeEnterpriseQuery(input = {}) {
   const accepted = ['lensId', 'scopeId', 'blueprintVersion', 'selectedId', 'proposalId', 'effectiveAt', 'recordedAt', 'branchId', 'branchRevision', 'simulationId', 'economicEvaluationId'];
@@ -135,6 +136,7 @@ export function projectEnterprise(project, query = {}, authority = {}) {
   const economics = projectEconomicPortfolio(project, blueprint, { selectedId: context.selectedId, recordedAtCutoff: context.recordedAt,
     economicEvaluationId: context.economicEvaluationId, branchId: context.branchId, branchRevision: branchContext.revision,
     proposalId: proposal?.id ?? null });
+  const integrity = projectEnterpriseIntegrity(project, blueprint, savedBy);
   return { context: { projectVersion: project.version, blueprintId: blueprint?.id ?? null, blueprintVersion: blueprint?.version ?? null,
     isCurrent, lensId: context.lensId, scopeId: context.scopeId, branch: context.branchId ?? 'main', proposalId: proposal?.id ?? null,
     branchId: context.branchId, branchRevision: branchContext.revision,
@@ -158,7 +160,7 @@ export function projectEnterprise(project, query = {}, authority = {}) {
       baseBlueprintId: proposal.baseBlueprintId, baseBlueprintVersion: proposal.baseBlueprintVersion, baseSnapshotHash: proposal.baseSnapshotHash,
       snapshotHash: proposal.snapshotHash, baseStale: proposal.baseStale,
       diff: { before: structuredClone(proposal.snapshot.edit.before), after: structuredClone(proposal.snapshot.edit.after), changedFields: proposal.snapshot.edit.changedFields } } : null,
-    branches: branchContext.branches, branch: branchContext.branch, processModel: structuredClone(PROCESS_MODEL), simulations, simulation, economics,
+    branches: branchContext.branches, branch: branchContext.branch, processModel: structuredClone(PROCESS_MODEL), simulations, simulation, economics, integrity,
     refinementTrace: projectRefinementTrace(objects, selected?.id),
     permissions: { write: isCurrent && Boolean(authority.write), scopeAdmin: isCurrent && Boolean(authority.scopeAdmin),
       branchCreate: Boolean(blueprint && !context.branchId && authority.write && authority.human),
@@ -167,7 +169,8 @@ export function projectEnterprise(project, query = {}, authority = {}) {
       processWrite: Boolean((isCurrent || branchContext.writable) && authority.write && authority.human),
       simulate: Boolean(blueprint && authority.write && authority.human),
       economicWrite: Boolean((isCurrent || branchContext.writable) && authority.write && authority.human),
-      economicEvaluate: Boolean(blueprint && authority.write && authority.human) },
+      economicEvaluate: Boolean(blueprint && authority.write && authority.human),
+      integrityRun: Boolean(isCurrent && authority.write && authority.human) },
     exclusions: { totalObjects: objects.length, visibleObjects: visible.size,
       scopeUnknownCount: unknownCount, unscopedCount: objects.filter((object) => scopeState(object) === 'UNSCOPED').length,
       filteredByScope: objects.filter((object) => !inScope(object)).length,

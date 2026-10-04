@@ -7,6 +7,9 @@ import { effectiveStatus, enterpriseInstant, enterpriseInterval, objectBasisHash
 import { normalizeDecisionTable, normalizeProcessFlow } from '../../src/enterprise/process-model.mjs';
 import { evaluateDecisionTable, simulateProcessFlow } from '../../src/enterprise/process-simulation.mjs';
 import { planManualProcessFlow, projectManualFlowActivation } from '../../src/enterprise/process-runtime.mjs';
+import { evaluateEnterpriseIntegrity, normalizeEnterpriseIntegrityCommand } from '../../src/enterprise/integrity.mjs';
+import { addConversationTurn, createProject } from '../../src/model.mjs';
+import { digest } from '../../src/sdlc/contracts.mjs';
 
 test('enterprise perspectives keep their sixteen stable IDs and distinguish unknown from explicitly unscoped records', () => {
   assert.deepEqual(ENTERPRISE_LENSES.map(({ id }) => id), Array.from({ length: 16 }, (_, index) => `L-${String(index + 1).padStart(2, '0')}`));
@@ -79,6 +82,41 @@ test('enterprise validity intervals accept UTC instants and return UNKNOWN, IN_R
   assert.throws(() => enterpriseInterval(null, '2026-10-01T00:00:00.000Z'), { code: 'INVALID_ENTERPRISE_INTERVAL' });
   assert.throws(() => normalizeEnterpriseQuery({ effectiveAt: '' }), { code: 'INVALID_ENTERPRISE_TIME' });
   assert.throws(() => normalizeEnterpriseQuery({ recordedAt: '2026-03-08T02:30:00-05:00' }), { code: 'INVALID_ENTERPRISE_TIME' });
+});
+
+test('typed integrity assessment detects canonical relation drift and keeps design gaps separate', () => {
+  const project = createProject('Integrity rule fixture');
+  for (const answer of ['A safe service.', 'Small businesses.', 'Clear status and fees.', 'Humans handle exceptions.']) addConversationTurn(project, answer);
+  const blueprint = project.blueprintVersions.at(-1);
+  const exact = evaluateEnterpriseIntegrity(blueprint);
+  assert.equal(exact.rules.find((rule) => rule.id === 'design.typed-structure').status, 'PASS');
+  assert.equal(exact.rules.find((rule) => rule.id === 'lineage.canonical-relations').status, 'PASS');
+  assert.equal(exact.rules.find((rule) => rule.id === 'design.completeness').status, 'REVIEW');
+  assert.equal(exact.status, 'REVIEW');
+  assert.ok(exact.findings.some((entry) => entry.ruleId === 'design.completeness' && entry.severity === 'high'));
+  assert.equal(exact.rules.find((rule) => rule.id === 'lineage.typed-references').findingCount, 0);
+
+  const drifted = structuredClone(blueprint);
+  drifted.relations.pop();
+  const driftReport = evaluateEnterpriseIntegrity(drifted);
+  assert.equal(driftReport.status, 'FAIL');
+  assert.ok(driftReport.findings.some((entry) => entry.ruleId === 'lineage.canonical-relations'
+    && entry.code === 'RELATION_MISSING_OR_MISMATCHED'));
+  const dangling = structuredClone(blueprint);
+  dangling.relations[0].target = 'missing-target';
+  const danglingReport = evaluateEnterpriseIntegrity(dangling);
+  assert.equal(danglingReport.rules.find((rule) => rule.id === 'lineage.typed-references').status, 'FAIL');
+  assert.ok(danglingReport.findings.some((entry) => entry.ruleId === 'lineage.typed-references'
+    && entry.code === 'DANGLING_REFERENCE'));
+  assert.throws(() => evaluateEnterpriseIntegrity({ ...blueprint, relations: [null] }), { code: 'INTEGRITY_BLUEPRINT_INVALID', statusCode: 409 });
+  assert.throws(() => evaluateEnterpriseIntegrity({ ...blueprint, areas: { ...blueprint.areas,
+    purposeStrategy: { ...blueprint.areas.purposeStrategy, items: [null] } } }),
+  { code: 'INTEGRITY_BLUEPRINT_INVALID', statusCode: 409 });
+
+  const command = normalizeEnterpriseIntegrityCommand({ kind: 'run-integrity-checks', blueprintId: blueprint.id,
+    blueprintVersion: blueprint.version, snapshotHash: digest(blueprint), reason: 'Check exact saved design.' });
+  assert.equal(command.snapshotHash, digest(blueprint));
+  assert.throws(() => normalizeEnterpriseIntegrityCommand({ ...command, extra: true }), { code: 'INVALID_INTEGRITY_COMMAND' });
 });
 
 test('enterprise decision tables preserve typed input identity and reject malformed or excessive rules', () => {

@@ -3,6 +3,7 @@ import { ENTERPRISE_BRANCH_COMMANDS, enterpriseBranchWritable, renderEnterpriseB
 import { ENTERPRISE_ECONOMIC_COMMANDS, renderEnterpriseEconomics } from './enterprise-economics.mjs';
 import { ENTERPRISE_REFINEMENT_COMMANDS, renderEnterpriseRefinement } from './enterprise-refinement.mjs';
 import { ENTERPRISE_INTERCHANGE_COMMANDS, renderEnterpriseInterchange } from './enterprise-interchange.mjs';
+import { renderEnterpriseIntegrity } from './enterprise-integrity.mjs';
 const SCOPE_TYPES = new Set(['organization', 'legal-entity', 'unit']);
 const STATE_VALUES = {
   lifecycle: ['UNKNOWN', 'PLANNED', 'ACTIVE', 'RETIRED'],
@@ -98,7 +99,7 @@ export function restoreEnterpriseCommand(storage, principal, projectId) {
   if (!saved) return null;
   if (saved.projectId !== projectId || saved.envelope?.schemaVersion !== '1.0'
     || typeof saved.envelope.commandId !== 'string' || !Number.isSafeInteger(saved.envelope.expectedVersion)
-    || !['create-scope', 'rename-scope', 'assign-object-scope', 'record-state', 'set-validity', 'propose-future-design', ...ENTERPRISE_BRANCH_COMMANDS, ...ENTERPRISE_PROCESS_COMMANDS, ...ENTERPRISE_ECONOMIC_COMMANDS, ...ENTERPRISE_REFINEMENT_COMMANDS, ...ENTERPRISE_INTERCHANGE_COMMANDS].includes(saved.envelope.payload?.kind)) throw new Error('Saved enterprise command is unreadable.');
+    || !['create-scope', 'rename-scope', 'assign-object-scope', 'record-state', 'set-validity', 'propose-future-design', 'run-integrity-checks', ...ENTERPRISE_BRANCH_COMMANDS, ...ENTERPRISE_PROCESS_COMMANDS, ...ENTERPRISE_ECONOMIC_COMMANDS, ...ENTERPRISE_REFINEMENT_COMMANDS, ...ENTERPRISE_INTERCHANGE_COMMANDS].includes(saved.envelope.payload?.kind)) throw new Error('Saved enterprise command is unreadable.');
   return saved;
 }
 
@@ -161,7 +162,7 @@ function scopeFields(el, scopes, values = {}) {
   return { organization, legalEntity, unit };
 }
 
-export function renderEnterpriseContext({ model, query, loading = false, error = null, unavailable = null, pending = null, status = '', storageAvailable = true, el, onContext, onCommand, onRetry, onReload }) {
+export function renderEnterpriseContext({ model, query, loading = false, error = null, unavailable = null, pending = null, integrityDraft = null, status = '', storageAvailable = true, el, onContext, onCommand, onRetry, onReload }) {
   const { field, form } = fields(el);
   const root = el('section', { className: 'enterprise-context', attrs: { 'data-enterprise-context': '', 'aria-label': 'Enterprise perspectives and design scopes' } }, [
     el('h3', { text: 'Enterprise perspectives and design scopes' }),
@@ -247,6 +248,8 @@ export function renderEnterpriseContext({ model, query, loading = false, error =
       : 'Save the initial blueprint before creating or assigning design scopes.' }));
     return root;
   }
+  const integrityPanel = renderEnterpriseIntegrity({ model, pending, draft: integrityDraft, loading, el, ui: { field, form }, onCommand });
+  if (integrityPanel) root.append(integrityPanel);
   const disabled = loading || Boolean(pending) || enterpriseContextReadOnly(model.context) || !model.permissions?.scopeAdmin;
   const validity = model.context.validity ?? {};
   root.append(el('p', { text: `Declared design validity: ${validity.effectiveFrom ?? 'start unknown'} to ${validity.effectiveTo ?? 'no end declared'} (end exclusive). This is proposed design timing.` }));

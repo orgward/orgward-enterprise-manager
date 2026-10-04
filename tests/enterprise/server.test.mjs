@@ -135,9 +135,9 @@ test('enterprise scopes retain design identity across sixteen lenses, commands, 
   const ownerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
   const editorView = await currentView(instance.base, 'editor', project.id);
   const readerView = await currentView(instance.base, 'reader', project.id);
-  assert.deepEqual(ownerView.data.permissions, { write: true, scopeAdmin: true, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, simulate: true, economicWrite: true, economicEvaluate: true });
-  assert.deepEqual(editorView.data.permissions, { write: true, scopeAdmin: false, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, simulate: true, economicWrite: true, economicEvaluate: true });
-  assert.deepEqual(readerView.data.permissions, { write: false, scopeAdmin: false, branchCreate: false, branchWrite: false, branchAdmin: false, processWrite: false, simulate: false, economicWrite: false, economicEvaluate: false });
+  assert.deepEqual(ownerView.data.permissions, { write: true, scopeAdmin: true, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, simulate: true, economicWrite: true, economicEvaluate: true, integrityRun: true });
+  assert.deepEqual(editorView.data.permissions, { write: true, scopeAdmin: false, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, simulate: true, economicWrite: true, economicEvaluate: true, integrityRun: true });
+  assert.deepEqual(readerView.data.permissions, { write: false, scopeAdmin: false, branchCreate: false, branchWrite: false, branchAdmin: false, processWrite: false, simulate: false, economicWrite: false, economicEvaluate: false, integrityRun: false });
   assert.equal(ownerView.data.selection.object.id, 'process-deliver');
   assert.equal(ownerView.data.selection.object.enterpriseScope, undefined);
   assert.equal(ownerView.data.selection.visible, true);
@@ -1396,6 +1396,67 @@ test('enterprise interchange export, preview and bulk apply enforce source, type
   const persisted = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
   assert.equal(persisted.data.audit.filter((entry) => entry.action === 'enterprise.bulk-edit-objects').length, 1);
   assert.equal(persisted.data.blueprintVersions.at(-1).edit.sourceHash, bundle.source.snapshotHash);
+});
+
+test('saved integrity assessments bind exact design source, replay, survive restart and stale on design change', async (t) => {
+  const postgres = await startPostgres();
+  let root;
+  let instance;
+  t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-enterprise-integrity-'));
+  instance = await startApp(postgres, root);
+  for (const identity of identities.values()) await postgres.query(`insert into orgward.oidc_principals
+    (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+  [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  const project = await seedProject(postgres, 'Integrity assessment fixture');
+  let view = await currentView(instance.base, 'owner', project.id);
+  assert.equal(view.data.permissions.integrityRun, true);
+  assert.equal(view.data.integrity.current, null);
+  const blueprintCount = view.data.versions.length;
+  const sourceHash = view.data.context.snapshotHash;
+  const runPayload = { kind: 'run-integrity-checks', snapshotHash: sourceHash, reason: 'Check the saved proposed design.' };
+  const command = commandBody(view, 'integrity-assessment-one', runPayload);
+  const saved = await postCommand(instance.base, 'owner', project.id, command);
+  const assessment = saved.data.integrityAssessment;
+  assert.equal(assessment.status, 'REVIEW');
+  assert.equal(assessment.source.projectId, project.id);
+  assert.equal(assessment.source.blueprintId, view.data.context.blueprintId);
+  assert.equal(assessment.source.blueprintVersion, view.data.context.blueprintVersion);
+  assert.equal(assessment.source.snapshotHash, sourceHash);
+  assert.match(assessment.reportHash, /^[a-f0-9]{64}$/);
+  assert.equal(saved.event.type, 'EnterpriseIntegrityAssessed');
+  assert.equal(saved.event.data.integrityAssessmentId, assessment.id);
+  assert.equal((await currentView(instance.base, 'owner', project.id)).data.versions.length, blueprintCount,
+    'running a report records an assessment without creating a design version');
+
+  const replay = await postCommand(instance.base, 'owner', project.id, command);
+  assert.equal(replay.meta.replayed, true);
+  assert.equal(replay.data.integrityAssessment.id, assessment.id);
+  const readerView = await currentView(instance.base, 'reader', project.id);
+  assert.equal(readerView.data.permissions.integrityRun, false);
+  const denied = await postCommand(instance.base, 'reader', project.id,
+    commandBody(readerView, 'integrity-reader-denied', { ...runPayload, reason: 'Reader cannot run checks.' }), 403);
+  assert.equal(denied.error.code, 'ACTION_FORBIDDEN');
+
+  view = await currentView(instance.base, 'owner', project.id);
+  const selected = await currentView(instance.base, 'owner', project.id, { selectedId: 'process-deliver' });
+  const changed = await postCommand(instance.base, 'owner', project.id, commandBody(selected, 'integrity-design-change', {
+    kind: 'record-state', objectId: 'process-deliver', dimension: 'lifecycle', value: 'PLANNED',
+    basisHash: selected.data.selection.states.basisHash, evidenceSummary: '', reason: 'Record current planning state.' }));
+  assert.ok(changed.data.blueprintVersion > assessment.source.blueprintVersion);
+  const latest = await currentView(instance.base, 'owner', project.id);
+  assert.equal(latest.data.integrity.current, null);
+  assert.equal(latest.data.integrity.latest.appliesToContext, false);
+  const stale = await postCommand(instance.base, 'owner', project.id, commandBody(latest, 'integrity-stale-source', {
+    kind: 'run-integrity-checks', snapshotHash: sourceHash, reason: 'Attempt an obsolete basis.' }), 409);
+  assert.equal(stale.error.code, 'INTEGRITY_SOURCE_STALE');
+
+  await closeApp(instance); instance = null;
+  instance = await startApp(postgres, root);
+  const afterRestart = await currentView(instance.base, 'owner', project.id);
+  assert.equal(afterRestart.data.integrity.assessments[0].id, assessment.id);
+  assert.equal(afterRestart.data.integrity.assessments[0].reportHash, assessment.reportHash);
+  assert.equal(afterRestart.data.integrity.current, null);
 });
 
 test('saved refinement links update canonical relations, reject cycles and trace exact branch revisions', async (t) => {

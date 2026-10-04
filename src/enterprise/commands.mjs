@@ -8,6 +8,7 @@ import { applyEnterpriseProcessCommand, ENTERPRISE_PROCESS_KINDS, normalizeEnter
 import { applyEnterpriseEconomicCommand, ENTERPRISE_ECONOMIC_KINDS, normalizeEnterpriseEconomicCommand } from './economics-commands.mjs';
 import { applyEnterpriseRefinementCommand, ENTERPRISE_REFINEMENT_KINDS, normalizeEnterpriseRefinementCommand } from './refinement-commands.mjs';
 import { applyEnterpriseBulkEdit, ENTERPRISE_INTERCHANGE_KINDS, normalizeEnterpriseInterchangeCommand } from './interchange.mjs';
+import { applyEnterpriseIntegrityCommand, ENTERPRISE_INTEGRITY_KINDS, normalizeEnterpriseIntegrityCommand } from './integrity.mjs';
 
 const base = ['kind', 'blueprintId', 'blueprintVersion', 'reason'];
 function reference(value, field, { nullable = false } = {}) {
@@ -18,6 +19,7 @@ function reference(value, field, { nullable = false } = {}) {
   return value;
 }
 export function normalizeEnterpriseCommand(input) {
+  if (input && ENTERPRISE_INTEGRITY_KINDS.has(input.kind)) return normalizeEnterpriseIntegrityCommand(input);
   if (input && ENTERPRISE_PROCESS_KINDS.has(input.kind)) return normalizeEnterpriseProcessCommand(input);
   if (input && ENTERPRISE_ECONOMIC_KINDS.has(input.kind)) return normalizeEnterpriseEconomicCommand(input);
   if (input && ENTERPRISE_REFINEMENT_KINDS.has(input.kind)) return normalizeEnterpriseRefinementCommand(input);
@@ -79,6 +81,7 @@ export function normalizeEnterpriseCommand(input) {
   return normalized;
 }
 export function applyEnterpriseCommand(project, command, actor, options = {}) {
+  if (ENTERPRISE_INTEGRITY_KINDS.has(command.kind)) return applyEnterpriseIntegrityCommand(project, command, actor);
   if (ENTERPRISE_PROCESS_KINDS.has(command.kind)) return applyEnterpriseProcessCommand(project, command, actor);
   if (ENTERPRISE_ECONOMIC_KINDS.has(command.kind)) return applyEnterpriseEconomicCommand(project, command, actor);
   if (ENTERPRISE_REFINEMENT_KINDS.has(command.kind)) return applyEnterpriseRefinementCommand(project, command, actor);
