@@ -6,16 +6,32 @@ export function resolveProjectAccessSelection(projects, requestedProjectId) {
   return { projectId: requestedProjectId, status: 'owner' };
 }
 
-export async function selectProjectAccess(projects, requestedProjectId, fetchMembers, {
-  onSelection, updateUrl = false, search = '', view = 'enterprise', onUrlUpdate,
-} = {}) {
-  const selection = resolveProjectAccessSelection(projects, requestedProjectId);
-  onSelection?.(selection);
-  if (updateUrl && selection.status !== 'unavailable') {
-    onUrlUpdate?.(projectAccessViewUrl(selection.projectId, { search, view }));
-  }
-  if (selection.status !== 'owner') return { ...selection, members: [] };
-  return { ...selection, members: await fetchMembers(selection.projectId) };
+export function createProjectAccessController({ getProjects, fetchMembers, onState }) {
+  let generation = 0;
+  return async function selectProjectAccess(requestedProjectId, {
+    updateUrl = false, search = '', view = 'enterprise', onUrlUpdate,
+  } = {}) {
+    const request = ++generation;
+    const selection = resolveProjectAccessSelection(getProjects(), requestedProjectId);
+    if (updateUrl && selection.status !== 'unavailable') {
+      onUrlUpdate?.(projectAccessViewUrl(selection.projectId, { search, view }));
+    }
+    const apply = (result) => {
+      const stale = request !== generation;
+      if (!stale) onState?.(result);
+      return { ...result, stale };
+    };
+    if (selection.status !== 'owner') {
+      return apply({ ...selection, members: [], loading: false, error: null });
+    }
+    apply({ ...selection, members: [], loading: true, error: null });
+    try {
+      const members = await fetchMembers(selection.projectId);
+      return apply({ ...selection, members, loading: false, error: null });
+    } catch (error) {
+      return apply({ ...selection, members: [], loading: false, error });
+    }
+  };
 }
 
 export function projectAccessIdFromSearch(search = '') {

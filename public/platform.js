@@ -1,5 +1,5 @@
 import { apiErrorFrom } from './shared-interactions.mjs';
-import { platformViewUrl, projectAccessIdFromSearch, projectAccessSelectionMessage, projectAccessViewUrl, selectProjectAccess } from './platform-sharing.mjs';
+import { createProjectAccessController, platformViewUrl, projectAccessIdFromSearch, projectAccessSelectionMessage } from './platform-sharing.mjs';
 
 const views = new Set(['command', 'enterprise', 'changes', 'work', 'releases', 'evidence', 'administration']);
 const manageableIdentityRoles = ['workspace-read', 'workspace-write', 'execution-approver', 'release-approver', 'control-owner', 'tenant-admin'];
@@ -47,6 +47,18 @@ const capabilityCopy = {
 };
 
 const state = { view: 'command', foundation: null, error: null, loading: true, inspectorTrigger: null, importBusy: false, importResult: null, importCommand: null, identityAdmin: null, identityAction: null, secretAdmin: null, secretAction: null, deepSeekAdmin: null, deepSeekAction: null, modelBudget: null, modelBudgetAction: null, session: null, sharing: { projects: [], projectId: '', members: [], loading: false, error: null, message: '', busy: false } };
+const projectAccessController = createProjectAccessController({
+  getProjects: () => state.sharing.projects,
+  fetchMembers: (projectId) => api(`/api/v1/projects/${encodeURIComponent(projectId)}/members`).then((result) => result.data),
+  onState: (selection) => {
+    state.sharing.projectId = selection.projectId;
+    state.sharing.members = selection.members;
+    state.sharing.loading = selection.loading;
+    state.sharing.error = selection.error?.message ?? null;
+    state.sharing.deepLinkStatus = selection.status === 'owner' ? null : selection.status;
+    render();
+  },
+});
 const canvas = document.querySelector('#platform-canvas');
 const inspector = document.querySelector('#spec-inspector');
 const dialog = document.querySelector('#command-dialog');
@@ -144,38 +156,22 @@ function renderEnterprise() {
 }
 
 async function loadProjectMembers(projectId = state.sharing.projectId, { updateUrl = false } = {}) {
-  state.sharing.projectId = projectId;
-  state.sharing.members = [];
-  state.sharing.error = null;
   state.sharing.message = '';
-  state.sharing.deepLinkStatus = null;
-  if (!projectId) {
-    state.sharing.deepLinkStatus = state.sharing.projects.length ? 'unavailable' : null;
-    render(); return;
-  }
-  state.sharing.loading = true;
-  render();
-  try {
-    const selection = await selectProjectAccess(state.sharing.projects, projectId,
-      (selectedId) => api(`/api/v1/projects/${encodeURIComponent(selectedId)}/members`).then((result) => result.data), {
-        updateUrl,
-        search: window.location.search,
-        view: state.view,
-        onUrlUpdate: (url) => window.history.replaceState(null, '', url),
-        onSelection: (resolved) => {
-          state.sharing.projectId = resolved.projectId;
-          state.sharing.deepLinkStatus = resolved.status === 'owner' ? null : resolved.status;
-        },
-      });
-    state.sharing.projectId = selection.projectId;
-    state.sharing.members = selection.members;
-    state.sharing.deepLinkStatus = selection.status === 'owner' ? null : selection.status;
-  } catch (error) {
-    state.sharing.error = error.message;
-  } finally {
+  if (!projectId && !state.sharing.projects.length) {
+    state.sharing.projectId = '';
+    state.sharing.members = [];
     state.sharing.loading = false;
+    state.sharing.error = null;
+    state.sharing.deepLinkStatus = null;
     render();
+    return;
   }
+  await projectAccessController(projectId, {
+    updateUrl,
+    search: window.location.search,
+    view: state.view,
+    onUrlUpdate: (url) => window.history.replaceState(null, '', url),
+  });
 }
 
 async function saveProjectMember(event) {

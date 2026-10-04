@@ -17,8 +17,8 @@ import { enterpriseGovernanceCommandPayload, renderEnterpriseGovernance } from '
 import { enterpriseStewardshipPayload, renderEnterpriseStewardship } from '../../public/enterprise-stewardship.mjs';
 import { downloadPortfolioDesign, portfolioDesignExportFilename, projectPortfolioFacts, readPortfolioImportFile, renderProjectPortfolio,
   portfolioImportWorkspaceRoute, portfolioManageAccessRoute, verifyPortfolioDesignBundle } from '../../public/project-portfolio.mjs';
-import { platformViewUrl, projectAccessIdFromSearch, projectAccessSelectionMessage,
-  resolveProjectAccessSelection, selectProjectAccess } from '../../public/platform-sharing.mjs';
+import { createProjectAccessController, platformViewUrl, projectAccessIdFromSearch, projectAccessSelectionMessage,
+  resolveProjectAccessSelection } from '../../public/platform-sharing.mjs';
 import { digest } from '../../src/sdlc/contracts.mjs';
 import { isValidEnterpriseIntegrityAssessment, projectEnterpriseIntegrity } from '../../src/enterprise/integrity.mjs';
 import { projectPortfolioIntegritySummary } from '../../src/platform/postgres-stores.mjs';
@@ -177,27 +177,33 @@ test('platform access management deep link selects the requested workspace', asy
   ];
   let currentUrl = '/platform.html?tab=access&projectId=old#enterprise';
   const ownerFetches = [];
-  const selectedOwner = await selectProjectAccess(projects, 'workspace-owner-requested', async (id) => {
-    ownerFetches.push(id); return [{ principal: 'owner-requested', access: 'owner' }];
-  }, { updateUrl: true, search: '?tab=access&projectId=old', view: 'enterprise',
-    onUrlUpdate: (url) => { currentUrl = url; } });
-  assert.deepEqual(selectedOwner, { projectId: 'workspace-owner-requested', status: 'owner', members: [{ principal: 'owner-requested', access: 'owner' }] });
+  let selectionState = null;
+  const controller = createProjectAccessController({ getProjects: () => projects,
+    fetchMembers: async (id) => { ownerFetches.push(id); return [{ principal: 'owner-requested', access: 'owner' }]; },
+    onState: (value) => { selectionState = value; },
+  });
+  const selectedOwner = await controller('workspace-owner-requested', {
+    updateUrl: true, search: '?tab=access&projectId=old', view: 'enterprise', onUrlUpdate: (url) => { currentUrl = url; },
+  });
+  assert.deepEqual(selectedOwner, { projectId: 'workspace-owner-requested', status: 'owner', members: [{ principal: 'owner-requested', access: 'owner' }], loading: false, error: null, stale: false });
   assert.deepEqual(ownerFetches, ['workspace-owner-requested']);
   assert.equal(currentUrl, '/platform.html?tab=access&projectId=workspace-owner-requested#enterprise');
-  const selectedAfterReload = await selectProjectAccess(projects, projectAccessIdFromSearch(new URL(currentUrl, 'https://local.test').search),
-    async (id) => [{ principal: `reloaded-${id}`, access: 'owner' }]);
+  const selectedAfterReload = await controller(projectAccessIdFromSearch(new URL(currentUrl, 'https://local.test').search));
   assert.equal(selectedAfterReload.projectId, 'workspace-owner-requested', 'the URL restores the dropdown selection after reload');
 
   for (const access of ['editor', 'reader']) {
     const id = `workspace-${access}`;
     let deniedUrl = '';
-    let deniedFetches = 0;
-    const deniedSelection = await selectProjectAccess(projects, id, async () => { deniedFetches += 1; return []; }, {
+    const deniedSelection = await controller(id, {
       updateUrl: true, view: 'enterprise', onUrlUpdate: (url) => { deniedUrl = url; },
     });
-    assert.deepEqual(deniedSelection, { projectId: id, status: 'denied', members: [] });
+    assert.deepEqual(deniedSelection, { projectId: id, status: 'denied', members: [], loading: false, error: null, stale: false });
     assert.equal(deniedUrl, `/platform.html?projectId=${id}#enterprise`);
-    assert.equal(deniedFetches, 0, `${access} selection must not call the project members endpoint`);
+    assert.equal(ownerFetches.length, 2, `${access} selection must not call the project members endpoint`);
+    assert.equal(selectionState.projectId, id);
+    assert.equal(selectionState.members.length, 0);
+    assert.equal(selectionState.loading, false);
+    assert.equal(selectionState.error, null);
   }
   assert.match(projectAccessSelectionMessage('denied'), /only to the owner.*No other workspace was selected/);
   assert.deepEqual(resolveProjectAccessSelection(projects, 'workspace-missing'),
@@ -207,6 +213,55 @@ test('platform access management deep link selects the requested workspace', asy
     { projectId: '', status: 'unavailable' });
   assert.equal(platformViewUrl('enterprise', '?projectId=workspace-owner-requested'),
     '/platform.html?projectId=workspace-owner-requested#enterprise');
+});
+
+test('platform access selection ignores a stale members response after a newer non-owner selection', async () => {
+  const projects = [
+    { id: 'workspace-owner-a', workspaceAccess: 'owner' },
+    { id: 'workspace-editor-b', workspaceAccess: 'editor' },
+  ];
+  let resolveOwnerMembers;
+  let currentUrl = '';
+  let rendered = null;
+  const renderSnapshots = [];
+  const fetches = [];
+  const controller = createProjectAccessController({ getProjects: () => projects,
+    fetchMembers: (projectId) => {
+      fetches.push(projectId);
+      return new Promise((resolve) => { resolveOwnerMembers = resolve; });
+    },
+    onState: (selection) => {
+      rendered = { ...selection, showMembershipControls: selection.status === 'owner' && selection.members.length > 0 };
+      renderSnapshots.push(rendered);
+    },
+  });
+  const ownerPending = controller('workspace-owner-a', { updateUrl: true,
+    onUrlUpdate: (url) => { currentUrl = url; } });
+  assert.equal(rendered.projectId, 'workspace-owner-a');
+  assert.equal(rendered.loading, true);
+  const editorSelected = await controller('workspace-editor-b', { updateUrl: true,
+    onUrlUpdate: (url) => { currentUrl = url; } });
+  assert.equal(editorSelected.status, 'denied');
+  assert.equal(currentUrl, '/platform.html?projectId=workspace-editor-b#enterprise');
+  assert.equal(rendered.projectId, 'workspace-editor-b');
+  assert.equal(rendered.members.length, 0);
+  assert.equal(rendered.loading, false);
+  assert.equal(rendered.error, null);
+  assert.equal(rendered.showMembershipControls, false);
+  assert.deepEqual(fetches, ['workspace-owner-a'], 'the editor selection does not make a members request');
+
+  const visibleSelection = rendered;
+  const renderCount = renderSnapshots.length;
+  resolveOwnerMembers([{ principal: 'owner-a-member', access: 'owner' }]);
+  const staleOwnerResult = await ownerPending;
+  assert.equal(staleOwnerResult.stale, true);
+  assert.equal(renderSnapshots.length, renderCount, 'a stale success does not render after the newer selection');
+  assert.equal(rendered, visibleSelection);
+  assert.equal(rendered.projectId, 'workspace-editor-b');
+  assert.deepEqual(rendered.members, []);
+  assert.equal(rendered.loading, false);
+  assert.equal(rendered.error, null);
+  assert.equal(rendered.showMembershipControls, false);
 });
 
 test('portfolio search and access filter find the matching workspace and preserve its identity', () => {

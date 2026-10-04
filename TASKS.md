@@ -7504,6 +7504,20 @@ membership-list cases passed 2/2 (0 failures, 0 skips; 2.56s; TAP log:
 `public/project-portfolio.mjs`, and `tests/enterprise/view.test.mjs`;
 `git diff --check` passed. No full check run; PR-15 remains open and active.
 
+PR-15 stale workspace-member response isolation (2026-10-04): the platform now
+uses one shared project-access selection controller with a monotonically
+increasing request generation. A members response or failure publishes state
+only while its selected project is still current; loading and errors from an
+older owner request cannot overwrite a newer editor/reader denial. Deferred
+response coverage selects owner A, selects editor B while A is pending, then
+resolves A and asserts B remains selected in the URL and rendered state, with
+no A members, controls, loading or error state applied. Focused platform deep
+link/race and PostgreSQL membership-list cases passed 3/3 (0 failures, 0 skips;
+2.52s; TAP log: `/tmp/orgward-tests-slr5LH/node-test.tap.log`). `node --check`
+passed for `public/platform.js`, `public/platform-sharing.mjs`,
+`public/project-portfolio.mjs`, and `tests/enterprise/view.test.mjs`;
+`git diff --check` passed. No full check run; PR-15 remains open and active.
+
 PR-15 restore draft from a saved design version (2026-10-04): when an owner or
 editor selects a historical saved main version, the branch panel offers an
 explicit “Restore this saved version as a draft” action. The draft copies the
