@@ -8,8 +8,8 @@ import { apiErrorFrom, decodeStudioRoute, encodeExecutionRoute, encodeStudioRout
 import { coverageAreaStateLabel, coverageForBlueprint } from './coverage-dashboard.mjs';
 import { compareBlueprintObjectVersions } from './blueprint-comparison.mjs';
 import { renderOutcomeInbox } from './outcomes.mjs';
-import { enterpriseContextFailure, enterpriseContextReadOnly, enterpriseStateSummary, enterpriseSourceAligned, hasEnterpriseContext, enterpriseQuery, enterpriseRequestPath, persistEnterpriseCommand, restoreEnterpriseCommand, persistEnterpriseInterchangeDraft, restoreEnterpriseInterchangeDraft, submitEnterpriseCommand, renderEnterpriseContext, renderEnterpriseObject, renderEnterpriseStewardshipPanel } from './enterprise.mjs';
-import { downloadPortfolioDesign, renderProjectPortfolio } from './project-portfolio.mjs';
+import { enterpriseContextFailure, enterpriseContextReadOnly, enterpriseStateSummary, enterpriseSourceAligned, hasEnterpriseContext, enterpriseQuery, enterpriseRequestPath, persistEnterpriseCommand, restoreEnterpriseCommand, persistEnterpriseInterchangeDraft, restoreEnterpriseInterchangeDraft, submitEnterpriseCommand, renderEnterpriseContext, renderEnterpriseObject, renderEnterpriseObjectHeader, renderEnterpriseStewardshipPanel } from './enterprise.mjs';
+import { downloadPortfolioDesign, portfolioImportWorkspaceRoute, readPortfolioImportFile, renderProjectPortfolio } from './project-portfolio.mjs';
 
 const state = {
   projects: [],
@@ -465,6 +465,17 @@ function renderPortfolio() {
       } catch (error) { notify(`Export failed: ${error.message}`); }
       finally { button.disabled = false; }
     },
+    onImport: async (id, file) => {
+      if (!allowRouteChange()) return;
+      try {
+        const draft = await readPortfolioImportFile(file);
+        persistEnterpriseInterchangeDraft(localStorage, state.sessionPrincipal, id, draft);
+        state.draft = '';
+        state.pendingMessage = null;
+        select.value = id;
+        loadProject(id, { focusImport: true });
+      } catch (error) { notify(`Import preview could not be prepared: ${error.message}`); }
+    },
   }));
 }
 
@@ -532,7 +543,7 @@ async function createProject(event) {
   }
 }
 
-async function loadProject(id, { history = 'push', route = null, focusOutcomes = false } = {}) {
+async function loadProject(id, { history = 'push', route = null, focusOutcomes = false, focusImport = false } = {}) {
   if (!id) return showWelcome({ history });
   const loadGeneration = ++state.projectLoadGeneration;
   if (state.project?.id !== id) state.enterpriseStatus = '';
@@ -559,10 +570,12 @@ async function loadProject(id, { history = 'push', route = null, focusOutcomes =
     const validTypes = new Set(state.project.graph.types);
     state.activeTypes = new Set(route?.types?.filter((type) => validTypes.has(type)) ?? state.project.graph.types);
     if (!state.activeTypes.size) state.activeTypes = new Set(state.project.graph.types);
-    state.selectedId = route?.selectedId ?? null;
+    const importRoute = focusImport ? portfolioImportWorkspaceRoute(state.project.latestBlueprint) : null;
+    state.selectedId = route?.selectedId ?? importRoute?.selectedId ?? null;
     state.mapAreaFilter = route?.area ?? null;
     state.coverageReturnContext = null;
-    state.view = state.project.latestBlueprint && ['map', 'coverage'].includes(route?.view) ? route.view : 'blueprint';
+    state.view = focusImport ? importRoute?.view ?? 'map'
+      : state.project.latestBlueprint && ['map', 'coverage'].includes(route?.view) ? route.view : 'blueprint';
     state.enterpriseQuery = enterpriseQuery(route ?? {});
     state.enterpriseExplicit = hasEnterpriseContext(route ?? {});
     state.enterpriseModel = null; state.enterpriseError = null; state.enterpriseLoading = false;
@@ -579,6 +592,11 @@ async function loadProject(id, { history = 'push', route = null, focusOutcomes =
       const inbox = document.querySelector('.outcome-inbox');
       inbox?.scrollIntoView?.({ block: 'start' });
       inbox?.focus?.({ preventScroll: true });
+    }
+    if (focusImport) {
+      const interchange = document.querySelector('#object-detail [data-enterprise-interchange]');
+      interchange?.scrollIntoView?.({ block: 'start' });
+      interchange?.querySelector?.('input[type="file"]')?.focus?.();
     }
     announceFounderConversation(state.project);
     hideAppState();
@@ -2305,7 +2323,6 @@ function renderDetail() {
     detail.replaceChildren(element('p', { className: 'detail-placeholder', text: state.selectedId ? 'The requested selected object is unavailable in this saved context. Choose an available record or another saved version.' : 'Select an object to inspect its design status, confidence, provenance, and relationships.' }));
     return;
   }
-  const type = element('span', { className: `type type-${node.type}`, text: node.type.replaceAll('-', ' ') });
   const meta = element('div', { className: 'detail-meta' }, [
     element('div', {}, [element('b', { text: 'Design status' }), element('span', { text: node.status })]),
     element('div', {}, [element('b', { text: 'Confidence' }), element('span', { text: node.confidence })]),
@@ -2323,7 +2340,7 @@ function renderDetail() {
   const interchangeOwner = { projectId: state.project?.id, principal: state.sessionPrincipal, generation: state.projectLoadGeneration };
   const isCurrentInterchangeContext = () => state.project?.id === interchangeOwner.projectId
     && state.sessionPrincipal === interchangeOwner.principal && state.projectLoadGeneration === interchangeOwner.generation;
-  const content = [type, element('h3', { text: node.name }), element('p', { text: node.detail }), meta,
+  const content = [...renderEnterpriseObjectHeader({ object: node, el: element }), meta,
     element('p', { text: `Evidence: ${node.provenance?.at(-1)?.note ?? 'No provenance recorded'}` }), connections,
     versionHistoryFor(node)];
   if (state.enterpriseModel && object) content.push(renderEnterpriseObject({ projectId: state.project?.id, model: state.enterpriseModel, object,

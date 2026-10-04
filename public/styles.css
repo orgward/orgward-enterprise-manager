@@ -370,6 +370,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .portfolio-access { display: inline-block; font-size: .78rem; }
 .portfolio-phase { font-size: .78rem; }
 .portfolio-card button { justify-self: start; margin-top: .3rem; }
+.portfolio-import { display: grid; gap: .35rem; font-size: .88rem; color: var(--muted, #a9b0a8); }
+.portfolio-import input { max-width: 100%; min-width: 0; }
 .portfolio-empty { grid-column: 1 / -1; padding: 1rem; border: 1px dashed var(--border, #363b32); border-radius: .8rem; }
 
 .enterprise-editor-rows, .enterprise-step-fields { display: grid; gap: .7rem; min-width: 0; }

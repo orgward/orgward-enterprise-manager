@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { enterpriseCommandStorageKey, enterpriseContextFailure, enterpriseContextReadOnly, enterpriseQuery, enterpriseRequestPath, enterpriseSourceAligned, hasEnterpriseContext,
   enterpriseInterchangeDraftStorageKey, persistEnterpriseCommand, persistEnterpriseInterchangeDraft, renderEnterpriseContext,
-  renderEnterpriseObject, restoreEnterpriseCommand, restoreEnterpriseInterchangeDraft, submitEnterpriseCommand } from '../../public/enterprise.mjs';
+  renderEnterpriseObject, renderEnterpriseObjectHeader, restoreEnterpriseCommand, restoreEnterpriseInterchangeDraft, submitEnterpriseCommand } from '../../public/enterprise.mjs';
 import { enterpriseBranchCommandPayload, enterpriseBranchWritable, enterpriseCandidateCurrent, enterpriseCommandResultRoute,
   renderEnterpriseBranches } from '../../public/enterprise-branches.mjs';
 import { enterpriseProcessCommandPayload, enterpriseTypedValue, renderEnterpriseProcess, renderEnterpriseSimulation } from '../../public/enterprise-process.mjs';
@@ -14,8 +14,8 @@ import { enterpriseInterchangeCommandPayload, enterpriseInterchangeWritable, ren
 import { enterpriseIntegrityCommandPayload, enterpriseIntegrityExceptionPayload, renderEnterpriseIntegrity } from '../../public/enterprise-integrity.mjs';
 import { enterpriseGovernanceCommandPayload, renderEnterpriseGovernance } from '../../public/enterprise-governance.mjs';
 import { enterpriseStewardshipPayload, renderEnterpriseStewardship } from '../../public/enterprise-stewardship.mjs';
-import { downloadPortfolioDesign, portfolioDesignExportFilename, projectPortfolioFacts, renderProjectPortfolio,
-  verifyPortfolioDesignBundle } from '../../public/project-portfolio.mjs';
+import { downloadPortfolioDesign, portfolioDesignExportFilename, projectPortfolioFacts, readPortfolioImportFile, renderProjectPortfolio,
+  portfolioImportWorkspaceRoute, verifyPortfolioDesignBundle } from '../../public/project-portfolio.mjs';
 import { digest } from '../../src/sdlc/contracts.mjs';
 import { decodeStudioRoute, encodeStudioRoute } from '../../public/shared-interactions.mjs';
 
@@ -49,9 +49,13 @@ class NodeFixture {
   remove() { if (this.parent) this.parent.children = this.parent.children.filter((child) => child !== this); this.parent = null; }
   addEventListener(type, handler) { this.listeners.set(type, handler); }
   querySelectorAll(selector) {
-    const tags = selector.split(',').map((part) => part.trim());
+    const selectors = selector.split(',').map((part) => part.trim());
+    const matches = (child) => selectors.some((entry) => {
+      const attribute = entry.match(/^\[([\w-]+)\]$/);
+      return attribute ? Object.hasOwn(child.attrs, attribute[1]) : entry === child.tagName;
+    });
     return new NodeListFixture(this.children.flatMap((child) => [
-      ...(tags.includes(child.tagName) ? [child] : []),
+      ...(matches(child) ? [child] : []),
       ...child.querySelectorAll(selector),
     ]));
   }
@@ -88,6 +92,7 @@ const el = (tag, options = {}, children = []) => {
 test('portfolio cards show saved workspace state and access and open the chosen project', () => {
   const opened = [];
   const exported = [];
+  const imported = [];
   const projects = [
     { id: 'project-a', name: 'Northstar', phase: 'design', blueprintVersion: 3,
       workspaceAccess: 'editor', openIncidentCount: 2, openSupportCount: 1, updatedAt: '2026-10-03T12:00:00.000Z' },
@@ -97,6 +102,7 @@ test('portfolio cards show saved workspace state and access and open the chosen 
   const rendered = renderProjectPortfolio(projects, {
     el, onOpen: (id, options) => opened.push(options ? [id, options] : id),
     onExport: (id, button) => exported.push([id, button.text]),
+    onImport: (id, file) => imported.push([id, file.name]),
   });
   assert.match(rendered.textContent, /Your portfolio Workspaces/);
   assert.match(rendered.textContent, /Northstar Editor access design Blueprint version 3/);
@@ -111,11 +117,55 @@ test('portfolio cards show saved workspace state and access and open the chosen 
   const exportButton = rendered.children[1].children[0].children.find((child) => child.text === 'Export proposed design JSON');
   exportButton.listeners.get('click')();
   assert.deepEqual(exported, [['project-a', 'Export proposed design JSON']]);
+  const importLabel = rendered.children[1].children[0].children.find((child) => child.tagName === 'label');
+  const importInput = importLabel.children[0];
+  importInput.files = [{ name: 'customer-design.json', size: 42 }];
+  importInput.listeners.get('change')();
+  assert.deepEqual(imported, [['project-a', 'customer-design.json']]);
+  const noBlueprint = rendered.children[1].children[1].children.find((child) => child.tagName === 'label').children[0];
+  assert.equal(Object.hasOwn(noBlueprint.attrs, 'disabled'), true, 'projects without a saved blueprint cannot start an import');
   assert.equal(projectPortfolioFacts({}).access, 'Local workspace');
   const returned = renderProjectPortfolio([{ ...projects[0], openIncidentCount: 0, openSupportCount: 0 }], { el, onOpen() {} });
   assert.match(returned.textContent, /Active incidents: 0 · Active support: 0/);
   assert.equal(returned.children[1].children[0].children.some((child) => child.text === 'Review incident and support inbox'), false,
     'the refreshed portfolio removes the review action after all incident/support items are closed');
+});
+
+test('portfolio import reads one bounded JSON file for preview', async () => {
+  const file = { name: 'design.json', size: 12, text: async () => '{"kind":"orgward-enterprise-blueprint"}' };
+  assert.deepEqual(await readPortfolioImportFile(file), { fileName: 'design.json',
+    bundle: { kind: 'orgward-enterprise-blueprint' }, recordIds: [], sourceSelections: [], reason: '' });
+  await assert.rejects(() => readPortfolioImportFile({ ...file, size: 1_000_001 }), /no larger than 1 MB/);
+  await assert.rejects(() => readPortfolioImportFile({ ...file, text: async () => '{broken' }), /not valid JSON/);
+});
+
+test('portfolio import opens the selected workspace information detail with its current preview', async () => {
+  const blueprint = { id: 'blueprint-current', version: 8, areas: { responsibilityAuthority: { items: [
+    { id: 'info-record', type: 'information', name: 'Import target', detail: 'Saved information record.' },
+  ] } } };
+  const route = portfolioImportWorkspaceRoute(blueprint);
+  assert.deepEqual(route, { view: 'map', selectedId: 'info-record' });
+  const model = { context: { isCurrent: true, blueprintId: blueprint.id, blueprintVersion: blueprint.version }, blueprint,
+    permissions: { write: true }, scopes: [], graph: { nodes: [] }, selection: null };
+  const preview = { source: { projectId: 'source-project', blueprintId: 'source-blueprint', blueprintVersion: 2, snapshotHash: 'source-hash' },
+    currentSource: { blueprintId: blueprint.id, blueprintVersion: blueprint.version, snapshotHash: 'current-hash' }, recordCount: 1,
+    recognizedFields: 1, readyRecordIds: ['imported-row'], previewHash: 'preview-hash', unknownFields: [], lossyFields: [],
+    collisions: [], validationErrors: [], rows: [{ id: 'imported-row', type: 'information', status: 'READY', changedFields: ['name'], recognizedFields: ['name'] }] };
+  const draft = { fileName: 'portfolio.json', bundle: { kind: 'orgward-enterprise-blueprint' } };
+  let requestedPath;
+  const selectedObject = blueprint.areas.responsibilityAuthority.items[0];
+  const enterprisePanel = renderEnterpriseObject({ projectId: 'selected-workspace', model, object: selectedObject,
+    interchangeDraft: draft, el, ui: branchUi, api: async (path) => { requestedPath = path; return { data: preview }; }, onCommand() {} });
+  const detail = el('aside', { attrs: { 'data-selected-object': selectedObject.id } }, [
+    ...renderEnterpriseObjectHeader({ object: selectedObject, el }), enterprisePanel,
+  ]);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(requestedPath, '/api/v1/projects/selected-workspace/enterprise/import-preview');
+  assert.match(detail.textContent, /Import target/);
+  assert.match(detail.textContent, /Import preview/);
+  assert.match(detail.textContent, /Current destination: blueprint blueprint-current v8/);
+  assert.equal(detail.querySelectorAll('[data-enterprise-interchange]').length, 1,
+    'the selected workspace detail visibly contains the saved draft preview');
 });
 
 test('portfolio design export downloads the authenticated saved blueprint pin', async () => {

@@ -40,6 +40,11 @@ export function enterpriseStateSummary(states = {}) {
   return Object.keys(STATE_VALUES).map((dimension) => `${STATE_LABELS[dimension]}: ${VALUE_LABELS[states?.[dimension]?.value] ?? (dimension === 'review' ? 'Unreviewed' : 'Unknown')}`).join(' · ');
 }
 
+export function renderEnterpriseObjectHeader({ object, el }) {
+  return [el('span', { className: `type type-${object.type}`, text: object.type.replaceAll('-', ' ') }),
+    el('h3', { text: object.name }), el('p', { text: object.detail })];
+}
+
 export function renderEnterpriseStates({ states = {}, el }) {
   const root = el('section', { attrs: { 'data-enterprise-states': '', 'aria-label': 'Independent item states' } }, [
     el('h4', { text: 'Independent item states' }),

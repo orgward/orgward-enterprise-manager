@@ -26,6 +26,20 @@ export function portfolioDesignExportFilename(bundle) {
   return `orgward-enterprise-${source.blueprintId}-v${source.blueprintVersion}.json`;
 }
 
+export async function readPortfolioImportFile(file) {
+  if (!file || typeof file.text !== 'function' || !Number.isFinite(file.size) || file.size < 0 || file.size > 1_000_000) {
+    throw new Error('Choose a proposed design JSON bundle no larger than 1 MB.');
+  }
+  try { return { fileName: file.name || 'enterprise-design.json', bundle: JSON.parse(await file.text()), recordIds: [], sourceSelections: [], reason: '' }; }
+  catch { throw new Error('The selected file is not valid JSON.'); }
+}
+
+export function portfolioImportWorkspaceRoute(blueprint) {
+  const items = Object.values(blueprint?.areas ?? {}).flatMap((area) => area.items ?? []);
+  const target = items.find((item) => item.type === 'information') ?? items[0] ?? null;
+  return { view: 'map', selectedId: target?.id ?? null };
+}
+
 function canonicalPortfolioJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalPortfolioJson).join(',')}]`;
   if (value && typeof value === 'object') {
@@ -65,7 +79,7 @@ export async function downloadPortfolioDesign(projectId, { api, el, createObject
   return { fileName, source };
 }
 
-export function renderProjectPortfolio(projects, { el, onOpen, onExport }) {
+export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImport }) {
   const section = el('section', { className: 'portfolio-list', attrs: { 'aria-labelledby': 'portfolio-heading' } });
   section.append(el('div', { className: 'portfolio-heading' }, [
     el('div', {}, [el('span', { className: 'eyebrow', text: 'Your portfolio' }),
@@ -88,9 +102,18 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport }) {
     const open = el('button', { className: 'button secondary', text: 'Open workspace', attrs: { type: 'button' } });
     open.addEventListener('click', () => onOpen(project.id));
     card.append(open);
-    const exportButton = el('button', { className: 'button ghost', text: 'Export proposed design JSON', attrs: { type: 'button', ...(!facts.hasBlueprint ? { disabled: 'disabled' } : {}) } });
+    const hasWorkspaceAccess = ['owner', 'editor', 'reader'].includes(project.workspaceAccess);
+    const exportButton = el('button', { className: 'button ghost', text: 'Export proposed design JSON', attrs: { type: 'button', ...(!facts.hasBlueprint || !hasWorkspaceAccess ? { disabled: 'disabled' } : {}) } });
     exportButton.addEventListener('click', () => onExport(project.id, exportButton));
     card.append(exportButton);
+    const importFile = el('input', { attrs: { type: 'file', accept: '.json,application/json',
+      'aria-label': `Import proposed design JSON for ${facts.name}`,
+      ...(!facts.hasBlueprint || !hasWorkspaceAccess ? { disabled: 'disabled' } : {}) } });
+    importFile.addEventListener('change', () => {
+      const file = importFile.files?.[0];
+      if (file) onImport?.(project.id, file);
+    });
+    card.append(el('label', { className: 'portfolio-import', text: 'Import proposed design JSON' }, [importFile]));
     if (facts.incidents || facts.support) {
       const review = el('button', { className: 'button ghost', text: 'Review incident and support inbox', attrs: { type: 'button' } });
       review.addEventListener('click', () => onOpen(project.id, { focusOutcomes: true }));

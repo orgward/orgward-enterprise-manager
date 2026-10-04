@@ -7279,3 +7279,31 @@ passed before review; Sol approved the final diff. Focused run passed 3/3
 runner 2.42s; `/tmp/orgward-tests-ikv6st/node-test.tap.log`), with 0 failures
 or skips. No full check run.
 PR-15 remains open and active.
+
+PR-15 portfolio import entry point (2026-10-04): member-visible portfolio cards
+with a saved blueprint accept a bounded JSON file and stage its exact name and
+bundle in the existing principal/project-scoped interchange draft. The app opens
+the workspace in the map/detail route on an information record and focuses the existing interchange
+preview; the existing API rechecks the saved source pin and requires a separate
+human review/apply. PostgreSQL fixture exports the current saved design, previews
+it as a reader against the exact blueprint pin, and rejects a nonmember. UI
+fixtures cover exact project/file selection, no-blueprint disablement, bounded
+JSON parsing, and validation failure. Static checks only; no behavior tests
+pending Sol review. Proposed focused command:
+`npm test -- tests/enterprise/view.test.mjs tests/enterprise/server.test.mjs --test-name-pattern='portfolio cards show saved workspace state and access|portfolio import reads one bounded JSON file for preview|portfolio project list returns each caller’s persisted workspace access'`.
+Sol review correction: the initial import route selected an information record
+but left the workspace on the blueprint tab, so its map detail never rendered.
+`portfolioImportWorkspaceRoute()` now binds the action to the map view and
+selected information record. UI coverage asserts that the selected workspace's
+object detail contains the current-source import preview and requests that
+workspace's API route. Static syntax/diff checks passed. Follow-up fixture
+correction: the view DOM shim supports the precise attribute selector used to
+locate the interchange panel. The selected-record header uses the same helper
+as app.js `renderDetail()`, so the fixture verifies both target heading and
+visible preview.
+Focused verification: the recorded portfolio command passed 3/3 (0 failures,
+0 skips; PG 896.6ms, card view 45.5ms, bounded-file parsing 1.94ms; runner
+2.44s, TAP 1.249s; `/tmp/orgward-tests-9PEM3N/node-test.tap.log`). That pattern
+did not select the newly added route/detail case; it was run separately and
+passed 1/1 (runner 0.26s; `/tmp/orgward-tests-C3ZrH0/node-test.tap.log`). No full
+check run. PR-15 remains open and active.
