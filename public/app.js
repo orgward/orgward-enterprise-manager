@@ -8,7 +8,7 @@ import { apiErrorFrom, decodeStudioRoute, encodeExecutionRoute, encodeStudioRout
 import { coverageAreaStateLabel, coverageForBlueprint } from './coverage-dashboard.mjs';
 import { compareBlueprintObjectVersions } from './blueprint-comparison.mjs';
 import { renderOutcomeInbox } from './outcomes.mjs';
-import { enterpriseContextFailure, enterpriseContextReadOnly, enterpriseStateSummary, enterpriseSourceAligned, hasEnterpriseContext, enterpriseQuery, enterpriseRequestPath, persistEnterpriseCommand, restoreEnterpriseCommand, submitEnterpriseCommand, renderEnterpriseContext, renderEnterpriseObject } from './enterprise.mjs';
+import { enterpriseContextFailure, enterpriseContextReadOnly, enterpriseStateSummary, enterpriseSourceAligned, hasEnterpriseContext, enterpriseQuery, enterpriseRequestPath, persistEnterpriseCommand, restoreEnterpriseCommand, persistEnterpriseInterchangeDraft, restoreEnterpriseInterchangeDraft, submitEnterpriseCommand, renderEnterpriseContext, renderEnterpriseObject } from './enterprise.mjs';
 
 const state = {
   projects: [],
@@ -210,6 +210,19 @@ function restoreEnterprise(projectId) {
   try {
     state.pendingEnterprise = restoreEnterpriseCommand(localStorage, state.sessionPrincipal, projectId);
   } catch (error) { state.enterpriseStorageAvailable = false; state.enterpriseStatus = `${error.message} Review project activity before issuing another command.`; }
+  try { state.enterpriseInterchangeDraft = restoreEnterpriseInterchangeDraft(localStorage, state.sessionPrincipal, projectId); }
+  catch (error) { state.enterpriseStorageAvailable = false; state.enterpriseStatus = `${error.message} The retained source evidence draft could not be restored.`; }
+}
+
+function retainEnterpriseInterchangeDraft(value) {
+  state.enterpriseInterchangeDraft = value;
+  try {
+    persistEnterpriseInterchangeDraft(localStorage, state.sessionPrincipal, state.project.id, value);
+    state.enterpriseStorageAvailable = true;
+  } catch (error) {
+    state.enterpriseStorageAvailable = false;
+    state.enterpriseStatus = `${error.message} Keep this page open or download the source JSON before leaving.`;
+  }
 }
 
 async function loadEnterpriseContext({ render = true, resetTypes = false } = {}) {
@@ -280,8 +293,8 @@ async function saveEnterpriseCommand(payload = null) {
     } else if (ENTERPRISE_INTERCHANGE_COMMANDS.includes(payload.kind)) {
       boundPayload = enterpriseInterchangeCommandPayload(model, payload);
       if (!boundPayload) return;
-      state.enterpriseInterchangeDraft = { ...(state.enterpriseInterchangeDraft ?? {}), recordIds: payload.recordIds,
-        reason: payload.reason, bundle: payload.bundle };
+      retainEnterpriseInterchangeDraft({ ...(state.enterpriseInterchangeDraft ?? {}), recordIds: payload.recordIds,
+        reason: payload.reason, bundle: payload.bundle });
     } else if (ENTERPRISE_BRANCH_COMMANDS.includes(payload.kind)) {
       boundPayload = enterpriseBranchCommandPayload(model, payload);
       if (!boundPayload) return;
@@ -315,7 +328,7 @@ async function saveEnterpriseCommand(payload = null) {
     if (ENTERPRISE_PROCESS_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseProcessDraft = null;
     if (ENTERPRISE_ECONOMIC_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseEconomicDraft = null;
     if (ENTERPRISE_REFINEMENT_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseRefinementDraft = null;
-    if (ENTERPRISE_INTERCHANGE_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseInterchangeDraft = null;
+    if (ENTERPRISE_INTERCHANGE_COMMANDS.includes(saved.envelope.payload.kind)) retainEnterpriseInterchangeDraft(null);
     if (saved.envelope.payload.kind === 'run-integrity-checks') state.enterpriseIntegrityDraft = null;
     if (result.data.simulation) state.enterpriseSimulation = result.data.simulation;
     state.enterpriseStatus = result.data.integrityAssessment ? `Saved the ${result.data.integrityAssessment.status} integrity and lineage assessment for its exact blueprint source. No design or operational state changed.`
@@ -330,9 +343,9 @@ async function saveEnterpriseCommand(payload = null) {
     definitive = error.status >= 400 && error.status < 500 && error.status !== 408;
     if (definitive && ENTERPRISE_ECONOMIC_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseEconomicDraft = saved.envelope.payload;
     if (definitive && ENTERPRISE_REFINEMENT_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseRefinementDraft = saved.envelope.payload;
-    if (definitive && ENTERPRISE_INTERCHANGE_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseInterchangeDraft = {
+    if (definitive && ENTERPRISE_INTERCHANGE_COMMANDS.includes(saved.envelope.payload.kind)) retainEnterpriseInterchangeDraft({
       ...(state.enterpriseInterchangeDraft ?? {}), bundle: saved.envelope.payload.bundle,
-      recordIds: saved.envelope.payload.recordIds, reason: saved.envelope.payload.reason };
+      recordIds: saved.envelope.payload.recordIds, reason: saved.envelope.payload.reason });
     if (definitive && saved.envelope.payload.kind === 'run-integrity-checks') state.enterpriseIntegrityDraft = saved.envelope.payload;
     if (definitive) retainEnterprise(null);
     state.enterpriseStatus = definitive ? `${error.message} ${ENTERPRISE_PROCESS_COMMANDS.includes(saved.envelope.payload.kind) ? 'The submitted process draft is retained for its original source. ' : ''}Review the refreshed requested design before submitting a new change.`
@@ -391,7 +404,7 @@ function allowRouteChange({ preserveProcessDraft = false, preserveEconomicDraft 
     if (!preserveProcessDraft) state.enterpriseProcessDraft = null;
     if (!preserveEconomicDraft) state.enterpriseEconomicDraft = null;
     if (!preserveRefinementDraft) state.enterpriseRefinementDraft = null;
-    if (!preserveInterchangeDraft) state.enterpriseInterchangeDraft = null;
+    if (!preserveInterchangeDraft) retainEnterpriseInterchangeDraft(null);
     if (!preserveIntegrityDraft) state.enterpriseIntegrityDraft = null;
   }
   return accepted;
@@ -2160,6 +2173,9 @@ function renderDetail() {
     button.addEventListener('click', () => { state.activeTypes.add(other.type); selectNode(other.id); });
     connections.append(button);
   }
+  const interchangeOwner = { projectId: state.project?.id, principal: state.sessionPrincipal, generation: state.projectLoadGeneration };
+  const isCurrentInterchangeContext = () => state.project?.id === interchangeOwner.projectId
+    && state.sessionPrincipal === interchangeOwner.principal && state.projectLoadGeneration === interchangeOwner.generation;
   const content = [type, element('h3', { text: node.name }), element('p', { text: node.detail }), meta,
     element('p', { text: `Evidence: ${node.provenance?.at(-1)?.note ?? 'No provenance recorded'}` }), connections,
     versionHistoryFor(node)];
@@ -2167,7 +2183,8 @@ function renderDetail() {
     pending: state.pendingEnterprise, loading: state.enterpriseLoading || state.enterpriseBusy, simulation: state.enterpriseSimulation, processDraft: state.enterpriseProcessDraft,
     economicDraft: state.enterpriseEconomicDraft, refinementDraft: state.enterpriseRefinementDraft, interchangeDraft: state.enterpriseInterchangeDraft,
     selectedSimulationId: state.enterpriseQuery.simulationId, el: element, api, onCommand: saveEnterpriseCommand,
-    onDraftChange: (value) => { state.enterpriseInterchangeDraft = value; },
+    onDraftChange: (value) => { if (isCurrentInterchangeContext()) retainEnterpriseInterchangeDraft(value); },
+    isCurrentContext: isCurrentInterchangeContext,
     onInspectDraft: (query, selectedId) => changeEnterpriseContext(query, { preserveProcessDraft: true, preserveEconomicDraft: true, preserveRefinementDraft: true, preserveInterchangeDraft: true, preserveIntegrityDraft: true, selectedId }),
     onSimulationSelection: (simulationId) => changeEnterpriseContext({ ...state.enterpriseQuery, simulationId }),
     economicEvaluationId: state.enterpriseQuery.economicEvaluationId,

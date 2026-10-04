@@ -4,12 +4,77 @@ import { addConversationTurn, createProject, latestBlueprint } from '../../src/m
 import { digest } from '../../src/sdlc/contracts.mjs';
 import { applyEnterpriseBulkEdit, createEnterpriseInterchangeBundle, normalizeEnterpriseInterchangeCommand,
   previewEnterpriseInterchange } from '../../src/enterprise/interchange.mjs';
+import { previewEnterpriseSourceEvidence } from '../../src/enterprise/source-onboarding.mjs';
 
 function completeProject() {
   const project = createProject('Interchange fixture');
   for (const answer of ['Transfer service', 'Small businesses', 'Clear status and fees', 'Humans approve exceptions']) addConversationTurn(project, answer);
   return project;
 }
+
+test('source onboarding preview proposes typed identities and claims with exact provenance without writes', () => {
+  const project = completeProject(); const blueprint = latestBlueprint(project);
+  const customer = blueprint.areas.customersOfferingsValueEconomics.items.find((entry) => entry.type === 'customer');
+  const process = blueprint.areas.capabilitiesProcesses.items.find((entry) => entry.type === 'process');
+  const capability = Object.values(blueprint.areas).flatMap((area) => area.items).find((entry) => entry.type === 'capability');
+  const information = Object.values(blueprint.areas).flatMap((area) => area.items).find((entry) => entry.type === 'information');
+  process.capability = capability.id;
+  const sourceBundle = { kind: 'orgward-enterprise-source-evidence', schemaVersion: '1.0',
+    source: { id: 'crm-export', label: 'CRM export', locator: 'crm://customers/export-7' }, records: [
+      { id: 'crm-customer-1', type: 'customer', name: customer.name, claims: [
+        { id: 'claim-customer-name', path: 'name', value: 'Potentially updated customer name', locator: 'customers/7/name' },
+        { id: 'claim-customer-count', path: 'name', value: 7, locator: 'customers/7/score' },
+        { id: 'claim-unknown', path: 'externalStatus', value: 'active', locator: 'customers/7/status' },
+      ] },
+      { id: 'crm-process-1', type: 'process', name: process.name, claims: [
+        { id: 'claim-trigger', path: 'trigger', value: 'A reported request arrives', locator: 'processes/1/trigger' },
+        { id: 'claim-info-ref', path: 'inputInformationIds', value: [information.id], locator: 'processes/1/input' },
+        { id: 'claim-bad-info-ref', path: 'outputInformationIds', value: ['missing-information'], locator: 'processes/1/output' },
+        { id: 'claim-clear-capability', path: 'capabilityId', value: null, locator: 'processes/1/capability' },
+        { id: 'claim-set-capability', path: 'capabilityId', value: capability.id, locator: 'processes/1/capability' },
+      ] },
+      { id: 'crm-customer-2', type: 'customer', name: customer.name, claims: [
+        { id: 'claim-duplicate', path: 'detail', value: 'Second source row', locator: 'customers/8/detail' },
+      ] },
+      { id: 'crm-new', type: 'customer', name: 'Unmatched name', claims: [
+        { id: 'claim-new', path: 'name', value: 'Unmatched name', locator: 'customers/9/name' },
+      ] },
+    ] };
+  const before = JSON.stringify(project);
+  const preview = previewEnterpriseSourceEvidence(project, sourceBundle);
+  const processProposal = preview.proposals.find((entry) => entry.identity.sourceRecordId === 'crm-process-1');
+  assert.equal(processProposal.identity.status, 'CANDIDATE');
+  assert.equal(processProposal.identity.provenance.sourceId, 'crm-export');
+  assert.equal(processProposal.identity.provenance.sourceRecordId, 'crm-process-1');
+  assert.equal(processProposal.identity.provenance.sourceLocator, 'crm://customers/export-7');
+  assert.equal(processProposal.identity.provenance.recordLocator, 'crm-process-1');
+  assert.match(processProposal.identity.provenance.sourceHash, /^[a-f0-9]{64}$/);
+  assert.equal(processProposal.claims[0].status, 'PROPOSED');
+  assert.equal(processProposal.claims[0].targetObjectId, process.id);
+  assert.equal(processProposal.claims[0].provenance.sourceId, 'crm-export');
+  assert.equal(processProposal.claims[0].provenance.sourceLocator, 'crm://customers/export-7');
+  assert.equal(processProposal.claims[0].provenance.claimLocator, 'processes/1/trigger');
+  assert.match(processProposal.claims[0].provenance.sourceHash, /^[a-f0-9]{64}$/);
+  assert.equal(processProposal.claims.find((entry) => entry.id === 'claim-info-ref').status, 'PROPOSED');
+  assert.equal(processProposal.claims.find((entry) => entry.id === 'claim-bad-info-ref').status, 'INVALID_REFERENCE');
+  assert.equal(processProposal.claims.find((entry) => entry.id === 'claim-clear-capability').status, 'PROPOSED');
+  assert.equal(processProposal.claims.find((entry) => entry.id === 'claim-clear-capability').expectedValueType, 'capability ID or null');
+  assert.equal(processProposal.claims.find((entry) => entry.id === 'claim-set-capability').status, 'PROPOSED');
+  const collisionRows = preview.proposals.filter((entry) => ['crm-customer-1', 'crm-customer-2'].includes(entry.identity.sourceRecordId));
+  assert.deepEqual(collisionRows.map((entry) => entry.identity.status), ['COLLISION', 'COLLISION']);
+  assert.ok(preview.collisions.every((entry) => entry.code === 'MULTIPLE_SOURCE_RECORDS_MATCH_TARGET'));
+  const firstClaims = collisionRows[0].claims;
+  assert.equal(firstClaims.find((entry) => entry.id === 'claim-customer-name').status, 'PROPOSED');
+  assert.equal(firstClaims.find((entry) => entry.id === 'claim-customer-name').identityResolution, 'COLLISION');
+  assert.equal(firstClaims.find((entry) => entry.id === 'claim-customer-count').status, 'TYPE_MISMATCH');
+  assert.equal(firstClaims.find((entry) => entry.id === 'claim-unknown').status, 'UNKNOWN_FIELD');
+  assert.equal(preview.proposals.find((entry) => entry.identity.sourceRecordId === 'crm-new').identity.status, 'UNMATCHED');
+  assert.deepEqual(preview.meaning, 'UNTRUSTED_EVIDENCE_PROPOSALS_ONLY');
+  assert.equal(preview.previewHash, previewEnterpriseSourceEvidence(project, sourceBundle).previewHash);
+  assert.equal(JSON.stringify(project), before);
+  assert.throws(() => previewEnterpriseSourceEvidence(project, { ...sourceBundle, records: [{ ...sourceBundle.records[0], claims: [{ id: 'claim', path: 'name', value: 'x', unexpected: true }] }] }),
+    { code: 'INVALID_ENTERPRISE_SOURCE_CLAIM', statusCode: 400 });
+});
 
 test('enterprise bundle preview binds source identity, reports known/unknown/loss fields and applies multiple edits as one atomic proposed version', () => {
   const project = completeProject(); const blueprint = latestBlueprint(project);

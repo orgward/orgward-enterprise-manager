@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { enterpriseCommandStorageKey, enterpriseContextFailure, enterpriseContextReadOnly, enterpriseQuery, enterpriseRequestPath, enterpriseSourceAligned, hasEnterpriseContext,
-  persistEnterpriseCommand, renderEnterpriseContext,
-  renderEnterpriseObject, restoreEnterpriseCommand, submitEnterpriseCommand } from '../../public/enterprise.mjs';
+  enterpriseInterchangeDraftStorageKey, persistEnterpriseCommand, persistEnterpriseInterchangeDraft, renderEnterpriseContext,
+  renderEnterpriseObject, restoreEnterpriseCommand, restoreEnterpriseInterchangeDraft, submitEnterpriseCommand } from '../../public/enterprise.mjs';
 import { enterpriseBranchCommandPayload, enterpriseBranchWritable, enterpriseCandidateCurrent, enterpriseCommandResultRoute,
   renderEnterpriseBranches } from '../../public/enterprise-branches.mjs';
 import { enterpriseProcessCommandPayload, enterpriseTypedValue, renderEnterpriseProcess, renderEnterpriseSimulation } from '../../public/enterprise-process.mjs';
@@ -107,7 +107,7 @@ test('enterprise interchange UI binds edits to the visible source and restores a
     assert.equal(enterpriseInterchangeCommandPayload({ ...model, context }, { kind: 'bulk-edit-objects' }), null);
   }
   const rendered = renderEnterpriseInterchange({ projectId: 'project-x', model, el, ui: branchUi, api: async () => ({}), onCommand() {} });
-  assert.match(rendered.textContent, /never run or publish work/);
+  assert.match(rendered.textContent, /never runs or publishes work/);
   assert.equal(rendered.querySelectorAll('button').some((button) => button.text === 'Apply selected edits as one proposed version'), false);
 
   const bundle = { kind: 'orgward-enterprise-blueprint' };
@@ -129,6 +129,78 @@ test('enterprise interchange UI binds edits to the visible source and restores a
   const reason = form.querySelectorAll('textarea')[0]; reason.value = 'Reviewed and corrected';
   form.listeners.get('submit')({ preventDefault() {} });
   assert.deepEqual(called, { kind: 'bulk-edit-objects', bundle, recordIds: ['customer-x'], reason: 'Reviewed and corrected' });
+});
+
+test('source evidence preview shows provenance and candidate identities without an apply action and survives reload', async () => {
+  const currentModel = { permissions: { write: true }, context: { isCurrent: true, blueprintId: 'blueprint-00000000-0000-4000-8000-000000000001',
+    blueprintVersion: 4, effectiveAt: null, recordedAtCutoff: null, proposalId: null, branchId: null }, blueprint: { id: 'visible' } };
+  const bundle = { kind: 'orgward-enterprise-source-evidence', schemaVersion: '1.0', source: { id: 'crm-export', label: 'CRM export' },
+    records: [{ id: 'crm-1', type: 'customer', name: 'Small business', claims: [{ id: 'claim-1', path: 'name', value: 'Updated name' }] }] };
+  const sourcePreview = { mode: 'SOURCE_ONBOARDING_PREVIEW', meaning: 'UNTRUSTED_EVIDENCE_PROPOSALS_ONLY',
+    source: { id: 'crm-export', label: 'CRM export', locator: 'crm://exports/october', snapshotHash: 'a'.repeat(64) },
+    currentSource: { blueprintId: currentModel.context.blueprintId, blueprintVersion: 4, snapshotHash: 'b'.repeat(64) },
+    recordCount: 1, claimCount: 1, previewHash: 'c'.repeat(64), unknowns: [], collisions: [],
+    proposals: [{ identity: { sourceRecordId: 'crm-1', type: 'customer', name: 'Small business', status: 'CANDIDATE', candidateObjectIds: ['customer-1'],
+      provenance: { sourceId: 'crm-export', sourceLabel: 'CRM export', sourceLocator: 'crm://exports/october', recordLocator: 'crm-1', sourceHash: 'a'.repeat(64) } },
+      claims: [{ id: 'claim-1', path: 'name', value: 'Updated name', status: 'PROPOSED', targetObjectId: 'customer-1',
+        provenance: { sourceId: 'crm-export', sourceLocator: 'crm://exports/october', sourceRecordId: 'crm-1', recordLocator: 'crm-1', claimLocator: 'crm-1/name', sourceHash: 'a'.repeat(64) } }] }],
+    limitations: ['Preview does not authenticate the source or verify claim truth.', 'No record is written or published.'] };
+  const draft = { fileName: 'crm.json', bundle, preview: sourcePreview };
+  const rendered = renderEnterpriseInterchange({ projectId: 'project-x', model: currentModel, draft, el, ui: branchUi, api: async () => ({}), onCommand() {} });
+  assert.match(rendered.textContent, /Source evidence preview · proposals only/);
+  assert.match(rendered.textContent, /crm-export\/crm:\/\/exports\/october\/crm-1\/crm-1\/name/);
+  assert.match(rendered.textContent, /Updated name/);
+  assert.match(rendered.textContent, /does not authenticate the source or verify claim truth/);
+  assert.equal(rendered.querySelectorAll('form').some((form) => form.attrs['data-enterprise-action'] === 'bulk-edit-objects'), false);
+  const readerPanel = renderEnterpriseInterchange({ projectId: 'project-x', model: { ...currentModel, permissions: { write: false } },
+    el, ui: branchUi, api: async () => ({}), onCommand() {} });
+  assert.equal(readerPanel.querySelectorAll('button').find((button) => button.text === 'Preview import').disabled, false);
+
+  const storage = storageFixture();
+  persistEnterpriseInterchangeDraft(storage, 'owner', 'project-x', draft);
+  assert.equal(storage.getItem(enterpriseInterchangeDraftStorageKey('reader', 'project-x')), null);
+  assert.deepEqual(restoreEnterpriseInterchangeDraft(storage, 'owner', 'project-x'), { fileName: 'crm.json', bundle, preview: null, recordIds: [], reason: '' });
+  assert.equal(restoreEnterpriseInterchangeDraft(storage, 'owner', 'project-y'), null);
+  const retainedDesignDraft = { fileName: 'design.json', bundle: { kind: 'orgward-enterprise-blueprint', records: [] },
+    recordIds: ['customer-1'], reason: 'Retain reviewer choice.' };
+  persistEnterpriseInterchangeDraft(storage, 'owner', 'project-x', retainedDesignDraft);
+  assert.deepEqual(restoreEnterpriseInterchangeDraft(storage, 'owner', 'project-x'), { ...retainedDesignDraft, preview: null });
+  const malformedSourceDraft = { fileName: 'malformed-source.json', bundle: { kind: 'orgward-enterprise-source-evidence', schemaVersion: '1.0', records: null } };
+  persistEnterpriseInterchangeDraft(storage, 'owner', 'project-x', malformedSourceDraft);
+  assert.deepEqual(restoreEnterpriseInterchangeDraft(storage, 'owner', 'project-x'), { ...malformedSourceDraft, preview: null, recordIds: [], reason: '' });
+  const repairPanel = renderEnterpriseInterchange({ projectId: 'project-x', model: currentModel, draft: malformedSourceDraft, el, ui: branchUi,
+    api: async () => { throw Object.assign(new Error('records must be an array'), { status: 400 }); }, onCommand() {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(repairPanel.textContent, /Retained source JSON needs review/);
+  assert.equal(repairPanel.querySelectorAll('button').some((button) => button.text === 'Download retained source JSON'), true);
+  persistEnterpriseInterchangeDraft(storage, 'owner', 'project-x', draft);
+  const restoredDraft = restoreEnterpriseInterchangeDraft(storage, 'owner', 'project-x');
+  let recoveredDraft = null;
+  const recovered = renderEnterpriseInterchange({ projectId: 'project-x', model: currentModel, draft: restoredDraft, el, ui: branchUi,
+    api: async (_path, options) => { assert.equal(options.method, 'POST'); return { data: sourcePreview }; },
+    onDraftChange(value) { recoveredDraft = value; }, onCommand() {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(recoveredDraft.preview, sourcePreview);
+  assert.match(recovered.textContent, /Source evidence preview · proposals only/);
+  assert.equal(recovered.querySelectorAll('form').length, 0);
+  persistEnterpriseInterchangeDraft(storage, 'owner', 'project-x', null);
+  assert.equal(storage.getItem(enterpriseInterchangeDraftStorageKey('owner', 'project-x')), null);
+
+  let releasePreview;
+  let isCurrent = true;
+  let staleDraftCallback = false;
+  const selected = { id: 'customer-1', type: 'customer', name: 'Small business', detail: 'Canonical customer.' };
+  const objectModel = model({ blueprint: { areas: { customersOfferingsValueEconomics: { items: [selected] } } },
+    selection: { object: selected, states: { basisHash: 'd'.repeat(64) }, visible: true, hiddenBy: [] } });
+  const late = renderEnterpriseObject({ projectId: 'project-x', model: objectModel, object: selected, interchangeDraft: { bundle }, el,
+    api: () => new Promise((resolve) => { releasePreview = resolve; }), isCurrentContext: () => isCurrent,
+    onDraftChange() { staleDraftCallback = true; }, onCommand() {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  isCurrent = false;
+  releasePreview({ data: sourcePreview });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(staleDraftCallback, false);
+  assert.doesNotMatch(late.textContent, /Source evidence preview · proposals only/);
 });
 function storageFixture(values = new Map()) {
   return { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, String(value)),

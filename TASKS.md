@@ -6453,7 +6453,63 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   Next bounded slice: source onboarding through a retained, inspectable import
   preview that extracts typed identity/claim proposals with explicit provenance,
   unknowns and collisions; no source publication or business effect occurs in
-  preview.
+  preview. Integrity checkpoint committed and pushed as `24ae0d9`.
+
+  Source-onboarding preview slice is now implemented in draft and frozen for
+  Sol read-only review. It reuses the project/member-authorized, read-only JSON
+  preview route; binds each preview to the current blueprint ID/version/hash;
+  proposes identity matches by exact canonical type plus normalized name; and
+  classifies claims against canonical editable field names and JSON value types.
+  Every proposal carries the source bundle hash, record ID and source locator;
+  unmatched, ambiguous, repeated-target, unknown-field and type-mismatch cases
+  remain unresolved. The exact source JSON is retained in project/principal-scoped
+  browser recovery storage and can be downloaded for repair after a failed
+  preview. No source registry, design, snapshot, audit or publication write is
+  performed. Added pure, UI/storage and PostgreSQL reader/no-persistence fixtures.
+  Sol's first review found six issues: collision output hid claim classification;
+  retained drafts accepted inconsistent bundle shapes and stale callbacks could
+  cross project/principal boundaries; empty typed reference arrays could be
+  misclassified; source locators were dropped; readers could not start a preview;
+  and malformed source bundles could not survive reload for repair. Repairs now
+  preserve separate identity-collision and claim statuses, type-check array and
+  reference claims against the exact blueprint, retain source/record/claim
+  locators, allow read-only preview, scope async callbacks to their captured
+  project/principal/load generation, retain malformed JSON for download/retry,
+  restore both source and design drafts with selections/reasons, and clear draft
+  recovery storage after successful apply. UI fixtures cover these paths. Syntax
+  and diff checks pass. Sol's re-review also caught a missing forwarding hop for
+  the asynchronous context guard through the selected-object renderer, an extra
+  repeated record ID in a provenance fixture, and nullable scalar reference
+  clears being rejected for already-populated links. These are corrected; the
+  UI fixture now exercises the app-to-object-to-interchange guard path, and the
+  pure fixture covers clearing a populated capability reference. The
+  next review also found null-to-reference assignments for populated-nullable
+  fields and a shadowed view-test model factory; the reference validator now
+  permits either null or an exact typed string for nullable scalar references,
+  with fixtures for both assignment and clear. The fixture uses the shared model
+  factory for its guarded render path. Syntax and diff checks pass; the
+  source/fixtures are frozen for another Sol review; no behavior tests have run.
+  Sol then found that the prior design-import test's local DTO declaration had
+  been renamed instead of the new source-preview test's declaration, and that
+  the shared renderer no longer stated the existing design boundary. The design
+  fixture again uses its local `model` DTO; the source-preview fixture uses
+  `currentModel`, leaving the shared `model({...})` factory available for the
+  guarded object-render path. Shared UI copy now explicitly says proposed-design
+  imports never run or publish work. Syntax and diff checks only; awaiting Sol
+  read-only re-review before behavior tests. Sol identified a final grammatical
+  mismatch between that copy and the prior test regex; the fixture now matches
+  the served wording, and syntax/diff checks were repeated only.
+
+  Sol approved the frozen source-preview slice. The new-only invocation
+  `node ops/run-tests.mjs tests/enterprise/interchange.test.mjs tests/enterprise/view.test.mjs tests/enterprise/server.test.mjs '--test-name-pattern=source onboarding preview proposes typed identities and claims with exact provenance without writes|source evidence preview shows provenance and candidate identities without an apply action and survives reload|source evidence import preview is reader-authorized, exact-source bound and leaves project state untouched'`
+  passed 3/3 (0 failed, cancelled, skipped; runner wall 2.30s; TAP
+  1136.079ms). Case durations: pure proposal 26.053ms, reader-authorized
+  PostgreSQL preview 660.999ms, and UI/reload 30.271ms. Log:
+  `/tmp/orgward-tests-Es7vKj/node-test.tap.log`. No fixture/source corrections
+  were needed after review; `git diff --check` passes. Next bounded PR-13 slice:
+  human-reviewed, provenance-preserving acceptance of selected identity/claim
+  proposals into one atomic proposed snapshot, with stale-source and replay
+  behavior; preview itself remains read-only.
 
 - [ ] PR-14 — Governance and supervised agents (T-76–T-89). Implement versioned
   policy decisions/enforcement, decision rights and appeals, semantic/data

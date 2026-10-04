@@ -94,6 +94,29 @@ export function enterpriseCommandStorageKey(principal, projectId) {
   return `orgward:enterprise-command:${encodeURIComponent(principal ?? '')}:${encodeURIComponent(projectId)}`;
 }
 
+export function enterpriseInterchangeDraftStorageKey(principal, projectId) {
+  return `orgward:enterprise-interchange-draft:${encodeURIComponent(principal ?? '')}:${encodeURIComponent(projectId)}`;
+}
+
+export function persistEnterpriseInterchangeDraft(storage, principal, projectId, draft) {
+  const key = enterpriseInterchangeDraftStorageKey(principal, projectId);
+  if (!draft || !Object.hasOwn(draft, 'bundle')) { storage.removeItem(key); return; }
+  const encoded = JSON.stringify({ projectId, fileName: draft.fileName ?? null, bundle: draft.bundle,
+    recordIds: Array.isArray(draft.recordIds) ? draft.recordIds : [], reason: typeof draft.reason === 'string' ? draft.reason : '' });
+  if (encoded.length > 1_400_000) throw new Error('The retained import draft is too large for browser recovery storage.');
+  storage.setItem(key, encoded);
+}
+
+export function restoreEnterpriseInterchangeDraft(storage, principal, projectId) {
+  const draft = JSON.parse(storage.getItem(enterpriseInterchangeDraftStorageKey(principal, projectId)) ?? 'null');
+  if (!draft) return null;
+  if (draft.projectId !== projectId || !Object.hasOwn(draft, 'bundle')) {
+    throw new Error('Saved import draft is unreadable or belongs to another project.');
+  }
+  return { fileName: draft.fileName, bundle: draft.bundle, preview: null,
+    recordIds: Array.isArray(draft.recordIds) ? draft.recordIds : [], reason: typeof draft.reason === 'string' ? draft.reason : '' };
+}
+
 export function restoreEnterpriseCommand(storage, principal, projectId) {
   const saved = JSON.parse(storage.getItem(enterpriseCommandStorageKey(principal, projectId)) ?? 'null');
   if (!saved) return null;
@@ -297,7 +320,7 @@ export function renderEnterpriseContext({ model, query, loading = false, error =
   return root;
 }
 
-export function renderEnterpriseObject({ projectId = null, model, object, pending = null, loading = false, simulation = null, processDraft = null, economicDraft = null, refinementDraft = null, interchangeDraft = null, selectedSimulationId = null, economicEvaluationId = null, el, api, onCommand, onDraftChange, onInspectDraft, onSimulationSelection, onInspectSimulation, onEconomicEvaluationSelection, onInspectEconomicEvaluation }) {
+export function renderEnterpriseObject({ projectId = null, model, object, pending = null, loading = false, simulation = null, processDraft = null, economicDraft = null, refinementDraft = null, interchangeDraft = null, selectedSimulationId = null, economicEvaluationId = null, el, api, onCommand, onDraftChange, isCurrentContext, onInspectDraft, onSimulationSelection, onInspectSimulation, onEconomicEvaluationSelection, onInspectEconomicEvaluation }) {
   const { field, form } = fields(el);
   const root = el('section', { className: 'enterprise-object', attrs: { 'aria-label': 'Selected object design scope' } });
   const scope = object.enterpriseScope;
@@ -317,7 +340,7 @@ export function renderEnterpriseObject({ projectId = null, model, object, pendin
   const pendingPayload = pending?.envelope?.payload;
   const interchangePanel = renderEnterpriseInterchange({ projectId, model,
     draft: pendingPayload?.kind === 'bulk-edit-objects' ? pendingPayload : interchangeDraft, pending: pendingPayload,
-    loading, el, ui: { field, form }, api, onCommand, onDraftChange });
+    loading, el, ui: { field, form }, api, onCommand, onDraftChange, isCurrentContext });
   if (interchangePanel) root.append(interchangePanel);
   root.append(el('h4', { text: 'Proposed organizational scope' }), el('p', { text: scope ? (assigned ? 'Assigned to a design scope.' : 'Explicitly unscoped.') : 'Organizational scope is unknown; no assignment has been recorded.' }));
   if (assigned) for (const id of Object.values(scope).filter(Boolean)) root.append(el('p', { text: scopes.find((entry) => entry.id === id)?.name ?? id }));

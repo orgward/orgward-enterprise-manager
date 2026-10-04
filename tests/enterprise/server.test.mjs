@@ -1398,6 +1398,51 @@ test('enterprise interchange export, preview and bulk apply enforce source, type
   assert.equal(persisted.data.blueprintVersions.at(-1).edit.sourceHash, bundle.source.snapshotHash);
 });
 
+test('source evidence import preview is reader-authorized, exact-source bound and leaves project state untouched', async (t) => {
+  const postgres = await startPostgres(); let root; let instance;
+  t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-source-evidence-preview-'));
+  instance = await startApp(postgres, root);
+  for (const identity of identities.values()) {
+    await postgres.query(`insert into orgward.oidc_principals
+      (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+    [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  }
+  const project = await seedProject(postgres, 'Source evidence preview fixture');
+  const blueprint = project.blueprintVersions.at(-1);
+  const customer = blueprint.areas.customersOfferingsValueEconomics.items.find((entry) => entry.type === 'customer');
+  const sourceBundle = { kind: 'orgward-enterprise-source-evidence', schemaVersion: '1.0',
+    source: { id: 'crm-export-2026-10', label: 'CRM October export', locator: 'crm://tenant/customers/2026-10' }, records: [
+      { id: 'crm-row-1', type: 'customer', name: customer.name, claims: [
+        { id: 'crm-claim-name', path: 'name', value: 'Potential customer display name', locator: 'row/1/name' },
+        { id: 'crm-claim-state', path: 'externalState', value: 'active', locator: 'row/1/state' },
+      ] },
+      { id: 'crm-row-unmatched', type: 'customer', name: 'Unmatched CRM organization', claims: [] },
+    ] };
+  const before = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  const preview = await request(instance.base, 'reader', `/api/v1/projects/${project.id}/enterprise/import-preview`, {
+    method: 'POST', body: { bundle: sourceBundle },
+  });
+  assert.equal(preview.data.mode, 'SOURCE_ONBOARDING_PREVIEW');
+  assert.equal(preview.data.meaning, 'UNTRUSTED_EVIDENCE_PROPOSALS_ONLY');
+  assert.equal(preview.data.currentSource.blueprintId, blueprint.id);
+  assert.equal(preview.data.currentSource.blueprintVersion, blueprint.version);
+  assert.equal(preview.data.proposals[0].identity.status, 'CANDIDATE');
+  assert.equal(preview.data.proposals[0].claims[0].status, 'PROPOSED');
+  assert.equal(preview.data.proposals[0].claims[0].provenance.sourceLocator, 'crm://tenant/customers/2026-10');
+  assert.equal(preview.data.proposals[0].claims[0].provenance.claimLocator, 'row/1/name');
+  assert.equal(preview.data.proposals[0].claims[0].provenance.sourceHash, preview.data.source.snapshotHash);
+  assert.equal(preview.data.proposals[0].claims[1].status, 'UNKNOWN_FIELD');
+  assert.equal(preview.data.proposals[1].identity.status, 'UNMATCHED');
+  const after = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  assert.equal(after.data.version, before.data.version);
+  assert.equal(after.data.audit.length, before.data.audit.length);
+  assert.deepEqual(after.data.blueprintVersions, before.data.blueprintVersions);
+  await request(instance.base, 'outsider', `/api/v1/projects/${project.id}/enterprise/import-preview`, {
+    method: 'POST', body: { bundle: sourceBundle },
+  }, 404);
+});
+
 test('saved integrity assessments bind exact design source, replay, survive restart and stale on design change', async (t) => {
   const postgres = await startPostgres();
   let root;

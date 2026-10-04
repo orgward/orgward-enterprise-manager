@@ -38,6 +38,7 @@ import { ENTERPRISE_ECONOMIC_KINDS } from './src/enterprise/economics-commands.m
 import { ENTERPRISE_REFINEMENT_KINDS } from './src/enterprise/refinement-commands.mjs';
 import { ENTERPRISE_INTEGRITY_KINDS } from './src/enterprise/integrity.mjs';
 import { createEnterpriseInterchangeBundle, ENTERPRISE_INTERCHANGE_KINDS, previewEnterpriseInterchange } from './src/enterprise/interchange.mjs';
+import { previewEnterpriseSourceEvidence } from './src/enterprise/source-onboarding.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -1577,7 +1578,10 @@ export function createApp({
           principal: requestActor(request), anyPrincipalRoleGroups: [['workspace-read', 'workspace-write', 'tenant-admin']],
           authzGeneration: request.identity.authzGeneration,
           operation(project) {
-            sendApi(response, 200, previewEnterpriseInterchange(project, body.bundle), { correlationId });
+            const preview = body.bundle?.kind === 'orgward-enterprise-source-evidence'
+              ? previewEnterpriseSourceEvidence(project, body.bundle)
+              : previewEnterpriseInterchange(project, body.bundle);
+            sendApi(response, 200, preview, { correlationId });
             return project;
           } });
         if (!found) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
