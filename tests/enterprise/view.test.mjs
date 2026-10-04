@@ -237,6 +237,49 @@ test('portfolio import opens the selected workspace information detail with its 
     'the selected workspace detail visibly contains the saved draft preview');
 });
 
+test('portfolio import round trip previews, applies one reviewed record and persists the saved change', async () => {
+  const projectId = 'portfolio-import-destination';
+  const blueprint = { id: 'blueprint-current', version: 8, areas: { responsibilityAuthority: { items: [
+    { id: 'info-record', type: 'information', name: 'Import target', detail: 'Saved information record.' },
+  ] } } };
+  const fileBundle = { kind: 'orgward-enterprise-blueprint', source: { projectId: 'portfolio-import-source' } };
+  let selectedFile;
+  const portfolio = renderProjectPortfolio([{ id: projectId, name: 'Destination', blueprintVersion: 8, workspaceAccess: 'editor' }], {
+    el, onOpen() {}, onExport() {}, onImport: async (id, file) => { selectedFile = { id, ...(await readPortfolioImportFile(file)) }; },
+  });
+  const importInput = portfolio.querySelectorAll('input').find((input) => input.attrs.type === 'file');
+  importInput.files = [{ name: 'proposed-design.json', size: 1, text: async () => JSON.stringify(fileBundle) }];
+  importInput.listeners.get('change')();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(selectedFile.id, projectId, 'the portfolio stages the file against the chosen workspace');
+  const route = portfolioImportWorkspaceRoute(blueprint);
+  assert.deepEqual(route, { view: 'map', selectedId: 'info-record' });
+  const model = { context: { isCurrent: true, blueprintId: blueprint.id, blueprintVersion: blueprint.version }, blueprint,
+    permissions: { write: true }, scopes: [], graph: { nodes: [] }, selection: null };
+  const preview = { source: { projectId: 'portfolio-import-source', blueprintId: 'blueprint-source', blueprintVersion: 2, snapshotHash: 'a'.repeat(64) },
+    currentSource: { blueprintId: blueprint.id, blueprintVersion: blueprint.version, snapshotHash: 'b'.repeat(64) }, recordCount: 2,
+    recognizedFields: 2, readyRecordIds: ['imported-customer', 'imported-information'], previewHash: 'c'.repeat(64),
+    unknownFields: [], lossyFields: [], collisions: [], validationErrors: [], rows: [
+      { id: 'imported-customer', type: 'customer', status: 'READY', changedFields: ['name'], recognizedFields: ['name'] },
+      { id: 'imported-information', type: 'information', status: 'READY', changedFields: ['name'], recognizedFields: ['name'] },
+    ] };
+  let requestedPath; let applied;
+  const selectedObject = blueprint.areas.responsibilityAuthority.items[0];
+  const detail = renderEnterpriseObject({ projectId, model, object: selectedObject, interchangeDraft: selectedFile, el, ui: branchUi,
+    api: async (path) => { requestedPath = path; return { data: preview }; }, onCommand: (command) => { applied = command; } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(requestedPath, `/api/v1/projects/${projectId}/enterprise/import-preview`);
+  assert.match(detail.textContent, /Current destination: blueprint blueprint-current v8/);
+  const applyForm = detail.querySelectorAll('form').find((form) => form.attrs['data-enterprise-action'] === 'bulk-edit-objects');
+  assert.ok(applyForm, 'the current-source review exposes the deliberate apply action');
+  const checkboxes = applyForm.querySelectorAll('input');
+  for (const checkbox of checkboxes) checkbox.checked = checkbox.attrs.value === 'imported-information';
+  applyForm.querySelectorAll('textarea')[0].value = 'Reviewed portfolio import for the destination workspace.';
+  applyForm.listeners.get('submit')({ preventDefault() {} });
+  assert.deepEqual(applied, { kind: 'bulk-edit-objects', bundle: fileBundle, recordIds: ['imported-information'],
+    reason: 'Reviewed portfolio import for the destination workspace.' });
+});
+
 test('portfolio design export downloads the authenticated saved blueprint pin', async () => {
   const baseline = { id: 'blueprint-00000000-0000-4000-8000-000000000001', version: 7, areas: { items: [{ id: 'item-z', type: 'goal' }, { id: 'item-a', type: 'process' }] } };
   const bundle = { kind: 'orgward-enterprise-blueprint', schemaVersion: '1.0',

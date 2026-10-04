@@ -7365,6 +7365,20 @@ did not select the newly added route/detail case; it was run separately and
 passed 1/1 (runner 0.26s; `/tmp/orgward-tests-C3ZrH0/node-test.tap.log`). No full
 check run. PR-15 remains open and active.
 
+PR-15 portfolio import round trip (2026-10-04): UI acceptance now stages a
+bounded JSON file from the selected portfolio card, routes to that workspace's
+information detail, verifies the current-source preview request and applies
+only the deliberately selected ready record with a review reason. PostgreSQL
+acceptance exports a saved blueprint, edits one customer record, previews it as
+the workspace editor, applies just that record and confirms the imported name,
+new blueprint version, and source pin after app restart and workspace reread.
+The first focused attempt failed to load the view test file because of a fixture
+syntax error; this was corrected before rerunning. The requested focused
+selection then passed 4/4 (0 failures, 0 skips; 3.28s; TAP log:
+`/tmp/orgward-tests-gbIvqZ/node-test.tap.log`). `node --check` passed for
+`tests/enterprise/view.test.mjs` and `tests/enterprise/server.test.mjs`, and
+`git diff --check` passed. No full check run; PR-15 remains open and active.
+
 PR-15 restore draft from a saved design version (2026-10-04): when an owner or
 editor selects a historical saved main version, the branch panel offers an
 explicit “Restore this saved version as a draft” action. The draft copies the

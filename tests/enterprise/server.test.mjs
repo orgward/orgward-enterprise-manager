@@ -1578,6 +1578,47 @@ test('enterprise interchange export, preview and bulk apply enforce source, type
   assert.equal(persisted.data.blueprintVersions.at(-1).edit.sourceHash, bundle.source.snapshotHash);
 });
 
+test('portfolio import round trip previews, applies one reviewed record and persists the saved change after restart', async (t) => {
+  const postgres = await startPostgres(); let root; let instance;
+  t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-portfolio-import-round-trip-'));
+  instance = await startApp(postgres, root);
+  for (const identity of identities.values()) await postgres.query(`insert into orgward.oidc_principals
+    (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+  [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  const project = await seedProject(postgres, 'Portfolio import destination');
+  const portfolio = await request(instance.base, 'editor', '/api/v1/projects');
+  assert.equal(portfolio.data.find((entry) => entry.id === project.id)?.workspaceAccess, 'editor',
+    'the importer is a member opening the destination from the authenticated portfolio');
+  const initialView = await currentView(instance.base, 'editor', project.id, { lensId: 'all' });
+  const bundle = (await request(instance.base, 'owner', `/api/v1/projects/${project.id}/enterprise/export`)).data;
+  const customerRecord = bundle.records.find((record) => record.type === 'customer');
+  assert.ok(customerRecord);
+  const importedName = `${customerRecord.fields.name} (reviewed portfolio import)`;
+  customerRecord.fields.name = importedName;
+  const preview = await request(instance.base, 'editor', `/api/v1/projects/${project.id}/enterprise/import-preview`, {
+    method: 'POST', body: { bundle },
+  });
+  assert.equal(preview.data.currentSource.blueprintId, initialView.data.context.blueprintId);
+  assert.equal(preview.data.currentSource.blueprintVersion, initialView.data.context.blueprintVersion);
+  assert.equal(preview.data.rows.find((row) => row.id === customerRecord.id).status, 'READY');
+  assert.ok(preview.data.readyRecordIds.includes(customerRecord.id));
+  const applied = await postCommand(instance.base, 'editor', project.id, commandBody(initialView, 'portfolio-import-round-trip-apply', {
+    kind: 'bulk-edit-objects', bundle, recordIds: [customerRecord.id], reason: 'Reviewed the portfolio import preview and selected this customer record.',
+  }));
+  assert.deepEqual(applied.data.importedRecordIds, [customerRecord.id]);
+  assert.equal(applied.data.blueprintVersion, initialView.data.context.blueprintVersion + 1);
+  assert.equal(applied.event.type, 'EnterpriseDesignChanged');
+
+  await closeApp(instance); instance = await startApp(postgres, root);
+  const reloadedView = await currentView(instance.base, 'editor', project.id, { lensId: 'all', selectedId: customerRecord.id });
+  const savedCustomer = items(reloadedView.data.blueprint).find((item) => item.id === customerRecord.id);
+  assert.equal(savedCustomer.name, importedName, 'the selected import survives app restart and project reread');
+  assert.equal(reloadedView.data.context.blueprintVersion, applied.data.blueprintVersion);
+  assert.equal(reloadedView.data.blueprint.edit.sourceHash, bundle.source.snapshotHash);
+  assert.deepEqual(reloadedView.data.blueprint.edit.importedRecordIds, [customerRecord.id]);
+});
+
 test('source evidence import preview is reader-authorized, exact-source bound and leaves project state untouched', async (t) => {
   const postgres = await startPostgres(); let root; let instance;
   t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });
