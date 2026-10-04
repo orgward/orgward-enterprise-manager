@@ -44,9 +44,9 @@ effects, durable audit and operational actions needed by that path. PR-11 and
 PR-19 remain pending in the separate future backlog. No P/E release gate is
 closed by this queue; active section order follows the functionality work order.
 
-Active cursor: PR-14. The active checkboxes below are the source of truth;
+Active cursor: PR-15. The active checkboxes below are the source of truth;
 `npm run task:next` checks that this cursor matches their first open PR in section
-order. PR-01 through PR-10 and PR-12–PR-13 are functionally complete, and PR-14 is next. A stale PR
+order. PR-01 through PR-10 and PR-12–PR-14 are functionally complete, and PR-15 is next. A stale PR
 number in a saved goal, dated receipt or older document does not reset the queue.
 Read this header and the active PR outcome at the line printed by
 `npm run task:next`; search receipts only for a concrete dependency.
