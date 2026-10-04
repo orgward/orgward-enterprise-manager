@@ -99,11 +99,18 @@ export function renderEnterpriseBranches({ model, query, loading = false, pendin
   const transportDisabled = loading || Boolean(pending);
   if (!branch) {
     if (model.blueprint) {
-      const title = field('title', 'Branch title', { maximum: 160 });
-      const reason = field('reason', 'Reason for creating this draft branch', { multiline: true, maximum: 500 });
+      const latestVersion = Math.max(0, ...(model.versions ?? []).map((entry) => entry.version));
+      const restoreDraft = !model.context.proposalId && !model.context.branchId
+        && model.context.effectiveAt == null && model.context.recordedAtCutoff == null
+        && Number.isSafeInteger(model.context.blueprintVersion) && model.context.blueprintVersion < latestVersion;
+      const title = field('title', restoreDraft ? 'Restore draft title' : 'Branch title', { maximum: 160 });
+      const reason = field('reason', restoreDraft ? 'Reason for restoring this saved version as a draft' : 'Reason for creating this draft branch', { multiline: true, maximum: 500 });
       const source = model.context.proposalId ? `future draft “${model.proposal?.title ?? 'selected draft'}”` : `saved main version ${model.context.blueprintVersion}`;
-      root.append(el('details', {}, [el('summary', { text: 'Create a draft branch from this exact snapshot' }), el('p', { text: `Saved source: ${source}. Dates remain proposed and never activate a draft automatically.` }),
-        form('create-branch', 'Create design branch', [title.node, reason.node], () => onCommand({ kind: 'create-branch', title: title.control.value.trim(), reason: reason.control.value.trim() }), transportDisabled || !model.permissions?.branchCreate),
+      root.append(el('details', {}, [el('summary', { text: restoreDraft ? `Restore this saved version as a draft` : 'Create a draft branch from this exact snapshot' }),
+        el('p', { text: restoreDraft
+          ? `The draft will copy ${source} exactly. Current main remains unchanged until the normal merge review is completed.`
+          : `Saved source: ${source}. Dates remain proposed and never activate a draft automatically.` }),
+        form('create-branch', restoreDraft ? `Create restore draft from version ${model.context.blueprintVersion}` : 'Create design branch', [title.node, reason.node], () => onCommand({ kind: 'create-branch', title: title.control.value.trim(), reason: reason.control.value.trim() }), transportDisabled || !model.permissions?.branchCreate),
       ]));
     }
     return root;

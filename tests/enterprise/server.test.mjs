@@ -2033,6 +2033,22 @@ test('enterprise branches merge exact typed changes only after a current owner r
     branchCommandBody(view, 'reader-cannot-create-branch', { kind: 'create-branch', title: 'Denied branch', reason: 'Read-only identity.' }), 403);
   assert.equal(readerCreate.error.code, 'ACTION_FORBIDDEN');
 
+  const mainVersionBeforeRestoreDraft = view.data.context.blueprintVersion;
+  const historicalVersion = Math.min(...view.data.versions.map((entry) => entry.version));
+  assert.ok(historicalVersion < mainVersionBeforeRestoreDraft, 'fixture has an earlier saved main snapshot');
+  const historicalView = await currentView(instance.base, 'owner', project.id,
+    { blueprintVersion: historicalVersion, selectedId: 'process-deliver' });
+  assert.equal(historicalView.data.context.blueprintVersion, historicalVersion);
+  const restoreDraft = await postCommand(instance.base, 'editor', project.id,
+    branchCommandBody(historicalView, 'create-restore-draft-from-version-one', { kind: 'create-branch',
+      title: `Restore draft from version ${historicalVersion}`, reason: 'Recover this saved design for a reviewed proposal.' }));
+  const restoredBranch = await currentView(instance.base, 'owner', project.id, { branchId: restoreDraft.data.branchId });
+  assert.equal(restoredBranch.data.branch.baseBlueprintVersion, historicalVersion);
+  assert.equal(restoredBranch.data.branch.baseSnapshotHash, digest(historicalView.data.blueprint));
+  view = await readMain();
+  assert.equal(view.data.context.blueprintVersion, mainVersionBeforeRestoreDraft,
+    'creating a restore draft leaves the current main blueprint unchanged');
+
   const initialBlueprint = view.data.blueprint;
   const baseProcess = items(initialBlueprint).find((entry) => entry.id === 'process-deliver');
   const role = items(initialBlueprint).find((entry) => entry.id === baseProcess.owner);

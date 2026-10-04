@@ -475,6 +475,35 @@ test('branch context route and command helpers retain exact draft revision, sour
   assert.deepEqual(calls, [[`/api/v1/projects/${projectId}/enterprise/commands`, { method: 'POST', body: JSON.stringify(saved.envelope) }]]);
 });
 
+test('historical blueprint can create an isolated restore draft from its exact saved version', () => {
+  const historical = { blueprintId: 'blueprint-00000000-0000-4000-8000-000000000011', blueprintVersion: 2,
+    projectVersion: 9, branchId: null, proposalId: null, effectiveAt: null, recordedAtCutoff: null, isCurrent: false };
+  const model = { context: historical, blueprint: { id: historical.blueprintId, version: historical.blueprintVersion },
+    versions: [{ version: 1 }, { version: 2 }, { version: 3 }], permissions: { branchCreate: true } };
+  let command;
+  const root = renderEnterpriseBranches({ model, query: { blueprintVersion: 2 }, el, ui: branchUi,
+    onContext() {}, onCommand: (value) => { command = value; }, utcTime: (value) => value || null });
+  assert.match(root.textContent, /Restore this saved version as a draft/);
+  assert.match(root.textContent, /Current main remains unchanged until the normal merge review is completed/);
+  const form = root.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === 'create-branch');
+  assert.ok(form);
+  assert.match(form.attrs['aria-label'], /version 2/);
+  const controls = form.querySelectorAll('input,textarea');
+  controls[0].value = 'Restore from version two';
+  controls[1].value = 'Recover the earlier customer-approved structure for review.';
+  form.listeners.get('submit')({ preventDefault() {} });
+  assert.deepEqual(enterpriseBranchCommandPayload(model, command), {
+    kind: 'create-branch', title: 'Restore from version two', reason: 'Recover the earlier customer-approved structure for review.',
+    blueprintId: historical.blueprintId, blueprintVersion: 2, proposalId: null,
+  });
+  const currentModel = { ...model, context: { ...historical, blueprintVersion: 3, blueprintId: 'blueprint-00000000-0000-4000-8000-000000000012', isCurrent: true },
+    blueprint: { id: 'blueprint-00000000-0000-4000-8000-000000000012', version: 3 } };
+  const ordinary = renderEnterpriseBranches({ model: currentModel, query: {}, el, ui: branchUi,
+    onContext() {}, onCommand() {}, utcTime: (value) => value || null });
+  assert.doesNotMatch(ordinary.textContent, /Restore this saved version as a draft/,
+    'the latest main version keeps its ordinary branch action');
+});
+
 test('branch review UI compares main and draft fields and keeps unresolved choices explicit', () => {
   const branchId = 'enterprise-branch-00000000-0000-4000-8000-000000000002';
   const mainId = 'blueprint-00000000-0000-4000-8000-000000000003';

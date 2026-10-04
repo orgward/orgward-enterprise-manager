@@ -7307,3 +7307,18 @@ Focused verification: the recorded portfolio command passed 3/3 (0 failures,
 did not select the newly added route/detail case; it was run separately and
 passed 1/1 (runner 0.26s; `/tmp/orgward-tests-C3ZrH0/node-test.tap.log`). No full
 check run. PR-15 remains open and active.
+
+PR-15 restore draft from a saved design version (2026-10-04): when an owner or
+editor selects a historical saved main version, the branch panel offers an
+explicit “Restore this saved version as a draft” action. The draft copies the
+exact selected blueprint ID/version/hash and keeps current main unchanged until
+the existing merge review. Current-main, proposal, branch and temporal views do
+not display restore wording. UI fixture verifies the exact source command and
+that latest main keeps its regular branch action. PostgreSQL fixture creates a
+restore draft from the oldest saved version, verifies its persisted base pin and
+hash, and confirms current main stays at its existing version. Focused verification after Sol review passed 2/2 (0 failures, 0 skips;
+PostgreSQL branch merge 10.79s, historical restore draft UI 9.47ms; TAP
+11.20s, runner 12.32s; `/tmp/orgward-tests-BM5c7k/node-test.tap.log`). No full
+check run. Proposed focused command:
+`npm test -- tests/enterprise/view.test.mjs tests/enterprise/server.test.mjs --test-name-pattern='historical blueprint can create an isolated restore draft from its exact saved version|enterprise branches merge exact typed changes only after a current owner review'`.
+PR-15 remains open and active.
