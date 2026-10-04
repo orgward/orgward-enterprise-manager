@@ -7541,6 +7541,20 @@ log: `/tmp/orgward-tests-tSsNH4/node-test.tap.log`). `node --check` passed for
 `tests/enterprise/view.test.mjs`; `git diff --check` passed. No full check run;
 PR-15 remains open and active.
 
+PR-15 portfolio sort by name or saved time (2026-10-04): an accessible sort
+control orders the current name/access-filtered workspace set by A–Z name or
+most recently saved time; the default retains portfolio order. Existing card
+IDs and actions remain attached to their original workspace objects. Sort state
+travels with the current page-session portfolio filters when opening a workspace
+and returning. Clear workspace filters and sorting is available whenever a
+search, access filter or nondefault sort is active, and resets all three to the
+default list order. Focused sorting/filter-return/card UI cases passed 4/4 (0
+failures, 0 skips; 1.55s; TAP log:
+`/tmp/orgward-tests-1kCbCs/node-test.tap.log`). `node --check` passed for
+`public/app.js`, `public/project-portfolio.mjs`, and
+`tests/enterprise/view.test.mjs`; `git diff --check` passed. No full check run;
+PR-15 remains open and active.
+
 PR-15 restore draft from a saved design version (2026-10-04): when an owner or
 editor selects a historical saved main version, the branch panel offers an
 explicit “Restore this saved version as a draft” action. The draft copies the

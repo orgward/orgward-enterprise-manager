@@ -365,7 +365,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .portfolio-count, .portfolio-access, .portfolio-phase { border: 1px solid var(--border, #363b32); border-radius: 999px; padding: .35rem .65rem; }
 .portfolio-count { margin: .75rem 0 1rem; max-width: 100%; overflow-wrap: anywhere; }
 .portfolio-access, .portfolio-phase { white-space: nowrap; }
-.portfolio-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; margin-top: 1rem; min-width: 0; }
+.portfolio-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: .75rem; margin-top: 1rem; min-width: 0; }
 .portfolio-filters label { display: grid; gap: .35rem; min-width: 0; }
 .portfolio-filters input, .portfolio-filters select { box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; }
 .portfolio-clear-filters { grid-column: 1 / -1; justify-self: start; }

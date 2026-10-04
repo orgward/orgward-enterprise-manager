@@ -313,7 +313,7 @@ test('portfolio search and access filter find the matching workspace and preserv
   assert.deepEqual(Array.from(portfolio.querySelectorAll('[data-project-id]'), (card) => card.attrs['data-project-id']), ['project-harbor']);
   access.value = 'owner'; access.listeners.get('change')();
   assert.match(portfolio.textContent, /No workspaces match these filters/);
-  const clear = portfolio.querySelectorAll('button').find((button) => button.text === 'Clear workspace filters');
+  const clear = portfolio.querySelectorAll('button').find((button) => button.text === 'Clear workspace filters and sorting');
   assert.ok(clear);
   clear.listeners.get('click')();
   assert.equal(search.value, '');
@@ -341,11 +341,11 @@ test('portfolio search and access filter find the matching workspace and preserv
 
 test('portfolio filters are restored after opening a workspace and returning', () => {
   const projects = [
-    { id: 'workspace-north', name: 'Northstar', workspaceAccess: 'editor', blueprintVersion: 2 },
-    { id: 'workspace-harbor', name: 'Harbor', workspaceAccess: 'reader', blueprintVersion: 1 },
-    { id: 'workspace-north-owner', name: 'North Annex', workspaceAccess: 'owner', blueprintVersion: 3 },
+    { id: 'workspace-north', name: 'Northstar', workspaceAccess: 'editor', blueprintVersion: 2, updatedAt: '2026-10-02T12:00:00Z' },
+    { id: 'workspace-harbor', name: 'Harbor', workspaceAccess: 'reader', blueprintVersion: 1, updatedAt: '2026-10-03T12:00:00Z' },
+    { id: 'workspace-north-owner', name: 'North Annex', workspaceAccess: 'owner', blueprintVersion: 3, updatedAt: '2026-10-04T12:00:00Z' },
   ];
-  let filterState = { search: '', access: 'all' };
+  let filterState = { search: '', access: 'all', sort: 'default' };
   const opened = [];
   const mountPortfolio = () => renderProjectPortfolio(projects, { el, filters: filterState,
     onFiltersChange: (next) => { filterState = next; }, onOpen: (id) => opened.push(id), onExport() {}, onImport() {},
@@ -354,9 +354,11 @@ test('portfolio filters are restored after opening a workspace and returning', (
   const portfolio = mountPortfolio();
   const search = portfolio.querySelectorAll('input').find((input) => input.attrs.type === 'search');
   const access = portfolio.querySelectorAll('select').find((select) => select.attrs.name === 'workspace-access');
+  const sort = portfolio.querySelectorAll('select').find((select) => select.attrs.name === 'workspace-sort');
   search.value = 'North'; search.listeners.get('input')();
   access.value = 'editor'; access.listeners.get('change')();
-  assert.deepEqual(filterState, { search: 'North', access: 'editor' });
+  sort.value = 'recent'; sort.listeners.get('change')();
+  assert.deepEqual(filterState, { search: 'North', access: 'editor', sort: 'recent' });
   const matchingCard = portfolio.querySelectorAll('[data-project-id]')[0];
   assert.equal(matchingCard.attrs['data-project-id'], 'workspace-north');
   matchingCard.querySelectorAll('button').find((button) => button.text === 'Open workspace').listeners.get('click')();
@@ -365,13 +367,51 @@ test('portfolio filters are restored after opening a workspace and returning', (
   const returned = mountPortfolio();
   assert.equal(returned.querySelectorAll('input').find((input) => input.attrs.type === 'search').value, 'North');
   assert.equal(returned.querySelectorAll('select').find((select) => select.attrs.name === 'workspace-access').value, 'editor');
+  assert.equal(returned.querySelectorAll('select').find((select) => select.attrs.name === 'workspace-sort').value, 'recent');
   assert.deepEqual(Array.from(returned.querySelectorAll('[data-project-id]'), (card) => card.attrs['data-project-id']), ['workspace-north']);
-  const clear = returned.querySelectorAll('button').find((button) => button.text === 'Clear workspace filters');
+  const clear = returned.querySelectorAll('button').find((button) => button.text === 'Clear workspace filters and sorting');
   assert.equal(clear.hidden, false, 'a matching filtered list still offers explicit filter reset');
   clear.listeners.get('click')();
-  assert.deepEqual(filterState, { search: '', access: 'all' });
+  assert.deepEqual(filterState, { search: '', access: 'all', sort: 'default' });
   const cleared = mountPortfolio();
   assert.equal(cleared.querySelectorAll('[data-project-id]').length, 3);
+  assert.equal(cleared.querySelectorAll('select').find((select) => select.attrs.name === 'workspace-sort').value, 'default');
+});
+
+test('portfolio sort orders filtered workspaces by name or most recent save without changing card actions', () => {
+  const projects = [
+    { id: 'workspace-zulu', name: 'Zulu', workspaceAccess: 'editor', updatedAt: '2026-10-04T12:00:00Z', blueprintVersion: 1, openIncidentCount: 1 },
+    { id: 'workspace-alpha', name: 'Alpha', workspaceAccess: 'editor', updatedAt: '2026-10-01T12:00:00Z', blueprintVersion: 2 },
+    { id: 'workspace-beta', name: 'Beta', workspaceAccess: 'reader', updatedAt: '2026-10-03T12:00:00Z', blueprintVersion: 3 },
+  ];
+  const opened = []; const exported = []; const imported = [];
+  const portfolio = renderProjectPortfolio(projects, { el, filters: { search: '', access: 'all', sort: 'name-asc' },
+    onFiltersChange() {}, onOpen: (id, options) => opened.push({ id, options }),
+    onExport: (id) => exported.push(id), onImport: (id, file) => imported.push([id, file.name]),
+  });
+  const sort = portfolio.querySelectorAll('select').find((select) => select.attrs.name === 'workspace-sort');
+  assert.equal(sort.attrs['aria-label'], 'Sort workspaces');
+  assert.deepEqual(Array.from(portfolio.querySelectorAll('[data-project-id]'), (card) => card.attrs['data-project-id']),
+    ['workspace-alpha', 'workspace-beta', 'workspace-zulu']);
+
+  const access = portfolio.querySelectorAll('select').find((select) => select.attrs.name === 'workspace-access');
+  access.value = 'editor'; access.listeners.get('change')();
+  assert.deepEqual(Array.from(portfolio.querySelectorAll('[data-project-id]'), (card) => card.attrs['data-project-id']),
+    ['workspace-alpha', 'workspace-zulu'], 'sort order is applied after access filtering');
+  sort.value = 'recent'; sort.listeners.get('change')();
+  const cards = portfolio.querySelectorAll('[data-project-id]');
+  assert.deepEqual(Array.from(cards, (card) => card.attrs['data-project-id']), ['workspace-zulu', 'workspace-alpha'],
+    'recent sorting is applied to the filtered records');
+  const zulu = cards[0];
+  zulu.querySelectorAll('button').find((button) => button.text === 'Open workspace').listeners.get('click')();
+  zulu.querySelectorAll('button').find((button) => button.text === 'Review incidents (1)').listeners.get('click')();
+  zulu.querySelectorAll('button').find((button) => button.text === 'Export proposed design JSON').listeners.get('click')();
+  const importFile = zulu.querySelectorAll('input').find((input) => input.attrs.type === 'file');
+  importFile.files = [{ name: 'sorted.json' }]; importFile.listeners.get('change')();
+  assert.deepEqual(opened, [{ id: 'workspace-zulu', options: undefined },
+    { id: 'workspace-zulu', options: { focusOutcomes: true, focusOutcomeCategory: 'incident' } }]);
+  assert.deepEqual(exported, ['workspace-zulu']);
+  assert.deepEqual(imported, [['workspace-zulu', 'sorted.json']]);
 });
 
 test('portfolio filter feedback is announced and its layout adapts to narrow screens', () => {

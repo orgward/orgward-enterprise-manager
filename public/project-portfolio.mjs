@@ -112,11 +112,16 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
     ['all', 'All access levels'], ['owner', 'Owner access'], ['editor', 'Editor access'], ['reader', 'Reader access'],
   ].map(([value, label]) => el('option', { text: label, attrs: { value } })));
   access.value = ['owner', 'editor', 'reader'].includes(savedFilters.access) ? savedFilters.access : 'all';
-  const clearFilters = el('button', { className: 'button ghost portfolio-clear-filters', text: 'Clear workspace filters', attrs: { type: 'button' } });
+  const sort = el('select', { attrs: { name: 'workspace-sort', 'aria-label': 'Sort workspaces' } }, [
+    ['default', 'Portfolio order'], ['name-asc', 'Name, A to Z'], ['recent', 'Most recently saved'],
+  ].map(([value, label]) => el('option', { text: label, attrs: { value } })));
+  sort.value = ['name-asc', 'recent'].includes(savedFilters.sort) ? savedFilters.sort : 'default';
+  const clearFilters = el('button', { className: 'button ghost portfolio-clear-filters', text: 'Clear workspace filters and sorting', attrs: { type: 'button' } });
   clearFilters.hidden = true;
   const filters = el('div', { className: 'portfolio-filters' }, [
     el('label', { text: 'Search workspaces by name' }, [search]),
     el('label', { text: 'Filter by access' }, [access]),
+    el('label', { text: 'Sort workspaces' }, [sort]),
     clearFilters,
   ]);
   headingContent.append(filters, count);
@@ -125,22 +130,34 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
   const renderCards = () => {
     list.replaceChildren();
     const term = search.value.trim().toLocaleLowerCase();
-    clearFilters.hidden = !term && access.value === 'all';
+    clearFilters.hidden = !term && access.value === 'all' && sort.value === 'default';
     const filtered = projects.filter((project) => {
       const matchesName = !term || projectPortfolioFacts(project).name.toLocaleLowerCase().includes(term);
       const matchesAccess = access.value === 'all' || project.workspaceAccess === access.value;
       return matchesName && matchesAccess;
     });
+    const ordered = [...filtered];
+    if (sort.value === 'name-asc') {
+      ordered.sort((left, right) => projectPortfolioFacts(left).name.localeCompare(projectPortfolioFacts(right).name, undefined, { sensitivity: 'base' }));
+    } else if (sort.value === 'recent') {
+      ordered.sort((left, right) => {
+        const leftSaved = Date.parse(left.updatedAt);
+        const rightSaved = Date.parse(right.updatedAt);
+        const leftTime = Number.isFinite(leftSaved) ? leftSaved : Number.NEGATIVE_INFINITY;
+        const rightTime = Number.isFinite(rightSaved) ? rightSaved : Number.NEGATIVE_INFINITY;
+        return rightTime - leftTime;
+      });
+    }
     const countText = filtered.length === projects.length
       ? `${projects.length} ${projects.length === 1 ? 'workspace' : 'workspaces'}`
       : `Showing ${filtered.length} of ${projects.length} workspaces`;
     count.textContent = !filtered.length && projects.length
-      ? `${countText}. No workspaces match these filters. Adjust the search or access level, or clear filters.`
+      ? `${countText}. No workspaces match these filters. Adjust the search or access level, or clear filters and sorting.`
       : !projects.length ? '0 workspaces. No workspaces are available to your account yet.' : countText;
     if (!filtered.length) {
       return;
     }
-    for (const project of filtered) {
+    for (const project of ordered) {
       const facts = projectPortfolioFacts(project);
       const card = el('article', { className: 'portfolio-card', attrs: { role: 'listitem', 'data-project-id': project.id } });
       card.append(el('div', { className: 'portfolio-card-heading' }, [
@@ -198,11 +215,12 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
       list.append(card);
     }
   };
-  const reportFilterChange = () => onFiltersChange({ search: search.value, access: access.value });
+  const reportFilterChange = () => onFiltersChange({ search: search.value, access: access.value, sort: sort.value });
   search.addEventListener('input', () => { reportFilterChange(); renderCards(); });
   access.addEventListener('change', () => { reportFilterChange(); renderCards(); });
+  sort.addEventListener('change', () => { reportFilterChange(); renderCards(); });
   clearFilters.addEventListener('click', () => {
-    search.value = ''; access.value = 'all'; reportFilterChange(); renderCards(); search.focus?.();
+    search.value = ''; access.value = 'all'; sort.value = 'default'; reportFilterChange(); renderCards(); search.focus?.();
   });
   renderCards();
   section.append(list);

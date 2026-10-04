@@ -13,7 +13,7 @@ import { downloadPortfolioDesign, portfolioImportWorkspaceRoute, readPortfolioIm
 
 const state = {
   projects: [],
-  portfolioFilters: { search: '', access: 'all' },
+  portfolioFilters: { search: '', access: 'all', sort: 'default' },
   portfolioRefreshPromise: null,
   project: null,
   view: 'blueprint',
