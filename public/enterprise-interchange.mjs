@@ -1,10 +1,12 @@
-export const ENTERPRISE_INTERCHANGE_COMMANDS = ['bulk-edit-objects'];
+export const ENTERPRISE_INTERCHANGE_COMMANDS = ['bulk-edit-objects', 'accept-source-evidence'];
 export function enterpriseInterchangeWritable(model) {
   return Boolean(model?.permissions?.write && model.context?.isCurrent === true && model.blueprint
     && model.context?.effectiveAt == null && model.context?.recordedAtCutoff == null && !model.context?.proposalId && !model.context?.branchId);
 }
 export function enterpriseInterchangeCommandPayload(model, payload) {
-  if (!enterpriseInterchangeWritable(model) || payload?.kind !== 'bulk-edit-objects') return null;
+  if (!enterpriseInterchangeWritable(model) || !ENTERPRISE_INTERCHANGE_COMMANDS.includes(payload?.kind)) return null;
+  if (payload.kind === 'accept-source-evidence' && (!/^[a-f0-9]{64}$/.test(payload.blueprintHash ?? '')
+    || !/^[a-f0-9]{64}$/.test(payload.previewHash ?? '') || !Array.isArray(payload.selections) || !payload.selections.length)) return null;
   return { ...payload, blueprintId: model.context.blueprintId, blueprintVersion: model.context.blueprintVersion };
 }
 
@@ -77,6 +79,65 @@ export function renderEnterpriseInterchange({ projectId, model, draft = null, pe
         fieldSummary('Unknown or unresolved identity/claim data', preview.unknowns, el),
         fieldSummary('Identity collisions', preview.collisions, el));
       for (const limitation of preview.limitations) previewRegion.append(el('p', { text: limitation }));
+      if (!writable) {
+        if (pending?.kind === 'accept-source-evidence') previewRegion.append(el('p', { attrs: { role: 'status' },
+          text: `Acceptance command is pending exact recovery: ${pending.selections.map((selection) => `${selection.sourceRecordId} → ${selection.targetObjectId} (${selection.claimIds.join(', ')})`).join('; ')} · preview ${pending.previewHash}.` }));
+        return;
+      }
+      const savedSelections = new Map((value.sourceSelections ?? []).map((entry) => [entry.sourceRecordId, entry]));
+      const canonicalObjects = Object.values(model.blueprint.areas ?? {}).flatMap((area) => area.items ?? []);
+      const acceptance = el('fieldset'); acceptance.append(el('legend', { text: 'Review and accept selected claims into one proposed version' }));
+      const proposalControls = [];
+      for (const proposal of preview.proposals) {
+        const identity = proposal.identity;
+        const choices = identity.candidateObjectIds.length
+          ? canonicalObjects.filter((object) => identity.candidateObjectIds.includes(object.id))
+          : canonicalObjects.filter((object) => object.type === identity.type);
+        const target = el('select', { attrs: { name: `source-target-${identity.sourceRecordId}`, 'aria-label': `Canonical target for ${identity.name}` } }, [
+          el('option', { text: 'Resolve identity before accepting claims', attrs: { value: '' } }),
+          ...choices.map((object) => el('option', { text: `${object.name} · ${object.id}`, attrs: { value: object.id } })),
+        ]);
+        target.required = false; target.disabled = choices.length === 0;
+        const saved = savedSelections.get(identity.sourceRecordId);
+        target.value = saved?.targetObjectId ?? '';
+        acceptance.append(el('p', { text: `${identity.name} · ${identity.type} · ${identity.status} · source record ${identity.sourceRecordId}` }),
+          el('label', { text: 'Canonical identity match' }, [target]));
+        const claimControls = [];
+        for (const claim of proposal.claims) {
+          const checkbox = el('input', { attrs: { type: 'checkbox', name: `source-claim-${identity.sourceRecordId}`, value: claim.id } });
+          checkbox.checked = Boolean(saved?.claimIds?.includes(claim.id));
+          checkbox.disabled = !['PROPOSED', 'IDENTITY_UNRESOLVED'].includes(claim.status);
+          acceptance.append(el('label', {}, [checkbox, el('span', { text: `${claim.path} · ${claim.status} · ${JSON.stringify(claim.value)} · ${claim.provenance.sourceLocator ?? 'source locator unknown'}/${claim.provenance.recordLocator}/${claim.provenance.claimLocator ?? 'claim locator unknown'}` })]));
+          claimControls.push(checkbox);
+        }
+        target.required = claimControls.some((control) => control.checked);
+        proposalControls.push({ sourceRecordId: identity.sourceRecordId, target, claimControls });
+      }
+      const reason = ui.field('reason', 'Reason for accepting these source claims', { multiline: true, maximum: 500, value: value.reason ?? '' });
+      const persistSelection = () => {
+        for (const { target, claimControls } of proposalControls) target.required = claimControls.some((control) => control.checked);
+        const sourceSelections = proposalControls.map(({ sourceRecordId, target, claimControls }) => ({ sourceRecordId,
+          targetObjectId: target.value, claimIds: claimControls.filter((control) => control.checked).map((control) => control.value) }))
+          .filter((entry) => entry.claimIds.length);
+        const next = { ...activeDraft, sourceSelections, reason: reason.control.value.trim() };
+        activeDraft = next; setDraft(next);
+      };
+      for (const { target, claimControls } of proposalControls) {
+        target.addEventListener('change', persistSelection);
+        for (const control of claimControls) control.addEventListener('change', persistSelection);
+      }
+      reason.control.addEventListener('change', persistSelection);
+      const submit = ui.form('accept-source-evidence', 'Accept selected claims as one proposed version', [acceptance, reason.node], () => {
+        const selectedRows = proposalControls.filter(({ claimControls }) => claimControls.some((control) => control.checked));
+        const selections = selectedRows.map(({ sourceRecordId, target, claimControls }) => ({ sourceRecordId,
+          targetObjectId: target.value, claimIds: claimControls.filter((control) => control.checked).map((control) => control.value) }))
+          .filter((entry) => entry.claimIds.length);
+        if (!selections.length || selections.some((entry) => !entry.targetObjectId)) throw new Error('Choose a canonical identity and at least one claim before accepting.');
+        const payload = { kind: 'accept-source-evidence', bundle: activeDraft.bundle, previewHash: preview.previewHash,
+          blueprintHash: preview.currentSource.snapshotHash, selections, reason: reason.control.value.trim() };
+        const next = { ...activeDraft, sourceSelections: selections, reason: payload.reason }; showPreview(next); onCommand(payload);
+      }, !writable || !proposalControls.some(({ target, claimControls }) => !target.disabled && claimControls.some((control) => !control.disabled)));
+      previewRegion.append(submit);
       return;
     }
     previewRegion.append(el('h5', { text: 'Import preview' }),

@@ -293,7 +293,7 @@ async function saveEnterpriseCommand(payload = null) {
     } else if (ENTERPRISE_INTERCHANGE_COMMANDS.includes(payload.kind)) {
       boundPayload = enterpriseInterchangeCommandPayload(model, payload);
       if (!boundPayload) return;
-      retainEnterpriseInterchangeDraft({ ...(state.enterpriseInterchangeDraft ?? {}), recordIds: payload.recordIds,
+      retainEnterpriseInterchangeDraft({ ...(state.enterpriseInterchangeDraft ?? {}), recordIds: payload.recordIds, sourceSelections: payload.selections,
         reason: payload.reason, bundle: payload.bundle });
     } else if (ENTERPRISE_BRANCH_COMMANDS.includes(payload.kind)) {
       boundPayload = enterpriseBranchCommandPayload(model, payload);
@@ -314,7 +314,8 @@ async function saveEnterpriseCommand(payload = null) {
   if (ENTERPRISE_REFINEMENT_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseRefinementDraft = saved.envelope.payload;
   if (ENTERPRISE_INTERCHANGE_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseInterchangeDraft = {
     ...(state.enterpriseInterchangeDraft ?? {}), bundle: saved.envelope.payload.bundle,
-    recordIds: saved.envelope.payload.recordIds, reason: saved.envelope.payload.reason };
+    recordIds: saved.envelope.payload.recordIds, sourceSelections: saved.envelope.payload.selections,
+    reason: saved.envelope.payload.reason };
   if (saved.envelope.payload.kind === 'run-integrity-checks') state.enterpriseIntegrityDraft = saved.envelope.payload;
   const sourceGeneration = state.enterpriseGeneration;
   state.enterpriseBusy = true;
@@ -331,7 +332,8 @@ async function saveEnterpriseCommand(payload = null) {
     if (ENTERPRISE_INTERCHANGE_COMMANDS.includes(saved.envelope.payload.kind)) retainEnterpriseInterchangeDraft(null);
     if (saved.envelope.payload.kind === 'run-integrity-checks') state.enterpriseIntegrityDraft = null;
     if (result.data.simulation) state.enterpriseSimulation = result.data.simulation;
-    state.enterpriseStatus = result.data.integrityAssessment ? `Saved the ${result.data.integrityAssessment.status} integrity and lineage assessment for its exact blueprint source. No design or operational state changed.`
+    state.enterpriseStatus = result.data.acceptedClaims ? `Accepted ${result.data.acceptedClaims.length} reviewed source claims into one proposed design version from source snapshot ${result.data.acceptedClaims[0]?.sourceHash ?? 'unknown'}; first claim locator ${result.data.acceptedClaims[0]?.claimLocator ?? 'not supplied'}. No work was run or published.`
+      : result.data.integrityAssessment ? `Saved the ${result.data.integrityAssessment.status} integrity and lineage assessment for its exact blueprint source. No design or operational state changed.`
       : result.data.economicEvaluation ? 'Saved the exact-source economic evaluation. It contains declared assumptions and reported capacity only.'
       : result.data.simulation ? 'Saved the deterministic simulation for its exact source. No work was performed.'
       : saved.envelope.payload.kind === 'apply-reviewed-merge' ? 'Owner-reviewed merge applied to the proposed main design. Publication and execution remain separate actions.'
@@ -345,7 +347,8 @@ async function saveEnterpriseCommand(payload = null) {
     if (definitive && ENTERPRISE_REFINEMENT_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseRefinementDraft = saved.envelope.payload;
     if (definitive && ENTERPRISE_INTERCHANGE_COMMANDS.includes(saved.envelope.payload.kind)) retainEnterpriseInterchangeDraft({
       ...(state.enterpriseInterchangeDraft ?? {}), bundle: saved.envelope.payload.bundle,
-      recordIds: saved.envelope.payload.recordIds, reason: saved.envelope.payload.reason });
+      recordIds: saved.envelope.payload.recordIds, sourceSelections: saved.envelope.payload.selections,
+      reason: saved.envelope.payload.reason });
     if (definitive && saved.envelope.payload.kind === 'run-integrity-checks') state.enterpriseIntegrityDraft = saved.envelope.payload;
     if (definitive) retainEnterprise(null);
     state.enterpriseStatus = definitive ? `${error.message} ${ENTERPRISE_PROCESS_COMMANDS.includes(saved.envelope.payload.kind) ? 'The submitted process draft is retained for its original source. ' : ''}Review the refreshed requested design before submitting a new change.`

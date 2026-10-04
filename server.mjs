@@ -37,6 +37,7 @@ import { ENTERPRISE_PROCESS_KINDS } from './src/enterprise/process-commands.mjs'
 import { ENTERPRISE_ECONOMIC_KINDS } from './src/enterprise/economics-commands.mjs';
 import { ENTERPRISE_REFINEMENT_KINDS } from './src/enterprise/refinement-commands.mjs';
 import { ENTERPRISE_INTEGRITY_KINDS } from './src/enterprise/integrity.mjs';
+import { ENTERPRISE_SOURCE_ACCEPTANCE_KINDS } from './src/enterprise/source-acceptance.mjs';
 import { createEnterpriseInterchangeBundle, ENTERPRISE_INTERCHANGE_KINDS, previewEnterpriseInterchange } from './src/enterprise/interchange.mjs';
 import { previewEnterpriseSourceEvidence } from './src/enterprise/source-onboarding.mjs';
 
@@ -70,6 +71,10 @@ function sendApi(response, status, data, { correlationId, event = null, meta = {
 
 function sendApiError(response, error, correlationId) {
   const status = error.statusCode ?? 500;
+  const roleRepair = error.code === 'ENTERPRISE_SOURCE_ROLE_REPAIR_REQUIRED'
+    && typeof error.roleId === 'string' && /^[a-z0-9][a-z0-9._:-]{0,119}$/i.test(error.roleId)
+    && Array.isArray(error.invalidFields)
+    && error.invalidFields.every((field) => ['proposedInstructions', 'proposedScopeStatements'].includes(field));
   response.setHeader('x-orgward-api-version', API_VERSION);
   response.setHeader('x-correlation-id', correlationId);
   return sendJson(response, status, {
@@ -82,6 +87,7 @@ function sendApiError(response, error, correlationId) {
       retryable: error.retryable ?? status >= 500,
       currentVersion: error.currentVersion ?? null,
       recoveryActions: error.recoveryActions ?? (status >= 500 ? [{ type: 'retry', label: 'Try again' }] : []),
+      ...(roleRepair ? { roleId: error.roleId, invalidFields: [...new Set(error.invalidFields)] } : {}),
     },
   });
 }
@@ -1622,7 +1628,7 @@ export function createApp({
         if ((administrative || payload.kind === 'record-state' || ENTERPRISE_BRANCH_KINDS.has(payload.kind)
           || ENTERPRISE_PROCESS_KINDS.has(payload.kind) || ENTERPRISE_ECONOMIC_KINDS.has(payload.kind)
           || ENTERPRISE_REFINEMENT_KINDS.has(payload.kind) || ENTERPRISE_INTERCHANGE_KINDS.has(payload.kind)
-          || ENTERPRISE_INTEGRITY_KINDS.has(payload.kind)) && request.identity.actorType !== 'human') {
+          || ENTERPRISE_INTEGRITY_KINDS.has(payload.kind) || ENTERPRISE_SOURCE_ACCEPTANCE_KINDS.has(payload.kind)) && request.identity.actorType !== 'human') {
           throw apiFailure(403, 'ENTERPRISE_HUMAN_OWNER_REQUIRED', 'A current human project member must report state, refine records or import proposed design; a human project owner must review design or define scopes, validity and future proposals.');
         }
         const actor = requestActor(request);
@@ -1659,13 +1665,14 @@ export function createApp({
               : ['record-state', 'set-validity', 'propose-future-design'].includes(payload.kind)
               || ENTERPRISE_BRANCH_KINDS.has(payload.kind) || ENTERPRISE_PROCESS_KINDS.has(payload.kind)
               || ENTERPRISE_ECONOMIC_KINDS.has(payload.kind) || ENTERPRISE_REFINEMENT_KINDS.has(payload.kind)
-              || ENTERPRISE_INTERCHANGE_KINDS.has(payload.kind)
+              || ENTERPRISE_INTERCHANGE_KINDS.has(payload.kind) || ENTERPRISE_SOURCE_ACCEPTANCE_KINDS.has(payload.kind)
               ? 'EnterpriseDesignChanged' : 'EnterpriseScopeChanged', actor, commandId: body.commandId, correlationId,
               data: { kind: payload.kind, blueprintId: changed.blueprint.id, blueprintVersion: changed.blueprint.version,
                 objectId: changed.affectedObjectId, proposalId: changed.proposalId ?? null,
                 branchId: changed.branchId ?? null, branchRevision: changed.branchRevision ?? null,
                 candidateId: changed.candidateId ?? null, candidateHash: changed.candidateHash ?? null,
                 importedRecordIds: changed.importedRecordIds ?? null,
+                acceptedSourceClaims: changed.acceptedClaims ?? null,
                 importSource: changed.source ?? null, importSourceHash: changed.sourceHash ?? null,
                 simulationId: changed.simulationId ?? null, economicEvaluationId: changed.economicEvaluationId ?? null,
                 integrityAssessmentId: changed.integrityAssessmentId ?? null, reason: payload.reason } }));
@@ -1685,6 +1692,7 @@ export function createApp({
           candidateId: receipt.candidateId ?? null, candidateHash: receipt.candidateHash ?? null,
           importedRecordIds: receipt.importedRecordIds ?? null, importSource: receipt.importSource ?? null,
           importSourceHash: receipt.importSourceHash ?? null,
+          acceptedClaims: receipt.acceptedSourceClaims ?? null,
           ...(simulation ? { simulation } : {}), ...(economicEvaluation ? { economicEvaluation } : {}),
           ...(integrityAssessment ? { integrityAssessment } : {}) },
         { correlationId, event: result.project.events.at(-1), meta: { replayed: result.replayed } });

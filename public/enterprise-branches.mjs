@@ -59,6 +59,7 @@ export function enterpriseCommandResultRoute(route, payload, result = null) {
   };
   return { ...route, ...reset, proposalId: result.proposalId ?? null, selectedId: result.affectedObjectId ?? route.selectedId, view: 'map',
     ...(payload.kind === 'bulk-edit-objects' && Array.isArray(result.importedRecordIds) && result.importedRecordIds.length ? { selectedId: result.importedRecordIds[0] } : {}),
+    ...(payload.kind === 'accept-source-evidence' && Array.isArray(result.acceptedClaims) && result.acceptedClaims.length ? { selectedId: result.acceptedClaims[0].targetObjectId } : {}),
     ...(payload.kind === 'create-scope' ? { lensId: 'all', scopeId: null, types: [], area: null } : {}) };
 }
 

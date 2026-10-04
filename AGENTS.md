@@ -11,12 +11,16 @@ required for working product paths: keep tenant isolation, server-only secrets,
 exact candidate identity, explicit approval/effect authority, intervention and
 audit controls where those flows need them.
 
-For this continuation, Luna 6 owns implementation, tests, documentation and
-integration. GPT-6.1 Sol is read-only reviewer and may provide design feedback.
-Keep tool use, context and reads concise and bounded to the active slice; Luna
-runs focused tests only when a slice is ready, then runs one full check against
-the frozen parent task tree. Preserve historical receipts and completed
-PR-01–PR-07 status.
+For this continuation, Luna 6 owns implementation, tests, documentation,
+integration and routine decisions. GPT-6.1 Sol is limited to rare, narrowly
+framed design decisions involving material security, data-integrity, migration
+or irreversible-effect risk. Give Sol the exact question and relevant evidence;
+Luna implements and verifies the chosen design. Keep tool use, context and reads
+concise and bounded to the active slice; Luna runs focused tests only when a
+slice is ready, then runs one full check against the frozen parent task tree.
+On quota exhaustion, checkpoint and wait. Do not make purchases, use billing
+fallbacks, redeem reset credits or perform busy retries. Preserve historical
+receipts and completed PR-01–PR-07 status.
 
 Build the private product in this repository. The user outcome is a working
 enterprise-design workspace: conversation, saved blueprint, interactive maps,

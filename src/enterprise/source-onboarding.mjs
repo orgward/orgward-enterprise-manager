@@ -16,7 +16,7 @@ const referenceFields = {
   evidenceMetricIds: ['metric'], feedbackGoalId: ['goal'], feedbackDecisionIds: ['decision'], readInformationId: ['information'],
   consumerLoopId: ['feedback-loop'], mitigatingControlId: ['control'], metricId: ['metric'],
 };
-function claimStatus(path, expected, value, byId) {
+export function sourceEvidenceClaimStatus(path, expected, value, byId) {
   const arrayValue = Array.isArray(expected);
   const validType = arrayValue ? Array.isArray(value) && value.every((entry) => typeof entry === 'string')
     : Object.hasOwn(referenceFields, path) ? value === null || typeof value === 'string'
@@ -89,7 +89,7 @@ export function previewEnterpriseSourceEvidence(project, bundle) {
       .filter(([field]) => field !== 'objectId')) : {};
     const claims = record.claims.map((claim) => ({ id: claim.id, path: claim.path, value: structuredClone(claim.value),
       status: !target ? 'IDENTITY_UNRESOLVED'
-        : Object.hasOwn(targetFields, claim.path) ? claimStatus(claim.path, targetFields[claim.path], claim.value, byId) : 'UNKNOWN_FIELD',
+        : Object.hasOwn(targetFields, claim.path) ? sourceEvidenceClaimStatus(claim.path, targetFields[claim.path], claim.value, byId) : 'UNKNOWN_FIELD',
       targetObjectId: target?.id ?? null,
       expectedValueType: Object.hasOwn(targetFields, claim.path) ? Array.isArray(targetFields[claim.path])
         ? `${referenceFields[claim.path]?.join(' or ') ?? 'string'} array`

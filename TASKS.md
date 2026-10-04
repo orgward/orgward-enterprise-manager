@@ -6511,6 +6511,71 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   proposals into one atomic proposed snapshot, with stale-source and replay
   behavior; preview itself remains read-only.
 
+  Source claim acceptance is implemented and drafted for read-only review. A
+  distinct `accept-source-evidence` command binds the human-selected target and
+  claim IDs to the exact source preview hash plus current blueprint ID/version/
+  hash. It revalidates claim field types and linked record types, stages grouped
+  edits on a cloned project, then persists exactly one proposed blueprint
+  version and one acceptance audit entry with source/record/claim locators and
+  hashes. It does not publish, execute or create operational records. The
+  workspace-write human command path is idempotent through the existing command
+  store; rejected stale or unresolved acceptance leaves the project unchanged.
+  UI accepts explicit target/claim selections, retains them with the source
+  bundle after rejection/reload, and presents accepted provenance; new pure,
+  UI-submit/recovery and PostgreSQL stale/replay/restart/permission fixtures
+  are drafted. Syntax and diff checks only; no behavior tests have run. Sol
+  read-only review is required before the focused cases. The first review found
+  four repair points: avoid copying unselected optional edit fields (including
+  invalid legacy metric links and renamed-role labels), require a target only
+  for rows with selected claims, assert restored acceptance selections/reason
+  instead of the stale no-form expectation, and read the persisted audit from
+  the project aggregate rather than the enterprise projection. Repairs now
+  stage only required name/detail and process/role mandatory fields plus the
+  explicitly selected claims. Pure fixtures cover sustainability metric
+  references, role-rename then process edit order, rejection after earlier
+  scratch edits with no persistence, exact stale-source rejection and one
+  consolidated version. UI fixture covers subset selection and recovered
+  target/claim/reason; PG fixture reads the durable project audit. Syntax and
+  diff checks only; frozen for Sol read-only re-review.
+
+  Source acceptance repair (2026-10-04): the first focused invocation passed
+  the PostgreSQL and UI cases (2/2) but the pure case failed because its legacy
+  founder-role fixture omitted required proposed instructions and scope. The
+  positive fixture now supplies both valid values. Following Sol's narrow
+  data-integrity direction, acceptance preserves stored role fields and rejects
+  the entire batch with `ENTERPRISE_SOURCE_ROLE_REPAIR_REQUIRED`, identifying
+  the role ID and invalid mandatory field names; it does not invent instructions
+  or bypass canonical edit validation. The rollback fixture asserts this
+  structured response and byte-for-byte no-mutation behavior after earlier
+  claims were staged. Only the previously failed pure case was rerun:
+  `node ops/run-tests.mjs tests/enterprise/interchange.test.mjs
+  '--test-name-pattern=^accepted source claims create one exact-source proposed
+  snapshot and reject stale or unresolved input atomically$'` passed 1/1, 0
+  failed/cancelled/skipped (runner 0.28s; TAP 215.916ms; case 68.362ms; log
+  `/tmp/orgward-tests-emHHEq/node-test.tap.log`). The already-passing UI and PG
+  cases were not rerun. `node --check` for changed module/fixture and
+  `git diff --check` pass. The primary integration review passed after the API
+  error envelope repair below. The source-acceptance UI, pure and PostgreSQL
+  cases are all accounted for as passing across the initial 2/3 run, the
+  previously failed pure 1/1 rerun and the affected PostgreSQL 1/1 rerun. PR-13
+  remains open for its remaining scope and one frozen parent check.
+
+  Source-acceptance API repair (2026-10-04): the API error envelope previously
+  omitted the repair-required role ID and invalid mandatory fields. `sendApiError`
+  now emits those two values only for `ENTERPRISE_SOURCE_ROLE_REPAIR_REQUIRED`,
+  after validating the role ID and limiting fields to proposed instructions and
+  scope. The existing PostgreSQL acceptance journey now posts an invalid role
+  claim and verifies HTTP 409, the repair code/role ID/invalid field, and
+  unchanged aggregate version, audit and blueprint history. Only that affected
+  case was run: `node ops/run-tests.mjs tests/enterprise/server.test.mjs
+  '--test-name-pattern=^human acceptance stores selected source claims once and
+  rejects stale preview after restart$'` passed 1/1 (0 failed/cancelled/skipped;
+  runner 2.70s; TAP 1548.667ms; case 1188.762ms; log
+  `/tmp/orgward-tests-BMxPpW/node-test.tap.log`). Syntax and diff checks pass;
+  the prior passing pure and UI cases were not rerun during this API repair.
+  Primary integration review passed; PR-13 remains open pending its remaining
+  scope and one frozen parent check.
+
 - [ ] PR-14 — Governance and supervised agents (T-76–T-89). Implement versioned
   policy decisions/enforcement, decision rights and appeals, semantic/data
   stewardship, verifiable governance ledger, agent identities/autonomy envelopes,

@@ -1443,6 +1443,90 @@ test('source evidence import preview is reader-authorized, exact-source bound an
   }, 404);
 });
 
+test('human acceptance stores selected source claims once and rejects stale preview after restart', async (t) => {
+  const postgres = await startPostgres(); let root; let instance;
+  t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-source-evidence-acceptance-'));
+  instance = await startApp(postgres, root);
+  for (const identity of identities.values()) await postgres.query(`insert into orgward.oidc_principals
+    (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+  [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  const project = await seedProject(postgres, 'Source evidence acceptance fixture');
+  const initial = await currentView(instance.base, 'owner', project.id, { lensId: 'all' });
+  const customer = initial.data.blueprint.areas.customersOfferingsValueEconomics.items.find((entry) => entry.type === 'customer');
+  const sourceBundle = { kind: 'orgward-enterprise-source-evidence', schemaVersion: '1.0',
+    source: { id: 'crm-acceptance', label: 'Reviewed CRM export', locator: 'crm://review/1' }, records: [
+      { id: 'crm-customer-review-1', type: 'customer', name: customer.name, claims: [
+        { id: 'claim-customer-review-name', path: 'name', value: 'Human accepted proposed customer name', locator: 'row/1/name' },
+      ] },
+    ] };
+  const preview = await request(instance.base, 'reader', `/api/v1/projects/${project.id}/enterprise/import-preview`, {
+    method: 'POST', body: { bundle: sourceBundle },
+  });
+  const payload = { kind: 'accept-source-evidence', blueprintId: preview.data.currentSource.blueprintId,
+    blueprintVersion: preview.data.currentSource.blueprintVersion, blueprintHash: preview.data.currentSource.snapshotHash,
+    previewHash: preview.data.previewHash, bundle: sourceBundle,
+    selections: [{ sourceRecordId: 'crm-customer-review-1', targetObjectId: customer.id, claimIds: ['claim-customer-review-name'] }],
+    reason: 'A human reviewer matched this source row and accepted its proposed name.' };
+  const command = commandBody(initial, 'source-acceptance-once', payload);
+  const saved = await postCommand(instance.base, 'owner', project.id, command);
+  assert.equal(saved.event.type, 'EnterpriseDesignChanged');
+  assert.equal(saved.data.blueprintVersion, initial.data.context.blueprintVersion + 1);
+  assert.equal(saved.data.acceptedClaims.length, 1);
+  assert.equal(saved.data.acceptedClaims[0].sourceHash, preview.data.source.snapshotHash);
+  const afterSave = await currentView(instance.base, 'owner', project.id, { lensId: 'all' });
+  assert.equal(afterSave.data.versions.length, initial.data.versions.length + 1);
+  assert.equal(afterSave.data.blueprint.areas.customersOfferingsValueEconomics.items.find((entry) => entry.id === customer.id).name,
+    'Human accepted proposed customer name');
+  const persistedProject = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  assert.equal(persistedProject.data.audit.filter((entry) => entry.action === 'enterprise.accept-source-evidence').length, 1);
+  const replay = await postCommand(instance.base, 'owner', project.id, command);
+  assert.equal(replay.meta.replayed, true);
+  assert.equal(replay.data.projectVersion, saved.data.projectVersion);
+  const stale = await postCommand(instance.base, 'owner', project.id,
+    commandBody(afterSave, 'source-acceptance-stale', payload), 409);
+  assert.equal(stale.error.code, 'ENTERPRISE_SOURCE_DESIGN_STALE');
+
+  const acceptedRole = afterSave.data.blueprint.areas.responsibilityAuthority.items.find((entry) => entry.id === 'role-founder');
+  const repairBundle = { kind: 'orgward-enterprise-source-evidence', schemaVersion: '1.0',
+    source: { id: 'role-review', label: 'Reviewed role source' }, records: [
+      { id: 'role-review-founder', type: 'role', name: acceptedRole.name,
+        claims: [{ id: 'empty-scope', path: 'proposedScopeStatements', value: [] }] },
+    ] };
+  const repairPreview = await request(instance.base, 'reader', `/api/v1/projects/${project.id}/enterprise/import-preview`, {
+    method: 'POST', body: { bundle: repairBundle },
+  });
+  const beforeRepair = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  const roleRepair = await postCommand(instance.base, 'owner', project.id,
+    commandBody(afterSave, 'source-acceptance-role-repair', {
+      kind: 'accept-source-evidence', blueprintId: repairPreview.data.currentSource.blueprintId,
+      blueprintVersion: repairPreview.data.currentSource.blueprintVersion,
+      blueprintHash: repairPreview.data.currentSource.snapshotHash, previewHash: repairPreview.data.previewHash,
+      bundle: repairBundle,
+      selections: [{ sourceRecordId: 'role-review-founder', targetObjectId: acceptedRole.id, claimIds: ['empty-scope'] }],
+      reason: 'Reject source acceptance until mandatory role scope is repaired.',
+    }), 409);
+  assert.equal(roleRepair.error.code, 'ENTERPRISE_SOURCE_ROLE_REPAIR_REQUIRED');
+  assert.equal(roleRepair.error.roleId, acceptedRole.id);
+  assert.ok(roleRepair.error.invalidFields.includes('proposedScopeStatements'));
+  const afterRepair = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  assert.equal(afterRepair.data.version, beforeRepair.data.version);
+  assert.deepEqual(afterRepair.data.audit, beforeRepair.data.audit);
+  assert.deepEqual(afterRepair.data.blueprintVersions, beforeRepair.data.blueprintVersions);
+
+  const readerDenied = await postCommand(instance.base, 'reader', project.id,
+    commandBody(await currentView(instance.base, 'reader', project.id, { lensId: 'all' }), 'source-acceptance-reader-denied', payload), 403);
+  assert.equal(readerDenied.error.code, 'ACTION_FORBIDDEN');
+
+  await closeApp(instance); instance = null;
+  instance = await startApp(postgres, root);
+  const restarted = await currentView(instance.base, 'owner', project.id, { lensId: 'all' });
+  const accepted = restarted.data.blueprint.areas.customersOfferingsValueEconomics.items.find((entry) => entry.id === customer.id);
+  assert.equal(accepted.name, 'Human accepted proposed customer name');
+  assert.equal(accepted.provenance.at(-1).source, 'workspace:source-evidence-acceptance');
+  assert.equal(accepted.provenance.at(-1).sourceEvidence.sourceHash, preview.data.source.snapshotHash);
+});
+
 test('saved integrity assessments bind exact design source, replay, survive restart and stale on design change', async (t) => {
   const postgres = await startPostgres();
   let root;
