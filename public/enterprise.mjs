@@ -187,7 +187,7 @@ function scopeFields(el, scopes, values = {}) {
   return { organization, legalEntity, unit };
 }
 
-export function renderEnterpriseContext({ model, query, loading = false, error = null, unavailable = null, pending = null, integrityDraft = null, status = '', storageAvailable = true, el, onContext, onCommand, onRetry, onReload }) {
+export function renderEnterpriseContext({ model, query, loading = false, error = null, unavailable = null, pending = null, integrityDraft = null, status = '', storageAvailable = true, el, onContext, onCommand, onInspectFinding, onRetry, onReload }) {
   const { field, form } = fields(el);
   const root = el('section', { className: 'enterprise-context', attrs: { 'data-enterprise-context': '', 'aria-label': 'Enterprise perspectives and design scopes' } }, [
     el('h3', { text: 'Enterprise perspectives and design scopes' }),
@@ -273,7 +273,7 @@ export function renderEnterpriseContext({ model, query, loading = false, error =
       : 'Save the initial blueprint before creating or assigning design scopes.' }));
     return root;
   }
-  const integrityPanel = renderEnterpriseIntegrity({ model, pending, draft: integrityDraft, loading, el, ui: { field, form }, onCommand });
+  const integrityPanel = renderEnterpriseIntegrity({ model, pending, draft: integrityDraft, loading, el, ui: { field, form }, onCommand, onInspectFinding });
   if (integrityPanel) root.append(integrityPanel);
   const disabled = loading || Boolean(pending) || enterpriseContextReadOnly(model.context) || !model.permissions?.scopeAdmin;
   const validity = model.context.validity ?? {};

@@ -218,7 +218,55 @@ export function projectEnterpriseIntegrity(project, blueprint, savedBy = () => t
     return { ...structuredClone(entry), exceptions: exceptionsByReport.get(entry.id) ?? [], appliesToContext: Boolean(blueprint && entry.source.blueprintId === blueprint.id
       && entry.source.blueprintVersion === blueprint.version && entry.source.snapshotHash === selectedSourceHash) };
   });
+  const reportWindow = assessments.slice(-10).reverse();
+  const newestExceptionByFinding = new Map();
+  const exceptionsByFinding = new Map();
+  for (const exception of projectedExceptions) {
+    const key = `${exception.reportId}\n${exception.findingId}`;
+    exceptionsByFinding.set(key, [...(exceptionsByFinding.get(key) ?? []), exception]);
+    const previous = newestExceptionByFinding.get(key);
+    if (!previous || exception.acceptedAt > previous.acceptedAt) newestExceptionByFinding.set(key, exception);
+  }
+  const bySeverity = { high: 0, medium: 0, low: 0 };
+  const byRule = new Map();
+  const exceptionCoverage = { ACTIVE: 0, EXPIRED: 0, STALE: 0, NONE: 0 };
+  let findingCount = 0; let driftedReports = 0;
+  const queueItems = [];
+  for (const assessment of reportWindow) {
+    const latestSameSource = [...assessments].reverse().find((candidate) =>
+      candidate.source.blueprintId === assessment.source.blueprintId
+      && candidate.source.blueprintVersion === assessment.source.blueprintVersion
+      && candidate.source.snapshotHash === assessment.source.snapshotHash) ?? assessment;
+    const reportDrift = !latest || assessment.source.blueprintId !== latest.id
+      || assessment.source.blueprintVersion !== latest.version || assessment.source.snapshotHash !== digest(latest);
+    if (reportDrift) driftedReports += 1;
+    for (const rule of assessment.rules) {
+      const coverage = byRule.get(rule.id) ?? { ruleId: rule.id, reports: 0, findings: 0 };
+      coverage.reports += 1; coverage.findings += rule.findingCount; byRule.set(rule.id, coverage);
+    }
+    for (const entry of assessment.findings) {
+      findingCount += 1;
+      if (Object.hasOwn(bySeverity, entry.severity)) bySeverity[entry.severity] += 1;
+      const exception = newestExceptionByFinding.get(`${assessment.id}\n${entry.id}`) ?? null;
+      exceptionCoverage[exception?.status ?? 'NONE'] += 1;
+      queueItems.push({ reportId: assessment.id, reportHash: assessment.reportHash,
+        source: structuredClone(assessment.source), reportCreatedAt: assessment.createdAt,
+        reportStatus: assessment.status, reportDrift, appliesToContext: assessment.appliesToContext,
+        latestSameSourceReportId: latestSameSource.id,
+        notReturnedInLatest: latestSameSource.id !== assessment.id
+          && !latestSameSource.findings.some((latestFinding) => latestFinding.id === entry.id),
+        finding: structuredClone(entry), status: 'UNRESOLVED',
+        exception: exception ? structuredClone(exception) : null,
+        exceptions: (exceptionsByFinding.get(`${assessment.id}\n${entry.id}`) ?? []).map((saved) => structuredClone(saved)) });
+    }
+  }
+  const remediationInbox = { currentSource: latest ? { blueprintId: latest.id, blueprintVersion: latest.version, snapshotHash: digest(latest) } : null,
+    reportWindowCount: reportWindow.length, totalSavedReports: assessments.length, totalFindings: findingCount,
+    unresolvedFindings: findingCount, visibleItems: Math.min(queueItems.length, ENTERPRISE_INTEGRITY_LIMITS.findings),
+    omittedItems: Math.max(0, queueItems.length - ENTERPRISE_INTEGRITY_LIMITS.findings), driftedReports,
+    bySeverity, byRule: [...byRule.values()].sort((left, right) => left.ruleId.localeCompare(right.ruleId)), exceptionCoverage,
+    items: queueItems.slice(0, ENTERPRISE_INTEGRITY_LIMITS.findings) };
   return { engineVersion: ENTERPRISE_INTEGRITY_ENGINE, assessments: assessments.slice(-10),
     exceptions: projectedExceptions.slice(-ENTERPRISE_INTEGRITY_LIMITS.exceptions), latest: assessments.at(-1) ?? null,
-    current: assessments.filter((entry) => entry.appliesToContext).at(-1) ?? null };
+    current: assessments.filter((entry) => entry.appliesToContext).at(-1) ?? null, remediationInbox };
 }

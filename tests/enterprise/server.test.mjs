@@ -135,9 +135,9 @@ test('enterprise scopes retain design identity across sixteen lenses, commands, 
   const ownerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
   const editorView = await currentView(instance.base, 'editor', project.id);
   const readerView = await currentView(instance.base, 'reader', project.id);
-  assert.deepEqual(ownerView.data.permissions, { write: true, scopeAdmin: true, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, simulate: true, economicWrite: true, economicEvaluate: true, integrityRun: true });
-  assert.deepEqual(editorView.data.permissions, { write: true, scopeAdmin: false, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, simulate: true, economicWrite: true, economicEvaluate: true, integrityRun: true });
-  assert.deepEqual(readerView.data.permissions, { write: false, scopeAdmin: false, branchCreate: false, branchWrite: false, branchAdmin: false, processWrite: false, simulate: false, economicWrite: false, economicEvaluate: false, integrityRun: false });
+  assert.deepEqual(ownerView.data.permissions, { write: true, scopeAdmin: true, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, simulate: true, economicWrite: true, economicEvaluate: true, integrityRun: true, integrityException: true });
+  assert.deepEqual(editorView.data.permissions, { write: true, scopeAdmin: false, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, simulate: true, economicWrite: true, economicEvaluate: true, integrityRun: true, integrityException: true });
+  assert.deepEqual(readerView.data.permissions, { write: false, scopeAdmin: false, branchCreate: false, branchWrite: false, branchAdmin: false, processWrite: false, simulate: false, economicWrite: false, economicEvaluate: false, integrityRun: false, integrityException: false });
   assert.equal(ownerView.data.selection.object.id, 'process-deliver');
   assert.equal(ownerView.data.selection.object.enterpriseScope, undefined);
   assert.equal(ownerView.data.selection.visible, true);
@@ -1583,6 +1583,9 @@ test('saved integrity assessments bind exact design source, replay, survive rest
   assert.deepEqual(acceptedView.data.integrity.current.findings[0], finding, 'the finding remains visible and unresolved');
   assert.equal(acceptedView.data.integrity.current.exceptions[0].status, 'ACTIVE');
   assert.equal(acceptedView.data.integrity.current.exceptions[0].findingRemainsUnresolved, true);
+  assert.equal(acceptedView.data.integrity.remediationInbox.unresolvedFindings, assessment.findings.length);
+  assert.equal(acceptedView.data.integrity.remediationInbox.exceptionCoverage.ACTIVE, 1);
+  assert.equal(acceptedView.data.integrity.remediationInbox.items.find((entry) => entry.reportId === assessment.id).status, 'UNRESOLVED');
   const exceptionReplay = await postCommand(instance.base, 'owner', project.id, exceptionCommand);
   assert.equal(exceptionReplay.meta.replayed, true);
   assert.equal(exceptionReplay.data.integrityException.id, accepted.data.integrityException.id);
@@ -1607,6 +1610,10 @@ test('saved integrity assessments bind exact design source, replay, survive rest
   assert.equal(latest.data.integrity.latest.appliesToContext, false);
   assert.equal(latest.data.integrity.latest.exceptions[0].status, 'STALE');
   assert.equal(latest.data.integrity.exceptions[0].findingRemainsUnresolved, true);
+  const driftedInboxItem = latest.data.integrity.remediationInbox.items.find((entry) => entry.reportId === assessment.id);
+  assert.equal(driftedInboxItem.status, 'UNRESOLVED');
+  assert.equal(driftedInboxItem.reportDrift, true);
+  assert.equal(driftedInboxItem.exception.status, 'STALE');
   const stale = await postCommand(instance.base, 'owner', project.id, commandBody(latest, 'integrity-stale-source', {
     kind: 'run-integrity-checks', snapshotHash: sourceHash, reason: 'Attempt an obsolete basis.' }), 409);
   assert.equal(stale.error.code, 'INTEGRITY_SOURCE_STALE');
@@ -1624,6 +1631,9 @@ test('saved integrity assessments bind exact design source, replay, survive rest
   assert.equal(refreshedView.data.integrity.current.id, refreshed.data.integrityAssessment.id);
   assert.deepEqual(refreshedView.data.integrity.current.exceptions, [], 'prior exceptions never carry forward into a new source report');
   assert.equal(refreshedView.data.integrity.exceptions[0].status, 'STALE', 'the old exception remains visible for explicit re-review');
+  assert.equal(refreshedView.data.integrity.remediationInbox.items.find((entry) => entry.reportId === assessment.id).status, 'UNRESOLVED',
+    'an absent finding in the new report does not resolve the historical finding');
+  assert.equal(refreshedView.data.integrity.remediationInbox.items.find((entry) => entry.reportId === assessment.id).reportDrift, true);
 });
 
 test('saved refinement links update canonical relations, reject cycles and trace exact branch revisions', async (t) => {

@@ -11,7 +11,8 @@ export function enterpriseIntegrityExceptionPayload(model, assessment, finding, 
   const source = assessment?.source;
   if (!model?.blueprint || !model.context?.isCurrent || model.context?.sourceKind !== 'MAIN_DESIGN'
     || model.permissions?.integrityException !== true || !assessment?.appliesToContext
-    || model.integrity?.current?.id !== assessment.id || !/^[a-f0-9]{64}$/.test(assessment.reportHash ?? '')
+    || model.integrity?.current?.id !== assessment.id
+    || !/^[a-f0-9]{64}$/.test(assessment.reportHash ?? '')
     || source?.blueprintId !== model.context.blueprintId || source?.blueprintVersion !== model.context.blueprintVersion
     || source?.snapshotHash !== model.context.snapshotHash
     || !assessment.findings?.some((entry) => entry.id === finding?.id)
@@ -28,7 +29,7 @@ export function enterpriseIntegrityExceptionPayload(model, assessment, finding, 
     snapshotHash: source.snapshotHash, reason: reason.trim(), expiresAt };
 }
 
-export function renderEnterpriseIntegrity({ model, pending = null, draft = null, loading = false, el, ui, onCommand }) {
+export function renderEnterpriseIntegrity({ model, pending = null, draft = null, loading = false, el, ui, onCommand, onInspectFinding = null }) {
   if (!model?.blueprint) return null;
   const panel = el('section', { className: 'enterprise-integrity', attrs: { 'aria-label': 'Integrity and lineage assessment' } }, [
     el('h3', { text: 'Integrity and lineage checks' }),
@@ -46,29 +47,6 @@ export function renderEnterpriseIntegrity({ model, pending = null, draft = null,
     for (const rule of assessment.rules) panel.append(el('p', { attrs: { 'data-integrity-rule': rule.id },
       text: `${rule.id}: ${rule.status} · ${rule.findingCount} findings · ${rule.summary}` }));
     if (!assessment.findings.length) panel.append(el('p', { text: 'No typed structure, lineage or completeness findings were returned for this saved source.' }));
-    else {
-      const list = el('ol', { attrs: { 'aria-label': 'Integrity findings' } });
-      for (const entry of assessment.findings) {
-        const item = el('li', { attrs: { 'data-integrity-finding': entry.id } }, [
-          el('p', { text: `${entry.severity.toUpperCase()} · ${entry.code} · ${entry.objectId ?? entry.path ?? 'Blueprint'}: ${entry.message} Suggested action: ${entry.action}` }),
-          el('p', { attrs: { role: 'status', 'data-finding-state': 'unresolved' }, text: 'UNRESOLVED · An exception never clears this finding or changes the integrity result.' }),
-        ]);
-        const exceptions = (assessment.exceptions ?? []).filter((exception) => exception.findingId === entry.id);
-        for (const exception of exceptions) item.append(el('p', { attrs: { role: 'status', 'data-exception-status': exception.status },
-          text: `${exception.status} exception · ${exception.actor} · ${exception.acceptedAt} · expires ${exception.expiresAt ?? 'never'} · ${exception.reason}. Finding remains unresolved.` }));
-        if (assessment.appliesToContext && model.context?.isCurrent && model.context?.sourceKind === 'MAIN_DESIGN'
-          && model.permissions?.integrityException === true && !exceptions.some((exception) => exception.status === 'ACTIVE')) {
-          const reason = ui.field(`exception-reason-${entry.id}`, 'Reason for accepting this exception', { maximum: 500 });
-          const expiry = ui.field(`exception-expiry-${entry.id}`, 'Expiry in UTC (optional)', { required: false, type: 'datetime-local' });
-          item.append(ui.form(`accept-integrity-exception-${entry.id}`, 'Accept exception for this finding', [reason.node, expiry.node], () => {
-            const command = enterpriseIntegrityExceptionPayload(model, assessment, entry, reason.control.value, expiry.control.value);
-            if (command) onCommand(command);
-          }, loading || Boolean(pending)));
-        }
-        list.append(item);
-      }
-      panel.append(list);
-    }
   } else panel.append(el('p', { text: 'No integrity assessment has been saved for this project yet.' }));
   for (const older of (integrity.assessments ?? []).slice(0, -1).reverse()) {
     panel.append(el('details', { attrs: { 'data-integrity-history': older.id } }, [
@@ -85,6 +63,70 @@ export function renderEnterpriseIntegrity({ model, pending = null, draft = null,
     el('ul', {}, staleExceptions.map((exception) => el('li', { attrs: { 'data-exception-status': exception.status },
       text: `STALE · finding ${exception.findingId} · report ${exception.reportId} (${exception.reportHash}) · blueprint ${exception.blueprintId} v${exception.blueprintVersion} (${exception.snapshotHash}) · ${exception.actor} · ${exception.acceptedAt}${exception.expiresAt ? ` · expired ${exception.expiresAt}` : ''} · ${exception.reason}. The finding remains unresolved.` }))),
   ]));
+  const inbox = integrity.remediationInbox;
+  if (inbox) {
+    const section = el('section', { className: 'integrity-remediation-inbox', attrs: { 'aria-label': 'Integrity remediation inbox' } }, [
+      el('h3', { text: 'Remediation inbox' }),
+      el('p', { text: `${inbox.unresolvedFindings} unresolved findings across ${inbox.reportWindowCount} recent saved reports (${inbox.totalSavedReports} reports in saved history). ${inbox.driftedReports} report sources differ from the current blueprint. Findings remain unresolved regardless of exception state.` }),
+      el('p', { text: `Severity coverage · high ${inbox.bySeverity.high} · medium ${inbox.bySeverity.medium} · low ${inbox.bySeverity.low}. Exceptions · active ${inbox.exceptionCoverage.ACTIVE} · expired ${inbox.exceptionCoverage.EXPIRED} · stale ${inbox.exceptionCoverage.STALE} · none ${inbox.exceptionCoverage.NONE}.` }),
+      el('ul', { attrs: { 'aria-label': 'Rule coverage' } }, inbox.byRule.map((rule) => el('li', { attrs: { 'data-remediation-rule': rule.ruleId },
+        text: `${rule.ruleId} · ${rule.findings} findings across ${rule.reports} reports` }))),
+    ]);
+    if (inbox.omittedItems) section.append(el('p', { attrs: { role: 'status' }, text: `Showing ${inbox.visibleItems} of ${inbox.totalFindings} findings; ${inbox.omittedItems} older findings are omitted from this bounded inbox projection.` }));
+    const list = el('ol', { attrs: { 'aria-label': 'Unresolved remediation items' } });
+    const assessments = new Map([...(integrity.assessments ?? []), ...(integrity.current ? [integrity.current] : [])]
+      .map((entry) => [entry.id, entry]));
+    const renderItem = (item, allowExceptionForm = true) => {
+      const finding = item.finding;
+      const itemExceptions = item.exceptions?.length ? item.exceptions : item.exception ? [item.exception] : [];
+      const row = el('li', { attrs: { 'data-remediation-report': item.reportId, 'data-remediation-finding': finding.id, 'data-remediation-status': 'UNRESOLVED' } }, [
+        el('h4', { text: `${finding.severity.toUpperCase()} · ${finding.ruleId} · ${finding.code}` }),
+        el('p', { text: `Target: ${finding.objectId ?? finding.path ?? 'Blueprint'}` }),
+        el('p', { text: `${finding.message} Suggested action: ${finding.action}` }),
+        el('p', { attrs: { role: 'status' }, text: `UNRESOLVED · ${item.reportDrift ? 'SOURCE DRIFT · this report is not for the current blueprint.' : 'Report source matches the current blueprint.'}${item.notReturnedInLatest ? ` · Not returned in latest same-source report ${item.latestSameSourceReportId}; this historical finding remains unresolved and needs review.` : ''} Report ${item.reportId} · ${item.reportHash} · blueprint ${item.source.blueprintVersion} · ${item.source.snapshotHash}.` }),
+        ...(itemExceptions.length ? itemExceptions.map((exception) => el('p', { attrs: { role: 'status', 'data-exception-status': exception.status },
+          text: `${exception.status} exception · ${exception.actor} · accepted ${exception.acceptedAt} · expires ${exception.expiresAt ?? 'never'} · ${exception.reason}. Finding remains unresolved.` }))
+          : [el('p', { attrs: { role: 'status' }, text: 'No exception recorded for this exact finding and report.' })]),
+      ]);
+      const inspect = el('button', { className: 'button ghost', text: finding.objectId ? 'Inspect record in current design' : 'Open current design report', attrs: { type: 'button' } });
+      inspect.addEventListener('click', () => onInspectFinding?.(finding, item)); row.append(inspect);
+      const savedAssessment = assessments.get(item.reportId);
+      if (allowExceptionForm && !item.reportDrift && item.appliesToContext && model.integrity?.current?.id === item.reportId
+        && model.context?.isCurrent && model.context?.sourceKind === 'MAIN_DESIGN'
+        && model.permissions?.integrityException === true && !itemExceptions.some((exception) => exception.status === 'ACTIVE') && savedAssessment) {
+        const reason = ui.field(`exception-reason-${item.reportId}-${finding.id}`, 'Reason for accepting this exception', { maximum: 500 });
+        const expiry = ui.field(`exception-expiry-${item.reportId}-${finding.id}`, 'Expiry in UTC (optional)', { required: false, type: 'datetime-local' });
+        row.append(ui.form(`accept-integrity-exception-${item.reportId}-${finding.id}`, 'Accept exception for this finding', [reason.node, expiry.node], () => {
+          const command = enterpriseIntegrityExceptionPayload(model, savedAssessment, finding, reason.control.value, expiry.control.value);
+          if (command) onCommand(command);
+        }, loading || Boolean(pending)));
+      }
+      return row;
+    };
+    for (const item of inbox.items) list.append(renderItem(item));
+    if (!inbox.items.length) list.append(el('li', { text: 'No unresolved findings were returned for the saved reports in this inbox window.' }));
+    section.append(list); panel.append(section);
+    const currentAssessment = integrity.current;
+    const inboxKeys = new Set(inbox.items.map((item) => `${item.reportId}\n${item.finding.id}`));
+    const currentSource = inbox.currentSource;
+    const currentFallbackItems = currentAssessment?.appliesToContext ? currentAssessment.findings
+      .filter((finding) => !inboxKeys.has(`${currentAssessment.id}\n${finding.id}`))
+      .map((finding) => {
+        const exceptions = (currentAssessment.exceptions ?? []).filter((exception) => exception.findingId === finding.id);
+        return { reportId: currentAssessment.id, reportHash: currentAssessment.reportHash, source: currentAssessment.source,
+          reportCreatedAt: currentAssessment.createdAt, reportStatus: currentAssessment.status,
+          reportDrift: !currentSource || currentAssessment.source.blueprintId !== currentSource.blueprintId
+            || currentAssessment.source.blueprintVersion !== currentSource.blueprintVersion
+            || currentAssessment.source.snapshotHash !== currentSource.snapshotHash,
+          appliesToContext: true, latestSameSourceReportId: currentAssessment.id,
+          notReturnedInLatest: false, finding, status: 'UNRESOLVED', exception: exceptions.at(-1) ?? null, exceptions };
+      }) : [];
+    if (currentFallbackItems.length) panel.append(el('section', { attrs: { 'aria-label': 'Current context findings omitted from recent inbox' } }, [
+      el('h3', { text: 'Current context findings omitted from the recent inbox' }),
+      el('p', { attrs: { role: 'status' }, text: 'These findings belong to the assessment for the selected blueprint and are retained here because they are outside the bounded inbox projection. They remain unresolved; exception actions are available only from the current applicable report row in the inbox.' }),
+      el('ol', {}, currentFallbackItems.map((item) => renderItem(item, false))),
+    ]));
+  }
   const savedReason = pending?.envelope?.payload?.kind === 'run-integrity-checks'
     ? pending.envelope.payload.reason : draft?.reason;
   const reason = ui.field('reason', 'Reason for running these checks', { multiline: true, maximum: 500, value: savedReason ?? '' });

@@ -44,9 +44,9 @@ effects, durable audit and operational actions needed by that path. PR-11 and
 PR-19 remain pending in the separate future backlog. No P/E release gate is
 closed by this queue; active section order follows the functionality work order.
 
-Active cursor: PR-13. The active checkboxes below are the source of truth;
+Active cursor: PR-14. The active checkboxes below are the source of truth;
 `npm run task:next` checks that this cursor matches their first open PR in section
-order. PR-01 through PR-10 and PR-12 are functionally complete, and PR-13 is next. A stale PR
+order. PR-01 through PR-10 and PR-12–PR-13 are functionally complete, and PR-14 is next. A stale PR
 number in a saved goal, dated receipt or older document does not reset the queue.
 Read this header and the active PR outcome at the line printed by
 `npm run task:next`; search receipts only for a concrete dependency.
@@ -6423,7 +6423,7 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   and the tree passes `git diff --check`. PR-12 is complete; proceed to the
   recorded next cursor without beginning its implementation here.
 
-- [ ] PR-13 — Evidence ingestion and integrity operations (T-65–T-75). Safely
+- [x] PR-13 — Evidence ingestion and integrity operations (T-65–T-75). Safely
   onboard sources, extract evidence-backed identity/claim proposals, review and
   publish atomic snapshots, run typed integrity/lineage rules, manage exceptions,
   and provide an actionable remediation inbox with drift and coverage feedback.
@@ -6610,6 +6610,60 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   have passing evidence; the pure and PG cases were not rerun. `git diff --check`
   passes. PR-13 remains open; defer its single frozen parent check until
   remaining PR-13 scope is complete.
+
+  Remediation queue/read-model increment (2026-10-04): added a projection-only
+  inbox derived from the recent saved current and historical immutable reports
+  and their exact-source exception records. Each report/finding pair remains a
+  separate `UNRESOLVED` queue item; later reports that omit a finding do not
+  infer resolution and now label that historical finding as not returned in
+  the latest same-source report, with the latest report ID for review. Items expose exact report and blueprint source, source
+  drift, severity/rule identity and every recorded exception state; summary
+  coverage counts unresolved findings, high/medium/low severity, rules,
+  active/expired/stale/no-exception classifications, and drifted report sources.
+  The bounded projection covers the most recent ten reports and caps visible
+  findings while reporting omissions and aggregate coverage. The UI provides an
+  inspect action that returns to the current main design and selects the finding
+  object through the existing map/editor route; recordless findings open the
+  current design report. Exceptions can be accepted only for the current
+  report ID on the exact source; historical same-source reports are inspect-only.
+  Exceptions remain separate from resolution. Read-model, UI navigation/
+  coverage and PostgreSQL projection assertions include same-
+  source historical omissions and current-report-only exception forms. The UI
+  retains displayed/current-context findings missing from the bounded inbox by
+  exact report/finding key, including findings beyond the 2,000-item cap, without
+  duplicating inbox rows or exposing exception forms; every row shows its object
+  or path target.
+
+  Focused behavior verification (2026-10-04): the approved contracts, UI and
+  PostgreSQL cases were selected in one runner invocation. Initial result was
+  1 pass/2 failures (3 tests; runner 2.90s; TAP 1730.153ms; PostgreSQL case
+  passed in 1327.745ms; log `/tmp/orgward-tests-EZLuPl/node-test.tap.log`). The
+  failures were fixture issues. Reran only contracts + UI: 1 pass/1 failure
+  (2 tests; runner 0.36s; TAP 266.896ms; UI passed in 15.346ms; log
+  `/tmp/orgward-tests-aCIUqm/node-test.tap.log`). Corrected the remaining pure
+  fixture and reran only contracts: 1/1 passed (runner 0.29s; TAP 216.715ms;
+  case 68.512ms; log `/tmp/orgward-tests-qCdLYx/node-test.tap.log`). All three
+  distinct selected cases now have passing evidence; PostgreSQL was not rerun.
+  PR-13 is complete based on the distinct-case evidence recorded below.
+
+  Frozen parent check (2026-10-04): the single `npm run check` completed in
+  112.88s; syntax checks passed and the test runner reported 532 tests, 530
+  passed, 1 failed, 1 skipped (TAP duration 111680.416ms; log
+  `/tmp/orgward-tests-1tyJcJ/node-test.tap.log`). The sole failure was the
+  existing enterprise-scope permission fixture, whose expected writer/reader
+  permission objects predated `integrityException`. Updated only those expected
+  objects. The first targeted rerun exposed the omitted reader `false` field
+  (1 case failed; TAP 1019.675ms; log
+  `/tmp/orgward-tests-kIv6ef/node-test.tap.log`); after correcting that fixture,
+  the same single case passed 1/1 (runner 4.72s; TAP 3603.060ms; case
+  3253.092ms; log `/tmp/orgward-tests-Ol2VFQ/node-test.tap.log`). No full check
+  rerun. Root disposition: all 531 runnable test cases have passing evidence
+  (530 from the full run plus the corrected permission case's targeted pass),
+  with one optional case skipped. The full `npm run check` remains recorded as
+  530 pass/1 fail/1 skip and is not described as a clean pass. PR-13 is complete
+  on this distinct-case evidence; the active cursor advances to PR-14. No tests
+  were rerun after this disposition. `git diff --check` passes and
+  `npm run task:next` must report PR-14.
 
 - [ ] PR-14 — Governance and supervised agents (T-76–T-89). Implement versioned
   policy decisions/enforcement, decision rights and appeals, semantic/data

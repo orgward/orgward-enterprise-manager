@@ -571,7 +571,13 @@ function renderStudio() {
       loading: state.enterpriseLoading || state.enterpriseBusy, error: state.enterpriseError, unavailable: state.enterpriseUnavailable,
       pending: state.pendingEnterprise, status: state.enterpriseStatus, storageAvailable: state.enterpriseStorageAvailable,
       integrityDraft: state.enterpriseIntegrityDraft,
-      el: element, onContext: changeEnterpriseContext, onCommand: saveEnterpriseCommand, onRetry: () => saveEnterpriseCommand(), onReload: () => loadEnterpriseContext() });
+      el: element, onContext: changeEnterpriseContext, onCommand: saveEnterpriseCommand,
+      onInspectFinding: (finding) => changeEnterpriseContext({ lensId: 'all', scopeId: null, blueprintVersion: null,
+        proposalId: null, effectiveAt: null, recordedAt: null, branchId: null, branchRevision: null,
+        simulationId: null, economicEvaluationId: null }, { preserveProcessDraft: true, preserveEconomicDraft: true,
+        preserveRefinementDraft: true, preserveInterchangeDraft: true, preserveIntegrityDraft: true,
+        selectedId: finding.objectId ?? null }),
+      onRetry: () => saveEnterpriseCommand(), onReload: () => loadEnterpriseContext() });
     document.querySelector('#blueprint-workspace').prepend(contextPanel);
     document.querySelector('#blueprint-title').textContent = viewedBlueprint()?.title ?? 'Requested saved design';
     document.querySelector('#blueprint-version').textContent = viewedBlueprint()?.version ?? 'unavailable';

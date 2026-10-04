@@ -143,6 +143,29 @@ test('integrity exceptions remain unresolved, expire, and become stale without c
   assert.deepEqual(expired.current.findings[0], finding);
   assert.equal(expired.current.exceptions[0].status, 'EXPIRED');
   assert.equal(expired.current.exceptions[0].findingRemainsUnresolved, true);
+  assert.equal(expired.remediationInbox.unresolvedFindings, expired.current.counts.findings);
+  assert.equal(expired.remediationInbox.exceptionCoverage.EXPIRED, 1);
+  assert.equal(expired.remediationInbox.items[0].status, 'UNRESOLVED');
+  assert.equal(expired.remediationInbox.bySeverity[finding.severity], expired.current.findings
+    .filter((entry) => entry.severity === finding.severity).length);
+  assert.equal(expired.remediationInbox.byRule.find((rule) => rule.ruleId === finding.ruleId).findings,
+    expired.current.findings.filter((entry) => entry.ruleId === finding.ruleId).length);
+
+  const sameSourceRerun = applyEnterpriseIntegrityCommand(project, normalizeEnterpriseIntegrityCommand({ kind: 'run-integrity-checks',
+    blueprintId: blueprint.id, blueprintVersion: blueprint.version, snapshotHash: digest(blueprint), reason: 'Compare same-source findings.' }), 'human:owner').integrityAssessment;
+  sameSourceRerun.findings = sameSourceRerun.findings.filter((entry) => entry.id !== finding.id);
+  sameSourceRerun.counts.findings -= 1;
+  sameSourceRerun.counts[finding.severity] -= 1;
+  const sameRule = sameSourceRerun.rules.find((rule) => rule.id === finding.ruleId);
+  sameRule.findingCount -= 1;
+  if (!sameRule.findingCount) sameRule.status = 'PASS';
+  const { reportHash: _sameSourceReportHash, ...sameSourceCore } = sameSourceRerun;
+  sameSourceRerun.reportHash = digest(sameSourceCore);
+  const compared = projectEnterpriseIntegrity(project, blueprint, () => true, checkedAt).remediationInbox.items
+    .find((item) => item.reportId === assessment.id && item.finding.id === finding.id);
+  assert.equal(compared.status, 'UNRESOLVED');
+  assert.equal(compared.notReturnedInLatest, true);
+  assert.equal(compared.latestSameSourceReportId, sameSourceRerun.id);
 
   const next = structuredClone(blueprint);
   next.id = 'blueprint-00000000-0000-4000-8000-000000000099'; next.version += 1;
@@ -150,7 +173,11 @@ test('integrity exceptions remain unresolved, expire, and become stale without c
   assert.throws(() => applyEnterpriseIntegrityException(project, command, 'human:owner', checkedAt),
     { code: 'INTEGRITY_EXCEPTION_SOURCE_STALE', statusCode: 409 });
   const drifted = projectEnterpriseIntegrity(project, next, () => true, new Date('2026-10-06T12:00:00.000Z'));
-  assert.equal(drifted.latest.exceptions[0].status, 'STALE');
+  assert.equal(drifted.exceptions.find((entry) => entry.id === saved.id).status, 'STALE');
+  const staleQueueItem = drifted.remediationInbox.items.find((item) => item.reportId === assessment.id && item.finding.id === finding.id);
+  assert.equal(staleQueueItem.status, 'UNRESOLVED');
+  assert.equal(staleQueueItem.reportDrift, true);
+  assert.equal(staleQueueItem.exception.status, 'STALE');
   const rerun = applyEnterpriseIntegrityCommand(project, normalizeEnterpriseIntegrityCommand({ kind: 'run-integrity-checks',
     blueprintId: next.id, blueprintVersion: next.version, snapshotHash: digest(next), reason: 'Reassess the changed source.' }), 'human:owner').integrityAssessment;
   const reviewed = projectEnterpriseIntegrity(project, next, () => true, new Date('2026-10-06T12:00:00.000Z'));

@@ -799,8 +799,19 @@ test('integrity UI keeps findings unresolved and binds exception review to curre
     blueprintId: 'blueprint-00000000-0000-4000-8000-000000000000', blueprintVersion: 2,
     snapshotHash: 'e'.repeat(64), actor: 'owner', acceptedAt: '2026-10-03T10:00:00.000Z', expiresAt: null,
     reason: 'Prior source exception.', status: 'STALE', findingRemainsUnresolved: true };
+  const remediationItem = { reportId: assessment.id, reportHash: assessment.reportHash, source: assessment.source,
+    reportCreatedAt: assessment.createdAt, reportStatus: assessment.status, reportDrift: false, appliesToContext: true,
+    finding: assessment.findings[0], status: 'UNRESOLVED', exception: null };
+  const historicalAssessment = { ...assessment, id: 'enterprise-integrity-00000000-0000-4000-8000-000000000002',
+    createdAt: '2026-10-04T09:00:00.000Z' };
+  const historicalItem = { ...remediationItem, reportId: historicalAssessment.id, reportHash: 'd'.repeat(64),
+    reportCreatedAt: historicalAssessment.createdAt, notReturnedInLatest: true, latestSameSourceReportId: assessment.id };
+  const remediationInbox = { currentSource: { blueprintId: assessment.source.blueprintId, blueprintVersion: 3, snapshotHash: 'a'.repeat(64) },
+    reportWindowCount: 2, totalSavedReports: 2, totalFindings: 2, unresolvedFindings: 2, visibleItems: 2, omittedItems: 0, driftedReports: 0,
+    bySeverity: { high: 1, medium: 0, low: 0 }, byRule: [{ ruleId: 'design.completeness', reports: 1, findings: 1 }],
+    exceptionCoverage: { ACTIVE: 0, EXPIRED: 0, STALE: 0, NONE: 2 }, items: [historicalItem, remediationItem] };
   const sourceModel = model({ context: { ...model().context, snapshotHash: 'a'.repeat(64), sourceKind: 'MAIN_DESIGN' },
-    permissions: { integrityRun: true, integrityException: true }, integrity: { current: assessment, latest: assessment, assessments: [assessment], exceptions: [staleException] } });
+    permissions: { integrityRun: true, integrityException: true }, integrity: { current: assessment, latest: assessment, assessments: [historicalAssessment, assessment], exceptions: [staleException], remediationInbox } });
   const exactPayload = enterpriseIntegrityCommandPayload(sourceModel, ' Recheck ');
   assert.deepEqual(exactPayload, { kind: 'run-integrity-checks', blueprintId: sourceModel.context.blueprintId,
     blueprintVersion: 3, snapshotHash: 'a'.repeat(64), reason: 'Recheck' });
@@ -813,21 +824,36 @@ test('integrity UI keeps findings unresolved and binds exception review to curre
     assessment.findings[0], 'Temporary exception'), null);
   assert.equal(enterpriseIntegrityExceptionPayload({ ...sourceModel, context: { ...sourceModel.context, isCurrent: false } },
     assessment, assessment.findings[0], 'Temporary exception'), null);
+  assert.equal(enterpriseIntegrityExceptionPayload(sourceModel, historicalAssessment, assessment.findings[0], 'Temporary exception'), null,
+    'a historical same-source report is inspect-only even when it applies to the current blueprint');
 
   let submitted = null;
-  const panel = renderEnterpriseIntegrity({ model: sourceModel, el, ui: branchUi, onCommand: (payload) => { submitted = payload; } });
+  let inspected = null;
+  const panel = renderEnterpriseIntegrity({ model: sourceModel, el, ui: branchUi, onCommand: (payload) => { submitted = payload; },
+    onInspectFinding: (finding, item) => { inspected = { finding, item }; } });
   assert.equal(panel.attrs['aria-label'], 'Integrity and lineage assessment');
   assert.match(panel.textContent, /never changes design, grants authority or verifies business outcomes/);
   assert.match(panel.textContent, /gap-owner/);
   assert.match(panel.textContent, /UNRESOLVED/);
+  assert.match(panel.textContent, /Target: process-deliver/);
+  assert.match(panel.textContent, new RegExp(`Not returned in latest same-source report ${assessment.id}`));
   assert.match(panel.textContent, /Exceptions requiring re-review/);
   assert.match(panel.textContent, /They do not carry forward/);
+  assert.match(panel.textContent, /Severity coverage · high 1 · medium 0 · low 0/);
+  assert.match(panel.textContent, /design\.completeness · 1 findings across 1 reports/);
+  const currentReportRow = panel.querySelectorAll('li').find((entry) => entry.attrs['data-remediation-report'] === assessment.id);
+  const inspectButton = currentReportRow.querySelectorAll('button').find((button) => button.text === 'Inspect record in current design');
+  assert.ok(inspectButton);
+  inspectButton.listeners.get('click')();
+  assert.deepEqual(inspected, { finding: assessment.findings[0], item: remediationItem });
   const form = panel.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === 'run-integrity-checks');
   form.querySelectorAll('textarea')[0].value = 'Recheck';
   form.listeners.get('submit')({ preventDefault() {} });
   assert.deepEqual(submitted, exactPayload);
-  const exceptionForm = panel.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === 'accept-integrity-exception-finding-one');
+  const exceptionForm = panel.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === `accept-integrity-exception-${assessment.id}-finding-one`);
   assert.ok(exceptionForm);
+  assert.equal(Array.from(panel.querySelectorAll('form')).filter((entry) => entry.attrs['data-enterprise-action']?.startsWith('accept-integrity-exception-')).length, 1,
+    'only the current report gets an exception form when older same-source reports are also shown');
   const exceptionInputs = exceptionForm.querySelectorAll('input,select,textarea');
   exceptionInputs[0].value = 'Temporary exception'; exceptionInputs[1].value = '2026-10-05T12:00';
   exceptionForm.listeners.get('submit')({ preventDefault() {} });
@@ -836,18 +862,50 @@ test('integrity UI keeps findings unresolved and binds exception review to curre
   const accepted = { ...assessment, exceptions: [{ id: 'integrity-exception-1', findingId: 'finding-one',
     reportId: assessment.id, actor: 'owner', acceptedAt: '2026-10-04T11:00:00.000Z', expiresAt: null,
     reason: 'Temporary exception', status: 'ACTIVE', findingRemainsUnresolved: true }] };
-  const acceptedPanel = renderEnterpriseIntegrity({ model: { ...sourceModel, integrity: { current: accepted, latest: accepted, assessments: [accepted], exceptions: accepted.exceptions } },
+  const acceptedInbox = { ...remediationInbox, items: [{ ...remediationItem, exception: accepted.exceptions[0] }],
+    exceptionCoverage: { ACTIVE: 1, EXPIRED: 0, STALE: 0, NONE: 0 } };
+  const acceptedPanel = renderEnterpriseIntegrity({ model: { ...sourceModel, integrity: { current: accepted, latest: accepted, assessments: [accepted], exceptions: [...sourceModel.integrity.exceptions, ...accepted.exceptions], remediationInbox: acceptedInbox } },
     el, ui: branchUi, onCommand() {} });
   assert.match(acceptedPanel.textContent, /ACTIVE exception/);
   assert.match(acceptedPanel.textContent, /Finding remains unresolved/);
-  assert.equal(acceptedPanel.querySelectorAll('form').some((entry) => entry.attrs['data-enterprise-action'] === 'accept-integrity-exception-finding-one'), false);
+  assert.equal(acceptedPanel.querySelectorAll('form').some((entry) => entry.attrs['data-enterprise-action'] === `accept-integrity-exception-${assessment.id}-finding-one`), false);
 
   const staleAssessment = { ...assessment, appliesToContext: false };
   const staleModel = { ...sourceModel, context: { ...sourceModel.context, snapshotHash: 'b'.repeat(64) },
-    integrity: { current: null, latest: staleAssessment, assessments: [staleAssessment], exceptions: [staleException] } };
+    integrity: { current: null, latest: staleAssessment, assessments: [staleAssessment], exceptions: [staleException],
+      remediationInbox: { ...remediationInbox, driftedReports: 1, items: [{ ...remediationItem, reportDrift: true, appliesToContext: false }] } } };
   const stalePanel = renderEnterpriseIntegrity({ model: staleModel, el, ui: branchUi, onCommand() {} });
   assert.match(stalePanel.textContent, /STALE · This saved assessment/);
   assert.match(stalePanel.textContent, new RegExp(assessment.source.snapshotHash));
   assert.match(stalePanel.textContent, /Assign an owner\./);
-  assert.equal(stalePanel.querySelectorAll('form').some((entry) => entry.attrs['data-enterprise-action'] === 'accept-integrity-exception-finding-one'), false);
+  assert.match(stalePanel.textContent, /SOURCE DRIFT/);
+  assert.equal(stalePanel.querySelectorAll('form').some((entry) => entry.attrs['data-enterprise-action'] === `accept-integrity-exception-${assessment.id}-finding-one`), false);
+
+  const omittedCurrentFinding = { ...assessment.findings[0], objectId: null, path: 'processes.items.process-deliver' };
+  omittedCurrentFinding.id = 'finding-two';
+  const oldCurrentAssessment = { ...assessment, findings: [assessment.findings[0], omittedCurrentFinding], createdAt: '2026-09-01T10:00:00.000Z' };
+  const recentReports = Array.from({ length: 10 }, (_, index) => ({ ...assessment,
+    id: `enterprise-integrity-00000000-0000-4000-8000-${String(index + 10).padStart(12, '0')}`, findings: [], createdAt: `2026-10-0${index + 1}T10:00:00.000Z` }));
+  const recentInboxItem = { ...remediationItem, reportId: recentReports.at(-1).id,
+    finding: { ...remediationItem.finding, id: 'recent-finding' } };
+  const outsideWindowModel = { ...sourceModel, context: { ...sourceModel.context, isCurrent: false, sourceKind: 'HISTORICAL' },
+    integrity: { current: oldCurrentAssessment, latest: recentReports.at(-1),
+    assessments: recentReports, remediationInbox: { ...remediationInbox,
+      currentSource: { blueprintId: 'blueprint-current', blueprintVersion: 4, snapshotHash: 'f'.repeat(64) },
+      reportWindowCount: 10, totalSavedReports: 11, totalFindings: 2001, unresolvedFindings: 2001,
+      visibleItems: 2000, omittedItems: 1, items: [recentInboxItem] } } };
+  const outsideWindowPanel = renderEnterpriseIntegrity({ model: outsideWindowModel, el, ui: branchUi, onCommand() {} });
+  assert.match(outsideWindowPanel.textContent, /Current context findings omitted from the recent inbox/);
+  assert.match(outsideWindowPanel.textContent, /Target: processes\.items\.process-deliver/);
+  assert.match(outsideWindowPanel.textContent, /SOURCE DRIFT/);
+  assert.equal(Array.from(outsideWindowPanel.querySelectorAll('form')).some((entry) => entry.attrs['data-enterprise-action']?.startsWith('accept-integrity-exception-')), false,
+    'a fallback row for an older selected blueprint is inspect-only');
+  const withinWindowModel = { ...outsideWindowModel, integrity: { ...outsideWindowModel.integrity,
+    assessments: [oldCurrentAssessment, ...recentReports.slice(0, 9)], latest: recentReports[8],
+    remediationInbox: { ...outsideWindowModel.integrity.remediationInbox, items: [remediationItem] } } };
+  const withinWindowPanel = renderEnterpriseIntegrity({ model: withinWindowModel, el, ui: branchUi, onCommand() {} });
+  const withinWindowRows = Array.from(withinWindowPanel.querySelectorAll('li')).filter((entry) => entry.attrs['data-remediation-report'] === oldCurrentAssessment.id);
+  assert.deepEqual(withinWindowRows.map((entry) => entry.attrs['data-remediation-finding']).sort(), ['finding-one', 'finding-two'],
+    'a selected report in the ten-report window has its inbox finding and capped-out finding rendered exactly once each');
+  assert.equal(Array.from(withinWindowPanel.querySelectorAll('form')).some((entry) => entry.attrs['data-enterprise-action']?.startsWith('accept-integrity-exception-')), false);
 });

@@ -343,6 +343,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .enterprise-context button, .enterprise-object button { white-space: normal; max-width: 100%; }
 .enterprise-context details { margin-top: .8rem; }
 .enterprise-context [hidden], .enterprise-object [hidden] { display: none; }
+.integrity-remediation-inbox > ol { display: grid; gap: .8rem; padding-left: 1.5rem; }
+.integrity-remediation-inbox > ol > li { border: 1px solid var(--border, #363b32); border-radius: .5rem; padding: .8rem; min-width: 0; }
+.integrity-remediation-inbox h4 { margin: 0 0 .5rem; }
+.integrity-remediation-inbox p { overflow-wrap: anywhere; }
+.integrity-remediation-inbox button { min-height: 44px; }
 
 .enterprise-change { border-top: 1px solid var(--border, #363b32); padding: .6rem 0; min-width: 0; }
 .enterprise-context [data-enterprise-merge-candidate] { border: 1px solid var(--border, #363b32); padding: .8rem; margin-top: .8rem; }
