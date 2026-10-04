@@ -2,14 +2,31 @@ import { randomUUID } from 'node:crypto';
 import { buildRelations, latestBlueprint, validateBlueprint } from '../model.mjs';
 import { digest } from '../sdlc/contracts.mjs';
 import { blueprintObjects, enterpriseFailure, enterpriseText } from './types.mjs';
+import { enterpriseInstant } from './state.mjs';
 
-export const ENTERPRISE_INTEGRITY_KINDS = new Set(['run-integrity-checks']);
+export const ENTERPRISE_INTEGRITY_KINDS = new Set(['run-integrity-checks', 'accept-integrity-exception']);
 export const ENTERPRISE_INTEGRITY_ENGINE = 'enterprise-integrity-1.0';
-export const ENTERPRISE_INTEGRITY_LIMITS = Object.freeze({ assessments: 50, findings: 2000, bytes: 262144 });
+export const ENTERPRISE_INTEGRITY_LIMITS = Object.freeze({ assessments: 50, findings: 2000, exceptions: 2000, bytes: 262144 });
 
 const fail = (code, message, status = 400) => { throw enterpriseFailure(code, message, status); };
 
 export function normalizeEnterpriseIntegrityCommand(input) {
+  if (input && typeof input === 'object' && !Array.isArray(input) && input.kind === 'accept-integrity-exception') {
+    const allowed = ['kind', 'findingId', 'reportId', 'reportHash', 'blueprintId', 'blueprintVersion', 'snapshotHash', 'reason', 'expiresAt'];
+    if (Object.keys(input).some((key) => !allowed.includes(key))
+      || !/^finding-[a-f0-9]{32}$/.test(input.findingId ?? '')
+      || !/^enterprise-integrity-[0-9a-f-]{36}$/.test(input.reportId ?? '')
+      || !/^[a-f0-9]{64}$/.test(input.reportHash ?? '')
+      || !/^blueprint-[0-9a-f-]{36}$/.test(input.blueprintId ?? '')
+      || !Number.isSafeInteger(input.blueprintVersion) || input.blueprintVersion < 1
+      || !/^[a-f0-9]{64}$/.test(input.snapshotHash ?? '')
+      || !(input.expiresAt === null || typeof input.expiresAt === 'string')) {
+      fail('INVALID_INTEGRITY_EXCEPTION', 'Bind an exception to one exact finding, saved report and current blueprint, with an optional UTC expiry.');
+    }
+    return { kind: input.kind, findingId: input.findingId, reportId: input.reportId, reportHash: input.reportHash,
+      blueprintId: input.blueprintId, blueprintVersion: input.blueprintVersion, snapshotHash: input.snapshotHash,
+      reason: enterpriseText(input.reason, 'Exception reason', 500), expiresAt: input.expiresAt === null ? null : enterpriseInstant(input.expiresAt, 'Exception expiry') };
+  }
   if (!input || typeof input !== 'object' || Array.isArray(input) || input.kind !== 'run-integrity-checks'
     || !/^blueprint-[0-9a-f-]{36}$/.test(input.blueprintId ?? '')
     || !Number.isSafeInteger(input.blueprintVersion) || input.blueprintVersion < 1
@@ -103,6 +120,7 @@ export function evaluateEnterpriseIntegrity(blueprint) {
 }
 
 export function applyEnterpriseIntegrityCommand(project, command, actor) {
+  if (command.kind === 'accept-integrity-exception') return applyEnterpriseIntegrityException(project, command, actor);
   const blueprint = latestBlueprint(project);
   if (!blueprint || blueprint.id !== command.blueprintId || blueprint.version !== command.blueprintVersion
     || digest(blueprint) !== command.snapshotHash) {
@@ -125,15 +143,82 @@ export function applyEnterpriseIntegrityCommand(project, command, actor) {
   return { blueprint, affectedObjectId: null, integrityAssessmentId: assessment.id, integrityAssessment: assessment, recordedAt: at };
 }
 
-export function projectEnterpriseIntegrity(project, blueprint, savedBy = () => true) {
+export function applyEnterpriseIntegrityException(project, command, actor, now = new Date()) {
+  const blueprint = latestBlueprint(project);
+  if (!blueprint || blueprint.id !== command.blueprintId || blueprint.version !== command.blueprintVersion
+    || digest(blueprint) !== command.snapshotHash) {
+    fail('INTEGRITY_EXCEPTION_SOURCE_STALE', 'The saved design changed. Review a report for the exact current blueprint before accepting an exception.', 409);
+  }
+  const report = (project.enterpriseIntegrityAssessments ?? []).find((entry) => entry.id === command.reportId);
+  if (!report || !report.source || !Array.isArray(report.findings)) {
+    fail('INTEGRITY_EXCEPTION_REPORT_STALE', 'The saved integrity report changed or is unavailable; rerun checks before accepting an exception.', 409);
+  }
+  const { reportHash, ...reportCore } = report;
+  if (reportHash !== command.reportHash || digest(reportCore) !== reportHash) {
+    fail('INTEGRITY_EXCEPTION_REPORT_STALE', 'The saved integrity report changed or is unavailable; rerun checks before accepting an exception.', 409);
+  }
+  if (report.source.blueprintId !== blueprint.id || report.source.blueprintVersion !== blueprint.version
+    || report.source.snapshotHash !== command.snapshotHash || !report.findings.some((entry) => entry.id === command.findingId)) {
+    fail('INTEGRITY_EXCEPTION_FINDING_STALE', 'The selected finding is not present in a report for the exact current design.', 409);
+  }
+  if (command.expiresAt && Date.parse(command.expiresAt) <= now.getTime()) {
+    fail('INVALID_INTEGRITY_EXCEPTION_EXPIRY', 'Choose a future expiry or leave expiry empty.', 400);
+  }
+  const prior = project.enterpriseIntegrityExceptions ?? [];
+  if (prior.length >= ENTERPRISE_INTEGRITY_LIMITS.exceptions) fail('INTEGRITY_EXCEPTION_LIMIT', 'This project reached its 2,000-exception history limit.', 409);
+  if (prior.some((entry) => entry.reportId === report.id && entry.findingId === command.findingId
+    && (!entry.expiresAt || Date.parse(entry.expiresAt) > now.getTime()))) {
+    fail('INTEGRITY_EXCEPTION_ALREADY_ACTIVE', 'An active exception already exists for this finding and report.', 409);
+  }
+  const acceptedAt = now.toISOString();
+  const core = { id: `integrity-exception-${randomUUID()}`, findingId: command.findingId, reportId: report.id,
+    reportHash: report.reportHash, blueprintId: blueprint.id, blueprintVersion: blueprint.version,
+    snapshotHash: command.snapshotHash, actor, reason: command.reason, acceptedAt, expiresAt: command.expiresAt };
+  const exception = { ...core, exceptionHash: digest(core) };
+  project.enterpriseIntegrityExceptions ??= [];
+  project.enterpriseIntegrityExceptions.push(exception);
+  project.audit ??= [];
+  project.audit.push({ at: acceptedAt, action: 'enterprise.accept-integrity-exception', actor,
+    detail: `Accepted a time-bounded human exception for finding ${command.findingId} in report ${report.id}; the finding remains unresolved.` });
+  return { blueprint, affectedObjectId: null, integrityExceptionId: exception.id, integrityException: exception, recordedAt: acceptedAt };
+}
+
+export function projectEnterpriseIntegrity(project, blueprint, savedBy = () => true, now = new Date()) {
   const selectedSourceHash = blueprint ? digest(blueprint) : null;
+  const latest = latestBlueprint(project);
+  const exceptionsByReport = new Map();
+  const projectedExceptions = [];
+  for (const saved of project.enterpriseIntegrityExceptions ?? []) {
+    if (!savedBy(saved.acceptedAt)) continue;
+    const { exceptionHash, ...core } = saved;
+    if (digest(core) !== exceptionHash) fail('INTEGRITY_EXCEPTION_CORRUPT', 'A saved integrity exception failed its immutable record check.', 409);
+    const report = (project.enterpriseIntegrityAssessments ?? []).find((entry) => entry.id === saved.reportId);
+    if (!report || report.reportHash !== saved.reportHash || !report.source || !Array.isArray(report.findings)
+      || !report.findings.some((entry) => entry.id === saved.findingId)) {
+      fail('INTEGRITY_EXCEPTION_CORRUPT', 'A saved integrity exception no longer matches its report finding.', 409);
+    }
+    if (saved.blueprintId !== report.source.blueprintId || saved.blueprintVersion !== report.source.blueprintVersion
+      || saved.snapshotHash !== report.source.snapshotHash || typeof saved.actor !== 'string'
+      || typeof saved.reason !== 'string' || !saved.reason.trim()
+      || !Number.isFinite(Date.parse(saved.acceptedAt))
+      || (saved.expiresAt !== null && !Number.isFinite(Date.parse(saved.expiresAt)))) {
+      fail('INTEGRITY_EXCEPTION_CORRUPT', 'A saved integrity exception has invalid source or human-review metadata.', 409);
+    }
+    const stale = !latest || saved.blueprintId !== latest.id || saved.blueprintVersion !== latest.version
+      || saved.snapshotHash !== digest(latest) || report.source.blueprintId !== latest.id
+      || report.source.blueprintVersion !== latest.version || report.source.snapshotHash !== digest(latest);
+    const status = stale ? 'STALE' : saved.expiresAt && Date.parse(saved.expiresAt) <= now.getTime() ? 'EXPIRED' : 'ACTIVE';
+    const entry = { ...structuredClone(saved), status, findingRemainsUnresolved: true };
+    projectedExceptions.push(entry);
+    exceptionsByReport.set(saved.reportId, [...(exceptionsByReport.get(saved.reportId) ?? []), entry]);
+  }
   const assessments = (project.enterpriseIntegrityAssessments ?? []).filter((entry) => savedBy(entry.createdAt)).map((entry) => {
     const { reportHash, ...core } = entry;
     if (digest(core) !== reportHash) fail('INTEGRITY_REPORT_CORRUPT', 'A saved integrity assessment failed its immutable report hash check.', 409);
-    return { ...structuredClone(entry), appliesToContext: Boolean(blueprint && entry.source.blueprintId === blueprint.id
+    return { ...structuredClone(entry), exceptions: exceptionsByReport.get(entry.id) ?? [], appliesToContext: Boolean(blueprint && entry.source.blueprintId === blueprint.id
       && entry.source.blueprintVersion === blueprint.version && entry.source.snapshotHash === selectedSourceHash) };
   });
   return { engineVersion: ENTERPRISE_INTEGRITY_ENGINE, assessments: assessments.slice(-10),
-    latest: assessments.at(-1) ?? null,
+    exceptions: projectedExceptions.slice(-ENTERPRISE_INTEGRITY_LIMITS.exceptions), latest: assessments.at(-1) ?? null,
     current: assessments.filter((entry) => entry.appliesToContext).at(-1) ?? null };
 }

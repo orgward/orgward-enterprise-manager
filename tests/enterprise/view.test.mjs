@@ -11,7 +11,7 @@ import { activationForTask, evaluateManualFlowAdvice, manualFlowActivation, manu
 import { renderEnterpriseEconomics } from '../../public/enterprise-economics.mjs';
 import { renderEnterpriseRefinement } from '../../public/enterprise-refinement.mjs';
 import { enterpriseInterchangeCommandPayload, enterpriseInterchangeWritable, renderEnterpriseInterchange } from '../../public/enterprise-interchange.mjs';
-import { enterpriseIntegrityCommandPayload, renderEnterpriseIntegrity } from '../../public/enterprise-integrity.mjs';
+import { enterpriseIntegrityCommandPayload, enterpriseIntegrityExceptionPayload, renderEnterpriseIntegrity } from '../../public/enterprise-integrity.mjs';
 import { decodeStudioRoute, encodeStudioRoute } from '../../public/shared-interactions.mjs';
 
 class NodeListFixture extends Array {
@@ -718,6 +718,13 @@ test('enterprise command recovery persists and resubmits the identical envelope 
   }]]);
   persistEnterpriseCommand(storageFixture(values), 'oidc:owner', 'project-one', null);
   assert.equal(restoreEnterpriseCommand(storageFixture(values), 'oidc:owner', 'project-one'), null);
+  const exceptionSaved = { projectId: 'project-one', envelope: { schemaVersion: '1.0', commandId: 'cmd-integrity-exception', expectedVersion: 9,
+    payload: { kind: 'accept-integrity-exception', findingId: `finding-${'a'.repeat(32)}`,
+      reportId: 'enterprise-integrity-00000000-0000-4000-8000-000000000001', reportHash: 'b'.repeat(64),
+      blueprintId: 'blueprint-00000000-0000-4000-8000-000000000001', blueprintVersion: 3,
+      snapshotHash: 'c'.repeat(64), reason: 'Recover the exact human exception.', expiresAt: null } } };
+  persistEnterpriseCommand(storageFixture(values), 'oidc:owner', 'project-one', exceptionSaved);
+  assert.deepEqual(restoreEnterpriseCommand(storageFixture(values), 'oidc:owner', 'project-one'), exceptionSaved);
 });
 
 test('first-run enterprise context gives blueprint guidance without rendering scope mutation forms', () => {
@@ -779,35 +786,68 @@ test('refinement UI names both reverse trace directions and saves selected exist
   assert.deepEqual(submitted, { kind: 'define-refinement', objectId: selected.id, refines: [parent.id], reason: '' });
 });
 
-test('integrity UI binds each run to the current saved snapshot and labels report findings', () => {
+test('integrity UI keeps findings unresolved and binds exception review to current exact report source', () => {
   const assessment = { id: 'enterprise-integrity-00000000-0000-4000-8000-000000000001', status: 'REVIEW',
-    source: { blueprintVersion: 3, snapshotHash: 'a'.repeat(64) }, appliesToContext: true,
+    reportHash: 'c'.repeat(64), source: { projectId: 'project-current', blueprintId: 'blueprint-00000000-0000-4000-8000-000000000001',
+      blueprintVersion: 3, snapshotHash: 'a'.repeat(64) }, appliesToContext: true,
     createdAt: '2026-10-04T10:00:00.000Z', createdBy: 'owner', reason: 'Check proposed design.',
     counts: { failedRules: 0, reviewRules: 1, findings: 1 },
     rules: [{ id: 'design.completeness', status: 'REVIEW', findingCount: 1, summary: 'Completeness gaps remain.' }],
-    findings: [{ id: 'finding-one', severity: 'high', code: 'gap-owner', objectId: 'process-deliver', message: 'Assign an owner.', action: 'Choose an owner.' }] };
+    exceptions: [], findings: [{ id: 'finding-one', severity: 'high', code: 'gap-owner', objectId: 'process-deliver', message: 'Assign an owner.', action: 'Choose an owner.' }] };
+  const staleException = { id: 'integrity-exception-00000000-0000-4000-8000-000000000001', findingId: 'finding-one',
+    reportId: 'enterprise-integrity-00000000-0000-4000-8000-000000000002', reportHash: 'd'.repeat(64),
+    blueprintId: 'blueprint-00000000-0000-4000-8000-000000000000', blueprintVersion: 2,
+    snapshotHash: 'e'.repeat(64), actor: 'owner', acceptedAt: '2026-10-03T10:00:00.000Z', expiresAt: null,
+    reason: 'Prior source exception.', status: 'STALE', findingRemainsUnresolved: true };
   const sourceModel = model({ context: { ...model().context, snapshotHash: 'a'.repeat(64), sourceKind: 'MAIN_DESIGN' },
-    permissions: { integrityRun: true }, integrity: { current: assessment, latest: assessment, assessments: [assessment] } });
+    permissions: { integrityRun: true, integrityException: true }, integrity: { current: assessment, latest: assessment, assessments: [assessment], exceptions: [staleException] } });
   const exactPayload = enterpriseIntegrityCommandPayload(sourceModel, ' Recheck ');
   assert.deepEqual(exactPayload, { kind: 'run-integrity-checks', blueprintId: sourceModel.context.blueprintId,
     blueprintVersion: 3, snapshotHash: 'a'.repeat(64), reason: 'Recheck' });
   assert.equal(enterpriseIntegrityCommandPayload({ ...sourceModel, context: { ...sourceModel.context, isCurrent: false } }, 'Recheck'), null);
+  const exceptionPayload = enterpriseIntegrityExceptionPayload(sourceModel, assessment, assessment.findings[0], ' Temporary exception ', '2026-10-05T12:00');
+  assert.deepEqual(exceptionPayload, { kind: 'accept-integrity-exception', findingId: 'finding-one', reportId: assessment.id,
+    reportHash: assessment.reportHash, blueprintId: assessment.source.blueprintId, blueprintVersion: 3,
+    snapshotHash: 'a'.repeat(64), reason: 'Temporary exception', expiresAt: '2026-10-05T12:00:00.000Z' });
+  assert.equal(enterpriseIntegrityExceptionPayload({ ...sourceModel, permissions: { integrityException: false } }, assessment,
+    assessment.findings[0], 'Temporary exception'), null);
+  assert.equal(enterpriseIntegrityExceptionPayload({ ...sourceModel, context: { ...sourceModel.context, isCurrent: false } },
+    assessment, assessment.findings[0], 'Temporary exception'), null);
 
   let submitted = null;
   const panel = renderEnterpriseIntegrity({ model: sourceModel, el, ui: branchUi, onCommand: (payload) => { submitted = payload; } });
   assert.equal(panel.attrs['aria-label'], 'Integrity and lineage assessment');
   assert.match(panel.textContent, /never changes design, grants authority or verifies business outcomes/);
   assert.match(panel.textContent, /gap-owner/);
-  const form = panel.querySelectorAll('form')[0];
+  assert.match(panel.textContent, /UNRESOLVED/);
+  assert.match(panel.textContent, /Exceptions requiring re-review/);
+  assert.match(panel.textContent, /They do not carry forward/);
+  const form = panel.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === 'run-integrity-checks');
   form.querySelectorAll('textarea')[0].value = 'Recheck';
   form.listeners.get('submit')({ preventDefault() {} });
   assert.deepEqual(submitted, exactPayload);
+  const exceptionForm = panel.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === 'accept-integrity-exception-finding-one');
+  assert.ok(exceptionForm);
+  const exceptionInputs = exceptionForm.querySelectorAll('input,select,textarea');
+  exceptionInputs[0].value = 'Temporary exception'; exceptionInputs[1].value = '2026-10-05T12:00';
+  exceptionForm.listeners.get('submit')({ preventDefault() {} });
+  assert.deepEqual(submitted, exceptionPayload);
+
+  const accepted = { ...assessment, exceptions: [{ id: 'integrity-exception-1', findingId: 'finding-one',
+    reportId: assessment.id, actor: 'owner', acceptedAt: '2026-10-04T11:00:00.000Z', expiresAt: null,
+    reason: 'Temporary exception', status: 'ACTIVE', findingRemainsUnresolved: true }] };
+  const acceptedPanel = renderEnterpriseIntegrity({ model: { ...sourceModel, integrity: { current: accepted, latest: accepted, assessments: [accepted], exceptions: accepted.exceptions } },
+    el, ui: branchUi, onCommand() {} });
+  assert.match(acceptedPanel.textContent, /ACTIVE exception/);
+  assert.match(acceptedPanel.textContent, /Finding remains unresolved/);
+  assert.equal(acceptedPanel.querySelectorAll('form').some((entry) => entry.attrs['data-enterprise-action'] === 'accept-integrity-exception-finding-one'), false);
 
   const staleAssessment = { ...assessment, appliesToContext: false };
   const staleModel = { ...sourceModel, context: { ...sourceModel.context, snapshotHash: 'b'.repeat(64) },
-    integrity: { current: null, latest: staleAssessment, assessments: [staleAssessment] } };
+    integrity: { current: null, latest: staleAssessment, assessments: [staleAssessment], exceptions: [staleException] } };
   const stalePanel = renderEnterpriseIntegrity({ model: staleModel, el, ui: branchUi, onCommand() {} });
   assert.match(stalePanel.textContent, /STALE · This saved assessment/);
   assert.match(stalePanel.textContent, new RegExp(assessment.source.snapshotHash));
   assert.match(stalePanel.textContent, /Assign an owner\./);
+  assert.equal(stalePanel.querySelectorAll('form').some((entry) => entry.attrs['data-enterprise-action'] === 'accept-integrity-exception-finding-one'), false);
 });

@@ -6576,6 +6576,41 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   Primary integration review passed; PR-13 remains open pending its remaining
   scope and one frozen parent check.
 
+  Integrity exception/remediation inbox slice (2026-10-04): applying Sol's
+  existing data-integrity decision, each exception is a separate audited human
+  record bound to one finding ID, report ID/hash, and exact blueprint ID/version/
+  hash, with actor, reason, acceptance time and optional UTC expiry. It never
+  changes the assessment, rule counts, or finding; the finding remains visibly
+  unresolved. Current-source exceptions project as active or expired. Any
+  blueprint source drift projects prior exceptions as stale in the remediation
+  inbox, without carrying them to a later report; a human can explicitly review
+  and accept a new exception only against a current report and source. The
+  command revalidates immutable report hash, finding membership and exact latest
+  blueprint inside the existing human workspace-writer command/audit store;
+  replay remains command-store idempotent. Draft pure/UI/PG fixtures cover
+  accept, replay/restart, expiry, stale-source rejection, drift/re-review,
+  permission denial, saved-command recovery and no suppression. Implementation
+  passed primary integration review. The three-case focused invocation
+  `node ops/run-tests.mjs tests/enterprise/contracts.test.mjs
+  tests/enterprise/view.test.mjs tests/enterprise/server.test.mjs
+  '--test-name-pattern=integrity exceptions remain unresolved, expire, and
+  become stale without carrying to a new report|integrity UI keeps findings
+  unresolved and binds exception review to current exact report source|saved
+  integrity assessments bind exact design source, replay, survive restart and
+  stale on design change'` ran 3 cases: 2 passed, 1 failed, 0 skipped (runner
+  2.72s; TAP 1548.672ms; pure 60.609ms, PG 1128.418ms, UI 8.941ms; log
+  `/tmp/orgward-tests-xUnWcl/node-test.tap.log`). The UI failure was fixture-only:
+  it selected the first form after per-finding controls were added, rather than
+  the run-check form by action ID. Only that failed UI case was rerun with
+  `node ops/run-tests.mjs tests/enterprise/view.test.mjs
+  '--test-name-pattern=^integrity UI keeps findings unresolved and binds
+  exception review to current exact report source$'`; it passed 1/1, 0
+  failed/cancelled/skipped (runner 0.23s; TAP 156.270ms; case 10.888ms; log
+  `/tmp/orgward-tests-xleadn/node-test.tap.log`). All three distinct cases now
+  have passing evidence; the pure and PG cases were not rerun. `git diff --check`
+  passes. PR-13 remains open; defer its single frozen parent check until
+  remaining PR-13 scope is complete.
+
 - [ ] PR-14 — Governance and supervised agents (T-76–T-89). Implement versioned
   policy decisions/enforcement, decision rights and appeals, semantic/data
   stewardship, verifiable governance ledger, agent identities/autonomy envelopes,

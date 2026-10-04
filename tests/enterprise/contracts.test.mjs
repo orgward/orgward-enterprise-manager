@@ -7,7 +7,8 @@ import { effectiveStatus, enterpriseInstant, enterpriseInterval, objectBasisHash
 import { normalizeDecisionTable, normalizeProcessFlow } from '../../src/enterprise/process-model.mjs';
 import { evaluateDecisionTable, simulateProcessFlow } from '../../src/enterprise/process-simulation.mjs';
 import { planManualProcessFlow, projectManualFlowActivation } from '../../src/enterprise/process-runtime.mjs';
-import { evaluateEnterpriseIntegrity, normalizeEnterpriseIntegrityCommand } from '../../src/enterprise/integrity.mjs';
+import { applyEnterpriseIntegrityCommand, applyEnterpriseIntegrityException, evaluateEnterpriseIntegrity,
+  normalizeEnterpriseIntegrityCommand, projectEnterpriseIntegrity } from '../../src/enterprise/integrity.mjs';
 import { addConversationTurn, createProject } from '../../src/model.mjs';
 import { digest } from '../../src/sdlc/contracts.mjs';
 
@@ -117,6 +118,45 @@ test('typed integrity assessment detects canonical relation drift and keeps desi
     blueprintVersion: blueprint.version, snapshotHash: digest(blueprint), reason: 'Check exact saved design.' });
   assert.equal(command.snapshotHash, digest(blueprint));
   assert.throws(() => normalizeEnterpriseIntegrityCommand({ ...command, extra: true }), { code: 'INVALID_INTEGRITY_COMMAND' });
+});
+
+test('integrity exceptions remain unresolved, expire, and become stale without carrying to a new report', () => {
+  const project = createProject('Integrity exception fixture');
+  for (const answer of ['A safe service.', 'Small businesses.', 'Clear status and fees.', 'Humans handle exceptions.']) addConversationTurn(project, answer);
+  const blueprint = project.blueprintVersions.at(-1);
+  const checkedAt = new Date('2026-10-04T12:00:00.000Z');
+  const assessment = applyEnterpriseIntegrityCommand(project, normalizeEnterpriseIntegrityCommand({ kind: 'run-integrity-checks',
+    blueprintId: blueprint.id, blueprintVersion: blueprint.version, snapshotHash: digest(blueprint), reason: 'Review current findings.' }), 'human:owner').integrityAssessment;
+  const finding = structuredClone(assessment.findings[0]);
+  const command = normalizeEnterpriseIntegrityCommand({ kind: 'accept-integrity-exception', findingId: finding.id,
+    reportId: assessment.id, reportHash: assessment.reportHash, blueprintId: blueprint.id, blueprintVersion: blueprint.version,
+    snapshotHash: digest(blueprint), reason: 'Temporary owner-approved exception while the gap is scheduled.', expiresAt: '2026-10-05T12:00:00.000Z' });
+  const saved = applyEnterpriseIntegrityException(project, command, 'human:owner', checkedAt).integrityException;
+  assert.equal(saved.actor, 'human:owner');
+  assert.equal(saved.acceptedAt, checkedAt.toISOString());
+  assert.equal(saved.expiresAt, '2026-10-05T12:00:00.000Z');
+  assert.equal(assessment.status, 'REVIEW');
+  assert.deepEqual(assessment.findings[0], finding, 'the immutable report finding is not rewritten or suppressed');
+  assert.equal(project.audit.at(-1).action, 'enterprise.accept-integrity-exception');
+  const expired = projectEnterpriseIntegrity(project, blueprint, () => true, new Date('2026-10-06T12:00:00.000Z'));
+  assert.equal(expired.current.status, assessment.status);
+  assert.deepEqual(expired.current.findings[0], finding);
+  assert.equal(expired.current.exceptions[0].status, 'EXPIRED');
+  assert.equal(expired.current.exceptions[0].findingRemainsUnresolved, true);
+
+  const next = structuredClone(blueprint);
+  next.id = 'blueprint-00000000-0000-4000-8000-000000000099'; next.version += 1;
+  next.createdAt = '2026-10-04T12:01:00.000Z'; project.blueprintVersions.push(next);
+  assert.throws(() => applyEnterpriseIntegrityException(project, command, 'human:owner', checkedAt),
+    { code: 'INTEGRITY_EXCEPTION_SOURCE_STALE', statusCode: 409 });
+  const drifted = projectEnterpriseIntegrity(project, next, () => true, new Date('2026-10-06T12:00:00.000Z'));
+  assert.equal(drifted.latest.exceptions[0].status, 'STALE');
+  const rerun = applyEnterpriseIntegrityCommand(project, normalizeEnterpriseIntegrityCommand({ kind: 'run-integrity-checks',
+    blueprintId: next.id, blueprintVersion: next.version, snapshotHash: digest(next), reason: 'Reassess the changed source.' }), 'human:owner').integrityAssessment;
+  const reviewed = projectEnterpriseIntegrity(project, next, () => true, new Date('2026-10-06T12:00:00.000Z'));
+  assert.equal(reviewed.current.id, rerun.id);
+  assert.deepEqual(reviewed.current.exceptions, [], 'exceptions do not carry to a report for a new exact source');
+  assert.equal(reviewed.exceptions.find((entry) => entry.id === saved.id).status, 'STALE');
 });
 
 test('enterprise decision tables preserve typed input identity and reject malformed or excessive rules', () => {

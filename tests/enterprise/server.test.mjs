@@ -1561,11 +1561,40 @@ test('saved integrity assessments bind exact design source, replay, survive rest
   const replay = await postCommand(instance.base, 'owner', project.id, command);
   assert.equal(replay.meta.replayed, true);
   assert.equal(replay.data.integrityAssessment.id, assessment.id);
+  view = await currentView(instance.base, 'owner', project.id);
+  const finding = assessment.findings[0];
+  const exceptionCommand = commandBody(view, 'integrity-exception-one', { kind: 'accept-integrity-exception',
+    findingId: finding.id, reportId: assessment.id, reportHash: assessment.reportHash,
+    blueprintId: assessment.source.blueprintId, blueprintVersion: assessment.source.blueprintVersion,
+    snapshotHash: assessment.source.snapshotHash, reason: 'Approve a temporary remediation window.', expiresAt: null });
+  const accepted = await postCommand(instance.base, 'owner', project.id, exceptionCommand);
+  assert.equal(accepted.event.type, 'EnterpriseIntegrityExceptionAccepted');
+  assert.equal(accepted.data.integrityException.findingId, finding.id);
+  assert.equal(accepted.data.integrityException.reportId, assessment.id);
+  assert.equal(accepted.data.integrityException.reportHash, assessment.reportHash);
+  assert.equal(accepted.data.integrityException.blueprintId, assessment.source.blueprintId);
+  assert.equal(accepted.data.integrityException.blueprintVersion, assessment.source.blueprintVersion);
+  assert.equal(accepted.data.integrityException.snapshotHash, assessment.source.snapshotHash);
+  assert.equal(accepted.data.integrityException.actor, accepted.event.actor);
+  assert.equal(accepted.data.integrityException.reason, 'Approve a temporary remediation window.');
+  assert.equal(accepted.data.integrityException.expiresAt, null);
+  const acceptedView = await currentView(instance.base, 'owner', project.id);
+  assert.equal(acceptedView.data.integrity.current.status, assessment.status, 'an exception does not alter the report result');
+  assert.deepEqual(acceptedView.data.integrity.current.findings[0], finding, 'the finding remains visible and unresolved');
+  assert.equal(acceptedView.data.integrity.current.exceptions[0].status, 'ACTIVE');
+  assert.equal(acceptedView.data.integrity.current.exceptions[0].findingRemainsUnresolved, true);
+  const exceptionReplay = await postCommand(instance.base, 'owner', project.id, exceptionCommand);
+  assert.equal(exceptionReplay.meta.replayed, true);
+  assert.equal(exceptionReplay.data.integrityException.id, accepted.data.integrityException.id);
   const readerView = await currentView(instance.base, 'reader', project.id);
   assert.equal(readerView.data.permissions.integrityRun, false);
+  assert.equal(readerView.data.permissions.integrityException, false);
   const denied = await postCommand(instance.base, 'reader', project.id,
     commandBody(readerView, 'integrity-reader-denied', { ...runPayload, reason: 'Reader cannot run checks.' }), 403);
   assert.equal(denied.error.code, 'ACTION_FORBIDDEN');
+  const exceptionDenied = await postCommand(instance.base, 'reader', project.id,
+    commandBody(readerView, 'integrity-exception-reader-denied', exceptionCommand.payload), 403);
+  assert.equal(exceptionDenied.error.code, 'ACTION_FORBIDDEN');
 
   view = await currentView(instance.base, 'owner', project.id);
   const selected = await currentView(instance.base, 'owner', project.id, { selectedId: 'process-deliver' });
@@ -1576,6 +1605,8 @@ test('saved integrity assessments bind exact design source, replay, survive rest
   const latest = await currentView(instance.base, 'owner', project.id);
   assert.equal(latest.data.integrity.current, null);
   assert.equal(latest.data.integrity.latest.appliesToContext, false);
+  assert.equal(latest.data.integrity.latest.exceptions[0].status, 'STALE');
+  assert.equal(latest.data.integrity.exceptions[0].findingRemainsUnresolved, true);
   const stale = await postCommand(instance.base, 'owner', project.id, commandBody(latest, 'integrity-stale-source', {
     kind: 'run-integrity-checks', snapshotHash: sourceHash, reason: 'Attempt an obsolete basis.' }), 409);
   assert.equal(stale.error.code, 'INTEGRITY_SOURCE_STALE');
@@ -1586,6 +1617,13 @@ test('saved integrity assessments bind exact design source, replay, survive rest
   assert.equal(afterRestart.data.integrity.assessments[0].id, assessment.id);
   assert.equal(afterRestart.data.integrity.assessments[0].reportHash, assessment.reportHash);
   assert.equal(afterRestart.data.integrity.current, null);
+  assert.equal(afterRestart.data.integrity.exceptions[0].status, 'STALE');
+  const refreshed = await postCommand(instance.base, 'owner', project.id, commandBody(afterRestart, 'integrity-reassessment-after-exception', {
+    kind: 'run-integrity-checks', snapshotHash: afterRestart.data.context.snapshotHash, reason: 'Re-review the changed design.' }));
+  const refreshedView = await currentView(instance.base, 'owner', project.id);
+  assert.equal(refreshedView.data.integrity.current.id, refreshed.data.integrityAssessment.id);
+  assert.deepEqual(refreshedView.data.integrity.current.exceptions, [], 'prior exceptions never carry forward into a new source report');
+  assert.equal(refreshedView.data.integrity.exceptions[0].status, 'STALE', 'the old exception remains visible for explicit re-review');
 });
 
 test('saved refinement links update canonical relations, reject cycles and trace exact branch revisions', async (t) => {

@@ -1661,7 +1661,8 @@ export function createApp({
             const changed = applyEnterpriseCommand(project, payload, actor, { authzGeneration: request.identity.authzGeneration,
               membershipGeneration: reviewMembershipGeneration });
             project.version += 1; project.updatedAt = changed.recordedAt ?? changed.blueprint.createdAt; project.updatedBy = actor;
-            project.events.push(projectEvent(project, { type: ENTERPRISE_INTEGRITY_KINDS.has(payload.kind) ? 'EnterpriseIntegrityAssessed'
+            project.events.push(projectEvent(project, { type: payload.kind === 'run-integrity-checks' ? 'EnterpriseIntegrityAssessed'
+              : payload.kind === 'accept-integrity-exception' ? 'EnterpriseIntegrityExceptionAccepted'
               : ['record-state', 'set-validity', 'propose-future-design'].includes(payload.kind)
               || ENTERPRISE_BRANCH_KINDS.has(payload.kind) || ENTERPRISE_PROCESS_KINDS.has(payload.kind)
               || ENTERPRISE_ECONOMIC_KINDS.has(payload.kind) || ENTERPRISE_REFINEMENT_KINDS.has(payload.kind)
@@ -1675,7 +1676,8 @@ export function createApp({
                 acceptedSourceClaims: changed.acceptedClaims ?? null,
                 importSource: changed.source ?? null, importSourceHash: changed.sourceHash ?? null,
                 simulationId: changed.simulationId ?? null, economicEvaluationId: changed.economicEvaluationId ?? null,
-                integrityAssessmentId: changed.integrityAssessmentId ?? null, reason: payload.reason } }));
+                integrityAssessmentId: changed.integrityAssessmentId ?? null,
+                integrityExceptionId: changed.integrityExceptionId ?? null, reason: payload.reason } }));
           },
         }, actor, { requiredPrincipalRoles: ['workspace-write'], authzGeneration: request.identity.authzGeneration,
           ...(administrative ? { minimumProjectAccess: 'owner' } : {}) });
@@ -1686,6 +1688,8 @@ export function createApp({
         const economicEvaluation = receipt.economicEvaluationId ? result.project.enterpriseEconomicEvaluations?.find((entry) => entry.id === receipt.economicEvaluationId) : null;
         const integrityAssessment = receipt.integrityAssessmentId
           ? result.project.enterpriseIntegrityAssessments?.find((entry) => entry.id === receipt.integrityAssessmentId) : null;
+        const integrityException = receipt.integrityExceptionId
+          ? result.project.enterpriseIntegrityExceptions?.find((entry) => entry.id === receipt.integrityExceptionId) : null;
         return sendApi(response, 200, { projectVersion: result.project.version, blueprintId: simulation?.source.blueprintId ?? economicEvaluation?.source.blueprintId ?? blueprint.id,
           blueprintVersion: simulation?.source.blueprintVersion ?? economicEvaluation?.source.blueprintVersion ?? blueprint.version, affectedObjectId: receipt.objectId, proposalId: receipt.proposalId ?? null,
           branchId: receipt.branchId ?? null, branchRevision: receipt.branchRevision ?? null,
@@ -1694,7 +1698,7 @@ export function createApp({
           importSourceHash: receipt.importSourceHash ?? null,
           acceptedClaims: receipt.acceptedSourceClaims ?? null,
           ...(simulation ? { simulation } : {}), ...(economicEvaluation ? { economicEvaluation } : {}),
-          ...(integrityAssessment ? { integrityAssessment } : {}) },
+          ...(integrityAssessment ? { integrityAssessment } : {}), ...(integrityException ? { integrityException } : {}) },
         { correlationId, event: result.project.events.at(-1), meta: { replayed: result.replayed } });
       }
 

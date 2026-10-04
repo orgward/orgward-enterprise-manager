@@ -301,6 +301,7 @@ async function saveEnterpriseCommand(payload = null) {
     } else {
       if (enterpriseReadOnly() || !model.permissions?.write
         || (payload.kind === 'run-integrity-checks' && !model.permissions?.integrityRun)
+        || (payload.kind === 'accept-integrity-exception' && !model.permissions?.integrityException)
         || ((['create-scope', 'rename-scope', 'set-validity', 'propose-future-design'].includes(payload.kind)
           || (payload.kind === 'record-state' && payload.dimension === 'review')) && !model.permissions.scopeAdmin)) return;
       boundPayload = { ...payload, blueprintId: model.context.blueprintId, blueprintVersion: model.context.blueprintVersion };
@@ -332,7 +333,8 @@ async function saveEnterpriseCommand(payload = null) {
     if (ENTERPRISE_INTERCHANGE_COMMANDS.includes(saved.envelope.payload.kind)) retainEnterpriseInterchangeDraft(null);
     if (saved.envelope.payload.kind === 'run-integrity-checks') state.enterpriseIntegrityDraft = null;
     if (result.data.simulation) state.enterpriseSimulation = result.data.simulation;
-    state.enterpriseStatus = result.data.acceptedClaims ? `Accepted ${result.data.acceptedClaims.length} reviewed source claims into one proposed design version from source snapshot ${result.data.acceptedClaims[0]?.sourceHash ?? 'unknown'}; first claim locator ${result.data.acceptedClaims[0]?.claimLocator ?? 'not supplied'}. No work was run or published.`
+    state.enterpriseStatus = result.data.integrityException ? `Recorded the human exception for finding ${result.data.integrityException.findingId} in report ${result.data.integrityException.reportId}. The finding remains unresolved and the integrity result is unchanged.`
+      : result.data.acceptedClaims ? `Accepted ${result.data.acceptedClaims.length} reviewed source claims into one proposed design version from source snapshot ${result.data.acceptedClaims[0]?.sourceHash ?? 'unknown'}; first claim locator ${result.data.acceptedClaims[0]?.claimLocator ?? 'not supplied'}. No work was run or published.`
       : result.data.integrityAssessment ? `Saved the ${result.data.integrityAssessment.status} integrity and lineage assessment for its exact blueprint source. No design or operational state changed.`
       : result.data.economicEvaluation ? 'Saved the exact-source economic evaluation. It contains declared assumptions and reported capacity only.'
       : result.data.simulation ? 'Saved the deterministic simulation for its exact source. No work was performed.'

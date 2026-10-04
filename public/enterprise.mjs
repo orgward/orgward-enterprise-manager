@@ -3,7 +3,7 @@ import { ENTERPRISE_BRANCH_COMMANDS, enterpriseBranchWritable, renderEnterpriseB
 import { ENTERPRISE_ECONOMIC_COMMANDS, renderEnterpriseEconomics } from './enterprise-economics.mjs';
 import { ENTERPRISE_REFINEMENT_COMMANDS, renderEnterpriseRefinement } from './enterprise-refinement.mjs';
 import { ENTERPRISE_INTERCHANGE_COMMANDS, renderEnterpriseInterchange } from './enterprise-interchange.mjs';
-import { renderEnterpriseIntegrity } from './enterprise-integrity.mjs';
+import { ENTERPRISE_INTEGRITY_COMMANDS, renderEnterpriseIntegrity } from './enterprise-integrity.mjs';
 const SCOPE_TYPES = new Set(['organization', 'legal-entity', 'unit']);
 const STATE_VALUES = {
   lifecycle: ['UNKNOWN', 'PLANNED', 'ACTIVE', 'RETIRED'],
@@ -124,7 +124,7 @@ export function restoreEnterpriseCommand(storage, principal, projectId) {
   if (!saved) return null;
   if (saved.projectId !== projectId || saved.envelope?.schemaVersion !== '1.0'
     || typeof saved.envelope.commandId !== 'string' || !Number.isSafeInteger(saved.envelope.expectedVersion)
-    || !['create-scope', 'rename-scope', 'assign-object-scope', 'record-state', 'set-validity', 'propose-future-design', 'run-integrity-checks', ...ENTERPRISE_BRANCH_COMMANDS, ...ENTERPRISE_PROCESS_COMMANDS, ...ENTERPRISE_ECONOMIC_COMMANDS, ...ENTERPRISE_REFINEMENT_COMMANDS, ...ENTERPRISE_INTERCHANGE_COMMANDS].includes(saved.envelope.payload?.kind)) throw new Error('Saved enterprise command is unreadable.');
+    || !['create-scope', 'rename-scope', 'assign-object-scope', 'record-state', 'set-validity', 'propose-future-design', ...ENTERPRISE_INTEGRITY_COMMANDS, ...ENTERPRISE_BRANCH_COMMANDS, ...ENTERPRISE_PROCESS_COMMANDS, ...ENTERPRISE_ECONOMIC_COMMANDS, ...ENTERPRISE_REFINEMENT_COMMANDS, ...ENTERPRISE_INTERCHANGE_COMMANDS].includes(saved.envelope.payload?.kind)) throw new Error('Saved enterprise command is unreadable.');
   return saved;
 }
 
