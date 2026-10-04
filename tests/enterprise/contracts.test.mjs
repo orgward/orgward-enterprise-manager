@@ -6,6 +6,7 @@ import { normalizeEnterpriseQuery } from '../../src/enterprise/projections.mjs';
 import { effectiveStatus, enterpriseInstant, enterpriseInterval, objectBasisHash, objectStates } from '../../src/enterprise/state.mjs';
 import { normalizeDecisionTable, normalizeProcessFlow } from '../../src/enterprise/process-model.mjs';
 import { evaluateDecisionTable, simulateProcessFlow } from '../../src/enterprise/process-simulation.mjs';
+import { planManualProcessFlow, projectManualFlowActivation } from '../../src/enterprise/process-runtime.mjs';
 
 test('enterprise perspectives keep their sixteen stable IDs and distinguish unknown from explicitly unscoped records', () => {
   assert.deepEqual(ENTERPRISE_LENSES.map(({ id }) => id), Array.from({ length: 16 }, (_, index) => `L-${String(index + 1).padStart(2, '0')}`));
@@ -173,4 +174,102 @@ test('bounded process flow simulation is deterministic across routes, joins, loo
     decisionChoices: [], stepLimit: 20 }, byId);
   assert.equal(failedActivity.status, 'COMPLETED', 'a declared manual exception route is traceable without performing work');
   assert.ok(failedActivity.trace.some((entry) => entry.stepId === 'exception' && entry.kind === 'manual-exception'));
+});
+
+test('manual-flow activation waits for verified outcomes, joins branches, bounds loops and marks unselected work skipped', () => {
+  const process = { id: 'process-live-flow', type: 'process', name: 'Live flow', detail: 'Bounded manual flow.', owner: 'role-operator' };
+  const score = { id: 'information-score', type: 'information', name: 'Score' };
+  const output = { id: 'information-result', type: 'information', name: 'Result' };
+  const role = { id: 'role-operator', type: 'role', name: 'Operator' };
+  const decision = { id: 'decision-route', type: 'decision', name: 'Route', by: role.id, decisionTable: {
+    schemaVersion: '1.0', hitPolicy: 'UNIQUE', inputs: [{ informationId: score.id, valueType: 'number' }],
+    rules: [{ id: 'route-high', conditions: [{ informationId: score.id, operator: 'gte', value: 5 }], outcome: 'HIGH' },
+      { id: 'route-low', conditions: [{ informationId: score.id, operator: 'lt', value: 5 }], outcome: 'LOW' }], defaultOutcome: null,
+  } };
+  const loopDecision = { id: 'decision-loop', type: 'decision', name: 'Loop', by: role.id, decisionTable: {
+    schemaVersion: '1.0', hitPolicy: 'FIRST_MATCH', inputs: [{ informationId: score.id, valueType: 'number' }],
+    rules: [{ id: 'loop-continue', conditions: [{ informationId: score.id, operator: 'eq', value: 1 }], outcome: 'CONTINUE' }], defaultOutcome: 'STOP',
+  } };
+  const manual = (id, kind, nextStepId, exceptionStepId = null) => ({ id, kind, title: id, processId: process.id, roleId: role.id,
+    inputIds: [score.id], outputIds: [output.id], nextStepId, exceptionStepId });
+  process.processFlow = { schemaVersion: '1.0', startStepId: 'start', steps: [
+    manual('start', 'manual', 'gate'),
+    { id: 'gate', kind: 'decision', title: 'Route', decisionId: decision.id,
+      routes: [{ outcome: 'HIGH', targetStepId: 'fork' }, { outcome: 'LOW', targetStepId: 'low-work' }] },
+    { id: 'fork', kind: 'fork', title: 'Checks', branchStepIds: ['check-a', 'check-b'], joinStepId: 'join' },
+    manual('check-a', 'manual', 'join', 'exception'),
+    manual('check-b', 'manual', 'join'),
+    manual('exception', 'manual-exception', 'join'),
+    { id: 'join', kind: 'join', title: 'Join', forkStepId: 'fork', mode: 'ALL', nextStepId: 'loop' },
+    { id: 'loop', kind: 'loop', title: 'Bounded correction', decisionId: loopDecision.id, continueOutcome: 'CONTINUE',
+      bodyStepId: 'correction', exitStepId: 'end', maxIterations: 2 },
+    manual('correction', 'manual', 'return'),
+    { id: 'return', kind: 'loop-return', title: 'Return', loopStepId: 'loop' },
+    manual('low-work', 'manual', 'low-end'),
+    { id: 'low-end', kind: 'end', title: 'Low route ended' },
+    { id: 'end', kind: 'end', title: 'Flow ended' },
+  ] };
+  const blueprint = { id: 'blueprint-manual-flow', version: 4, areas: { capabilitiesProcesses: { items: [process, score, output, role] },
+    governanceRiskControls: { items: [decision, loopDecision] } } };
+  const plan = planManualProcessFlow({ id: 'project-manual-flow', blueprintVersions: [blueprint] }, {
+    processId: process.id, mode: 'manual-flow', blueprintId: blueprint.id, blueprintVersion: blueprint.version,
+  }, 'oidc:operator');
+  const task = (stepId, iteration = 0) => plan.tasks.find((entry) => entry.flowRef.stepId === stepId && entry.flowRef.iteration === iteration);
+  assert.equal(task('gate').assignee.roleId, role.id, 'the decision maker role comes from the canonical decision.by field');
+  assert.equal(task('loop').assignee.roleId, role.id);
+  const outcomes = new Map();
+  const complete = (stepId, iteration = 0, result = 'succeeded', decisionChoice = undefined) => {
+    const entry = task(stepId, iteration);
+    assert.ok(entry, `compiled occurrence ${stepId}#${iteration} exists`);
+    outcomes.set(entry.id, { verified: true, result, ...(decisionChoice ? { decisionChoice } : {}) });
+  };
+  let activation = projectManualFlowActivation(plan);
+  assert.equal(activation.tasks.find((entry) => entry.taskId === task('start').id).state, 'READY');
+  assert.equal(activation.tasks.find((entry) => entry.taskId === task('gate').id).state, 'WAITING');
+  const paused = projectManualFlowActivation(plan, outcomes, { planInstanceId: 'process-task-instance-paused', control: { status: 'PAUSED' } });
+  assert.equal(paused.tasks.find((entry) => entry.taskId === task('start').id).state, 'WAITING');
+  assert.match(paused.tasks.find((entry) => entry.taskId === task('start').id).reason, /paused/i);
+  assert.notEqual(paused.identity, activation.identity);
+
+  complete('start');
+  activation = projectManualFlowActivation(plan, outcomes);
+  assert.equal(activation.tasks.find((entry) => entry.taskId === task('gate').id).state, 'READY');
+  complete('gate', 0, 'succeeded', { outcome: 'HIGH' });
+  activation = projectManualFlowActivation(plan, outcomes);
+  assert.equal(activation.tasks.find((entry) => entry.taskId === task('check-a').id).state, 'READY');
+  assert.equal(activation.tasks.find((entry) => entry.taskId === task('check-b').id).state, 'READY');
+  assert.equal(activation.tasks.find((entry) => entry.taskId === task('low-work').id).state, 'SKIPPED');
+
+  complete('check-a', 0, 'failed');
+  activation = projectManualFlowActivation(plan, outcomes);
+  assert.equal(activation.tasks.find((entry) => entry.taskId === task('exception').id).state, 'READY');
+  assert.equal(activation.steps.find((entry) => entry.stepId === 'join' && entry.iteration === 0).state, 'WAITING');
+  complete('exception');
+  complete('check-b');
+  activation = projectManualFlowActivation(plan, outcomes);
+  assert.equal(activation.steps.find((entry) => entry.stepId === 'join' && entry.iteration === 0).state, 'SUCCEEDED');
+  assert.equal(activation.tasks.find((entry) => entry.taskId === task('loop', 0).id).state, 'READY');
+
+  complete('loop', 0, 'succeeded', { outcome: 'CONTINUE' });
+  assert.equal(projectManualFlowActivation(plan, outcomes).tasks.find((entry) => entry.taskId === task('correction', 1).id).state, 'READY');
+  complete('correction', 1);
+  complete('loop', 1, 'succeeded', { outcome: 'CONTINUE' });
+  complete('correction', 2);
+  complete('loop', 2, 'succeeded', { outcome: 'STOP' });
+  activation = projectManualFlowActivation(plan, outcomes);
+  assert.equal(activation.state, 'COMPLETED');
+  assert.equal(activation.tasks.find((entry) => entry.taskId === task('low-work').id).state, 'SKIPPED');
+  assert.equal(activation.steps.find((entry) => entry.stepId === 'join').state, 'SUCCEEDED', 'a prior WAITING arrival does not mask the completed ALL join');
+
+  const overBound = new Map(outcomes);
+  overBound.set(task('loop', 2).id, { verified: true, result: 'succeeded', decisionChoice: { outcome: 'CONTINUE' } });
+  const bounded = projectManualFlowActivation(plan, overBound);
+  assert.equal(bounded.state, 'BLOCKED');
+  assert.equal(bounded.tasks.find((entry) => entry.taskId === task('loop', 2).id).state, 'WAITING');
+  assert.match(bounded.tasks.find((entry) => entry.taskId === task('loop', 2).id).reason, /bound/i);
+
+  const unverified = new Map([[task('start').id, { verified: false, result: 'succeeded' }]]);
+  const pending = projectManualFlowActivation(plan, unverified);
+  assert.equal(pending.tasks.find((entry) => entry.taskId === task('start').id).state, 'WAITING');
+  assert.equal(pending.tasks.find((entry) => entry.taskId === task('gate').id).state, 'WAITING');
 });

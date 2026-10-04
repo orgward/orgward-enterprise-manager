@@ -1,4 +1,5 @@
 import { getOrCreatePlanRevisionCommand, getOrCreateProcessPlanCommand, processPlanCommandKey, processPlanFailureDisposition } from './process-plan-command.mjs';
+import { activationForTask, isManualFlowPlan, manualFlowActivation, manualFlowInputLabel, manualFlowKindLabel, mergeProcessPlanActivation, renderManualFlowDecisionChoice } from './manual-flow-ui.mjs';
 import { deriveProcessTaskState } from './process-task-state.mjs';
 import { processTaskStatusAnnouncement, scheduleProcessTaskAnnouncement, summarizeBlockedTaskTransitions } from './process-task-announcement.mjs';
 import { humanTaskHistoryEntries } from './human-task-history.mjs';
@@ -82,8 +83,7 @@ let selectedRunWaitMessage = '';
 function processPlansFor(project = state.planningProject) {
   const base = project?.processPlans ?? [];
   const runtime = state.runtimePlans.filter((plan) => plan.source?.projectId === project?.id);
-  const revisions = new Set(base.map((plan) => `${plan.id}\n${plan.revision ?? 1}`));
-  return [...base, ...runtime.filter((plan) => !revisions.has(`${plan.id}\n${plan.revision ?? 1}`))];
+  return mergeProcessPlanActivation(base, runtime);
 }
 
 function setProcessRefreshStatus(message) {
@@ -373,12 +373,21 @@ function processTaskIntentStorage() {
 }
 
 async function refresh() {
-  processRefreshRequestId += 1;
-  state.runs = (await api('/api/execution/runs')).runs;
+  const requestId = ++processRefreshRequestId;
+  const projectId = state.planningProject?.id ?? null;
+  const principal = state.currentPrincipal;
+  const routeKey = `${window.location.pathname}${window.location.search}`;
+  const stillCurrent = () => requestId === processRefreshRequestId && principal === state.currentPrincipal
+    && projectId === (state.planningProject?.id ?? null)
+    && routeKey === `${window.location.pathname}${window.location.search}`;
+  const runs = (await api('/api/execution/runs')).runs;
+  if (!stillCurrent()) return false;
+  state.runs = runs;
   let processInstancesRefreshed = false;
   if (state.authenticated && state.planningProject?.id) {
     try {
-      const runtime = await api(`/api/execution/process-task-instances?projectId=${encodeURIComponent(state.planningProject.id)}`);
+      const runtime = await api(`/api/execution/process-task-instances?projectId=${encodeURIComponent(projectId)}`);
+      if (!stillCurrent()) return false;
       state.taskInstances = runtime.instances;
       state.runtimePlans = runtime.plans ?? [];
       deferredProcessInstances = null;
@@ -387,6 +396,7 @@ async function refresh() {
       reconcileAcceptedProcessTaskRequests(state.runs, state.taskInstances, state.planningProject.id);
       processInstancesRefreshed = true;
     } catch {
+      if (!stillCurrent()) return false;
       setProcessRefreshStatus('Could not refresh process instances. Existing controls remain locked until the current state is available.');
     }
   }
@@ -443,6 +453,7 @@ function showNew({ planTarget = null, preferredProcessId = null, preserveProcess
   });
   document.querySelector('#process-plan-form').addEventListener('submit', createProcessPlan);
   document.querySelector('#plan-process').addEventListener('change', updatePlanButtonLabel);
+  document.querySelector('#plan-mode').addEventListener('change', updatePlanButtonLabel);
   if (state.projects.length) void loadPlanningProject(planProjectSelect.value, preferredProcessId, planTarget);
 }
 
@@ -608,9 +619,10 @@ async function createProcessPlan(event) {
   const form = event.currentTarget; const button = form.querySelector('button');
   const projectId = form.querySelector('#plan-project').value;
   const processId = form.querySelector('#plan-process').value;
+  const mode = form.querySelector('#plan-mode').value;
   if (!projectId || !processId) return notify('Choose a project and saved process first.');
   button.disabled = true;
-  const key = processPlanCommandKey(projectId, processId);
+  const key = processPlanCommandKey(projectId, processId, mode);
   try {
     let pending = state.pendingProcessPlans.get(key);
     if (!pending) {
@@ -621,7 +633,8 @@ async function createProcessPlan(event) {
         await loadPlanningProject(projectId);
         return notify('The saved blueprint changed. Review the current process list and submit again.');
       }
-      pending = getOrCreateProcessPlanCommand(state.pendingProcessPlans, projectId, processId, project, () => `process-plan-${crypto.randomUUID()}`);
+      if (mode === 'manual-flow' && !sourceProcess.processFlow) return notify('Save a typed process flow in Enterprise Design before compiling human work.');
+      pending = getOrCreateProcessPlanCommand(state.pendingProcessPlans, projectId, processId, project, () => `process-plan-${crypto.randomUUID()}`, mode);
     }
     const result = await api(`/api/v1/projects/${encodeURIComponent(projectId)}/process-plans`, {
       method: 'POST', body: JSON.stringify({
@@ -630,11 +643,16 @@ async function createProcessPlan(event) {
       }),
     });
     state.pendingProcessPlans.delete(key);
-    state.planningProject = result.data;
-    renderProcessPlans(document.querySelector('#process-plans'), processPlansFor(result.data), result.data);
-    focusProcessPlanCard(currentProcessPlanFocusTarget(result.data, processId, result.event?.data?.planId));
+    if (document.querySelector('#plan-project')?.value === projectId) {
+      state.planningProject = result.data;
+      if (mode === 'manual-flow') await refresh();
+      if (document.querySelector('#plan-project')?.value === projectId && state.planningProject?.id === projectId) {
+        renderProcessPlans(document.querySelector('#process-plans'), processPlansFor(), state.planningProject);
+        focusProcessPlanCard(currentProcessPlanFocusTarget(result.data, processId, result.event?.data?.planId));
+      }
+    }
     updatePlanButtonLabel();
-    notify('Planning graph saved. No execution run was created and no work was dispatched.');
+    notify(mode === 'manual-flow' ? 'Saved flow compiled. Ready steps require the assigned human to start and record work.' : 'Planning graph saved. No execution run was created and no work was dispatched.');
   } catch (error) {
     const disposition = processPlanFailureDisposition(error);
     if (disposition === 'reload') {
@@ -655,11 +673,12 @@ async function createProcessPlan(event) {
 function updatePlanButtonLabel() {
   const projectId = document.querySelector('#plan-project')?.value;
   const processId = document.querySelector('#plan-process')?.value;
+  const mode = document.querySelector('#plan-mode')?.value;
   const button = document.querySelector('#process-plan-form button');
   if (!button) return;
   button.textContent = projectId && processId
-    && state.pendingProcessPlans.has(processPlanCommandKey(projectId, processId))
-    ? 'Retry graph save' : 'Create planning graph';
+    && state.pendingProcessPlans.has(processPlanCommandKey(projectId, processId, mode))
+    ? 'Retry exact plan save' : mode === 'manual-flow' ? 'Compile human work flow' : 'Create planning graph';
 }
 
 function renderProcessPlans(container, plans, project, { allowNewInstances = true, showHistory = true, skipBlockedAnnouncement = false } = {}) {
@@ -686,7 +705,7 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
       'data-plan-revision': plan.revision ?? 1,
     } }, [
       el('h4', { text: `${plan.source.processName} · blueprint v${plan.source.blueprintVersion} · graph revision ${plan.revision ?? 1}` }),
-      el('p', { text: 'Proposed design · planned only · not dispatched' }),
+      el('p', { text: isManualFlowPlan(plan) ? 'Pinned human work flow · no automatic dispatch' : 'Proposed design · planned only · not dispatched' }),
     ]);
     const planControls = el('div', { className: 'process-plan-controls' });
     const sourceLink = sourceProcessDesignLink(plan, project);
@@ -700,7 +719,7 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
       if (freshness.link) planControls.append(el('a', { className: 'button', text: freshness.link.label, attrs: { href: freshness.link.href } }));
     }
     if (canStartNewInstances) {
-      const editButton = el('button', { className: 'button', text: 'Edit planned graph', attrs: { type: 'button' } });
+      const editButton = el('button', { className: 'button', text: isManualFlowPlan(plan) ? 'Assign human flow work' : 'Edit planned graph', attrs: { type: 'button' } });
       editButton.addEventListener('click', () => openPlanEditor(card, plan, project));
       planControls.append(editButton);
     }
@@ -750,6 +769,28 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
       renderProcessPlans(container, plans, project);
     });
     card.append(el('label', { text: 'Process instance' }, instanceSelect));
+    const flowRows = selectedInstance === 'new' ? [] : instances.get(selectedInstance) ?? [];
+    const flowActivation = manualFlowActivation(plan, flowRows, selectedInstance === 'new' ? null : selectedInstance);
+    if (isManualFlowPlan(plan)) {
+      card.append(el('details', {}, [el('summary', { text: 'Exact saved source and instance references' }),
+        el('p', { text: `Exact source: ${plan.source.blueprintId} v${plan.source.blueprintVersion} · plan ${plan.id} revision ${plan.revision} · instance ${selectedInstance === 'new' ? 'not started' : selectedInstance}` }),
+      ]));
+      card.append(el('p', { className: 'muted', text: 'Activation follows recorded work and human choices. Failed activities may enter the declared exception handler. Joins follow the saved ALL or ANY rule; loops stop at their saved iteration bound. Advanced agent automation requires a later implementation.' }));
+      if (!flowActivation) card.append(el('p', { className: 'muted', text: 'Activation is unavailable. Reload the saved runtime before starting work.' }));
+      else {
+        const progress = el('details', { className: 'manual-flow-progress' }, [
+          el('summary', { text: `Actual flow progress — ${flowActivation.state}` }),
+          el('p', { text: selectedInstance === 'new' ? 'Entry activation before any human work is started.' : 'Derived from durable outcomes in this selected instance.' }),
+        ]);
+        progress.append(el('ol', {}, (flowActivation.steps ?? []).map((step) => {
+          const definition = plan.flow.definition.steps.find((saved) => saved.id === step.stepId);
+          return el('li', {}, [el('p', { text: `${definition?.title ?? 'Saved flow step'} · ${manualFlowKindLabel(step.kind)} · iteration ${step.iteration} · ${step.state}: ${step.reason}` }),
+            el('details', {}, [el('summary', { text: 'Step reference' }), el('p', { text: step.stepId })]),
+          ]);
+        })));
+        card.append(progress);
+      }
+    }
     const currentInstanceRuntimes = selectedInstance === 'new' ? [] : instances.get(selectedInstance) ?? [];
     const instanceControl = currentInstanceRuntimes[0]?.instanceControl ?? null;
     if (instanceControl) {
@@ -822,6 +863,12 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
       const roleText = taskAssigneePresentation(task, plan, project);
       const selectedRuntimes = selectedInstance === 'new' ? [] : instances.get(selectedInstance) ?? [];
       const runtimeState = deriveProcessTaskState(task, selectedRuntimes, selectedInstance === 'new' ? null : selectedInstance, plan.tasks);
+      const activation = activationForTask(plan, selectedRuntimes, task.id, selectedInstance === 'new' ? null : selectedInstance);
+      if (isManualFlowPlan(plan)) {
+        runtimeState.dependenciesSucceeded = activation?.state === 'READY';
+        runtimeState.blockedDependencies = [];
+        if (!runtimeState.runtime) runtimeState.status = activation?.state ?? 'WAITING';
+      }
       const runtime = runtimeState.runtime;
       const uncertainBlockedDependency = runtimeState.blockedDependencies.some(({ taskId }) => {
         const dependencyRuntime = selectedRuntimes.find((candidate) => candidate.taskId === taskId);
@@ -865,11 +912,24 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
       }));
       item.append(
         el('p', { text: task.detail }),
-        el('p', { text: `Depends on: ${dependencies.join(', ') || 'No upstream process dependency'}` }),
+        el('p', { text: isManualFlowPlan(plan)
+          ? 'Readiness follows saved flow routing, upstream human outcomes and choices, and any branch join. Review the activation reason before starting.'
+          : `Depends on: ${dependencies.join(', ') || 'No upstream process dependency'}` }),
         el('p', { text: `Inputs: ${inputs}` }), el('p', { text: `Outputs: ${outputs}` }),
         el('p', { text: `Role reference: ${roleText}` }),
       );
       item.append(renderTaskAssignmentTransparency(task, plan, project));
+      if (isManualFlowPlan(plan)) {
+        item.append(el('p', { className: 'manual-flow-activation', text: `${manualFlowKindLabel(task.flowRef.kind)} · iteration ${task.flowRef.iteration} · ${activation?.state ?? 'WAITING'}: ${activation?.reason ?? 'Activation unavailable; reload before work.'}` }));
+        item.append(el('details', {}, [el('summary', { text: 'Pinned task and flow occurrence' }), el('p', { text: `Task ${task.id} · step ${task.flowRef.stepId} · iteration ${task.flowRef.iteration}` })]));
+        if (activation?.trace?.length) item.append(el('details', {}, [
+          el('summary', { text: 'Why this step is active or waiting' }),
+          el('ol', {}, activation.trace.map((entry) => {
+            const definition = plan.flow.definition.steps.find((saved) => saved.id === entry.stepId);
+            return el('li', { text: `${definition?.title ?? 'Saved flow step'} · ${manualFlowKindLabel(entry.kind)} · iteration ${entry.iteration} · ${entry.state}: ${entry.reason}` });
+          })),
+        ]));
+      }
       const selectedStartKey = humanTaskStartCommandKey({ planId: plan.id, revision: plan.revision,
         planInstanceId: selectedInstance, taskId: task.id });
       const detachedTaskStarts = pendingHumanTaskStarts.filter((entry) => entry.pending.payload.taskId === task.id
@@ -997,6 +1057,14 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
         if (runtime?.outcome?.result) {
           item.append(el('p', { text: `Human checkpoint result: ${runtime.outcome.result}. Evidence: ${runtime.evidence.join(' · ') || 'none recorded'}` }));
         }
+        const savedChoice = runtime?.outcome?.decisionChoice;
+        if (savedChoice) item.append(el('section', { className: 'manual-flow-saved-choice', attrs: { 'aria-label': `Recorded human decision for ${task.title}` } }, [
+          el('p', { text: `Recorded human choice: ${savedChoice.outcome}. Reason: ${savedChoice.reason}` }),
+          el('ul', {}, (savedChoice.observations ?? []).map((entry) => el('li', { text: `${manualFlowInputLabel(task, entry.informationId)}: ${entry.value === null ? 'Explicitly unknown' : JSON.stringify(entry.value)}` }))),
+          el('p', { text: `Saved table advice: ${savedChoice.advisory?.status ?? 'unavailable'}${savedChoice.advisory?.outcome ? ` — ${savedChoice.advisory.outcome}` : ''}.` }),
+          el('details', {}, [el('summary', { text: 'Saved choice reference' }), el('p', { text: savedChoice.choiceHash ?? 'Unavailable' })]),
+          el('p', { className: 'muted', text: 'This saved human choice drives routing. Table advice and simulations do not establish completed work.' }),
+        ]));
         const humanHistory = humanTaskHistoryEntries(runtime?.events);
         if (humanHistory.length) {
           const history = el('details', { className: 'human-task-history' }, [
@@ -1047,7 +1115,9 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
           item.append(el('p', { className: 'muted', text: 'Pause is draining active work; no new human task work can start.' }));
         } else if (['SUCCEEDED', 'FAILED', 'INTERRUPTED'].includes(runtime?.status)) {
           item.append(el('p', { className: 'muted', text: 'This human checkpoint is complete for this process instance. A retry requires a new process instance.' }));
-        } else if (selectedInstance === 'new' && task.dependencies.length > 0) {
+        } else if (isManualFlowPlan(plan) && activation?.state !== 'READY') {
+          item.append(el('p', { className: 'muted', text: activation?.reason ?? 'Reload this plan’s activation before starting work.' }));
+        } else if (selectedInstance === 'new' && task.dependencies.length > 0 && !isManualFlowPlan(plan)) {
           item.append(el('p', { className: 'muted', text: 'A dependent human task must join an existing process instance after every dependency succeeds.' }));
         } else if (selectedInstance === 'new' && (!canStartNewInstances || entries.at(-1)?.revision !== plan.revision
           || project.latestBlueprint?.version !== plan.source.blueprintVersion)) {
@@ -1082,6 +1152,8 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
             startButton, startStatus,
           );
         }
+      } else if (isManualFlowPlan(plan)) {
+        item.append(el('p', { className: 'muted', text: 'This flow occurrence requires an enabled human assignment. Use Assign human flow work to save a new revision. Advanced agent execution is unsupported in this mode.' }));
       } else if (instanceCancelled) {
         item.append(el('p', { className: 'muted', text: 'This process instance is cancelled. No further task work can start.' }));
       } else {
@@ -1483,9 +1555,26 @@ function renderHumanTaskCompletion({ project, plan, task, selectedInstance }) {
   result.addEventListener('change', updateEvidenceRequirement);
   const submit = el('button', { className: 'button primary', text: 'Complete human task', attrs: { type: 'submit' } });
   const status = el('p', { className: 'muted human-task-command-status', attrs: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' } });
-  form.append(el('label', { text: 'Outcome' }, result), evidenceLabel, status, submit);
+  const decision = renderManualFlowDecisionChoice({ project, plan, task, el });
+  form.append(el('label', { text: 'Work outcome' }, result), ...(decision ? [decision.node] : []), evidenceLabel, status, submit);
+  if (decision) {
+    const syncChoice = () => decision.setRequired(result.value === 'succeeded');
+    result.addEventListener('change', syncChoice); syncChoice();
+  }
+  const pending = state.pendingHumanTaskCommands.get(humanTaskCommandKey('complete', plan, task, selectedInstance));
+  if (pending) {
+    result.value = pending.payload.result; evidence.value = pending.payload.evidence.join('\n');
+    decision?.restore(pending.payload.decisionChoice);
+    for (const control of form.elements) if (control !== submit) control.disabled = true;
+    submit.textContent = 'Retry saved completion';
+    status.textContent = 'The exact saved completion is pending. Retry preserves its work outcome, decision choice, observed inputs and evidence.';
+  }
   form.addEventListener('submit', (event) => {
     event.preventDefault();
+    if (pending) {
+      void completeHumanTask({ project, plan, task, selectedInstance, ...pending.payload, form, status, button: submit });
+      return;
+    }
     const evidenceEntries = parseHumanTaskEvidence(evidence.value);
     if (!evidenceEntries || (result.value === 'succeeded' && evidenceEntries.length === 0)) {
       evidence.setCustomValidity('Enter up to 20 evidence notes, one per line, with no note longer than 1000 characters. A succeeded task needs at least one note.');
@@ -1493,10 +1582,14 @@ function renderHumanTaskCompletion({ project, plan, task, selectedInstance }) {
       return;
     }
     evidence.setCustomValidity('');
-    void completeHumanTask({ project, plan, task, selectedInstance, result: result.value, evidence: evidenceEntries, form, status, button: submit });
+    let decisionChoice;
+    try { decisionChoice = result.value === 'succeeded' ? decision?.read() : undefined; }
+    catch (error) { status.textContent = error.message; return; }
+    void completeHumanTask({ project, plan, task, selectedInstance, result: result.value, evidence: evidenceEntries, decisionChoice, form, status, button: submit });
   });
   return form;
 }
+
 
 function humanTaskOutputApplicationKey({ project, plan, task, runtime, output }) {
   return [project.id, plan.id, plan.revision, runtime.planInstanceId, task.id, output.objectId].join('\n');
@@ -1639,6 +1732,7 @@ function renderHumanTaskEscalationResolution({ project, plan, task, selectedInst
     instanceControlStatus: runtime.instanceControl?.status,
     reassignmentAvailable: reassignmentCandidates.length > 0,
   });
+  const requiresHumanChoice = isManualFlowPlan(plan) && ['decision', 'loop'].includes(task.flowRef?.kind);
   const disposition = el('select', { attrs: { name: 'disposition', required: 'required', 'aria-label': `Owner resolution for ${task.title}` } }, [
     ...(resolutionOptions.initialChoiceRequired ? [el('option', {
       text: 'Choose an available owner resolution', attrs: { value: '', disabled: 'disabled', selected: 'selected' },
@@ -1646,7 +1740,7 @@ function renderHumanTaskEscalationResolution({ project, plan, task, selectedInst
     el('option', { text: resolutionOptions.resume.label, attrs: { value: 'resume', ...(resolutionOptions.resume.disabled ? { disabled: 'disabled' } : {}) } }),
     el('option', { text: resolutionOptions.reassign.label,
       attrs: { value: 'reassign', ...(resolutionOptions.reassign.disabled ? { disabled: 'disabled' } : {}) } }),
-    el('option', { text: 'Mark succeeded', attrs: { value: 'succeeded', ...(resolutionOptions.succeeded.disabled ? { disabled: 'disabled' } : {}) } }),
+    el('option', { text: requiresHumanChoice ? 'Resume or reassign to record a human choice' : 'Mark succeeded', attrs: { value: 'succeeded', ...(resolutionOptions.succeeded.disabled || requiresHumanChoice ? { disabled: 'disabled' } : {}) } }),
     el('option', { text: 'Mark failed', attrs: { value: 'failed', ...(resolutionOptions.failed.disabled ? { disabled: 'disabled' } : {}) } }),
   ]);
   const targetPrincipal = el('select', { attrs: { name: 'targetPrincipal', 'aria-label': `New human assignee for ${task.title}`, disabled: 'disabled' } }, [
@@ -1672,6 +1766,7 @@ function renderHumanTaskEscalationResolution({ project, plan, task, selectedInst
   const status = el('p', { className: 'muted human-task-command-status', attrs: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' } });
   form.append(
     el('p', { className: 'muted', text: 'Only a project owner with workspace write access can resolve this escalation. Reassignment is an explicit owner override to another active human project member with workspace write access; it keeps the pinned plan unchanged. Reassignment and marking succeeded require evidence.' }),
+    ...(requiresHumanChoice ? [el('p', { className: 'muted', text: 'This decision needs a recorded human choice. Resume or reassign it so the assigned human records the declared outcome, observed inputs and reason. An owner can mark it failed without choosing a route.' })] : []),
     ...(resolutionOptions.pauseMessage ? [el('p', { className: 'muted', text: resolutionOptions.pauseMessage })] : []),
     el('label', { text: 'Resolution' }, disposition),
     targetLabel,
@@ -1798,7 +1893,7 @@ async function startHumanTask({ project, plan, task, selectedInstance, button, s
   }
 }
 
-async function completeHumanTask({ project, plan, task, selectedInstance, result, evidence, form, status, button }) {
+async function completeHumanTask({ project, plan, task, selectedInstance, result, evidence, decisionChoice, form, status, button }) {
   const key = humanTaskCommandKey('complete', plan, task, selectedInstance);
   const priorFocus = document.activeElement;
   let saved = false;
@@ -1806,7 +1901,7 @@ async function completeHumanTask({ project, plan, task, selectedInstance, result
     const submission = await submitHumanTaskCommand({
       action: 'complete', key, pendingCommands: state.pendingHumanTaskCommands,
       payload: { projectId: project.id, planId: plan.id, revision: plan.revision,
-        planInstanceId: selectedInstance, taskId: task.id, result, evidence },
+        planInstanceId: selectedInstance, taskId: task.id, result, evidence, ...(decisionChoice ? { decisionChoice } : {}) },
       form, button, status,
       send: (pending) => api('/api/execution/process-task-instances/complete', {
         method: 'POST', body: JSON.stringify({ schemaVersion: '1.0', commandId: pending.commandId, payload: pending.payload }),
@@ -2066,6 +2161,7 @@ function openPlanEditor(container, plan, project) {
   form.append(el('p', { text: pendingRevision
     ? 'Retrying the same graph revision command. Its submitted values are locked to avoid changing an uncertain request.'
     : `Editing graph revision ${plan.revision ?? 1}. Save creates an immutable revision; every task stays planned and no person or execution authority is assigned.` }));
+  if (isManualFlowPlan(plan)) form.append(el('p', { text: 'Select an enabled human for each flow occurrence. Routing, loop bounds and checkpoints stay pinned to the saved process flow. To change that flow, edit Enterprise Design and compile a new plan.' }));
   const blueprint = project.blueprintVersions?.find((entry) => entry.id === plan.source.blueprintId && entry.version === plan.source.blueprintVersion);
   const pinnedObjects = Object.values(blueprint?.areas ?? {}).flatMap((area) => area.items ?? []);
   const roles = pinnedObjects.filter((item) => item.type === 'role');
@@ -2085,6 +2181,7 @@ function openPlanEditor(container, plan, project) {
       dependencySelect.append(el('option', { text: candidate.title, attrs: { value: candidate.id, ...(dependencies.includes(candidate.id) ? { selected: 'selected' } : {}) } }));
     }
     fieldset.append(el('label', { text: 'Dependencies (use Ctrl or Command to select multiple)' }, dependencySelect));
+    if (isManualFlowPlan(plan)) dependencySelect.disabled = true;
     const roleSelect = el('select', { attrs: { name: `role:${task.id}`, 'aria-label': `Blueprint role reference for ${task.title}` } });
     roleSelect.append(el('option', { text: 'No role reference', attrs: { value: '' } }));
     const selectedRoleId = pendingEdit ? pendingEdit.roleId : task.assignee.roleId ?? null;
@@ -2099,7 +2196,8 @@ function openPlanEditor(container, plan, project) {
       actorSelect.replaceChildren(el('option', { text: 'Role reference only — no person selected', attrs: { value: '' } }));
       const bindingRows = state.actorBindingRows.filter((row) => row.blueprintVersion === plan.source.blueprintVersion
         && row.roleId === roleId && row.status === 'enabled'
-        && row.eligibilityStatus?.length === 1 && row.eligibilityStatus[0] === 'eligible');
+        && row.eligibilityStatus?.length === 1 && row.eligibilityStatus[0] === 'eligible'
+        && (!isManualFlowPlan(plan) || pinnedObjects.find((item) => item.id === row.actorId)?.type === 'actor-human'));
       for (const row of bindingRows) {
         const boundActor = pinnedObjects.find((item) => item.id === row.actorId);
         const option = el('option', {
@@ -2168,7 +2266,7 @@ function openPlanEditor(container, plan, project) {
     const required = Boolean(beforeTask.value);
     for (const control of [checkpointTitle, checkpointDetail, humanBinding]) control.required = required;
   });
-  form.append(checkpointSet);
+  if (!isManualFlowPlan(plan)) form.append(checkpointSet);
   const save = el('button', { className: 'button primary', text: 'Save graph revision', attrs: { type: 'submit' } });
   if (pendingRevision) {
     save.textContent = 'Retry same graph revision';
@@ -2205,7 +2303,7 @@ async function submitPlanRevision(event, plan, project) {
         taskId: task.id,
         title: String(formData.get(`title:${task.id}`) ?? ''),
         detail: String(formData.get(`detail:${task.id}`) ?? ''),
-        dependencies: formData.getAll(`dependencies:${task.id}`).map(String),
+        dependencies: isManualFlowPlan(plan) ? [...task.dependencies] : formData.getAll(`dependencies:${task.id}`).map(String),
         roleId: String(formData.get(`role:${task.id}`) ?? '') || null,
         actorId: formData.has(`actor:${task.id}`)
           ? String(formData.get(`actor:${task.id}`) ?? '') || null
@@ -2230,9 +2328,14 @@ async function submitPlanRevision(event, plan, project) {
       method: 'POST', body: JSON.stringify({ schemaVersion: pending.schemaVersion, commandId: pending.commandId, expectedVersion: pending.expectedVersion, payload: pending.payload }),
     });
     state.pendingProcessPlans.delete(key);
-    state.planningProject = result.data;
-    renderProcessPlans(document.querySelector('#process-plans'), processPlansFor(result.data), result.data);
-    focusProcessPlanCard(processPlanRevisionFocusTarget(result.event));
+    if (document.querySelector('#plan-project')?.value === projectId) {
+      state.planningProject = result.data;
+      if (isManualFlowPlan(plan)) await refresh();
+      if (document.querySelector('#plan-project')?.value === projectId && state.planningProject?.id === projectId) {
+        renderProcessPlans(document.querySelector('#process-plans'), processPlansFor(), state.planningProject);
+        focusProcessPlanCard(processPlanRevisionFocusTarget(result.event));
+      }
+    }
     notify('Immutable graph revision saved. Tasks remain planned; no work was dispatched.');
   } catch (error) {
     const disposition = processPlanFailureDisposition(error);

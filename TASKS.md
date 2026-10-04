@@ -6061,11 +6061,42 @@ activity. PR-06 cursor, task checkboxes and release gates are unchanged.
   economics/resources/value lifecycles, simulation, bulk collaboration and
   explainable multi-axis completeness.
 
-  Current slice: actual bounded manual-flow runtime. Scope/lens, independent
-  state/time, reviewed branch/merge and typed process/decision authoring with
-  deterministic simulation below are implemented and focused checks passed.
+  Current slice: governed agent integration for authored flow activities.
+  Scope/lens, independent state/time, reviewed branch/merge, typed process/
+  decision authoring with deterministic simulation and actual bounded manual
+  runtime below are implemented and focused checks passed.
   Keep the parent open until its remaining functionality and one frozen parent
   full check pass; the active cursor remains PR-12.
+
+  Manual runtime verified (2026-10-04, base `75df605`): GPT-6.1 Sol compiled
+  exact saved flows into pinned, bounded task occurrences and reused durable
+  human work, assignment, intervention and audit stores. Verified human outcomes
+  activate decisions, parallel reviews, one join continuation, declared failure
+  handlers and bounded loop occurrences. Unselected routes are skipped with an
+  explanation, never fabricated successful work. Explicit typed observations,
+  a declared human choice and reason are saved with source/choice hashes; table
+  advice does not choose for the human. Pause/drain/resume, escalation/owner
+  resolution, exact replay and app restart preserve the same instance and
+  evidence. UI merges exact runtime activation into saved plan revisions, shows
+  readable step labels and reasons, gates starts, and restores exact pending
+  decisions. Decisions/loops remain human; governed agent integration follows.
+  Sol reviewed fixtures and implementation before Luna's first run. Three new
+  focused cases: initial 1 passed/2 failed/0 skipped (3.24s runner, 2.109s Node),
+  then affected-only 2 passed/0 failed/0 skipped (4.41s runner, 3.201s Node).
+  The passing activation case was not rerun. Repairs fixed a UI fixture's
+  singleton-child handling and a real server failure caused by hashing evidence
+  on a task-start event before filtering terminal outcomes. Control event shape
+  is checked before hashing. Final UI and PostgreSQL checks passed; the PG case
+  covers human route choice, parallel join, exception, loop, pause/resume,
+  escalation, restart, exact replay and rejected premature/unselected starts.
+  Logs: `/tmp/orgward-tests-DlQTj4/node-test.tap.log` and
+  `/tmp/orgward-tests-dgBiU6/node-test.tap.log` (wrappers
+  `/tmp/orgward-pr12-manual-flow-focused.log` and
+  `/tmp/orgward-pr12-manual-flow-rerun.log`). Changed-test/store syntax and
+  `git diff --check` passed. No full parent check, rendered browser proof,
+  provider request, live effect or gate promotion occurred. PR-12 remains open
+  for governed agent runtime, economics/resources/value, refinement/reverse
+  trace, bulk/interchange and scoped multi-axis completeness.
 
   Process/decision authoring and simulation verified (2026-10-04, branch base
   `d81f9e4`): GPT-6.1 Sol added canonical typed activity, exception, decision,

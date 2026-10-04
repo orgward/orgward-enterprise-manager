@@ -1,3 +1,4 @@
+import { verifyManualFlowPlan, normalizeHumanDecisionChoice, projectManualFlowActivation } from '../enterprise/process-runtime.mjs';
 import { randomUUID } from 'node:crypto';
 import { lstat, readFile, readdir, readlink } from 'node:fs/promises';
 import path from 'node:path';
@@ -95,7 +96,10 @@ async function resolveRuntimeProcessPlan(client, { tenantId, projectId, project,
   }
   const saved = (project?.processPlans ?? []).find((candidate) => candidate.id === planId
     && Number(candidate.revision ?? 1) === Number(revision));
-  if (saved) return saved;
+  if (saved) {
+    verifyManualFlowPlan(saved, project.blueprintVersions?.find((blueprint) => blueprint.id === saved.source.blueprintId && blueprint.version === saved.source.blueprintVersion));
+    return saved;
+  }
   const result = await client.query(`select project_id, case_id, runtime_revision, snapshot_hash, snapshot
     from orgward.software_delivery_runtime_plans
     where tenant_id=$1 and project_id=$2 and plan_id=$3 and runtime_revision=$4 for share`, [tenantId, projectId, planId, revision]);
@@ -141,6 +145,9 @@ function verifyRuntimePlanTasks(plan, runtimes) {
       || runtime.blueprint_id !== plan.source.blueprintId || Number(runtime.blueprint_version) !== Number(plan.source.blueprintVersion)) {
       throw persistenceIntegrity('A process task runtime does not match its immutable graph snapshot.');
     }
+    if (plan.kind === 'manual_process_flow_plan' && (runtime.actor_type !== 'human' || runtime.execution_run_id
+      || runtime.actor_id !== task.assignee?.actorId || runtime.role_id !== task.assignee?.roleId
+      || runtime.process_id !== plan.source.processId)) throw persistenceIntegrity('A manual flow runtime does not match its pinned human assignment.');
     if (plan.kind === 'software_delivery_runtime_plan'
       && (runtime.actor_type !== 'human' || runtime.execution_run_id
         || task.assignee?.actorId !== runtime.actor_id || task.assignee?.roleId !== runtime.role_id
@@ -314,6 +321,7 @@ function processTaskRuntimeView(row, principal = null) {
   })) : [];
   const canResolveEscalation = Boolean(principal && row.can_resolve_escalation);
   return {
+    ...(row.manual_flow_activation ? { activation: row.manual_flow_activation } : {}),
     projectId: row.project_id,
     processPlanId: row.process_plan_id,
     revision: Number(row.plan_revision),
@@ -425,6 +433,76 @@ export async function hasVerifiedHumanTaskSuccess(client, runtime) {
   `, [runtime.tenant_id, aggregateId, event.type, event.actor,
     canonicalJson(event), contentHash(event)]);
   return audited.rowCount === 1;
+}
+
+async function verifiedManualFlowOutcome(client, plan, runtime) {
+  const task = plan.tasks.find((task) => task.id === runtime.task_id);
+  const result = runtime.outcome?.result;
+  if (runtime.actor_type !== 'human' || !['succeeded', 'failed'].includes(result)
+    || runtime.status !== (result === 'succeeded' ? 'SUCCEEDED' : 'FAILED') || !runtime.completed_at
+    || !Array.isArray(runtime.evidence) || (result === 'succeeded' && !runtime.evidence.length)
+    || runtime.evidence.some((note) => typeof note !== 'string' || !note.trim())) return { verified: false, result };
+  let choice = null;
+  if (task.flowRef.decisionId && result === 'succeeded') {
+    try {
+      const saved = runtime.outcome.decisionChoice;
+      choice = normalizeHumanDecisionChoice(task, saved && { outcome: saved.outcome, observations: saved.observations, reason: saved.reason }, result);
+      if (contentHash(choice) !== contentHash(saved)) return { verified: false, result };
+    } catch { return { verified: false, result }; }
+  } else if (runtime.outcome.decisionChoice) return { verified: false, result };
+  const matches = (runtime.events ?? []).filter((event) => {
+    const { contentHash: hash, ...core } = event;
+    const data = event.data;
+    return ['HumanTaskCompleted', 'HumanTaskEscalationResolved'].includes(event.type)
+      && hash && hash === contentHash(core) && data?.taskId === runtime.task_id
+      && Array.isArray(data.evidence)
+      && data.processPlanId === runtime.process_plan_id && Number(data.revision) === Number(runtime.plan_revision)
+      && data.planInstanceId === runtime.plan_instance_id && data.snapshotHash === plan.snapshotHash && data.flowHash === plan.flow.definitionHash && contentHash(data.evidence) === contentHash(runtime.evidence)
+      && contentHash(data.decisionChoice ?? null) === contentHash(choice)
+      && (event.type === 'HumanTaskCompleted' && data.result === result && event.actor === effectiveHumanAssignee(runtime).principal
+        || event.type === 'HumanTaskEscalationResolved' && data.disposition === result && typeof data.reason === 'string' && data.reason.trim());
+  });
+  if (matches.length !== 1) return { verified: false, result };
+  const event = matches[0];
+  const audit = await client.query(`select 1 from orgward.audit_log where tenant_id=$1 and aggregate_kind='process_task_instance'
+    and aggregate_id=$2 and event_type=$3 and actor=$4 and event=$5::jsonb and event_hash=$6`,
+  [runtime.tenant_id, `${runtime.plan_instance_id}:${runtime.task_id}`, event.type, event.actor, canonicalJson(event), contentHash(event)]);
+  return { verified: audit.rowCount === 1, result, ...(choice ? { decisionChoice: choice } : {}), eventHash: contentHash(event) };
+}
+async function verifyManualFlowControl(client, plan, control, instanceId) {
+  if (!control) return;
+  if (control.project_id !== plan.source.projectId || control.process_plan_id !== plan.id
+    || Number(control.plan_revision) !== Number(plan.revision) || control.plan_instance_id !== instanceId
+    || !Array.isArray(control.events)) throw persistenceIntegrity('The manual flow control does not match its pinned instance.');
+  if (!control.events.length) {
+    if (control.status !== 'ACTIVE' || Number(control.version) !== 0 || control.pause_reason || contentHash(control.pause_boundary) !== contentHash({})) throw persistenceIntegrity('The initial manual flow control is invalid.');
+    return;
+  }
+  const event = control.events.at(-1);
+  if (!event || typeof event !== 'object' || !event.data || typeof event.data !== 'object'
+    || !Object.hasOwn(event.data, 'reason') || !event.data.boundary || typeof event.data.boundary !== 'object'
+    || Array.isArray(event.data.boundary)) throw persistenceIntegrity('The manual flow control event is missing its reason or boundary.');
+  const { contentHash: hash, ...core } = event;
+  if (hash !== contentHash(core) || event.data?.planInstanceId !== instanceId || event.data.resultingStatus !== control.status
+    || event.data.reason !== control.pause_reason || contentHash(event.data.boundary) !== contentHash(control.pause_boundary)) throw persistenceIntegrity('The manual flow control differs from its saved event.');
+  const audited = await client.query(`select 1 from orgward.audit_log where tenant_id=$1 and aggregate_kind='process_task_instance_control'
+    and aggregate_id=$2 and event_type=$3 and actor=$4 and event=$5::jsonb and event_hash=$6`,
+  [control.tenant_id, instanceId, event.type, event.actor, canonicalJson(event), contentHash(event)]);
+  if (audited.rowCount !== 1) throw persistenceIntegrity('The manual flow control has no matching durable audit event.');
+}
+async function manualFlowActivation(client, plan, rows, control = null, instanceId = null) {
+  verifyRuntimePlanTasks(plan, rows);
+  if (rows.length && !control) throw persistenceIntegrity('The manual flow rows have no durable instance control.');
+  await verifyManualFlowControl(client, plan, control, instanceId);
+  const outcomes = new Map();
+  for (const row of rows) outcomes.set(row.task_id, await verifiedManualFlowOutcome(client, plan, row));
+  return projectManualFlowActivation(plan, outcomes, { planInstanceId: instanceId, control: control ? { status: control.status, version: Number(control.version), boundary: control.pause_boundary, eventsHash: contentHash(control.events) } : null });
+}
+async function requireManualFlowTaskReady(client, plan, taskId, rows, control, instanceId) {
+  const activation = await manualFlowActivation(client, plan, rows, control, instanceId);
+  const task = activation.tasks.find((task) => task.taskId === taskId);
+  if (task?.state !== 'READY') throw conflict(task?.reason ?? 'The flow occurrence is not activated.', null, 'PROCESS_TASK_DEPENDENCY_UNSATISFIED');
+  return activation;
 }
 
 async function selectProcessTaskRuntimeForPrincipal(client, {
@@ -2943,6 +3021,7 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         const project = verifyAggregateRow(selectedProject.rows[0]);
         const plan = await resolveRuntimeProcessPlan(client, { tenantId, projectId, project, planId, revision });
         if (!plan) throw conflict('The saved process plan revision was not found.', null, 'PROCESS_PLAN_REVISION_NOT_FOUND');
+        if (plan.kind === 'manual_process_flow_plan') throw conflict('Advanced flows currently support explicit human work only.', null, 'PROCESS_FLOW_AGENT_RUNTIME_UNSUPPORTED');
         if (plan.kind === 'software_delivery_runtime_plan') throw conflict('Owner-promoted software work contains human checkpoints only; it cannot create a model execution run.', null, 'SOFTWARE_AGENT_RUNTIME_UNSUPPORTED');
         const revisions = (project.processPlans ?? []).filter((candidate) => candidate.id === planId)
           .sort((left, right) => (left.revision ?? 1) - (right.revision ?? 1));
@@ -3495,6 +3574,7 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         || plan.source?.blueprintVersion !== ref.blueprintVersion || plan.source?.processId !== ref.processId) {
         throw conflict('The immutable plan revision pinned to this paused task is no longer available.', run.version, 'PROCESS_PLAN_REVISION_NOT_FOUND');
       }
+      if (plan.kind === 'manual_process_flow_plan') throw conflict('Advanced flows currently support explicit human work only.', null, 'PROCESS_FLOW_AGENT_RUNTIME_UNSUPPORTED');
       const task = plan.tasks?.find((candidate) => candidate.id === ref.taskId);
       const assignee = task?.assignee;
       if (!task || assignee?.kind !== 'blueprint-actor' || assignee.actorId !== ref.actorId || assignee.roleId !== ref.roleId) {
@@ -3731,6 +3811,22 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         row.can_apply_human_task_output = Boolean(row.can_resolve_escalation && row.actor_type === 'human'
           && row.status === 'SUCCEEDED' && task?.outputs?.some((reference) => reference?.type === 'information')
           && await hasVerifiedHumanTaskSuccess(client, row));
+      }
+      for (const plan of project.processPlans ?? []) {
+        if (plan.kind !== 'manual_process_flow_plan') continue;
+        verifyManualFlowPlan(plan, project.blueprintVersions?.find((blueprint) => blueprint.id === plan.source.blueprintId && blueprint.version === plan.source.blueprintVersion));
+        plans.set(`${plan.id}\n${plan.revision}`, { ...plan, activation: projectManualFlowActivation(plan) });
+      }
+      const activations = new Map();
+      for (const row of result.rows) {
+        const plan = plans.get(`${row.process_plan_id}\n${Number(row.plan_revision)}`);
+        if (plan?.kind !== 'manual_process_flow_plan') continue;
+        if (!activations.has(row.plan_instance_id)) {
+          const controls = await client.query(`select * from orgward.process_task_instance_controls where tenant_id=$1 and plan_instance_id=$2 for share`, [tenantId, row.plan_instance_id]);
+          if (!controls.rowCount) throw persistenceIntegrity('The manual flow instance has no durable control.');
+          activations.set(row.plan_instance_id, await manualFlowActivation(client, plan, result.rows.filter((candidate) => candidate.plan_instance_id === row.plan_instance_id), controls.rows[0], row.plan_instance_id));
+        }
+        row.manual_flow_activation = activations.get(row.plan_instance_id);
       }
       return { instances: result.rows.map((row) => processTaskRuntimeView(row, principal)), plans: [...plans.values()] };
     });
@@ -4168,6 +4264,7 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         || Number(row.blueprint_version) !== plan.source.blueprintVersion)) {
         throw conflict('This instance is pinned to a different immutable graph revision.', null, 'PROCESS_TASK_INSTANCE_PIN_CONFLICT');
       }
+      const flowActivation = plan.kind === 'manual_process_flow_plan' ? await requireManualFlowTaskReady(client, plan, taskId, instanceRows.rows, control, instanceId) : null;
       const byTask = new Map(instanceRows.rows.map((row) => [row.task_id, row]));
       for (const dependencyId of task.dependencies) {
         if (byTask.get(dependencyId)?.status !== 'SUCCEEDED') {
@@ -4241,7 +4338,8 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         }
       }
       if (runtime.status !== 'PLANNED') throw conflict('The human task must be planned before its assigned person can start it.', Number(runtime.version), 'PROCESS_TASK_STATE_CONFLICT');
-      const event = processTaskRuntimeEvent('HumanTaskStarted', principal, { taskId, processPlanId: planId, revision, planInstanceId: instanceId });
+      const event = processTaskRuntimeEvent('HumanTaskStarted', principal, { taskId, processPlanId: planId, revision, planInstanceId: instanceId,
+        ...(flowActivation ? { activationIdentity: flowActivation.identity, snapshotHash: plan.snapshotHash, flowHash: plan.flow.definitionHash } : {}) });
       const updated = await client.query(`
         update orgward.process_task_instances
         set status='IN_PROGRESS', version=version+1, started_at=now(), updated_at=now(), events=events || $5::jsonb
@@ -4270,7 +4368,7 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
 
   async completeHumanProcessTask({
     tenantId, projectId, planId, revision, planInstanceId, taskId,
-    principal, authzGeneration, commandId, requestHash, result, evidence,
+    principal, authzGeneration, commandId, requestHash, result, evidence, decisionChoice,
   }) {
     if (!tenantId || !projectId || !planId || !planInstanceId || !taskId || !principal) throw projectAccessDenied();
     if (!['succeeded', 'failed'].includes(result)) {
@@ -4312,7 +4410,9 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
       `, [tenantId, projectId, planId, revision, planInstanceId, taskId]);
       if (!selected.rowCount) throw conflict('The human task runtime was not found in this project instance.', null, 'PROCESS_TASK_INSTANCE_NOT_FOUND');
       const runtime = selected.rows[0];
-      await verifyProcessRuntimeTaskDefinition(client, { tenantId, projectId, planId, revision, taskId, runtime });
+      const { plan: completedPlan, task: completedTask } = await verifyProcessRuntimeTaskDefinition(client, { tenantId, projectId, planId, revision, taskId, runtime });
+      if (completedPlan.kind === 'manual_process_flow_plan') await verifyManualFlowControl(client, completedPlan, control, planInstanceId);
+      const savedChoice = normalizeHumanDecisionChoice(completedTask, decisionChoice, result);
       const assignee = effectiveHumanAssignee(runtime);
       if (runtime.actor_type !== 'human' || assignee.principal !== principal) throw projectAccessDenied();
       if (assignee.authzGeneration !== authzGeneration
@@ -4323,9 +4423,10 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         throw conflict('An escalated human task requires project owner resolution before it can be completed.', Number(runtime.version), 'PROCESS_TASK_ESCALATION_ACTIVE');
       }
       if (runtime.status !== 'IN_PROGRESS') throw conflict('Only an in-progress human task can be completed.', Number(runtime.version), 'PROCESS_TASK_STATE_CONFLICT');
-      const taskOutcome = { result };
+      const taskOutcome = { result, ...(savedChoice ? { decisionChoice: savedChoice } : {}) };
       const event = processTaskRuntimeEvent('HumanTaskCompleted', principal, {
-        taskId, processPlanId: planId, revision, planInstanceId, result, evidence: safeEvidence,
+        taskId, processPlanId: planId, revision, planInstanceId, result, evidence: safeEvidence, ...(savedChoice ? { decisionChoice: savedChoice } : {}),
+        ...(completedPlan.kind === 'manual_process_flow_plan' ? { snapshotHash: completedPlan.snapshotHash, flowHash: completedPlan.flow.definitionHash } : {}),
       });
       const status = result === 'succeeded' ? 'SUCCEEDED' : 'FAILED';
       const updated = await client.query(`
@@ -4493,8 +4594,9 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
       if (disposition === 'reassign' && Number(runtime.version) !== expectedVersion) {
         throw conflict('This human task changed before reassignment. Refresh the current task and try again.', Number(runtime.version), 'PROCESS_TASK_STATE_CONFLICT');
       }
-      const { task: immutableTask } = await verifyProcessRuntimeTaskDefinition(client, { tenantId, projectId, planId, revision, taskId, runtime });
+      const { plan: immutablePlan, task: immutableTask } = await verifyProcessRuntimeTaskDefinition(client, { tenantId, projectId, planId, revision, taskId, runtime });
       if (!immutableTask) throw persistenceIntegrity('The escalated human task is missing from its immutable plan snapshot.');
+      if (immutablePlan.kind === 'manual_process_flow_plan') await verifyManualFlowControl(client, immutablePlan, control, planInstanceId);
       if (runtime.actor_type !== 'human') throw conflict('Only a human task can be resolved through this path.', null, 'PROCESS_TASK_ASSIGNMENT_CONFLICT');
       if (runtime.status !== 'ESCALATED') throw conflict('Only an escalated human task can be resolved by its project owner.', Number(runtime.version), 'PROCESS_TASK_STATE_CONFLICT');
 
@@ -4604,6 +4706,9 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         };
       }
 
+      if (immutablePlan.kind === 'manual_process_flow_plan' && immutableTask.flowRef.decisionId && disposition === 'succeeded') {
+        throw conflict('A decision requires the assigned human to resume and save an explicit choice.', null, 'PROCESS_DECISION_RESUME_REQUIRED');
+      }
       const status = ['resume', 'reassign'].includes(disposition) ? 'IN_PROGRESS' : disposition === 'succeeded' ? 'SUCCEEDED' : 'FAILED';
       const taskOutcome = ['resume', 'reassign'].includes(disposition) ? runtime.outcome : { result: disposition };
       const taskEvidence = ['resume', 'reassign'].includes(disposition) ? runtime.evidence : safeEvidence;
@@ -4612,6 +4717,7 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         disposition: disposition === 'reassign' ? 'resume' : disposition,
         ...(disposition === 'reassign' ? { ownerAction: 'reassign', ...reassignmentEventData } : {}),
         reason: safeReason, evidence: safeEvidence,
+        ...(immutablePlan.kind === 'manual_process_flow_plan' ? { snapshotHash: immutablePlan.snapshotHash, flowHash: immutablePlan.flow.definitionHash } : {}),
       });
       const updated = await client.query(`
         update orgward.process_task_instances

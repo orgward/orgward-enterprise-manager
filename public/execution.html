@@ -42,6 +42,8 @@
           <form id="process-plan-form" class="execution-form">
             <label>Project<select id="plan-project" required></select></label>
             <label>Saved process<select id="plan-process" required></select></label>
+            <label>Plan mode<select id="plan-mode"><option value="planning">Planning graph</option><option value="manual-flow">Compile saved process flow for human work</option></select></label>
+            <p class="muted">Human work compiles the exact current saved flow. Decisions route by recorded human choice; simulation never completes work. Advanced agent automation is not supported in this mode.</p>
             <button class="button" type="submit">Create planning graph</button>
           </form>
         </section>

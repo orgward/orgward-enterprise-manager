@@ -251,10 +251,30 @@ summaries and one full result: the latest matching selected process and exact
 source, or an explicit `simulationId`. Recorded-time cutoffs hide later results.
 The original command ID and body recover an uncertain save response.
 
-Actual routing for these advanced flows is the next runtime increment. Until it
-is implemented, the legacy process planner rejects an authored advanced flow;
-it cannot silently compile the design as an ordinary information-dependency DAG.
-Existing baseline plans remain available.
+Advanced flows compile explicitly through the process-plan endpoint with
+`mode: "manual-flow"`, `processId`, `blueprintId` and `blueprintVersion` in the
+normal versioned command payload. The saved manual plan pins its complete source,
+flow and expanded occurrences (maximum 32 including structural steps). Assign
+human blueprint actors through the existing plan editor and enabled actor bindings.
+Routing is fixed; changing a flow requires a new design and compile.
+
+Execution projects ready, waiting and skipped occurrences from audited human
+outcomes. Manual failures activate only declared exception handlers. Forks activate
+all branches; ALL/ANY joins release one continuation according to their saved mode.
+Loop decisions require an explicit human choice for each bounded occurrence, with
+no body work beyond the saved bound. A saved continue choice at the final bound
+remains blocked and inspectable; stop the instance or revise and compile a new flow. Decision completion saves `decisionChoice`
+with `outcome`, typed `observations` (`informationId` and `value`, or explicit null
+for unknown), and `reason`. Saved table evaluation is advisory; the human choice
+routes the instance. Skipped routes never create human success records.
+
+Existing pause, escalation, reassignment and restart paths apply. Owners must resume
+or reassign a decision for its assigned human to save a choice; terminal owner
+success cannot invent one. Runtime projections retain activation identities and
+trace; source, choice and terminal event hashes bind durable routing. Advanced
+agent execution remains an explicit unsupported functionality gap. The legacy
+planner rejects advanced flows; baseline DAG and software delivery paths remain
+available.
 
 ## Financial SDLC reference
 

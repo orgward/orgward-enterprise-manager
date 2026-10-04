@@ -716,6 +716,239 @@ test('enterprise process definitions and simulations stay typed, bounded, source
   assert.ok(flowResult.data.blueprintVersion < ambiguousResult.data.blueprintVersion);
 });
 
+test('manual process flow gates actual human work by audited decision routes, forks, loops, exceptions and instance control', async (t) => {
+  const postgres = await startPostgres();
+  let root;
+  let instance;
+  t.after(async () => {
+    await closeApp(instance);
+    if (root) await rm(root, { recursive: true, force: true });
+    await postgres.close();
+  });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-enterprise-manual-flow-'));
+  instance = await startApp(postgres, root);
+  for (const identity of identities.values()) {
+    await postgres.query(`insert into orgward.oidc_principals
+      (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+    [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  }
+  const project = await seedProject(postgres, 'Enterprise actual manual flow fixture');
+  const getProject = (subject = 'owner') => request(instance.base, subject, `/api/v1/projects/${project.id}`);
+  const bindingRoute = `/api/v1/projects/${project.id}/actor-bindings/proposals`;
+  let enterpriseView = await currentView(instance.base, 'owner', project.id, { selectedId: 'process-deliver' });
+  const decisionTable = { schemaVersion: '1.0', hitPolicy: 'UNIQUE', defaultOutcome: 'STOP',
+    inputs: [{ informationId: 'information-customer-signal', valueType: 'number' }], rules: [
+      { id: 'route-high', conditions: [{ informationId: 'information-customer-signal', operator: 'gte', value: 5 }], outcome: 'HIGH' },
+      { id: 'route-low', conditions: [{ informationId: 'information-customer-signal', operator: 'lt', value: 5 }], outcome: 'LOW' },
+      { id: 'loop-continue', conditions: [{ informationId: 'information-customer-signal', operator: 'eq', value: 1 }], outcome: 'CONTINUE' },
+      { id: 'loop-stop', conditions: [{ informationId: 'information-customer-signal', operator: 'eq', value: 2 }], outcome: 'STOP' },
+    ] };
+  const tableResult = await postCommand(instance.base, 'owner', project.id,
+    commandBody(enterpriseView, 'manual-flow-decision-table', { kind: 'define-decision-table', objectId: 'decision-priority', decisionTable,
+      reason: 'Define explicit human outcomes for routing and the bounded correction decision.' }));
+  enterpriseView = await currentView(instance.base, 'owner', project.id, { selectedId: 'process-deliver' });
+  const manual = (id, kind, title, nextStepId, exceptionStepId = null) => ({ id, kind, title,
+    processId: 'process-deliver', roleId: 'role-founder', inputIds: ['information-customer-signal'], outputIds: [], nextStepId, exceptionStepId });
+  const processFlow = { schemaVersion: '1.0', startStepId: 'start', steps: [
+    manual('start', 'manual', 'Verify transfer request', 'gate'),
+    { id: 'gate', kind: 'decision', title: 'Select work route', decisionId: 'decision-priority', routes: [
+      { outcome: 'HIGH', targetStepId: 'fork' }, { outcome: 'LOW', targetStepId: 'low-work' }] },
+    { id: 'fork', kind: 'fork', title: 'Run parallel reviews', branchStepIds: ['check-a', 'check-b'], joinStepId: 'join' },
+    manual('check-a', 'manual', 'Verify customer details', 'join', 'exception'),
+    manual('check-b', 'manual', 'Verify delivery capacity', 'join'),
+    manual('exception', 'manual-exception', 'Resolve failed customer check', 'join'),
+    { id: 'join', kind: 'join', title: 'Wait for both checks', forkStepId: 'fork', mode: 'ALL', nextStepId: 'loop' },
+    { id: 'loop', kind: 'loop', title: 'Choose correction or finish', decisionId: 'decision-priority', continueOutcome: 'CONTINUE',
+      bodyStepId: 'correction', exitStepId: 'flow-end', maxIterations: 2 },
+    manual('correction', 'manual', 'Record a correction', 'loop-return'),
+    { id: 'loop-return', kind: 'loop-return', title: 'Return to correction decision', loopStepId: 'loop' },
+    manual('low-work', 'manual', 'Review low risk transfer', 'low-end'),
+    { id: 'low-end', kind: 'end', title: 'Low risk route complete' },
+    { id: 'flow-end', kind: 'end', title: 'Transfer review complete' },
+  ] };
+  const flowResult = await postCommand(instance.base, 'owner', project.id,
+    commandBody(enterpriseView, 'manual-flow-save-definition', { kind: 'define-process-flow', objectId: 'process-deliver', processFlow,
+      reason: 'Save manual approval, parallel review, exception and bounded correction routes.' }));
+  assert.ok(tableResult.data.blueprintVersion < flowResult.data.blueprintVersion);
+
+  let projectView = await getProject();
+  const bindingPayload = { actorId: 'actor-founder', roleId: 'role-founder',
+    targetPrincipal: identities.get('editor').principal, blueprintVersion: projectView.data.latestBlueprint.version };
+  projectView = await request(instance.base, 'owner', bindingRoute, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'manual-flow-editor-binding-proposal', expectedVersion: projectView.data.version,
+    payload: bindingPayload,
+  } });
+  projectView = await request(instance.base, 'owner', `${bindingRoute}/enable`, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'manual-flow-editor-binding-enable', expectedVersion: projectView.data.version,
+    payload: { actorId: bindingPayload.actorId, roleId: bindingPayload.roleId, blueprintVersion: bindingPayload.blueprintVersion },
+  } });
+  projectView = await getProject();
+  const planned = await request(instance.base, 'owner', `/api/v1/projects/${project.id}/process-plans`, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'manual-flow-compile', expectedVersion: projectView.data.version,
+    payload: { processId: 'process-deliver', mode: 'manual-flow', blueprintId: flowResult.data.blueprintId,
+      blueprintVersion: flowResult.data.blueprintVersion },
+  } }, 201);
+  let plan = planned.data.processPlans.at(-1);
+  assert.equal(plan.kind, 'manual_process_flow_plan');
+  assert.equal(plan.source.blueprintId, flowResult.data.blueprintId);
+  assert.equal(plan.source.blueprintVersion, flowResult.data.blueprintVersion);
+  const findTask = (stepId, iteration = 0) => plan.tasks.find((task) => task.flowRef.stepId === stepId && task.flowRef.iteration === iteration);
+  assert.ok(findTask('correction', 1));
+  assert.ok(findTask('correction', 2));
+  assert.equal(findTask('correction', 3), undefined, 'the compiled task set cannot exceed the saved loop bound');
+  const revisionRoute = `/api/v1/projects/${project.id}/process-plans/${plan.id}/revisions`;
+  const assigned = await request(instance.base, 'owner', revisionRoute, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'manual-flow-human-assignment', expectedVersion: planned.data.version,
+    payload: { tasks: plan.tasks.map((task) => ({ taskId: task.id, title: task.title, detail: task.detail,
+      dependencies: task.dependencies, roleId: 'role-founder', actorId: 'actor-founder' })) },
+  } }, 200);
+  plan = assigned.data.processPlans.filter((entry) => entry.id === plan.id).at(-1);
+  assert.equal(plan.revision, 2);
+  assert.ok(plan.tasks.every((task) => task.assignee.actorId === 'actor-founder' && task.assignee.roleId === 'role-founder'));
+
+  const runtimeRoute = `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`;
+  const runtimeRead = (subject = 'owner') => request(instance.base, subject, runtimeRoute);
+  const taskAction = (action, subject, commandId, payload, status = 201) => request(instance.base, subject,
+    `/api/execution/process-task-instances/${action}`, { method: 'POST', body: { schemaVersion: '1.0', commandId, payload } }, status);
+  const start = (stepId, instanceId = null, subject = 'editor', suffix = stepId, iteration = 0, status = 201) => {
+    const task = findTask(stepId, iteration);
+    assert.ok(task, `compiled task ${stepId}#${iteration} exists`);
+    return taskAction('start', subject, `manual-flow-start-${suffix}`, { projectId: project.id, planId: plan.id,
+      revision: plan.revision, planInstanceId: instanceId, taskId: task.id }, status);
+  };
+  const complete = (stepId, instanceId, suffix, { result = 'succeeded', decisionChoice = undefined, status = 201, subject = 'editor', iteration = 0 } = {}) => {
+    const task = findTask(stepId, iteration);
+    assert.ok(task, `compiled task ${stepId}#${iteration} exists`);
+    const payload = { projectId: project.id, planId: plan.id, revision: plan.revision, planInstanceId: instanceId,
+      taskId: task.id, result, evidence: [`Evidence for ${stepId} iteration ${iteration}.`], ...(decisionChoice ? { decisionChoice } : {}) };
+    const body = { schemaVersion: '1.0', commandId: `manual-flow-complete-${suffix}`, payload };
+    return { body, request: taskAction('complete', subject, body.commandId, payload, status) };
+  };
+  const refreshInstances = async (subject = 'owner') => (await runtimeRead(subject)).instances;
+  const instanceRow = (rows, instanceId, taskId) => rows.find((row) => row.planInstanceId === instanceId && row.taskId === taskId);
+  const gate = findTask('gate');
+  const unactivatedGateStart = await start('gate', null, 'editor', 'gate-before-root', 0, 409);
+  assert.equal(unactivatedGateStart.error.code, 'PROCESS_TASK_DEPENDENCY_UNSATISFIED');
+
+  const startedRoot = await start('start', null, 'editor', 'root');
+  const planInstanceId = startedRoot.planInstanceId;
+  assert.match(planInstanceId, /^[0-9a-f-]{36}$/i);
+  const rootTask = findTask('start');
+  const rootStartIdempotent = await taskAction('start', 'editor', 'manual-flow-start-root', {
+    projectId: project.id, planId: plan.id, revision: plan.revision, planInstanceId: null, taskId: rootTask.id,
+  }, 200);
+  assert.equal(rootStartIdempotent.meta.replayed, true);
+  assert.equal(rootStartIdempotent.planInstanceId, planInstanceId);
+
+  let row = instanceRow(await refreshInstances('editor'), planInstanceId, rootTask.id);
+  assert.ok(row.activation.identity);
+  assert.equal(row.activation.planInstanceId, planInstanceId);
+  const paused = await request(instance.base, 'editor', '/api/execution/process-task-instances/pause', { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'manual-flow-pause-active-root', payload: { projectId: project.id, planInstanceId,
+      version: row.instanceControl.version, reason: 'Hold before the first human outcome is recorded.' },
+  } });
+  assert.equal(paused.status, 'PAUSE_REQUESTED');
+  const pausedStartDenied = await start('gate', planInstanceId, 'editor', 'gate-paused-request', 0, 409);
+  assert.equal(pausedStartDenied.error.code, 'PROCESS_INSTANCE_PAUSED');
+  const rootCompletion = complete('start', planInstanceId, 'root', { status: 201 });
+  const completedRoot = await rootCompletion.request;
+  assert.equal(completedRoot.status, 'SUCCEEDED');
+  row = instanceRow(await refreshInstances('owner'), planInstanceId, rootTask.id);
+  assert.equal(row.instanceControl.status, 'PAUSED');
+  assert.ok(row.instanceControl.events.some((event) => event.type === 'ProcessTaskInstancePaused'));
+  const pausedGateDenied = await start('gate', planInstanceId, 'editor', 'gate-paused', 0, 409);
+  assert.equal(pausedGateDenied.error.code, 'PROCESS_INSTANCE_PAUSED');
+
+  await closeApp(instance);
+  instance = await startApp(postgres, root);
+  row = instanceRow(await refreshInstances('owner'), planInstanceId, rootTask.id);
+  assert.equal(row.instanceControl.status, 'PAUSED', 'pause state and activation survive PostgreSQL app restart');
+  const resumed = await request(instance.base, 'owner', '/api/execution/process-task-instances/resume', { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'manual-flow-owner-resume', payload: { projectId: project.id, planInstanceId, version: row.instanceControl.version },
+  } });
+  assert.equal(resumed.status, 'ACTIVE');
+
+  assert.equal((await start('gate', planInstanceId, 'editor', 'gate')).status, 'IN_PROGRESS');
+  const incompleteChoice = await taskAction('complete', 'editor', 'manual-flow-gate-without-choice', {
+    projectId: project.id, planId: plan.id, revision: plan.revision, planInstanceId, taskId: gate.id,
+    result: 'succeeded', evidence: ['Input checked.'],
+  }, 400);
+  assert.equal(incompleteChoice.error.code, 'INVALID_HUMAN_DECISION_CHOICE', 'direct completion cannot skip its required declared outcome, observations or reason');
+  const highChoice = { outcome: 'HIGH', observations: [{ informationId: 'information-customer-signal', value: 10 }], reason: 'The recorded score follows the high route.' };
+  const gateCompletion = complete('gate', planInstanceId, 'gate', { decisionChoice: highChoice });
+  const completedGate = await gateCompletion.request;
+  assert.equal(completedGate.outcome.decisionChoice.outcome, 'HIGH');
+  const highChoiceHash = completedGate.outcome.decisionChoice.choiceHash;
+  assert.ok(highChoiceHash);
+  const skippedStartDenied = await start('low-work', planInstanceId, 'editor', 'low-route-not-selected', 0, 409);
+  assert.equal(skippedStartDenied.error.code, 'PROCESS_TASK_DEPENDENCY_UNSATISFIED');
+
+  await start('check-a', planInstanceId, 'editor', 'check-a');
+  const escalation = await taskAction('escalate', 'editor', 'manual-flow-escalate-check-a', {
+    projectId: project.id, planId: plan.id, revision: plan.revision, planInstanceId, taskId: findTask('check-a').id,
+    reason: 'A second person must resolve this failed verification.', evidence: ['The customer record could not be verified.'],
+  });
+  assert.equal(escalation.status, 'ESCALATED');
+  const escalatedCompletionDenied = await taskAction('complete', 'editor', 'manual-flow-complete-escalated-check-a', {
+    projectId: project.id, planId: plan.id, revision: plan.revision, planInstanceId, taskId: findTask('check-a').id,
+    result: 'failed', evidence: ['Must wait for owner resolution.'],
+  }, 409);
+  assert.equal(escalatedCompletionDenied.error.code, 'PROCESS_TASK_ESCALATION_ACTIVE');
+  const resolution = await taskAction('resolve', 'owner', 'manual-flow-owner-resolve-check-a-failed', {
+    projectId: project.id, planId: plan.id, revision: plan.revision, planInstanceId, taskId: findTask('check-a').id,
+    disposition: 'failed', reason: 'Verification failed; route through the declared handler.', evidence: ['Owner reviewed the exception.'],
+  });
+  assert.equal(resolution.status, 'FAILED');
+  let rows = await refreshInstances('owner');
+  let activation = instanceRow(rows, planInstanceId, rootTask.id).activation;
+  assert.equal(activation.tasks.find((entry) => entry.taskId === findTask('exception').id).state, 'READY');
+  assert.equal(activation.steps.find((entry) => entry.stepId === 'join').state, 'WAITING');
+  await start('exception', planInstanceId, 'editor', 'exception');
+  await complete('exception', planInstanceId, 'exception').request;
+  await start('check-b', planInstanceId, 'editor', 'check-b');
+  await complete('check-b', planInstanceId, 'check-b').request;
+  rows = await refreshInstances('owner');
+  activation = instanceRow(rows, planInstanceId, rootTask.id).activation;
+  assert.equal(activation.steps.find((entry) => entry.stepId === 'join').state, 'SUCCEEDED');
+  assert.equal(activation.tasks.find((entry) => entry.taskId === findTask('loop', 0).id).state, 'READY');
+
+  for (let iteration = 0; iteration < 2; iteration += 1) {
+    await start('loop', planInstanceId, 'editor', `loop-${iteration}`, iteration);
+    await complete('loop', planInstanceId, `loop-${iteration}`, { iteration, decisionChoice: {
+      outcome: 'CONTINUE', observations: [{ informationId: 'information-customer-signal', value: 1 }], reason: 'Continue within the saved bound.' } }).request;
+    await start('correction', planInstanceId, 'editor', `correction-${iteration + 1}`, iteration + 1);
+    await complete('correction', planInstanceId, `correction-${iteration + 1}`, { iteration: iteration + 1 }).request;
+  }
+  await start('loop', planInstanceId, 'editor', 'loop-exit', 2);
+  const stopChoice = { outcome: 'STOP', observations: [{ informationId: 'information-customer-signal', value: 2 }], reason: 'Finish at the declared loop bound.' };
+  await complete('loop', planInstanceId, 'loop-exit', { iteration: 2, decisionChoice: stopChoice }).request;
+  rows = await refreshInstances('owner');
+  activation = instanceRow(rows, planInstanceId, rootTask.id).activation;
+  assert.equal(activation.state, 'COMPLETED');
+  assert.equal(activation.tasks.find((entry) => entry.taskId === findTask('low-work').id).state, 'SKIPPED');
+  const finalLoopRuntime = instanceRow(rows, planInstanceId, findTask('loop', 2).id);
+  assert.equal(finalLoopRuntime.outcome.decisionChoice.outcome, 'STOP');
+  assert.equal(finalLoopRuntime.outcome.decisionChoice.advisory.status, 'CONFLICTED',
+    'the saved human STOP choice remains authoritative even when the typed observations disagree');
+  assert.ok(finalLoopRuntime.events.some((event) => event.type === 'HumanTaskCompleted'
+    && event.data?.decisionChoice?.choiceHash === finalLoopRuntime.outcome.decisionChoice.choiceHash));
+  assert.equal(finalLoopRuntime.outcome.decisionChoice.meaning, 'HUMAN_REPORTED_CHOICE');
+  const savedPlan = (await getProject()).data.processPlans.filter((entry) => entry.id === plan.id).at(-1);
+  assert.equal(savedPlan.revision, plan.revision);
+  assert.equal(savedPlan.source.blueprintHash, plan.source.blueprintHash);
+  await closeApp(instance);
+  instance = await startApp(postgres, root);
+  rows = await refreshInstances('owner');
+  const exactRestarted = instanceRow(rows, planInstanceId, gate.id);
+  assert.equal(exactRestarted.outcome.decisionChoice.choiceHash, highChoiceHash);
+  assert.deepEqual(exactRestarted.outcome.decisionChoice.observations, highChoice.observations);
+  assert.equal(instanceRow(rows, planInstanceId, rootTask.id).instanceControl.status, 'ACTIVE');
+  assert.equal(instanceRow(rows, planInstanceId, rootTask.id).activation.state, 'COMPLETED');
+  const gateReplay = await taskAction('complete', 'editor', gateCompletion.body.commandId, gateCompletion.body.payload, 200);
+  assert.equal(gateReplay.meta.replayed, true);
+  assert.equal(gateReplay.outcome.decisionChoice.choiceHash, highChoiceHash);
+});
+
 test('enterprise branches merge exact typed changes only after a current owner review', async (t) => {
   const postgres = await startPostgres();
   let root;

@@ -1476,7 +1476,7 @@ export class ExecutionService {
       requestHash: digest({
         projectId: input.projectId, planId: input.planId, revision: input.revision,
         planInstanceId: input.planInstanceId, taskId: input.taskId, principal: input.principal,
-        result: input.result, evidence: input.evidence,
+        result: input.result, evidence: input.evidence, ...(input.decisionChoice !== undefined ? { decisionChoice: input.decisionChoice } : {}),
       }),
     });
   }

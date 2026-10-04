@@ -6,6 +6,8 @@ import { enterpriseCommandStorageKey, enterpriseContextFailure, enterpriseContex
 import { enterpriseBranchCommandPayload, enterpriseBranchWritable, enterpriseCandidateCurrent, enterpriseCommandResultRoute,
   renderEnterpriseBranches } from '../../public/enterprise-branches.mjs';
 import { enterpriseProcessCommandPayload, enterpriseTypedValue, renderEnterpriseProcess, renderEnterpriseSimulation } from '../../public/enterprise-process.mjs';
+import { activationForTask, evaluateManualFlowAdvice, manualFlowActivation, manualFlowDecisionDefinition,
+  mergeProcessPlanActivation, renderManualFlowDecisionChoice } from '../../public/manual-flow-ui.mjs';
 import { decodeStudioRoute, encodeStudioRoute } from '../../public/shared-interactions.mjs';
 
 class NodeListFixture extends Array {
@@ -70,7 +72,7 @@ class NodeFixture {
 
 const el = (tag, options = {}, children = []) => {
   const node = new NodeFixture(tag, options);
-  node.append(...children);
+  node.append(...(Array.isArray(children) ? children : [children]));
   return node;
 };
 const branchUi = {
@@ -343,6 +345,69 @@ test('enterprise process UI shows a saved simulation as exact hypothetical evide
   simulationPicker.value = result.id;
   simulationPicker.listeners.get('change')?.();
   assert.equal(selectedSimulation, result.id, 'choosing saved history requests the exact detail record');
+});
+
+test('manual-flow UI binds activation, decisions and task occurrences to the exact plan instance', () => {
+  const taskId = 'task-flow-0123456789abcdef01234567';
+  const decisionTable = { schemaVersion: '1.0', hitPolicy: 'UNIQUE', inputs: [{ informationId: 'information-score', valueType: 'number' }],
+    rules: [{ id: 'rule-high', conditions: [{ informationId: 'information-score', operator: 'gte', value: 5 }], outcome: 'HIGH' }], defaultOutcome: 'LOW' };
+  const task = { id: taskId, title: 'Review transaction risk', inputs: [{ objectId: 'information-score', label: 'Customer risk score' }],
+    flowRef: { stepId: 'risk-gate', iteration: 2, kind: 'decision', decisionId: 'decision-risk',
+    decisionTable, outcomes: ['HIGH', 'LOW'], decisionInputs: [{ informationId: 'information-score', valueType: 'number' }] } };
+  const taskActivation = { taskId, state: 'READY', reason: 'Reached by verified saved outcomes.', identity: 'a'.repeat(64), trace: [] };
+  const planActivation = { planInstanceId: null, state: 'WAITING', identity: 'b'.repeat(64), trace: [], tasks: [taskActivation], steps: [] };
+  const plan = { id: 'process-plan-1', kind: 'manual_process_flow_plan', revision: 3,
+    source: { projectId: 'project-one', blueprintId: 'blueprint-pinned', blueprintVersion: 4 },
+    tasks: [task], activation: planActivation };
+  const instanceId = 'process-task-instance-00000000-0000-4000-8000-000000000001';
+  const instanceActivation = { ...planActivation, planInstanceId: instanceId, identity: 'c'.repeat(64), tasks: [{ ...taskActivation, state: 'WAITING' }] };
+  const rows = [{ projectId: 'project-one', processPlanId: plan.id, revision: plan.revision, planInstanceId: instanceId, activation: instanceActivation }];
+  const changedTable = { ...decisionTable, defaultOutcome: 'REVIEW' };
+  const project = { blueprintVersions: [{ id: 'blueprint-pinned', version: 4,
+    areas: { governanceRiskControls: { items: [{ id: 'decision-risk', decisionTable: changedTable }] } } },
+  { id: 'blueprint-latest', version: 5, areas: { governanceRiskControls: { items: [{ id: 'decision-risk', decisionTable: changedTable }] } } }] };
+
+  const merged = mergeProcessPlanActivation([plan], [{ id: plan.id, revision: 3, activation: planActivation }]);
+  assert.equal(merged[0].activation.identity, planActivation.identity);
+  assert.equal(manualFlowActivation(merged[0], rows, null).planInstanceId, null);
+  assert.equal(manualFlowActivation(merged[0], rows, instanceId).identity, instanceActivation.identity);
+  assert.equal(manualFlowActivation(merged[0], [{ planInstanceId: 'process-task-instance-other', activation: instanceActivation }], instanceId), null);
+  assert.equal(manualFlowActivation(merged[0], [{ ...rows[0], projectId: 'project-other' }], instanceId), null);
+  assert.equal(activationForTask(merged[0], rows, taskId, instanceId).state, 'WAITING');
+  assert.equal(activationForTask(merged[0], rows, 'task-flow-stale', instanceId), null);
+  assert.equal(manualFlowDecisionDefinition(plan, project, task), decisionTable, 'runtime task carries the immutable compiled table instead of a later blueprint definition');
+  assert.deepEqual(evaluateManualFlowAdvice(decisionTable, []), { status: 'UNKNOWN', outcome: null });
+  assert.deepEqual(evaluateManualFlowAdvice(decisionTable, [{ informationId: 'information-score', value: 8 }]), { status: 'RESOLVED', outcome: 'HIGH' });
+  const overlap = { ...decisionTable, rules: [...decisionTable.rules,
+    { id: 'rule-overlap', conditions: [{ informationId: 'information-score', operator: 'gte', value: 7 }], outcome: 'LOW' }] };
+  assert.deepEqual(evaluateManualFlowAdvice(overlap, [{ informationId: 'information-score', value: 8 }]), { status: 'CONFLICTED', outcome: null });
+  const staleRevisionMerge = mergeProcessPlanActivation([plan], [{ id: plan.id, revision: 2, activation: planActivation }]);
+  assert.equal(staleRevisionMerge[0], plan, 'a runtime projection from another saved plan revision cannot replace the current plan');
+  assert.equal(staleRevisionMerge[1].revision, 2, 'unmatched historical runtime is retained as a separately identified revision');
+
+  task.flowRef.decisionTable = overlap;
+  const choice = renderManualFlowDecisionChoice({ project, plan, task, el });
+  const scoreControl = choice.node.querySelectorAll('input').find((control) => control.attrs.name === 'information-score');
+  const knownControl = choice.node.querySelectorAll('select').find((control) => control.attrs.name === 'known:information-score');
+  const outcomeControl = choice.node.querySelectorAll('select').find((control) => control.attrs.name === 'decisionOutcome');
+  const reasonControl = choice.node.querySelectorAll('textarea').find((control) => control.attrs.name === 'decisionReason');
+  assert.match(choice.node.textContent, /Human decision — Review transaction risk/);
+  assert.match(choice.node.textContent, /Observed Customer risk score/);
+  assert.match(choice.node.textContent, /Customer risk score: information-score/);
+  scoreControl.value = '8'; scoreControl.listeners.get('input')?.();
+  assert.ok(choice.node.textContent.includes('Choose the human outcome explicitly'));
+  outcomeControl.value = 'LOW'; reasonControl.value = 'Operator records a cautious route.';
+  assert.match(choice.node.querySelectorAll('p').find((node) => node.className === 'manual-flow-table-advice').textContent, /CONFLICTED/);
+  const savedChoice = choice.read();
+  assert.deepEqual(savedChoice, { outcome: 'LOW', observations: [{ informationId: 'information-score', value: 8 }], reason: 'Operator records a cautious route.' });
+  const restored = renderManualFlowDecisionChoice({ project, plan, task, el });
+  restored.restore(savedChoice);
+  assert.deepEqual(restored.read(), savedChoice, 'the exact saved human choice is restored for retry');
+  const unknownChoice = { outcome: 'HIGH', observations: [{ informationId: 'information-score', value: null }], reason: 'Input is not known.' };
+  restored.restore(unknownChoice);
+  assert.equal(restored.node.querySelectorAll('select').find((control) => control.attrs.name === 'known:information-score').value, 'unknown');
+  assert.equal(restored.node.querySelectorAll('input').find((control) => control.attrs.name === 'information-score').disabled, true);
+  assert.deepEqual(restored.read(), unknownChoice);
 });
 
 test('an unavailable requested enterprise context stays explicit and offers an intentional reset', () => {

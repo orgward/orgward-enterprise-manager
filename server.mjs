@@ -1,3 +1,4 @@
+import { planManualProcessFlow } from './src/enterprise/process-runtime.mjs';
 import { createServer as createHttpServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
@@ -2015,7 +2016,10 @@ export function createApp({
         requireWriteAccess(request);
         const body = validateCommand(await readJson(request));
         const keys = Object.keys(body.payload);
-        if (keys.length !== 1 || keys[0] !== 'processId' || typeof body.payload.processId !== 'string'
+        const manualFlow = body.payload.mode === 'manual-flow';
+        if ((manualFlow ? keys.length !== 4 || keys.some((key) => !['processId', 'mode', 'blueprintId', 'blueprintVersion'].includes(key))
+          || typeof body.payload.blueprintId !== 'string' || !Number.isSafeInteger(body.payload.blueprintVersion)
+          : keys.length !== 1 || keys[0] !== 'processId') || typeof body.payload.processId !== 'string'
           || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(body.payload.processId)) {
           throw apiFailure(400, 'INVALID_COMMAND', 'Choose one valid saved process.', {
             fieldErrors: [{ field: 'payload.processId', message: 'Only a valid processId is accepted.' }],
@@ -2028,11 +2032,11 @@ export function createApp({
         const command = {
           operation: 'project.plan-process-task-graph',
           commandId: body.commandId,
-          payloadHash: payloadHash({ schemaVersion: body.schemaVersion, expectedVersion: body.expectedVersion, processId }),
+          payloadHash: payloadHash({ schemaVersion: body.schemaVersion, expectedVersion: body.expectedVersion, ...body.payload }),
           expectedVersion: body.expectedVersion,
           apply(project) {
             normalizeProject(project, { tenantId, actor });
-            const plan = planProcessTaskGraph(project, processId, actor);
+            const plan = manualFlow ? planManualProcessFlow(project, body.payload, actor) : planProcessTaskGraph(project, processId, actor);
             project.processPlans ??= [];
             project.processPlans.push(plan);
             project.version += 1;
@@ -2699,7 +2703,7 @@ export function createApp({
         });
         const action = humanTaskActionMatch[1];
         const allowed = new Set(['projectId', 'planId', 'revision', 'planInstanceId', 'taskId',
-          ...(action === 'complete' ? ['result', 'evidence'] : []),
+          ...(action === 'complete' ? ['result', 'evidence', 'decisionChoice'] : []),
           ...(action === 'escalate' ? ['reason', 'evidence'] : []),
           ...(action === 'resolve' ? ['disposition', 'reason', 'evidence', 'targetPrincipal', 'expectedVersion'] : []),
         ]);
@@ -2728,8 +2732,8 @@ export function createApp({
           return sendJson(response, result.replayed ? 200 : 201, { ...result.runtime, meta: { replayed: result.replayed } });
         }
         if (action === 'complete') {
-          const { result: taskResult, evidence } = body.payload;
-          const completed = await executionService.completeHumanProcessTask({ ...command, result: taskResult, evidence });
+          const { result: taskResult, evidence, decisionChoice } = body.payload;
+          const completed = await executionService.completeHumanProcessTask({ ...command, result: taskResult, evidence, decisionChoice });
           if (!completed) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'The project or authorized membership was not found.');
           return sendJson(response, completed.replayed ? 200 : 201, { ...completed.runtime, meta: { replayed: completed.replayed } });
         }

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { verifyBlueprintProposalEvaluation } from './execution/proposals.mjs';
 import { enterpriseScopeErrors, enterpriseScopeRelations } from './enterprise/types.mjs';
 import { enterpriseStateErrors } from './enterprise/state.mjs';
+import { manualFlowSnapshotHash, verifyManualFlowPlan } from './enterprise/process-runtime.mjs';
 import { processModelErrors, processModelRelations } from './enterprise/process-model.mjs';
 
 export const AREA_DEFINITIONS = [
@@ -976,9 +977,14 @@ export function editProcessTaskGraph(project, planId, payload, actor) {
     || payload.tasks.length + (payload.humanCheckpoint ? 1 : 0) > 32) {
     throw Object.assign(new Error('Provide one edit for every task in this graph (maximum 32).'), { code: 'INVALID_PROCESS_PLAN_EDIT', statusCode: 400 });
   }
+  if (current.kind === 'manual_process_flow_plan' && (payload.humanCheckpoint !== undefined
+    || payload.tasks.some((edit) => JSON.stringify(edit?.dependencies) !== JSON.stringify(current.tasks.find((task) => task.id === edit?.taskId)?.dependencies)))) {
+    throw Object.assign(new Error('Advanced flow routing is pinned; edit the design and compile a new flow to change routing or checkpoints.'), { code: 'PROCESS_FLOW_ROUTING_PINNED', statusCode: 409 });
+  }
   const blueprint = project.blueprintVersions?.find((candidate) => candidate.id === current.source.blueprintId
     && candidate.version === current.source.blueprintVersion);
   if (!blueprint) throw Object.assign(new Error('The pinned source blueprint is unavailable; this graph cannot be edited.'), { code: 'PROCESS_PLAN_SOURCE_UNAVAILABLE', statusCode: 409 });
+  verifyManualFlowPlan(current, blueprint);
   const blueprintObjects = Object.values(blueprint.areas ?? {}).flatMap((entry) => entry.items ?? []);
   const blueprintById = new Map(blueprintObjects.map((itemValue) => [itemValue.id, itemValue]));
   const roles = new Set(blueprintObjects.filter((itemValue) => itemValue.type === 'role').map((itemValue) => itemValue.id));
@@ -1009,6 +1015,7 @@ export function editProcessTaskGraph(project, planId, payload, actor) {
     }
     if (edit.actorId !== null) {
       const actor = blueprintById.get(edit.actorId);
+      if (current.kind === 'manual_process_flow_plan' && actor?.type === 'actor-agent') throw Object.assign(new Error('Advanced flows currently support explicit human assignments only.'), { code: 'PROCESS_FLOW_AGENT_RUNTIME_UNSUPPORTED', statusCode: 409 });
       const linked = actor && edit.roleId && ['actor-human', 'actor-agent'].includes(actor.type)
         && ((actor.assignedRoles ?? []).includes(edit.roleId)
           || (blueprint.relations ?? []).some((relation) => relation.source === edit.actorId
@@ -1026,7 +1033,8 @@ export function editProcessTaskGraph(project, planId, payload, actor) {
       throw Object.assign(new Error('A task no longer resolves to a process in its pinned blueprint.'), { code: 'INVALID_PROCESS_PLAN_SOURCE', statusCode: 409 });
     }
     for (const kind of ['inputs', 'outputs']) {
-      const ids = sourceProcess[kind] ?? [];
+      const flowStep = current.kind === 'manual_process_flow_plan' ? current.flow.definition.steps.find((step) => step.id === old.flowRef.stepId) : null;
+      const ids = flowStep ? (kind === 'inputs' ? flowStep.inputIds ?? old.flowRef.decisionInputs?.map((input) => input.informationId) ?? [] : flowStep.outputIds ?? []) : sourceProcess[kind] ?? [];
       const references = old[kind];
       if (!Array.isArray(references) || references.length !== ids.length
         || references.some((reference, index) => {
@@ -1110,6 +1118,7 @@ export function editProcessTaskGraph(project, planId, payload, actor) {
   next.createdAt = new Date().toISOString();
   next.createdBy = actor;
   next.changedTasks = changedTasks;
+  if (next.kind === 'manual_process_flow_plan') next.snapshotHash = manualFlowSnapshotHash(next);
   project.processPlans.push(next);
   return next;
 }
