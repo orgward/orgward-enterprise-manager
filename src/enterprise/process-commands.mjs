@@ -6,6 +6,7 @@ import { appendEnterpriseBranchDesign } from './branches.mjs';
 import { projectEnterprise } from './projections.mjs';
 import { normalizeDecisionTable, normalizeProcessFlow } from './process-model.mjs';
 import { normalizeStaffingScenario, simulateProcessFlow, simulateStaffingCapacity } from './process-simulation.mjs';
+import { createLocalSandboxTestAdapter, LOCAL_SANDBOX_ADAPTER_ID, SANDBOX_EFFECT_CONTRACT } from './sandbox-adapter-contract.mjs';
 
 export const ENTERPRISE_PROCESS_KINDS = new Set(['define-process-flow', 'define-decision-table', 'simulate-process', 'simulate-staffing', 'run-sandbox-procurement-test']);
 const fail = (code, message, status = 400) => { throw enterpriseFailure(code, message, status); };
@@ -73,8 +74,16 @@ export function applyEnterpriseProcessCommand(project, command, actor) {
     const existing = (project.sandboxTransactions ?? []).find((entry) => entry.operationKey === operationKey);
     if (existing) return { blueprint: current, affectedObjectId: process.id, sandboxTransaction: structuredClone(existing), idempotent: true };
     const operationId = `sandbox-transaction-${randomUUID()}`;
-    const core = { operationId, operationKey, providerKey: `orgward-local-sandbox:${operationKey}`, adapterId: 'orgward.local-sandbox.procurement-test/v1',
-      kind: 'PROCUREMENT_TEST_EFFECT', status: 'RECORDED_IN_SANDBOX', sandbox: true,
+    const request = { contract: SANDBOX_EFFECT_CONTRACT, schemaVersion: '1.0', adapterId: LOCAL_SANDBOX_ADAPTER_ID,
+      mode: 'LOCAL_TEST_ONLY', operationId, operationKey, kind: 'PROCUREMENT_TEST_EFFECT',
+      source: { projectId: project.id, blueprintId: current.id, blueprintVersion: current.version, blueprintHash,
+        processId: process.id, stepId: step.id, resourceId: resource.id, windowId: window.id, allocationId: allocation.id },
+      approval: { decision: 'APPROVED', actor, at, authority: 'HUMAN_PROJECT_OWNER',
+        quantity: { value: quantity.value, unit: quantity.unit }, capacity: { value: available.value, unit: available.unit } } };
+    const adapterResponse = createLocalSandboxTestAdapter().dispatch(request);
+    const core = { operationId, operationKey, providerKey: `orgward-local-sandbox:${operationKey}`,
+      contract: SANDBOX_EFFECT_CONTRACT, contractVersion: '1.0', mode: 'LOCAL_TEST_ONLY',
+      adapterId: LOCAL_SANDBOX_ADAPTER_ID, kind: 'PROCUREMENT_TEST_EFFECT', status: adapterResponse.outcome, sandbox: true,
       label: `Sandbox test effect · ${step.title}`, source: { projectId: project.id, blueprintId: current.id, blueprintVersion: current.version,
         blueprintHash, processId: process.id, stepId: step.id, resourceId: resource.id, windowId: window.id, allocationId: allocation.id },
       commitment: { state: allocation.state, quantity: structuredClone(quantity), source: 'saved owner-reviewed design declaration' },
@@ -82,7 +91,8 @@ export function applyEnterpriseProcessCommand(project, command, actor) {
       approval: { decision: 'APPROVED', actor, at, authority: 'HUMAN_PROJECT_OWNER',
         approved: { kind: 'PROCUREMENT_TEST_EFFECT', stepId: step.id, resourceId: resource.id, windowId: window.id,
           allocationId: allocation.id, quantity: structuredClone(quantity), capacity: structuredClone(available) } },
-      effect: { result: 'LOCAL_TEST_RECORD_CREATED', externalProviderCalled: false },
+      effect: { result: adapterResponse.result.status, externalProviderCalled: adapterResponse.externalProviderCalled,
+        adapterResponse: structuredClone(adapterResponse) },
       evidence: { kind: 'SANDBOX_OPERATION_RECEIPT', operationKey, createdAt: at, actor,
         detail: 'A local sandbox record represents one test effect. No payment, legal, physical, supplier or other external action was sent.' } };
     const transaction = { ...core, evidenceHash: digest(core) };

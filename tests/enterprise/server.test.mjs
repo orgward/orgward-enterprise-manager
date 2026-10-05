@@ -1173,6 +1173,8 @@ test('owner-approved sandbox procurement records one source-pinned test effect a
   const approved = await postCommand(instance.base, 'owner', project.id, approvalBody);
   const operation = approved.data.sandboxTransaction;
   assert.equal(operation.status, 'RECORDED_IN_SANDBOX'); assert.equal(operation.sandbox, true);
+  assert.equal(operation.contract, 'orgward.sandbox-effect/v1'); assert.equal(operation.contractVersion, '1.0');
+  assert.equal(operation.mode, 'LOCAL_TEST_ONLY'); assert.equal(operation.effect.adapterResponse.outcome, 'RECORDED_IN_SANDBOX');
   assert.equal(operation.effect.externalProviderCalled, false);
   assert.equal(operation.approval.decision, 'APPROVED'); assert.equal(operation.approval.authority, 'HUMAN_PROJECT_OWNER');
   assert.deepEqual(operation.approval.approved, { kind: 'PROCUREMENT_TEST_EFFECT', stepId: 'sandbox-effect', resourceId: 'resource-operating-capacity',

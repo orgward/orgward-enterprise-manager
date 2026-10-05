@@ -7997,3 +7997,25 @@ passed 4/4 (0 failures, 0 skips; 0.36s; log
 This slice does not complete T-96 AC1, which still requires a genuine external
 sandbox test effect/provider; T-96 AC2 is only partially advanced. T-96 and
 PR-15 remain open. No full check or Sol review.
+
+PR-15 T-96 local sandbox adapter contract (2026-10-05): the owner-approved
+operation now crosses a versioned `orgward.sandbox-effect/v1` request/response
+boundary and persists the normalized adapter response with its contract version.
+Its only adapter is the fixed deterministic `LOCAL_TEST_ONLY` harness; it is
+not configurable or registered as a provider, and every response records
+`externalProviderCalled: false`. Focused conformance cases cover a valid local
+receipt, malformed request/response, mismatched operation key, a false external
+call claim, identical-key replay, and conflicting reuse of the same key. The
+existing owner API journey verifies the normalized response survives in the
+durable operation. Command
+`npm test -- tests/enterprise/sandbox-adapter.test.mjs tests/enterprise/server.test.mjs
+--test-name-pattern='local sandbox adapter|sandbox adapter rejects|sandbox adapter replays|owner-approved sandbox procurement'`
+passed 4/4 (0 failures, 0 skips; 3.64s runner; TAP duration 2.406s; log
+`/tmp/orgward-tests-yUp5R1/node-test.tap.log`). `node --check` passed for the
+changed module, command and test files; `git diff --check` passed. This only
+exercises a local contract harness and does not complete T-96 AC1: no authentic
+external sandbox adapter was configured or called. T-96 AC3 timeout
+reconciliation and AC4 multi-effect compensation remain unimplemented; T-96
+and PR-15 remain open. T-97 is not dependency-ready because T-44 is in pending
+PR-11; T-98 is not dependency-ready because T-45 is in pending PR-11. No full
+check, release gate change or Sol review.
