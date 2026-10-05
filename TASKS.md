@@ -7786,6 +7786,20 @@ open. The current app still has no Sentinel-version source to pin, so this is
 one bounded T-90 contribution; T-90 and PR-15 remain open. No full check or Sol
 review.
 
+PR-15 T-90 accepted requirements in context (2026-10-05): owner acceptance of a
+source-bound requirements baseline now advances the context manifest revision,
+stores the exact requirement content and baseline hash as pinned evidence, and
+shows the requirements in the SDLC context view. Restart/API assertions verify
+the same baseline remains bound and the manifest verifies. Focused tests passed
+36/36 (0 failures, 0 skips; duration 1.76s; TAP log
+`/tmp/orgward-tests-O7Z0e6/node-test.tap.log`):
+`npm test -- tests/sdlc/engine.test.mjs tests/sdlc/server.test.mjs`.
+`node --check` passed for `src/sdlc/engine.mjs`, `server.mjs`, `public/sdlc.js`,
+and both focused test files; `git diff --check` passed. `npm run task:next`
+reports PR-15 first open. Sentinel still has no runtime version source in this
+repository, so AC1 remains incomplete. This is one bounded T-90 contribution;
+T-90 and PR-15 remain open. No full check or Sol review.
+
 PR-15 T-90 runtime evidence correction proposals (2026-10-05): an unhealthy
 runtime observation or recorded control exception now creates a design-correction
 claim proposal bound to the observation hash, release ID, and outcome ID. The

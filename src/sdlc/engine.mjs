@@ -321,6 +321,43 @@ function requirementBaselineValid(changeCase) {
     && validateRequirementDraft(baseline.requirements, changeCase).length === 0);
 }
 
+function contextEvidenceManifestEntry(record) {
+  return { evidenceRef: record.id, contentHash: record.contentHash, sourceId: record.sourceId,
+    sourceType: record.sourceType, objectRef: record.objectRef, authority: record.authority, freshness: record.freshness };
+}
+
+function sealContextManifest(context) {
+  const { provenanceManifestHash: _priorHash, ...manifest } = context;
+  context.provenanceManifestHash = digest(manifest);
+  return context.provenanceManifestHash;
+}
+
+function bindAcceptedRequirementsContext(changeCase, baseline) {
+  const context = changeCase.artifacts.context;
+  if (!context || context.manifestVersion !== 1) return null;
+  const priorManifestHash = context.provenanceManifestHash;
+  const relevantRequirements = {
+    baselineVersion: baseline.version, contentHash: baseline.contentHash, intentHash: baseline.intentHash,
+    sourceHash: baseline.sourceHash, acceptedBy: baseline.acceptedBy, acceptedAt: baseline.acceptedAt,
+    requirements: structuredClone(baseline.requirements),
+  };
+  const record = evidence(changeCase, {
+    sourceId: `sdlc:case:${changeCase.id}:requirements:${baseline.contentHash}`,
+    sourceType: 'owner-accepted-requirements-baseline', objectRef: baseline.contentHash,
+    authority: 'OWNER_ACCEPTED_REQUIREMENTS', freshness: 'PINNED', classification: 'INTERNAL',
+    content: structuredClone(relevantRequirements), relevance: 1,
+    provenanceChain: [`case:${changeCase.id}`, `intent:${changeCase.intent.id}`, `requirements:${baseline.contentHash}`, `source:${baseline.sourceHash}`],
+  });
+  changeCase.evidenceLedger.push(record);
+  context.evidenceRefs.push(record.id);
+  context.evidenceManifest.push(contextEvidenceManifestEntry(record));
+  context.relevantRequirements = { ...relevantRequirements, evidenceRef: record.id };
+  context.manifestRevision = (context.manifestRevision ?? 1) + 1;
+  context.previousManifestHash = priorManifestHash;
+  sealContextManifest(context);
+  return priorManifestHash;
+}
+
 function requirementsForDesign(changeCase) {
   return changeCase.sourceBinding
     ? changeCase.artifacts.requirements.acceptedBaseline.requirements
@@ -381,6 +418,7 @@ export function acceptRequirementDraft(changeCase, command = {}) {
     acceptedBy: actor, acceptedAt: now(), requirements: structuredClone(artifact.requirements),
   };
   artifact.acceptedBaseline.requirements.forEach((entry) => { entry.status = 'ACCEPTED'; });
+  const priorContextManifestHash = bindAcceptedRequirementsContext(changeCase, artifact.acceptedBaseline);
   const stage = stageAt(changeCase.currentStageIndex);
   const startedAt = now();
   const result = requirementsEngineering(changeCase);
@@ -396,7 +434,7 @@ export function acceptRequirementDraft(changeCase, command = {}) {
   changeCase.status = next ? 'RUNNING' : 'PASSED';
   return finishCommand(changeCase, key, requestHash, 'accept-requirements', actor, 'RequirementBaselineAccepted', {
     draftRevision: artifact.draftRevision, baselineVersion: 1, contentHash, intentHash: artifact.acceptedBaseline.intentHash,
-    sourceHash: artifact.acceptedBaseline.sourceHash, gate: stage.gate,
+    sourceHash: artifact.acceptedBaseline.sourceHash, gate: stage.gate, priorContextManifestHash,
   });
 }
 
@@ -878,11 +916,10 @@ function contextDiscovery(changeCase) {
     status: 'EXCLUDED', reason: 'UNTRUSTED_SOURCE_NOT_USED_FOR_AUTHORITATIVE_COVERAGE' }));
   const evidenceManifest = evidenceRefs.map((evidenceRef) => {
     const record = changeCase.evidenceLedger.find((entry) => entry.id === evidenceRef);
-    return { evidenceRef, contentHash: record.contentHash, sourceId: record.sourceId, sourceType: record.sourceType,
-      objectRef: record.objectRef, authority: record.authority, freshness: record.freshness };
+    return contextEvidenceManifestEntry(record);
   });
   const manifest = {
-    manifestVersion: 1, plan, coverage, evidenceRefs, evidenceManifest,
+    manifestVersion: 1, manifestRevision: 1, plan, coverage, evidenceRefs, evidenceManifest,
     guardrails: { intentRef: changeCase.intent.id, constraints: [...changeCase.intent.constraints], nonGoals: [...changeCase.intent.nonGoals] },
     enterpriseContext: { version: changeCase.enterpriseSnapshot.version ?? null,
       sourceKind: changeCase.enterpriseSnapshot.sourceKind ?? 'synthetic-reference-model',
@@ -909,8 +946,7 @@ export function verifyContextManifest(changeCase) {
   const { provenanceManifestHash, ...manifest } = context;
   const expectedEvidenceManifest = (context.evidenceRefs ?? []).map((evidenceRef) => {
     const record = changeCase.evidenceLedger.find((entry) => entry.id === evidenceRef);
-    return record ? { evidenceRef, contentHash: record.contentHash, sourceId: record.sourceId, sourceType: record.sourceType,
-      objectRef: record.objectRef, authority: record.authority, freshness: record.freshness } : null;
+    return record ? contextEvidenceManifestEntry(record) : null;
   });
   const evidenceManifestValid = expectedEvidenceManifest.every(Boolean)
     && digest(expectedEvidenceManifest) === digest(context.evidenceManifest ?? []);

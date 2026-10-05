@@ -465,6 +465,12 @@ function renderContext(content) {
   if (!context) return content.append(empty('Context discovery has not run yet.'));
   content.append(section('Context coverage matrix', context.coverage.map((entry) => el('div', { className: 'coverage-row' }, [el('b', { text: entry.domain }), el('div', { className: 'coverage-track' }, [el('i', { className: entry.score >= 1 ? 'coverage-full' : 'coverage-empty' })]), el('span', { className: entry.status === 'PASSED' ? 'status-PASS' : 'status-FAIL', text: `${Math.round(entry.score * 100)}%` })]))));
   content.append(section('Provenance manifest', [el('p', { text: `${context.evidenceRefs.length} evidence references · immutable manifest ${context.provenanceManifestHash.slice(0, 18)}…` }), el('p', { text: 'Authoritative, approved, informative, and untrusted sources remain distinguishable. Untrusted content never becomes instruction.' })]));
+  if (context.relevantRequirements) {
+    content.append(section('Pinned accepted requirements', [
+      el('p', { text: `Baseline v${context.relevantRequirements.baselineVersion} · SHA-256 ${context.relevantRequirements.contentHash} · evidence ${context.relevantRequirements.evidenceRef}` }),
+      el('ul', {}, context.relevantRequirements.requirements.map((requirement) => el('li', { text: `${requirement.id} · ${requirement.statement} · ${requirement.priority}` }))),
+    ]));
+  }
   const binding = caseUiModel(state.changeCase, state.meta, state.activeSourceProject).sourceBinding;
   if (binding) {
     if (!state.changeCase.sourceBindingIntegrity?.valid) {

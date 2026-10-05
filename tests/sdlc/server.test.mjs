@@ -289,6 +289,11 @@ test('source-bound requirements are revisioned, validated, owner-accepted and in
   assert.equal(baseline.sourceHash, accepted.sourceBinding.sourceHash);
   assert.equal(baseline.requirements[0].status, 'ACCEPTED');
   assert.equal(accepted.artifacts.requirements.requirements[0].status, 'ACCEPTED');
+  assert.equal(accepted.contextManifestIntegrity.valid, true);
+  assert.equal(accepted.artifacts.context.manifestRevision, 2);
+  assert.equal(accepted.artifacts.context.relevantRequirements.contentHash, baseline.contentHash);
+  assert.deepEqual(accepted.artifacts.context.relevantRequirements.requirements, baseline.requirements);
+  assert.ok(accepted.artifacts.context.evidenceRefs.includes(accepted.artifacts.context.relevantRequirements.evidenceRef));
   await request(app.base, `/api/sdlc/cases/${accepted.id}/edit-requirements`, {
     method: 'POST', body: JSON.stringify({ version: accepted.version, expectedDraftRevision: 4, requirementId: editable.id, changes: { statement: 'Late edit.' }, idempotencyKey: 'requirements-edit-after-accept' }),
   }, 409);
@@ -297,6 +302,8 @@ test('source-bound requirements are revisioned, validated, owner-accepted and in
   app = await start(root);
   changeCase = await request(app.base, `/api/sdlc/cases/${acceptedId}`);
   assert.deepEqual(changeCase.artifacts.requirements.acceptedBaseline, baseline);
+  assert.equal(changeCase.contextManifestIntegrity.valid, true);
+  assert.equal(changeCase.artifacts.context.relevantRequirements.contentHash, baseline.contentHash);
   assert.equal(changeCase.events.some((event) => event.type === 'RequirementBaselineAccepted'), true);
   changeCase = await request(app.base, `/api/sdlc/cases/${acceptedId}/advance`, {
     method: 'POST', body: JSON.stringify({ version: changeCase.version, idempotencyKey: 'requirements-valid-g5' }),
