@@ -182,6 +182,7 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
       if (archived) {
         const lifecycle = project.lifecycle ?? {};
         card.append(el('p', { className: 'portfolio-lifecycle', text: `Archived ${lifecycle.archivedAt ? new Date(lifecycle.archivedAt).toLocaleString() : ''} by ${lifecycle.archivedBy ?? 'workspace owner'} · ${historyCount ?? 'Full'} history events retained · reason: ${lifecycle.reason ?? 'not recorded'}` }));
+        card.append(el('p', { className: 'portfolio-read-only', text: 'Archived workspace is read-only. Restore it before making changes.' }));
       }
       card.append(el('p', { className: 'portfolio-summary', text: `Blueprint ${facts.blueprint} · ${historyCount ?? 'Full'} history events · incidents ${facts.incidents} · support ${facts.support} · governed changes ${facts.changeCases}` }));
       card.append(el('p', { className: 'portfolio-issues', text: `Active incidents: ${facts.incidents} · Active support: ${facts.support}` }));
@@ -190,7 +191,7 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
         : `Active governed changes: ${facts.changeCases}` }));
       if (facts.latestChangeCaseId) card.append(el('a', { className: 'button ghost', text: `Open governed change: ${facts.latestChangeCaseTitle}`,
         attrs: { href: `/sdlc.html?case=${encodeURIComponent(facts.latestChangeCaseId)}` } }));
-      if (facts.hasBlueprint && ['owner', 'editor'].includes(project.workspaceAccess)) {
+      if (!archived && facts.hasBlueprint && ['owner', 'editor'].includes(project.workspaceAccess)) {
         card.append(el('a', { className: 'button ghost', text: 'Start governed change',
           attrs: { href: `/sdlc.html?projectId=${encodeURIComponent(project.id)}` } }));
       }

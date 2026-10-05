@@ -431,6 +431,9 @@ test('portfolio exposes separate active and archived views with owner lifecycle 
   assert.deepEqual(Array.from(portfolio.querySelectorAll('[data-project-id]'), (card) => card.attrs['data-project-id']), ['project-retired']);
   assert.match(portfolio.textContent, /Superseded\./);
   assert.match(portfolio.textContent, /13 history events retained/);
+  assert.match(portfolio.textContent, /Archived workspace is read-only\. Restore it before making changes\./);
+  assert.equal(portfolio.querySelectorAll('[data-project-id]')[0].querySelectorAll('a').some((link) => link.text === 'Start governed change'), false,
+    'archived workspaces do not offer a write journey');
   assert.ok(portfolio.querySelectorAll('button').some((button) => button.text === 'Restore workspace'));
   const open = portfolio.querySelectorAll('button').find((button) => button.text === 'Open workspace');
   open.listeners.get('click')();

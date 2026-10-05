@@ -7682,3 +7682,14 @@ the assertion now converts it to an array. The corrected focused run passed 2/2
 `npm test -- tests/enterprise/view.test.mjs --test-name-pattern='archived outcome inbox retains issue evidence and history with every edit disabled|archived protected-release history remains visible while request, approval, execution, and retry controls are disabled'`.
 `node --check` passed for the changed JavaScript files and `git diff --check`
 passed. No full check or Sol review; PR-15 remains open and active.
+
+PR-15 archived portfolio read-only handoff (2026-10-05): archived workspace
+cards explicitly say they are read-only and direct the owner to restore before
+making changes. They no longer offer the “Start governed change” link; active
+owner/editor workspaces retain that existing path, and archived restore remains
+available. Focused tests passed 2/2 (0 failures, 0 skips; TAP duration 0.35s;
+log `/tmp/orgward-tests-rIfjAA/node-test.tap.log`):
+`npm test -- tests/enterprise/view.test.mjs --test-name-pattern='portfolio exposes separate active and archived views with owner lifecycle controls|portfolio starts a governed change from the exact writable workspace'`.
+`node --check` passed for `public/project-portfolio.mjs` and
+`tests/enterprise/view.test.mjs`; `git diff --check` passed.
+No full check or Sol review; PR-15 remains open and active.
