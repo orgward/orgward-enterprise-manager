@@ -5,6 +5,7 @@ import { createLocalSandboxTestAdapter, LOCAL_SANDBOX_ADAPTER_ID,
 
 const request = () => ({ contract: SANDBOX_EFFECT_CONTRACT, schemaVersion: '1.0', adapterId: LOCAL_SANDBOX_ADAPTER_ID,
   mode: 'LOCAL_TEST_ONLY', operationId: 'sandbox-transaction-00000000-0000-4000-8000-000000000001', operationKey: 'a'.repeat(64),
+  providerKey: `orgward-local-sandbox:${'a'.repeat(64)}`,
   kind: 'PROCUREMENT_TEST_EFFECT', source: { projectId: 'project-1', blueprintId: 'blueprint-00000000-0000-4000-8000-000000000001',
     blueprintVersion: 2, blueprintHash: 'b'.repeat(64), processId: 'process-deliver', stepId: 'procure', resourceId: 'resource-capacity',
     windowId: 'window-delivery', allocationId: 'allocation-delivery' },
@@ -45,4 +46,14 @@ test('sandbox adapter replays an identical operation key and rejects reuse for d
   assert.equal(replay.operationKey, first.operationKey); assert.deepEqual(replay.result, first.result);
   const changed = { ...original, operationId: 'sandbox-transaction-00000000-0000-4000-8000-000000000002' };
   assert.throws(() => adapter.dispatch(changed), { code: 'SANDBOX_IDEMPOTENCY_CONFLICT' });
+});
+
+test('accepted-then-timeout fault is unknown to caller and reconciles by provider key without redispatch', () => {
+  const adapter = createLocalSandboxTestAdapter({ acceptedThenTimeoutOnce: true }); const input = request();
+  assert.throws(() => adapter.dispatch(input), { code: 'SANDBOX_ADAPTER_TIMEOUT_AFTER_ACCEPTANCE' });
+  assert.deepEqual(adapter.metrics, { dispatchCount: 1, effectCount: 1, reconciliationCount: 0 });
+  const reconciled = adapter.reconcile(input.providerKey);
+  assert.equal(reconciled.outcome, 'RECORDED_IN_SANDBOX'); assert.equal(reconciled.externalProviderCalled, false);
+  assert.equal(reconciled.idempotent, true);
+  assert.deepEqual(adapter.metrics, { dispatchCount: 1, effectCount: 1, reconciliationCount: 1 });
 });

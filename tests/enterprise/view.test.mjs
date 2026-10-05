@@ -1512,7 +1512,7 @@ test('sandbox procurement UI makes owner approval and local-only evidence explic
   const root = renderEnterpriseProcess({ model: modelValue, object: process, el, ui: branchUi, onCommand: (value) => { submitted = value; } });
   assert.match(root.textContent, /explicit project-owner approval/);
   assert.match(root.textContent, /no external provider is contacted/);
-  const approve = root.querySelectorAll('button').find((button) => /Approve and record sandbox test effect/.test(button.textContent));
+  const approve = root.querySelectorAll('button').find((button) => /Approve local sandbox effect/.test(button.textContent));
   assert.ok(approve); assert.equal(approve.disabled, false); approve.listeners.get('click')?.();
   assert.deepEqual(submitted, { kind: 'run-sandbox-procurement-test', processId: process.id, stepId: 'effect-test',
     reason: 'Approve one local sandbox test effect using committed allocation allocation-delivery.' });
@@ -1520,11 +1520,33 @@ test('sandbox procurement UI makes owner approval and local-only evidence explic
   assert.equal(enterpriseProcessCommandPayload({ ...modelValue, permissions: { ...modelValue.permissions, sandboxExecute: false } }, submitted), null);
   const record = { operationId: 'sandbox-transaction-00000000-0000-4000-8000-000000000001', status: 'RECORDED_IN_SANDBOX',
     label: 'Sandbox test effect · Test procurement', source: { processId: process.id, blueprintId: blueprint.id,
-      blueprintVersion: blueprint.version, blueprintHash: context.snapshotHash }, providerKey: `orgward-local-sandbox:${'b'.repeat(64)}`,
+      blueprintVersion: blueprint.version, blueprintHash: context.snapshotHash, stepId: 'effect-test' }, providerKey: `orgward-local-sandbox:${'b'.repeat(64)}`,
     commitment: { quantity: { value: 12, unit: 'hours' } }, approval: { at: '2026-10-05T12:00:00.000Z' }, evidenceHash: 'c'.repeat(64) };
   const history = renderEnterpriseProcess({ model: { ...modelValue, sandboxTransactions: [record] }, object: process, el, ui: branchUi, onCommand() {} });
   assert.match(history.textContent, /RECORDED_IN_SANDBOX · current source/);
   assert.match(history.textContent, /Local sandbox record only\. No external provider was called/);
+
+  let dispatchCommand = null;
+  const pendingRecord = { ...record, status: 'APPROVED_PENDING', effect: { result: 'NOT_DISPATCHED', externalProviderCalled: false } };
+  const pendingView = renderEnterpriseProcess({ model: { ...modelValue, sandboxTransactions: [pendingRecord] }, object: process, el, ui: branchUi,
+    onCommand: (value) => { dispatchCommand = value; } });
+  assert.match(pendingView.textContent, /Approval is saved; dispatch has not been confirmed/);
+  const dispatch = pendingView.querySelectorAll('button').find((button) => /Dispatch approved local test effect/.test(button.textContent));
+  assert.ok(dispatch); dispatch.listeners.get('click')?.();
+  assert.deepEqual(dispatchCommand, { kind: 'dispatch-sandbox-procurement-test', operationId: record.operationId,
+    reason: 'Dispatch the already approved local sandbox request once by its stable provider key.' });
+
+  let recoveryCommand = null;
+  const unknown = { ...record, status: 'UNKNOWN_EFFECT', effect: { result: 'UNKNOWN_EFFECT', externalProviderCalled: false, reconciliationRequired: true } };
+  const recovery = renderEnterpriseProcess({ model: { ...modelValue, sandboxTransactions: [unknown] }, object: process, el, ui: branchUi,
+    onCommand: (value) => { recoveryCommand = value; } });
+  assert.match(recovery.textContent, /outcome is unknown[.] Reconcile this provider key before any retry or compensation/);
+  const reconcile = recovery.querySelectorAll('button').find((button) => /Reconcile by provider key/.test(button.textContent));
+  assert.ok(reconcile); reconcile.listeners.get('click')?.();
+  assert.deepEqual(recoveryCommand, { kind: 'reconcile-sandbox-procurement-test', operationId: record.operationId,
+    reason: 'Reconcile the unknown local sandbox outcome by its stable provider key before any retry.' });
+  assert.ok(enterpriseProcessCommandPayload(modelValue, recoveryCommand));
+  assert.equal(enterpriseProcessCommandPayload({ ...modelValue, permissions: { ...modelValue.permissions, sandboxExecute: false } }, recoveryCommand), null);
 });
 
 test('enterprise process UI shows a saved simulation as exact hypothetical evidence', () => {

@@ -91,7 +91,7 @@ export function applyEnterpriseCommand(project, command, actor, options = {}) {
   if (ENTERPRISE_GOVERNANCE_KINDS.has(command.kind)) return applyEnterpriseGovernanceCommand(project, command, actor);
   if (ENTERPRISE_INTEGRITY_KINDS.has(command.kind)) return applyEnterpriseIntegrityCommand(project, command, actor);
   if (ENTERPRISE_SOURCE_ACCEPTANCE_KINDS.has(command.kind)) return applyEnterpriseSourceAcceptance(project, command, actor);
-  if (ENTERPRISE_PROCESS_KINDS.has(command.kind)) return applyEnterpriseProcessCommand(project, command, actor);
+  if (ENTERPRISE_PROCESS_KINDS.has(command.kind)) return applyEnterpriseProcessCommand(project, command, actor, options);
   if (ENTERPRISE_ECONOMIC_KINDS.has(command.kind)) return applyEnterpriseEconomicCommand(project, command, actor);
   if (ENTERPRISE_REFINEMENT_KINDS.has(command.kind)) return applyEnterpriseRefinementCommand(project, command, actor);
   if (command.kind === 'import-design-pack') return applyEnterpriseDesignPack(project, command, actor);

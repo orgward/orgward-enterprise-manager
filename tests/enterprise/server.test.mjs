@@ -8,6 +8,7 @@ import { createApp } from '../../server.mjs';
 import { addConversationTurn, buildRelations, createProject, validateBlueprint } from '../../src/model.mjs';
 import { contentHash } from '../../src/platform/postgres.mjs';
 import { digest, persistedDigest } from '../../src/sdlc/contracts.mjs';
+import { createLocalSandboxTestAdapter } from '../../src/enterprise/sandbox-adapter-contract.mjs';
 import { startPostgres } from '../helpers/postgres.mjs';
 
 const tenantId = 'tenant-enterprise-test';
@@ -56,7 +57,7 @@ async function seedProject(postgres, name, { mutate = null } = {}) {
   return project;
 }
 
-async function startApp(postgres, root, { additionalIdentities = new Map(), executionProfiles } = {}) {
+async function startApp(postgres, root, { additionalIdentities = new Map(), executionProfiles, sandboxEffectAdapter } = {}) {
   const oidcAuthenticator = { authenticate: async (request) => {
     const subject = request.headers.authorization?.slice('Bearer '.length);
     return identities.get(subject) ?? additionalIdentities.get(subject) ?? null;
@@ -64,7 +65,7 @@ async function startApp(postgres, root, { additionalIdentities = new Map(), exec
   const app = createApp({ databaseUrl: postgres.databaseUrl,
     dataDirectory: path.join(root, 'projects'), sdlcDirectory: path.join(root, 'sdlc'),
     executionDirectory: path.join(root, 'executions'), executionWorkspaceDirectory: path.join(root, 'workspaces'),
-    oidcAuthenticator, ...(executionProfiles ? { executionProfiles } : {}) });
+    oidcAuthenticator, ...(executionProfiles ? { executionProfiles } : {}), ...(sandboxEffectAdapter ? { sandboxEffectAdapter } : {}) });
   await app.init();
   await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
   return { app, base: `http://127.0.0.1:${app.server.address().port}` };
@@ -1093,7 +1094,8 @@ test('enterprise staffing simulations compare exact-source capacity, deny reader
 test('owner-approved sandbox procurement records one source-pinned test effect and replays after restart', async (t) => {
   const postgres = await startPostgres(); let root; let instance;
   t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });
-  root = await mkdtemp(path.join(tmpdir(), 'orgward-sandbox-transaction-')); instance = await startApp(postgres, root);
+  const sandboxEffectAdapter = createLocalSandboxTestAdapter({ acceptedThenTimeoutOnce: true });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-sandbox-transaction-')); instance = await startApp(postgres, root, { sandboxEffectAdapter });
   for (const identity of identities.values()) await postgres.query(`insert into orgward.oidc_principals
     (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
   [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
@@ -1171,7 +1173,54 @@ test('owner-approved sandbox procurement records one source-pinned test effect a
     'non-owner approval creates no operation');
 
   const approved = await postCommand(instance.base, 'owner', project.id, approvalBody);
-  const operation = approved.data.sandboxTransaction;
+  assert.equal(approved.data.sandboxTransaction.status, 'APPROVED_PENDING');
+  assert.equal(approved.data.sandboxTransaction.effect.result, 'NOT_DISPATCHED');
+  assert.deepEqual(sandboxEffectAdapter.metrics, { dispatchCount: 0, effectCount: 0, reconciliationCount: 0 },
+    'owner approval persists the stable request before any adapter dispatch');
+  ownerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  const operationId = approved.data.sandboxTransaction.operationId;
+  const dispatchPayload = { kind: 'dispatch-sandbox-procurement-test', operationId,
+    reason: 'Dispatch the approved local test request by its stable key.' };
+  const dispatchBody = commandBody(ownerView, 'sandbox-transaction-dispatch', dispatchPayload);
+  const timedOut = await postCommand(instance.base, 'owner', project.id, dispatchBody);
+  assert.equal(timedOut.data.sandboxTransaction.status, 'UNKNOWN_EFFECT');
+  assert.equal(timedOut.data.sandboxTransaction.effect.externalProviderCalled, false);
+  assert.equal(timedOut.data.sandboxTransaction.effect.reconciliationRequired, true);
+  assert.equal(timedOut.data.sandboxTransaction.providerKey, approved.data.sandboxTransaction.providerKey);
+  assert.deepEqual(sandboxEffectAdapter.metrics, { dispatchCount: 1, effectCount: 1, reconciliationCount: 1 },
+    'dispatch checks by provider key, then simulates exactly one accepted operation followed by a timeout');
+  const dispatchReplay = await postCommand(instance.base, 'owner', project.id, dispatchBody);
+  assert.equal(dispatchReplay.meta.replayed, true);
+  assert.equal(dispatchReplay.data.sandboxTransaction.status, 'UNKNOWN_EFFECT');
+  assert.equal(sandboxEffectAdapter.metrics.dispatchCount, 1, 'same command replay does not dispatch again');
+  ownerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  const blockedReplay = await postCommand(instance.base, 'owner', project.id, commandBody(ownerView, 'sandbox-transaction-replay-before-reconcile', dispatchPayload), 409);
+  assert.equal(blockedReplay.error.code, 'SANDBOX_EFFECT_RECONCILIATION_REQUIRED');
+  assert.equal(sandboxEffectAdapter.metrics.effectCount, 1, 'replay cannot create a second operation before reconciliation');
+
+  await closeApp(instance); instance = await startApp(postgres, root, { sandboxEffectAdapter });
+  ownerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  assert.equal(ownerView.data.sandboxTransactions[0].status, 'UNKNOWN_EFFECT', 'accepted-then-timeout state survives app restart');
+  assert.equal(ownerView.data.sandboxTransactions[0].adapterRequest.providerKey, ownerView.data.sandboxTransactions[0].providerKey,
+    'the exact versioned request and provider key are durable before dispatch');
+  const restartReplay = await postCommand(instance.base, 'owner', project.id,
+    commandBody(ownerView, 'sandbox-transaction-replay-after-restart', dispatchPayload), 409);
+  assert.equal(restartReplay.error.code, 'SANDBOX_EFFECT_RECONCILIATION_REQUIRED');
+  assert.equal(sandboxEffectAdapter.metrics.dispatchCount, 1, 'restart does not allow replay before reconciliation');
+  const editorView = await currentView(instance.base, 'editor', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  const editorReconcile = await postCommand(instance.base, 'editor', project.id, commandBody(editorView, 'sandbox-transaction-editor-reconcile', {
+    kind: 'reconcile-sandbox-procurement-test', operationId, reason: 'Attempt reconciliation without project owner authority.' }), 403);
+  assert.equal(editorReconcile.error.code, 'ACTION_FORBIDDEN');
+  assert.equal(sandboxEffectAdapter.metrics.reconciliationCount, 1, 'a non-owner cannot trigger reconciliation');
+  const reconciled = await postCommand(instance.base, 'owner', project.id, commandBody(ownerView, 'sandbox-transaction-reconcile', {
+    kind: 'reconcile-sandbox-procurement-test', operationId, reason: 'Resolve the unknown operation by its stable provider key.' }));
+  const operation = reconciled.data.sandboxTransaction;
+  assert.equal(operation.status, 'RECORDED_IN_SANDBOX');
+  assert.equal(operation.reconciliation.state, 'RECONCILED_ACCEPTED');
+  assert.equal(operation.reconciliation.providerKey, operation.providerKey);
+  assert.match(operation.reconciliation.detail, /no second dispatch/);
+  assert.deepEqual(sandboxEffectAdapter.metrics, { dispatchCount: 1, effectCount: 1, reconciliationCount: 2 },
+    'reconciliation locates the accepted result by stable provider key without redispatch');
   assert.equal(operation.status, 'RECORDED_IN_SANDBOX'); assert.equal(operation.sandbox, true);
   assert.equal(operation.contract, 'orgward.sandbox-effect/v1'); assert.equal(operation.contractVersion, '1.0');
   assert.equal(operation.mode, 'LOCAL_TEST_ONLY'); assert.equal(operation.effect.adapterResponse.outcome, 'RECORDED_IN_SANDBOX');

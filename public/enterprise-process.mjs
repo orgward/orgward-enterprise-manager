@@ -1,6 +1,7 @@
 import { enterpriseBranchWritable } from './enterprise-branches.mjs';
 
-export const ENTERPRISE_PROCESS_COMMANDS = ['define-process-flow', 'define-decision-table', 'simulate-process', 'simulate-staffing', 'run-sandbox-procurement-test'];
+export const ENTERPRISE_PROCESS_COMMANDS = ['define-process-flow', 'define-decision-table', 'simulate-process', 'simulate-staffing',
+  'run-sandbox-procurement-test', 'dispatch-sandbox-procurement-test', 'reconcile-sandbox-procurement-test'];
 const STEP_KINDS = [['manual', 'Manual activity'], ['manual-exception', 'Manual exception handling'], ['decision', 'Decision routing'], ['fork', 'Parallel fork'], ['join', 'Parallel join'], ['loop', 'Bounded loop'], ['loop-return', 'Return to loop'], ['sandbox-procurement', 'Sandbox procurement test effect'], ['end', 'End']];
 const OPERATORS = [['eq', 'equals'], ['neq', 'does not equal'], ['lt', 'is less than'], ['lte', 'is at most'], ['gt', 'is greater than'], ['gte', 'is at least'], ['in', 'is one of']];
 const VALUE_TYPES = [['string', 'Text'], ['number', 'Number'], ['boolean', 'True or false']];
@@ -33,7 +34,8 @@ export function enterpriseProcessWritable(model) {
 
 export function enterpriseProcessCommandPayload(model, payload) {
   if (!model?.blueprint || !ENTERPRISE_PROCESS_COMMANDS.includes(payload?.kind)) return null;
-  if (payload.kind === 'run-sandbox-procurement-test' && !model.permissions?.sandboxExecute) return null;
+  if (['run-sandbox-procurement-test', 'dispatch-sandbox-procurement-test', 'reconcile-sandbox-procurement-test'].includes(payload.kind)
+    && !model.permissions?.sandboxExecute) return null;
   const simulation = ['simulate-process', 'simulate-staffing'].includes(payload.kind);
   if (simulation ? !model.permissions?.simulate : !enterpriseProcessWritable(model)) return null;
   const bound = { ...payload, blueprintId: model.context.blueprintId, blueprintVersion: model.context.blueprintVersion };
@@ -183,7 +185,7 @@ function flowEditor({ model, object, el, ui, onCommand, disabled, reasonValue = 
         };
         resource.control.addEventListener('change', refreshCommitments); window.control.addEventListener('change', refreshCommitments); refreshCommitments();
         const next = target('nextStepId', 'Next step after owner-approved sandbox effect', value.nextStepId);
-        body.append(el('p', { text: 'This declares a local procurement test effect against one saved committed allocation. An owner action records approval and a durable sandbox result; no external connector, payment, supplier, legal or physical action is called.' }), resource.node, window.node, allocation.node, next.node);
+        body.append(el('p', { text: 'This declares a local procurement test effect against one saved committed allocation. Owner approval first saves the exact request; a separate action dispatches it to the local test harness and may require reconciliation. No external connector, payment, supplier, legal or physical action is called.' }), resource.node, window.node, allocation.node, next.node);
         row.read = () => ({ resourceId: resource.control.value, windowId: window.control.value, allocationId: allocation.control.value, nextStepId: next.control.value });
       } else row.read = () => ({});
       disable(body, disabled); refresh();
@@ -407,8 +409,10 @@ export function renderEnterpriseProcess({ model, object, pending = null, loading
       const capacityReady = Boolean(allocation?.state === 'COMMITTED_REPORTED' && Number.isFinite(quantity?.value) && quantity.value > 0
         && Number.isFinite(available?.value) && available.value >= quantity.value && Number.isFinite(capacity?.value)
         && capacity.value >= available.value && quantity.unit === available.unit && available.unit === capacity.unit);
-      const button = action(el, `Approve and record sandbox test effect · ${step.title}`, () => onCommand({ kind: 'run-sandbox-procurement-test', processId: object.id, stepId: step.id,
-        reason: `Approve one local sandbox test effect using committed allocation ${step.allocationId}.` }), !model.permissions?.sandboxExecute || loading || Boolean(pending) || !capacityReady);
+      const existingTransaction = (model.sandboxTransactions ?? []).find((entry) => entry.source?.processId === object.id && entry.source?.stepId === step.id
+        && entry.source?.blueprintId === model.context.blueprintId && entry.source?.blueprintVersion === model.context.blueprintVersion);
+      const button = action(el, `Approve local sandbox effect · ${step.title}`, () => onCommand({ kind: 'run-sandbox-procurement-test', processId: object.id, stepId: step.id,
+        reason: `Approve one local sandbox test effect using committed allocation ${step.allocationId}.` }), !model.permissions?.sandboxExecute || loading || Boolean(pending) || !capacityReady || Boolean(existingTransaction));
       root.append(el('section', { attrs: { 'data-sandbox-transaction-intent': step.id } }, [el('h5', { text: `Sandbox procurement · ${step.title}` }),
         el('p', { text: `${resource?.name ?? step.resourceId} · ${step.windowId} · ${quantity?.value ?? 'unknown'} ${quantity?.unit ?? ''} · ${allocation?.state ?? 'allocation unavailable'} · ${capacityReady ? 'reported capacity is sufficient' : 'capacity is unknown or insufficient; update the saved commitment/capacity before approval'}. Owner approval records a local sandbox operation only; it does not call a supplier or external provider.` }), button]));
     }
@@ -418,10 +422,20 @@ export function renderEnterpriseProcess({ model, object, pending = null, loading
       for (const record of sandboxRecords) {
         const isCurrent = record.source.blueprintId === model.context.blueprintId && record.source.blueprintVersion === model.context.blueprintVersion
           && record.source.blueprintHash === model.context.snapshotHash;
-        list.append(el('article', {}, [el('strong', { text: `${record.status} · ${isCurrent ? 'current source' : 'historical source'} · ${record.operationId}` }),
+        const article = el('article', {}, [el('strong', { text: `${record.status} · ${isCurrent ? 'current source' : 'historical source'} · ${record.operationId}` }),
           el('p', { text: `${record.label} · ${record.commitment.quantity.value} ${record.commitment.quantity.unit} · owner approval ${record.approval.at}` }),
           el('p', { text: `Stable local key: ${record.providerKey} · evidence ${record.evidenceHash}` }),
-          el('p', { text: 'Local sandbox record only. No external provider was called.' })]));
+          el('p', { text: record.status === 'UNKNOWN_EFFECT'
+            ? 'The outcome is unknown. Reconcile this provider key before any retry or compensation. Local harness only; no external provider was called.'
+            : record.status === 'APPROVED_PENDING' ? 'Approval is saved; dispatch has not been confirmed. Local harness only; no external provider was called.'
+              : 'Local sandbox record only. No external provider was called.' })]);
+        if (record.status === 'APPROVED_PENDING') article.append(action(el, 'Dispatch approved local test effect', () => onCommand({
+          kind: 'dispatch-sandbox-procurement-test', operationId: record.operationId, reason: 'Dispatch the already approved local sandbox request once by its stable provider key.',
+        }), !model.permissions?.sandboxExecute || loading || Boolean(pending)));
+        if (record.status === 'UNKNOWN_EFFECT') article.append(action(el, 'Reconcile by provider key', () => onCommand({
+          kind: 'reconcile-sandbox-procurement-test', operationId: record.operationId, reason: 'Reconcile the unknown local sandbox outcome by its stable provider key before any retry.',
+        }), !model.permissions?.sandboxExecute || loading || Boolean(pending)));
+        list.append(article);
       }
       root.append(list);
     }

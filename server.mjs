@@ -40,6 +40,7 @@ import { ENTERPRISE_INTEGRITY_KINDS } from './src/enterprise/integrity.mjs';
 import { ENTERPRISE_SOURCE_ACCEPTANCE_KINDS } from './src/enterprise/source-acceptance.mjs';
 import { ENTERPRISE_GOVERNANCE_KINDS } from './src/enterprise/governance.mjs';
 import { ENTERPRISE_STEWARDSHIP_KINDS } from './src/enterprise/stewardship.mjs';
+import { createLocalSandboxTestAdapter } from './src/enterprise/sandbox-adapter-contract.mjs';
 import { createEnterpriseInterchangeBundle, createEnterpriseDesignPack, ENTERPRISE_INTERCHANGE_KINDS,
   previewEnterpriseDesignPack, previewEnterpriseInterchange } from './src/enterprise/interchange.mjs';
 import { previewEnterpriseSourceEvidence } from './src/enterprise/source-onboarding.mjs';
@@ -804,12 +805,14 @@ export function createApp({
   githubFetchImpl = fetch,
   releaseEnvironments = [],
   releaseFetchImpl = fetch,
+  sandboxEffectAdapter: injectedSandboxEffectAdapter = null,
   openAiAdminApiKey = null,
   openAiOrganizationId = null,
   openAiTenantProjects = null,
   openAiAdminEndpoint = 'https://api.openai.com',
   readOnly = false,
 } = {}) {
+  const sandboxEffectAdapter = injectedSandboxEffectAdapter ?? createLocalSandboxTestAdapter();
   const persistence = databaseUrl ? new PostgresPersistence({ databaseUrl, faults: persistenceFaults }) : null;
   const sessionStore = oidcSessionStore ?? (persistence ? new PostgresOidcSessionStore(persistence, { bootstrapPrincipals: oidcBootstrapPrincipals }) : null);
   const secretStore = persistence ? new PostgresSecretStore(persistence, {
@@ -1804,7 +1807,7 @@ export function createApp({
         const administrative = ['create-scope', 'rename-scope', 'set-validity', 'propose-future-design',
           'set-branch-validity', 'review-merge', 'apply-reviewed-merge', 'abandon-branch'].includes(payload.kind)
           || ['decide-governance-decision', 'review-governance-appeal', 'assign-information-steward'].includes(payload.kind)
-          || payload.kind === 'run-sandbox-procurement-test'
+          || ['run-sandbox-procurement-test', 'dispatch-sandbox-procurement-test', 'reconcile-sandbox-procurement-test'].includes(payload.kind)
           || (payload.kind === 'record-state' && payload.dimension === 'review')
           || (payload.kind === 'edit-branch-scope' && ['create-scope', 'rename-scope'].includes(payload.change.kind));
         if ((administrative || payload.kind === 'record-state' || ENTERPRISE_BRANCH_KINDS.has(payload.kind)
@@ -1841,10 +1844,13 @@ export function createApp({
                 throw apiFailure(403, 'ENTERPRISE_MERGE_REVIEW_AUTHORITY_STALE', 'The saved reviewer no longer has the same human owner authority. Prepare a new candidate and obtain a current review.');
               }
             }
-            const changed = applyEnterpriseCommand(project, payload, actor, { authzGeneration: request.identity.authzGeneration,
+            const changed = applyEnterpriseCommand(project, payload, actor, { sandboxEffectAdapter,
+              authzGeneration: request.identity.authzGeneration,
               membershipGeneration: reviewMembershipGeneration });
             project.version += 1; project.updatedAt = changed.recordedAt ?? changed.blueprint.createdAt; project.updatedBy = actor;
-            project.events.push(projectEvent(project, { type: payload.kind === 'run-sandbox-procurement-test' ? 'SandboxTransactionRecorded'
+          project.events.push(projectEvent(project, { type: payload.kind === 'run-sandbox-procurement-test' ? 'SandboxTransactionApproved'
+              : payload.kind === 'dispatch-sandbox-procurement-test' ? 'SandboxTransactionDispatched'
+              : payload.kind === 'reconcile-sandbox-procurement-test' ? 'SandboxTransactionReconciled'
               : payload.kind === 'run-integrity-checks' ? 'EnterpriseIntegrityAssessed'
               : payload.kind === 'accept-integrity-exception' ? 'EnterpriseIntegrityExceptionAccepted'
               : ENTERPRISE_GOVERNANCE_KINDS.has(payload.kind) ? 'EnterpriseGovernanceChanged'

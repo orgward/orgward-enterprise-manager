@@ -6,9 +6,10 @@ import { appendEnterpriseBranchDesign } from './branches.mjs';
 import { projectEnterprise } from './projections.mjs';
 import { normalizeDecisionTable, normalizeProcessFlow } from './process-model.mjs';
 import { normalizeStaffingScenario, simulateProcessFlow, simulateStaffingCapacity } from './process-simulation.mjs';
-import { createLocalSandboxTestAdapter, LOCAL_SANDBOX_ADAPTER_ID, SANDBOX_EFFECT_CONTRACT } from './sandbox-adapter-contract.mjs';
+import { createLocalSandboxTestAdapter, LOCAL_SANDBOX_ADAPTER_ID, normalizeSandboxEffectResponse, SANDBOX_EFFECT_CONTRACT } from './sandbox-adapter-contract.mjs';
 
-export const ENTERPRISE_PROCESS_KINDS = new Set(['define-process-flow', 'define-decision-table', 'simulate-process', 'simulate-staffing', 'run-sandbox-procurement-test']);
+export const ENTERPRISE_PROCESS_KINDS = new Set(['define-process-flow', 'define-decision-table', 'simulate-process', 'simulate-staffing',
+  'run-sandbox-procurement-test', 'dispatch-sandbox-procurement-test', 'reconcile-sandbox-procurement-test']);
 const fail = (code, message, status = 400) => { throw enterpriseFailure(code, message, status); };
 const safeId = (value) => typeof value === 'string' && /^[a-z0-9][a-z0-9_-]{0,119}$/i.test(value);
 export function normalizeEnterpriseProcessCommand(input) {
@@ -29,6 +30,12 @@ export function normalizeEnterpriseProcessCommand(input) {
     allowed.push('processId', 'stepId');
     if (!safeId(input.processId) || !safeId(input.stepId)) fail('Choose a saved process and exact sandbox effect step.', 'INVALID_ENTERPRISE_PROCESS_COMMAND');
     Object.assign(command, { processId: input.processId, stepId: input.stepId });
+  } else if (['dispatch-sandbox-procurement-test', 'reconcile-sandbox-procurement-test'].includes(input.kind)) {
+    allowed.push('operationId');
+    if (typeof input.operationId !== 'string' || !/^sandbox-transaction-[0-9a-f-]{36}$/.test(input.operationId)) {
+      fail('Choose an exact unknown sandbox operation to reconcile by its stable provider key.', 'INVALID_ENTERPRISE_PROCESS_COMMAND');
+    }
+    command.operationId = input.operationId;
   } else if (input.kind === 'simulate-process' || input.kind === 'simulate-staffing') {
     allowed.push('processId', 'scenario', 'proposalId');
     if (!safeId(input.processId) || !input.scenario || typeof input.scenario !== 'object' || Array.isArray(input.scenario)) fail('INVALID_ENTERPRISE_PROCESS_COMMAND', 'Choose a saved process and declared scenario.');
@@ -45,9 +52,93 @@ export function normalizeEnterpriseProcessCommand(input) {
   if (Object.keys(input).some((field) => !allowed.includes(field))) fail('INVALID_ENTERPRISE_PROCESS_COMMAND', 'The process command contains unsupported fields.');
   return command;
 }
-export function applyEnterpriseProcessCommand(project, command, actor) {
+export function applyEnterpriseProcessCommand(project, command, actor, options = {}) {
   const at = new Date().toISOString(); const current = latestBlueprint(project);
   if (!current) fail('BLUEPRINT_NOT_FOUND', 'Save the initial blueprint first.', 409);
+  if (command.kind === 'reconcile-sandbox-procurement-test') {
+    const existing = (project.sandboxTransactions ?? []).find((entry) => entry.operationId === command.operationId);
+    if (!existing) fail('SANDBOX_TRANSACTION_NOT_FOUND', 'The saved sandbox operation is unavailable; reload the project and try again.', 404);
+    if (!['UNKNOWN_EFFECT', 'APPROVED_PENDING'].includes(existing.status)) fail('SANDBOX_RECONCILIATION_NOT_REQUIRED', 'Only an unconfirmed sandbox operation can be reconciled.', 409);
+    const adapter = options.sandboxEffectAdapter ?? createLocalSandboxTestAdapter();
+    if (typeof adapter.reconcile !== 'function') fail('SANDBOX_RECONCILIATION_UNAVAILABLE', 'The configured sandbox adapter cannot reconcile by provider key.', 503);
+    const response = adapter.reconcile(existing.providerKey);
+    const transaction = structuredClone(existing);
+    if (response) {
+      const normalized = normalizeSandboxEffectResponse(response, existing.adapterRequest);
+      if (normalized.result.operationId !== existing.operationId || normalized.providerKey !== existing.providerKey) {
+        fail('SANDBOX_RECONCILIATION_MISMATCH', 'The adapter result does not match this saved operation and provider key.', 409);
+      }
+      transaction.status = normalized.outcome;
+      transaction.effect = { result: normalized.result.status, externalProviderCalled: normalized.externalProviderCalled,
+        adapterResponse: normalized };
+      transaction.reconciliation = { state: 'RECONCILED_ACCEPTED', actor, at, providerKey: existing.providerKey,
+        outcome: normalized.outcome, detail: 'The existing operation was found by provider key; no second dispatch occurred.' };
+      transaction.evidence = { ...transaction.evidence, kind: 'SANDBOX_OPERATION_RECEIPT',
+        detail: 'The existing local sandbox operation was reconciled by provider key. No second dispatch or external provider call occurred.' };
+    } else {
+      transaction.reconciliation = { state: existing.status === 'UNKNOWN_EFFECT' ? 'STILL_UNKNOWN' : 'NOT_FOUND', actor, at,
+        providerKey: existing.providerKey, outcome: 'UNKNOWN', detail: existing.status === 'UNKNOWN_EFFECT'
+          ? 'No operation was found by provider key. Do not replay or compensate; retry reconciliation.'
+          : 'No accepted operation was found by provider key. The approved request remains pending and may be dispatched.' };
+    }
+    const { evidenceHash: _priorHash, ...core } = transaction;
+    const updated = { ...core, evidenceHash: digest(core) };
+    project.sandboxTransactions = (project.sandboxTransactions ?? []).map((entry) => entry.operationId === existing.operationId ? updated : entry);
+    project.audit ??= []; project.audit.push({ at, action: response ? 'enterprise.sandbox-transaction-reconciled' : 'enterprise.sandbox-transaction-reconciliation-unknown',
+      actor, operationId: existing.operationId, providerKey: existing.providerKey, outcome: updated.reconciliation.state,
+      evidenceHash: updated.evidenceHash });
+    return { blueprint: current, affectedObjectId: existing.source.processId, sandboxTransaction: structuredClone(updated), idempotent: false };
+  }
+  if (command.kind === 'dispatch-sandbox-procurement-test') {
+    const existing = (project.sandboxTransactions ?? []).find((entry) => entry.operationId === command.operationId);
+    if (!existing) fail('SANDBOX_TRANSACTION_NOT_FOUND', 'The approved sandbox operation is unavailable; reload the project and try again.', 404);
+    if (existing.status === 'UNKNOWN_EFFECT') {
+      fail('SANDBOX_EFFECT_RECONCILIATION_REQUIRED', 'The previous attempt has an unknown outcome. Reconcile its stable provider key before retrying or considering compensation.', 409);
+    }
+    if (existing.status !== 'APPROVED_PENDING') return { blueprint: current, affectedObjectId: existing.source.processId,
+      sandboxTransaction: structuredClone(existing), idempotent: true };
+    if (current.id !== existing.source.blueprintId || current.version !== existing.source.blueprintVersion
+      || digest(current) !== existing.source.blueprintHash) {
+      fail('SANDBOX_TRANSACTION_SOURCE_STALE', 'The approved source changed before dispatch. Review the current design and approve a new request.', 409);
+    }
+    const adapter = options.sandboxEffectAdapter ?? createLocalSandboxTestAdapter();
+    if (typeof adapter.reconcile !== 'function' || typeof adapter.dispatch !== 'function') {
+      fail('SANDBOX_ADAPTER_UNAVAILABLE', 'The approved sandbox adapter cannot dispatch and reconcile by provider key.', 503);
+    }
+    // Check first so a crash after acceptance cannot cause a second effect when dispatch resumes.
+    const accepted = adapter.reconcile(existing.providerKey);
+    let adapterResponse = accepted ? normalizeSandboxEffectResponse(accepted, existing.adapterRequest) : null;
+    let status = adapterResponse?.outcome ?? 'UNKNOWN_EFFECT'; let timedOut = false;
+    if (!adapterResponse) {
+      try {
+        adapterResponse = normalizeSandboxEffectResponse(adapter.dispatch(existing.adapterRequest), existing.adapterRequest);
+        status = adapterResponse.outcome;
+      } catch (error) {
+        if (error?.code !== 'SANDBOX_ADAPTER_TIMEOUT_AFTER_ACCEPTANCE') throw error;
+        timedOut = true; status = 'UNKNOWN_EFFECT';
+      }
+    }
+    const transaction = structuredClone(existing); transaction.status = status;
+    if (adapterResponse) {
+      transaction.effect = { result: adapterResponse.result.status, externalProviderCalled: adapterResponse.externalProviderCalled,
+        adapterResponse: structuredClone(adapterResponse) };
+      transaction.evidence = { ...transaction.evidence, kind: 'SANDBOX_OPERATION_RECEIPT',
+        detail: 'The local test adapter returned a normalized sandbox receipt. No external provider was called.' };
+    } else {
+      transaction.effect = { result: 'UNKNOWN_EFFECT', externalProviderCalled: false, adapterResponse: null,
+        reconciliationRequired: true, detail: 'The local harness accepted the operation but simulated a lost response.' };
+      transaction.adapterAttempt = { state: 'ACCEPTED_RESPONSE_TIMEOUT', at, providerKey: existing.providerKey };
+      transaction.evidence = { ...transaction.evidence, kind: 'SANDBOX_OPERATION_OUTCOME_UNKNOWN',
+        detail: 'The local harness accepted the request then simulated a lost response. Reconcile by provider key before retry; no external provider was called.' };
+    }
+    if (accepted) transaction.reconciliation = { state: 'RECONCILED_ACCEPTED', actor, at, providerKey: existing.providerKey,
+      outcome: adapterResponse.outcome, detail: 'The existing operation was found before dispatch; no second effect was sent.' };
+    const { evidenceHash: _priorHash, ...core } = transaction; const updated = { ...core, evidenceHash: digest(core) };
+    project.sandboxTransactions = (project.sandboxTransactions ?? []).map((entry) => entry.operationId === existing.operationId ? updated : entry);
+    project.audit ??= []; project.audit.push({ at, action: timedOut ? 'enterprise.sandbox-transaction-outcome-unknown' : 'enterprise.sandbox-transaction-dispatched',
+      actor, operationId: existing.operationId, providerKey: existing.providerKey, outcome: updated.status, evidenceHash: updated.evidenceHash });
+    return { blueprint: current, affectedObjectId: existing.source.processId, sandboxTransaction: structuredClone(updated), idempotent: false };
+  }
   if (command.kind === 'run-sandbox-procurement-test') {
     if (current.id !== command.blueprintId || current.version !== command.blueprintVersion) {
       fail('SANDBOX_TRANSACTION_SOURCE_STALE', 'The saved process or capacity source changed. Review the current design and request owner approval again.', 409);
@@ -72,18 +163,21 @@ export function applyEnterpriseProcessCommand(project, command, actor) {
     const operationKey = digest({ projectId: project.id, blueprintId: current.id, blueprintVersion: current.version,
       blueprintHash, processId: process.id, stepId: step.id, resourceId: resource.id, windowId: window.id, allocationId: allocation.id });
     const existing = (project.sandboxTransactions ?? []).find((entry) => entry.operationKey === operationKey);
+    if (existing?.status === 'UNKNOWN_EFFECT') {
+      fail('SANDBOX_EFFECT_RECONCILIATION_REQUIRED', 'The previous attempt has an unknown outcome. Reconcile its stable provider key before retrying or considering compensation.', 409);
+    }
     if (existing) return { blueprint: current, affectedObjectId: process.id, sandboxTransaction: structuredClone(existing), idempotent: true };
     const operationId = `sandbox-transaction-${randomUUID()}`;
+    const providerKey = `orgward-local-sandbox:${operationKey}`;
     const request = { contract: SANDBOX_EFFECT_CONTRACT, schemaVersion: '1.0', adapterId: LOCAL_SANDBOX_ADAPTER_ID,
-      mode: 'LOCAL_TEST_ONLY', operationId, operationKey, kind: 'PROCUREMENT_TEST_EFFECT',
+      mode: 'LOCAL_TEST_ONLY', operationId, operationKey, providerKey, kind: 'PROCUREMENT_TEST_EFFECT',
       source: { projectId: project.id, blueprintId: current.id, blueprintVersion: current.version, blueprintHash,
         processId: process.id, stepId: step.id, resourceId: resource.id, windowId: window.id, allocationId: allocation.id },
       approval: { decision: 'APPROVED', actor, at, authority: 'HUMAN_PROJECT_OWNER',
         quantity: { value: quantity.value, unit: quantity.unit }, capacity: { value: available.value, unit: available.unit } } };
-    const adapterResponse = createLocalSandboxTestAdapter().dispatch(request);
-    const core = { operationId, operationKey, providerKey: `orgward-local-sandbox:${operationKey}`,
+    const core = { operationId, operationKey, providerKey,
       contract: SANDBOX_EFFECT_CONTRACT, contractVersion: '1.0', mode: 'LOCAL_TEST_ONLY',
-      adapterId: LOCAL_SANDBOX_ADAPTER_ID, kind: 'PROCUREMENT_TEST_EFFECT', status: adapterResponse.outcome, sandbox: true,
+      adapterId: LOCAL_SANDBOX_ADAPTER_ID, kind: 'PROCUREMENT_TEST_EFFECT', status: 'APPROVED_PENDING', sandbox: true, adapterRequest: request,
       label: `Sandbox test effect · ${step.title}`, source: { projectId: project.id, blueprintId: current.id, blueprintVersion: current.version,
         blueprintHash, processId: process.id, stepId: step.id, resourceId: resource.id, windowId: window.id, allocationId: allocation.id },
       commitment: { state: allocation.state, quantity: structuredClone(quantity), source: 'saved owner-reviewed design declaration' },
@@ -91,15 +185,14 @@ export function applyEnterpriseProcessCommand(project, command, actor) {
       approval: { decision: 'APPROVED', actor, at, authority: 'HUMAN_PROJECT_OWNER',
         approved: { kind: 'PROCUREMENT_TEST_EFFECT', stepId: step.id, resourceId: resource.id, windowId: window.id,
           allocationId: allocation.id, quantity: structuredClone(quantity), capacity: structuredClone(available) } },
-      effect: { result: adapterResponse.result.status, externalProviderCalled: adapterResponse.externalProviderCalled,
-        adapterResponse: structuredClone(adapterResponse) },
-      evidence: { kind: 'SANDBOX_OPERATION_RECEIPT', operationKey, createdAt: at, actor,
-        detail: 'A local sandbox record represents one test effect. No payment, legal, physical, supplier or other external action was sent.' } };
+      effect: { result: 'NOT_DISPATCHED', externalProviderCalled: false, adapterResponse: null },
+      evidence: { kind: 'SANDBOX_APPROVAL_REQUEST', operationKey, createdAt: at, actor,
+        detail: 'Owner approval and the exact versioned request are saved before dispatch. No external provider has been called.' } };
     const transaction = { ...core, evidenceHash: digest(core) };
     project.sandboxTransactions ??= []; project.sandboxTransactions.push(transaction);
-    project.audit ??= []; project.audit.push({ at, action: 'enterprise.sandbox-transaction-recorded', actor,
-      detail: `Approved and recorded one local sandbox procurement test effect for “${process.name}”; no external provider was called.`,
-      operationId, operationKey, evidenceHash: transaction.evidenceHash });
+    project.audit ??= []; project.audit.push({ at, action: 'enterprise.sandbox-transaction-approved', actor,
+      detail: `Approved one local sandbox procurement test effect for “${process.name}”; no dispatch has occurred.`,
+      operationId, operationKey, providerKey, evidenceHash: transaction.evidenceHash });
     return { blueprint: current, affectedObjectId: process.id, sandboxTransaction: structuredClone(transaction), idempotent: false };
   }
   if (command.kind === 'simulate-process' || command.kind === 'simulate-staffing') {

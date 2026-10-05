@@ -8019,3 +8019,30 @@ reconciliation and AC4 multi-effect compensation remain unimplemented; T-96
 and PR-15 remain open. T-97 is not dependency-ready because T-44 is in pending
 PR-11; T-98 is not dependency-ready because T-45 is in pending PR-11. No full
 check, release gate change or Sol review.
+
+PR-15 T-96 accepted-then-timeout local recovery path (2026-10-05): owner
+approval now commits the exact versioned adapter request and stable provider
+key as `APPROVED_PENDING` before a separate dispatch action can call an
+adapter. Dispatch checks reconciliation by key first; the injected
+`LOCAL_TEST_ONLY` harness can cache one accepted result then simulate a lost
+response. The app persists `UNKNOWN_EFFECT`, retains the request/key and marks
+reconciliation required with `externalProviderCalled: false`. Replays with the
+same command return the saved unknown result; new dispatch attempts fail with
+`SANDBOX_EFFECT_RECONCILIATION_REQUIRED`. An owner-only reconciliation command
+uses the stable key, updates the record to the observed normalized outcome and
+appends audit evidence without dispatching again. The API fixture reopens the
+app while retaining the local harness as the provider-side test fixture, checks
+the unknown state/request survived, proves pre-reconciliation dispatch remains
+blocked and non-owner reconciliation does not call the adapter, then reconciles
+to the cached accepted result with exactly one effect/dispatch. UI exposes the
+separate approval, pending dispatch and unknown reconciliation actions and
+guidance. Focused command
+`npm test -- tests/enterprise/sandbox-adapter.test.mjs tests/enterprise/server.test.mjs tests/enterprise/view.test.mjs
+--test-name-pattern='owner-approved sandbox procurement|sandbox procurement UI|local sandbox adapter|sandbox adapter rejects|sandbox adapter replays|accepted-then-timeout'`
+passed 6/6 (0 failures, 0 skips; 3.76s runner; TAP duration 2.650s; log
+`/tmp/orgward-tests-ipn3La/node-test.tap.log`). Syntax checks passed for all
+changed JS files; `git diff --check` passed; `npm run task:next` still reports
+PR-15 first open. This is only local fault-injection/recovery evidence, not a
+real provider timeout qualification; no external provider was configured or
+called, no compensation was attempted, and T-96 AC1/AC3/AC4 plus PR-15 remain
+open. No full check, gate change or Sol review.

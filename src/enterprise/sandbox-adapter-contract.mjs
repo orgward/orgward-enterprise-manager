@@ -3,16 +3,17 @@ import { digest } from '../sdlc/contracts.mjs';
 export const SANDBOX_EFFECT_CONTRACT = 'orgward.sandbox-effect/v1';
 export const LOCAL_SANDBOX_ADAPTER_ID = 'orgward.local-sandbox.procurement-test/v1';
 
-const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
+const fail = (code, message, statusCode = 400) => { throw Object.assign(new Error(message), { code, statusCode }); };
 const exactKeys = (value, expected) => value && typeof value === 'object' && !Array.isArray(value)
   && Object.keys(value).sort().join(',') === [...expected].sort().join(',');
 
 export function normalizeSandboxEffectRequest(input) {
-  const fields = ['contract', 'schemaVersion', 'adapterId', 'mode', 'operationId', 'operationKey', 'kind', 'source', 'approval'];
+  const fields = ['contract', 'schemaVersion', 'adapterId', 'mode', 'operationId', 'operationKey', 'providerKey', 'kind', 'source', 'approval'];
   if (!exactKeys(input, fields) || input.contract !== SANDBOX_EFFECT_CONTRACT || input.schemaVersion !== '1.0'
     || input.adapterId !== LOCAL_SANDBOX_ADAPTER_ID || input.mode !== 'LOCAL_TEST_ONLY'
     || typeof input.operationId !== 'string' || !/^sandbox-transaction-[0-9a-f-]{36}$/.test(input.operationId)
     || typeof input.operationKey !== 'string' || !/^[a-f0-9]{64}$/.test(input.operationKey)
+    || input.providerKey !== `orgward-local-sandbox:${input.operationKey}`
     || input.kind !== 'PROCUREMENT_TEST_EFFECT' || !exactKeys(input.source,
       ['projectId', 'blueprintId', 'blueprintVersion', 'blueprintHash', 'processId', 'stepId', 'resourceId', 'windowId', 'allocationId'])
     || !exactKeys(input.approval, ['decision', 'actor', 'at', 'authority', 'quantity', 'capacity'])
@@ -36,10 +37,10 @@ export function normalizeSandboxEffectRequest(input) {
 }
 
 export function normalizeSandboxEffectResponse(input, request) {
-  const fields = ['contract', 'schemaVersion', 'adapterId', 'mode', 'operationKey', 'outcome', 'externalProviderCalled', 'result', 'idempotent'];
+  const fields = ['contract', 'schemaVersion', 'adapterId', 'mode', 'operationKey', 'providerKey', 'outcome', 'externalProviderCalled', 'result', 'idempotent'];
   if (!exactKeys(input, fields) || input.contract !== SANDBOX_EFFECT_CONTRACT || input.schemaVersion !== '1.0'
     || input.adapterId !== request.adapterId || input.mode !== 'LOCAL_TEST_ONLY'
-    || input.operationKey !== request.operationKey || input.outcome !== 'RECORDED_IN_SANDBOX'
+    || input.operationKey !== request.operationKey || input.providerKey !== request.providerKey || input.outcome !== 'RECORDED_IN_SANDBOX'
     || input.externalProviderCalled !== false || typeof input.idempotent !== 'boolean'
     || !exactKeys(input.result, ['operationId', 'status', 'detail']) || input.result.operationId !== request.operationId
     || input.result.status !== 'RECORDED_IN_SANDBOX' || typeof input.result.detail !== 'string' || !input.result.detail) {
@@ -53,24 +54,36 @@ export function normalizeSandboxEffectResponse(input, request) {
  * registry entry: it cannot contact a connector and only returns a local test
  * receipt. Production connector support requires a separate configured adapter.
  */
-export function createLocalSandboxTestAdapter() {
+export function createLocalSandboxTestAdapter({ acceptedThenTimeoutOnce = false } = {}) {
   const results = new Map();
+  let faultConsumed = false; let dispatchCount = 0; let effectCount = 0; let reconciliationCount = 0;
   return Object.freeze({
     id: LOCAL_SANDBOX_ADAPTER_ID,
     dispatch(input) {
+      dispatchCount += 1;
       const request = normalizeSandboxEffectRequest(input);
       const requestHash = digest(request);
-      const prior = results.get(request.operationKey);
+      const prior = results.get(request.providerKey);
       if (prior) {
         if (prior.requestHash !== requestHash) fail('SANDBOX_IDEMPOTENCY_CONFLICT', 'The operation key is already bound to a different sandbox request.');
         return normalizeSandboxEffectResponse({ ...prior.response, idempotent: true }, request);
       }
       const response = normalizeSandboxEffectResponse({ contract: SANDBOX_EFFECT_CONTRACT, schemaVersion: '1.0',
         adapterId: LOCAL_SANDBOX_ADAPTER_ID, mode: 'LOCAL_TEST_ONLY', operationKey: request.operationKey,
-        outcome: 'RECORDED_IN_SANDBOX', externalProviderCalled: false, idempotent: false,
+        providerKey: request.providerKey, outcome: 'RECORDED_IN_SANDBOX', externalProviderCalled: false, idempotent: false,
         result: { operationId: request.operationId, status: 'RECORDED_IN_SANDBOX', detail: 'Local deterministic test receipt; no external provider was called.' } }, request);
-      results.set(request.operationKey, { requestHash, response });
+      results.set(request.providerKey, { requestHash, request, response }); effectCount += 1;
+      if (acceptedThenTimeoutOnce && !faultConsumed) {
+        faultConsumed = true;
+        fail('SANDBOX_ADAPTER_TIMEOUT_AFTER_ACCEPTANCE', 'The local harness accepted the operation but simulated a lost response.', 504);
+      }
       return response;
     },
+    reconcile(providerKey) {
+      reconciliationCount += 1;
+      const prior = results.get(providerKey);
+      return prior ? normalizeSandboxEffectResponse({ ...prior.response, idempotent: true }, prior.request) : null;
+    },
+    get metrics() { return Object.freeze({ dispatchCount, effectCount, reconciliationCount }); },
   });
 }
