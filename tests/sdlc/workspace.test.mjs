@@ -61,6 +61,40 @@ test('case UI keeps the pinned source identity visible when the saved project ad
   assert.equal(caseUiModel(changeCase, {}, { id: 'project-source', version: 5, blueprintVersions: [{ version: 3 }] }).sourceBinding.state, 'INTEGRITY_FAILED');
 });
 
+test('an accepted upstream authority change invalidates dependent artifacts while retaining the pinned history', () => {
+  const snapshot = { id: 'control-human-authority', type: 'control', name: 'Human authority boundary', detail: 'Only the accountable owner may approve changes.' };
+  const binding = {
+    projectId: 'project-authority', projectVersion: 8, blueprintId: 'blueprint-authority', blueprintVersion: 4,
+    blueprintSchemaVersion: 1, objectId: snapshot.id, objectType: snapshot.type, sourceHash: digest(snapshot), snapshot,
+  };
+  binding.bindingHash = digest({ projectId: binding.projectId, projectVersion: binding.projectVersion,
+    blueprintId: binding.blueprintId, blueprintVersion: binding.blueprintVersion,
+    blueprintSchemaVersion: binding.blueprintSchemaVersion, objectId: binding.objectId,
+    objectType: binding.objectType, sourceHash: binding.sourceHash });
+  const changeCase = createChangeCase({ mode: 'golden' }, { sourceBinding: binding });
+  changeCase.workspace = workspaceStatus(changeCase);
+  changeCase.sourceBindingIntegrity = { valid: true };
+  changeCase.artifacts.requirements = { acceptedBaseline: { sourceHash: binding.sourceHash, contentHash: 'accepted-requirements' } };
+  changeCase.artifacts.architecture = { acceptedBaseline: { sourceHash: binding.sourceHash, draftHash: 'accepted-architecture' } };
+  changeCase.evaluations = [{ id: 'historical-evaluation' }];
+  changeCase.approvals = [{ id: 'historical-approval' }];
+  const historicalContext = structuredClone(changeCase.sourceBinding);
+  const currentProject = { id: binding.projectId, version: 9, latestBlueprint: {
+    id: binding.blueprintId, version: 5,
+    areas: { governance: { items: [{ ...snapshot, detail: 'The requester may approve changes without an independent owner.' }] } },
+  } };
+
+  const current = caseUiModel(changeCase, {}, currentProject).sourceBinding;
+
+  assert.equal(current.state, 'PINNED_OLDER_VERSION');
+  assert.equal(current.invalidation.status, 'DEPENDENCIES_STALE');
+  assert.deepEqual(current.invalidation.staleArtifacts.map((artifact) => artifact.reference), [
+    'accepted-requirements', 'accepted-architecture', 'historical-evaluation', 'historical-approval',
+  ]);
+  assert.deepEqual(current.snapshot, historicalContext.snapshot);
+  assert.deepEqual(changeCase.sourceBinding, historicalContext, 'the pinned historical source remains unchanged');
+});
+
 test('case UI needs full active-project detail to distinguish current pin from unavailable summary', () => {
   const snapshot = { id: 'info-current', type: 'information', name: 'Current source', detail: 'Exact saved detail.' };
   const binding = {

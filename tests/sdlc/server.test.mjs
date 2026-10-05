@@ -7,7 +7,7 @@ import { createApp } from '../../server.mjs';
 import { addConversationTurn, createProject, editBlueprintObject, latestBlueprint } from '../../src/model.mjs';
 import { digest } from '../../src/sdlc/contracts.mjs';
 import { applyEnterpriseIntegrityCommand } from '../../src/enterprise/integrity.mjs';
-import { eligibleActorBindings } from '../../public/sdlc-view.mjs';
+import { caseUiModel, eligibleActorBindings } from '../../public/sdlc-view.mjs';
 
 async function start(root) {
   const app = createApp({ dataDirectory: path.join(root, 'blueprints'), sdlcDirectory: path.join(root, 'sdlc') });
@@ -101,7 +101,7 @@ test('SDLC case pins a saved design source, rejects stale or unresolved selectio
   const normalizedLegacyProject = await request(app.base, `/api/v1/projects/${project.id}`);
   assert.equal(normalizedLegacyProject.data.version, 1);
   const blueprint = latestBlueprint(project);
-  const source = Object.values(blueprint.areas).flatMap((area) => area.items).find((item) => item.type === 'information');
+  const source = Object.values(blueprint.areas).flatMap((area) => area.items).find((item) => item.id === 'control-human-authority');
   assert.ok(source);
   const selection = {
     mode: 'golden', projectId: project.id, sourceObjectId: source.id,
@@ -141,11 +141,23 @@ test('SDLC case pins a saved design source, rejects stale or unresolved selectio
   assert.equal(requestedImpact.sourceHash, changeCase.sourceBinding.sourceHash);
   assert.match(requestedImpact.reason, /saved-design/);
   assert.equal(changeCase.enterpriseSnapshot.sourceKind, 'synthetic-reference-model');
+
+  const seededCase = await app.sdlcStore.get(changeCase.id);
+  seededCase.artifacts.requirements = { acceptedBaseline: { sourceHash: changeCase.sourceBinding.sourceHash, contentHash: 'accepted-requirements-hash' } };
+  seededCase.artifacts.architecture = { acceptedBaseline: { sourceHash: changeCase.sourceBinding.sourceHash, draftHash: 'accepted-architecture-hash' } };
+  seededCase.evaluations = [{ id: 'historical-evaluation' }];
+  seededCase.approvals = [{ id: 'historical-approval' }];
+  await app.sdlcStore.save(seededCase);
+  changeCase = await request(app.base, `/api/sdlc/cases/${changeCase.id}`);
   const originalPin = structuredClone(changeCase.sourceBinding);
 
   const editedProject = await app.store.get(project.id, project.tenantId);
   const target = Object.values(latestBlueprint(editedProject).areas).flatMap((area) => area.items).find((item) => item.id === source.id);
-  editBlueprintObject(editedProject, { objectId: target.id, name: target.name, detail: `${target.detail} Updated after case creation.` }, 'test-owner');
+  editBlueprintObject(editedProject, {
+    objectId: target.id,
+    name: target.name,
+    detail: 'The requester may approve safety critical work without an independent owner.',
+  }, 'test-owner');
   assert.equal(latestBlueprint(editedProject).blueprintSchemaVersion, 1);
   editedProject.version = (editedProject.version ?? 1) + 1;
   await app.store.save(editedProject);
@@ -156,8 +168,15 @@ test('SDLC case pins a saved design source, rejects stale or unresolved selectio
   changeCase = await request(app.base, `/api/sdlc/cases/${caseId}`);
   const latestProject = await request(app.base, `/api/projects/${project.id}`);
   assert.equal(latestProject.version, 2);
-  assert.match(Object.values(latestBlueprint(latestProject).areas).flatMap((area) => area.items).find((item) => item.id === source.id).detail, /Updated after case creation/);
+  assert.match(Object.values(latestBlueprint(latestProject).areas).flatMap((area) => area.items).find((item) => item.id === source.id).detail, /requester may approve/);
   assert.deepEqual(changeCase.sourceBinding, originalPin);
+  const staleUiBinding = caseUiModel(changeCase, {}, latestProject).sourceBinding;
+  assert.equal(staleUiBinding.state, 'PINNED_OLDER_VERSION');
+  assert.equal(staleUiBinding.invalidation.status, 'DEPENDENCIES_STALE');
+  assert.deepEqual(staleUiBinding.invalidation.staleArtifacts.map((artifact) => artifact.reference), [
+    'accepted-requirements-hash', 'accepted-architecture-hash', 'historical-evaluation', 'historical-approval',
+  ]);
+  assert.equal(staleUiBinding.sourceHash, originalPin.sourceHash);
   assert.equal(changeCase.sourceBindingIntegrity.valid, true);
   assert.equal(changeCase.artifacts.context.sourceBindingHash, originalPin.sourceHash);
   assert.deepEqual(changeCase.artifacts.context.integrityContext, originalPin.integrityContext);

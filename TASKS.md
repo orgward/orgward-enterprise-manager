@@ -7745,6 +7745,32 @@ duration 0.33s; log `/tmp/orgward-tests-XafBj2/node-test.tap.log`):
 reported PR-15 first open. No full check or Sol review; PR-15 remains open and
 active.
 
+PR-15 T-90 AC3/AC4 acceptance mapping (2026-10-05): AC3's dependent-staleness
+behavior has an authority-specific saved-project regression. The test changes
+the pinned human-authority control from owner approval to requester approval,
+then reloads the project and case after restart. It confirms the case retains its
+original source hash and historical pin while accepted requirements, accepted
+architecture, evaluations, and approvals are marked stale dependencies. The UI
+model test separately checks all four dependency types and confirms it does not
+rewrite the source pin. After adding persisted accepted-baseline/evaluation/
+approval fixtures to the restart-backed test, the combined focused suite passed
+25/25 (0 failures, 0 skips; duration 2.17s; TAP log
+`/tmp/orgward-tests-mlLBDN/node-test.tap.log`):
+`npm test -- tests/sdlc/workspace.test.mjs tests/sdlc/server.test.mjs`.
+`node --check` passed for both focused test files; `git diff --check` passed.
+`npm run task:next` reported PR-15 first open at `TASKS.md:6882`. No initial
+focused-suite test failures; no full check or Sol review.
+AC4 is covered by `f2cbd2d`: runtime-health/control observations produce an
+evidence-linked `PROPOSED_NOT_APPLIED` design-correction claim requiring owner
+authority; its engine test verifies the source and release remain unchanged, and
+the UI shows the proposal without granting release authority. Its focused suite
+passed 35/35 (0 failures, 0 skips; duration 1.74s; TAP log
+`/tmp/orgward-tests-6kDbqt/node-test.tap.log`):
+`npm test -- tests/sdlc/engine.test.mjs tests/sdlc/server.test.mjs`.
+These behaviors cover AC3 and AC4; the parent remains open because AC1 lacks an
+authentic Sentinel-version source and other T-90 acceptance still requires
+review. No full check or Sol review.
+
 PR-15 T-90 pinned design return from SDLC (2026-10-05): saved process-task run
 details now link back to the exact project, process, and blueprint version that
 the run used. The route is omitted when its project/version/process identity is
