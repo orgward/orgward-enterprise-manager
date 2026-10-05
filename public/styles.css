@@ -243,6 +243,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .blueprint-edit-form textarea { min-height: 66px; resize: vertical; }
 .blueprint-edit-form :focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; }
 .blueprint-edit-form .button { width: 100%; min-height: 42px; }
+.blueprint-impact-preview { border: 1px solid var(--line-strong); border-radius: 8px; padding: 10px; background: var(--surface-2); overflow-wrap: anywhere; }
+.blueprint-impact-preview h4, .blueprint-impact-preview h5 { color: var(--ink); margin: 6px 0; }
+.blueprint-impact-preview p, .blueprint-impact-preview li { color: var(--muted); font-size: 10px; line-height: 1.5; }
+.blueprint-impact-preview ul { margin: 4px 0 9px; padding-left: 20px; }
 .serving-customer-select { min-width: 0; margin: 2px 0; padding: 8px; border: 1px solid var(--line); border-radius: 6px; display: grid; gap: 5px; }
 .serving-customer-select legend { color: var(--muted); font-size: 10px; }
 .serving-customer-select > .edit-help { margin: 0; }

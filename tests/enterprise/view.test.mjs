@@ -26,6 +26,7 @@ import { projectPortfolioIntegritySummary } from '../../src/platform/postgres-st
 import { decodeStudioRoute, encodeStudioRoute } from '../../public/shared-interactions.mjs';
 import { renderOutcomeInbox } from '../../public/outcomes.mjs';
 import { renderProtectedRelease } from '../../public/protected-release.mjs';
+import { renderBlueprintImpactPreview } from '../../public/blueprint-impact-preview.mjs';
 
 class NodeListFixture extends Array {
   constructor(entries) { super(...entries); this.at = undefined; }
@@ -97,6 +98,24 @@ const el = (tag, options = {}, children = []) => {
   node.append(...(Array.isArray(children) ? children : [children]));
   return node;
 };
+
+test('blueprint impact preview shows exact pins, direct changes and explicit unknown downstream areas', () => {
+  const preview = renderBlueprintImpactPreview({ status: 'INCOMPLETE',
+    source: { blueprintId: 'blueprint-source', blueprintVersion: 7, projectVersion: 19, snapshotHash: 'a'.repeat(64) },
+    proposedBlueprintVersion: 8,
+    changedFields: [{ field: 'ownerRoleName', before: 'Operations owner', after: 'Founder' }],
+    directlyAffectedObjects: [{ objectId: 'process-deliver', name: 'Deliver service', type: 'process', edited: true,
+      source: { blueprintVersion: 7 } }, { objectId: 'role-operations', name: 'Operations', type: 'role', edited: false,
+      source: { blueprintVersion: 7 } }],
+    unknownAreas: ['Approvals and queued, running, or completed work'],
+    limitation: 'This read-only preview does not authorize publication.' }, el);
+  assert.match(preview.textContent, /Impact preview · INCOMPLETE/);
+  assert.match(preview.textContent, /blueprint-source v7 · workspace v19/);
+  assert.match(preview.textContent, /ownerRoleName: "Operations owner" → "Founder"/);
+  assert.match(preview.textContent, /Operations · role · directly connected · source v7/);
+  assert.match(preview.textContent, /Approvals and queued, running, or completed work/);
+  assert.match(preview.textContent, /does not authorize publication/);
+});
 
 test('portfolio cards show saved workspace state and access and open the chosen project', () => {
   const opened = [];

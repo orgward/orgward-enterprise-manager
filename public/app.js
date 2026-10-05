@@ -7,6 +7,7 @@ import { connectedNodeIds, filterGraph, focusFirstMapResult, focusSelectedMapCon
 import { apiErrorFrom, decodeStudioRoute, encodeExecutionRoute, encodeStudioRoute, fieldErrorsFor, founderConversationAnnouncement } from './shared-interactions.mjs';
 import { coverageAreaStateLabel, coverageForBlueprint } from './coverage-dashboard.mjs';
 import { compareBlueprintObjectVersions } from './blueprint-comparison.mjs';
+import { renderBlueprintImpactPreview } from './blueprint-impact-preview.mjs';
 import { renderOutcomeInbox } from './outcomes.mjs';
 import { enterpriseContextFailure, enterpriseContextReadOnly, enterpriseStateSummary, enterpriseSourceAligned, hasEnterpriseContext, enterpriseQuery, enterpriseRequestPath, persistEnterpriseCommand, restoreEnterpriseCommand, persistEnterpriseInterchangeDraft, restoreEnterpriseInterchangeDraft, submitEnterpriseCommand, renderEnterpriseContext, renderEnterpriseObject, renderEnterpriseObjectHeader, renderEnterpriseStewardshipPanel } from './enterprise.mjs';
 import { downloadPortfolioDesign, downloadPortfolioInventory, portfolioImportWorkspaceRoute, readPortfolioImportFile, renderProjectPortfolio } from './project-portfolio.mjs';
@@ -1899,7 +1900,9 @@ function renderBlueprintEditForm(node) {
   const branchReason = branchEditing ? editField(form, 'Reason for this draft revision', 'reason', '', { multiline: true, maxLength: 500 }) : null;
   const error = element('p', { className: 'field-error edit-error', attrs: { role: 'alert', 'aria-live': 'polite', hidden: '' } });
   const recovery = element('div', { className: 'edit-recovery' });
-  const save = element('button', { className: 'button primary', text: branchEditing ? 'Save new branch revision' : 'Save new version', attrs: { type: 'submit' } });
+  const save = element('button', { className: 'button primary', text: branchEditing ? 'Save new branch revision' : 'Preview impact', attrs: { type: 'submit' } });
+  const impactPanel = element('section', { className: 'blueprint-impact-preview', attrs: { hidden: '', 'aria-label': 'Proposed design impact preview', 'aria-live': 'polite' } });
+  let previewedImpact = null;
   const latestVersion = element('button', { className: 'button ghost', text: 'Use current version', attrs: { type: 'button', hidden: '' } });
   if (pending?.needsReview) {
     error.textContent = 'This draft is retained after a version conflict. Review the latest history, then use the current version before resubmitting.';
@@ -1909,6 +1912,10 @@ function renderBlueprintEditForm(node) {
   }
   latestVersion.addEventListener('click', () => {
     if (!state.pendingBlueprintEdit) return;
+    previewedImpact = null;
+    impactPanel.hidden = true;
+    impactPanel.replaceChildren();
+    save.textContent = 'Preview impact';
     state.pendingBlueprintEdit.expectedVersion = state.project.version;
     state.pendingBlueprintEdit.blueprintId = state.project.latestBlueprint.id;
     state.pendingBlueprintEdit.blueprintVersion = state.project.latestBlueprint.version;
@@ -1922,7 +1929,7 @@ function renderBlueprintEditForm(node) {
     save.disabled = false;
     notify(`Draft is ready against blueprint version ${sourceBlueprint.version}.`);
   });
-  form.append(error, recovery, latestVersion, save);
+  form.append(error, recovery, impactPanel, latestVersion, save);
   const values = () => ({ objectId: node.id, name: name.value.trim(), detail: detail.value.trim(),
     ...(ownerRole ? { ownerRoleName: ownerRole.value } : {}), ...(trigger ? { trigger: trigger.value.trim() } : {}),
     ...(servingCustomers ? { servesCustomerIds: [...servingCustomers.querySelectorAll('input[name="servesCustomerIds"]:checked')].map((control) => control.value).sort() } : {}),
@@ -1952,6 +1959,10 @@ function renderBlueprintEditForm(node) {
     ...(toolStatements ? { proposedToolStatements: toolStatements.value.split('\n').map((line) => line.trim()).filter(Boolean) } : {}),
     ...(escalationRules ? { proposedEscalationRules: escalationRules.value.split('\n').map((line) => line.trim()).filter(Boolean) } : {}) });
   const trackDraft = () => {
+    previewedImpact = null;
+    impactPanel.hidden = true;
+    impactPanel.replaceChildren();
+    save.textContent = 'Preview impact';
     const payload = values();
     const current = blueprintItem(sourceBlueprint, node.id);
     const unchanged = payload.name === current.name && payload.detail === current.detail
@@ -1984,6 +1995,38 @@ function renderBlueprintEditForm(node) {
       && (!toolStatements || JSON.stringify(payload.proposedToolStatements) === JSON.stringify(current.proposedToolStatements ?? []))
       && (!escalationRules || JSON.stringify(payload.proposedEscalationRules) === JSON.stringify(current.proposedEscalationRules ?? []));
     state.blueprintEditDraft = unchanged ? null : { projectId: state.project.id, objectId: node.id, payload };
+  };
+  const showImpactPreview = (preview) => {
+    const rendered = renderBlueprintImpactPreview(preview, element);
+    impactPanel.replaceChildren(...rendered.children);
+    impactPanel.hidden = false;
+  };
+  const previewImpact = async (pendingEdit) => {
+    const projectId = state.project.id;
+    const currentBlueprint = state.project.latestBlueprint;
+    const semanticPayload = { ...pendingEdit.payload, kind: 'edit-blueprint-object',
+      blueprintId: pendingEdit.blueprintId ?? currentBlueprint.id,
+      blueprintVersion: pendingEdit.blueprintVersion ?? currentBlueprint.version,
+      reason: 'Edited the proposed design from the interactive map.' };
+    save.disabled = true;
+    error.hidden = true;
+    try {
+      const result = await api(`/api/v1/projects/${projectId}/enterprise/impact-preview`, { method: 'POST',
+        body: JSON.stringify({ expectedVersion: pendingEdit.expectedVersion, command: semanticPayload }) });
+      if (state.project?.id !== projectId || state.requestedProjectId !== projectId) return;
+      previewedImpact = { commandId: pendingEdit.commandId, payload: pendingEdit.payload,
+        expectedVersion: pendingEdit.expectedVersion, blueprintId: semanticPayload.blueprintId,
+        blueprintVersion: semanticPayload.blueprintVersion, previewHash: result.data.previewHash };
+      showImpactPreview(result.data);
+      save.textContent = 'Apply proposed edit';
+      save.disabled = false;
+    } catch (failure) {
+      if (state.project?.id !== projectId || state.requestedProjectId !== projectId) return;
+      error.textContent = failure.message;
+      error.hidden = false;
+      save.textContent = 'Preview impact';
+      save.disabled = false;
+    }
   };
   form.addEventListener('input', trackDraft);
   form.addEventListener('change', trackDraft);
@@ -2062,7 +2105,16 @@ function renderBlueprintEditForm(node) {
     }
     state.blueprintEditDraft = null;
     if (pendingEdit.needsReview) return;
-    submit(pendingEdit.commandId, pendingEdit.payload, pendingEdit.expectedVersion);
+    if (previewedImpact && previewedImpact.commandId === pendingEdit.commandId
+      && previewedImpact.expectedVersion === pendingEdit.expectedVersion
+      && previewedImpact.blueprintId === pendingEdit.blueprintId
+      && previewedImpact.blueprintVersion === pendingEdit.blueprintVersion
+      && JSON.stringify(previewedImpact.payload) === JSON.stringify(payload)) {
+      previewedImpact = null;
+      submit(pendingEdit.commandId, pendingEdit.payload, pendingEdit.expectedVersion);
+      return;
+    }
+    previewImpact(pendingEdit);
   });
   return form;
 }

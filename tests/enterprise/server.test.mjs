@@ -382,8 +382,41 @@ test('interactive map edits use the shared semantic command boundary with denial
     blueprintId: view.data.context.blueprintId, blueprintVersion: view.data.context.blueprintVersion };
   const denied = await postCommand(instance.base, 'reader', project.id, commandBody(view, 'map-edit-reader-denied', edit), 403);
   assert.equal(denied.error.code, 'ACTION_FORBIDDEN');
+  const authorityAssertion = await postCommand(instance.base, 'editor', project.id,
+    commandBody(view, 'map-edit-cannot-claim-authority', { ...edit, authority: ['workspace-admin'] }), 400);
+  assert.equal(authorityAssertion.error.code, 'CALLER_AUTHORITY_NOT_ALLOWED');
+  const identityAssertion = await postCommand(instance.base, 'editor', project.id,
+    commandBody(view, 'map-edit-cannot-claim-identity', { ...edit, principal: 'oidc:caller-claimed' }), 400);
+  assert.equal(identityAssertion.error.code, 'CALLER_AUTHORITY_NOT_ALLOWED');
+  const layoutAssertion = await postCommand(instance.base, 'editor', project.id,
+    commandBody(view, 'map-edit-cannot-change-layout', { ...edit, layout: { x: 100, y: 200 } }), 400);
+  assert.equal(layoutAssertion.error.code, 'INVALID_ENTERPRISE_COMMAND');
+  const previewRoute = `/api/v1/projects/${project.id}/enterprise/impact-preview`;
+  const preview = await request(instance.base, 'editor', previewRoute, { method: 'POST', body: {
+    expectedVersion: project.version, command: edit,
+  } });
+  assert.equal(preview.data.status, 'INCOMPLETE');
+  assert.equal(preview.data.source.projectVersion, project.version);
+  assert.equal(preview.data.source.blueprintId, view.data.context.blueprintId);
+  assert.equal(preview.data.source.blueprintVersion, view.data.context.blueprintVersion);
+  assert.match(preview.data.source.snapshotHash, /^[a-f0-9]{64}$/);
+  assert.ok(preview.data.changedFields.some((change) => change.field === 'name'
+    && change.before === 'Deliver the core offering' && change.after === edit.name));
+  assert.ok(preview.data.directlyAffectedObjects.some((entry) => entry.objectId === 'process-deliver' && entry.edited));
+  assert.ok(preview.data.directlyAffectedObjects.some((entry) => entry.objectId === 'role-operations'));
+  assert.equal(preview.data.coverage.operationalAndDownstreamImpact, 'UNKNOWN');
+  assert.ok(preview.data.unknownAreas.some((entry) => /approvals and queued, running, or completed work/i.test(entry)));
+  const stalePreview = await request(instance.base, 'editor', previewRoute, { method: 'POST', body: {
+    expectedVersion: project.version + 1, command: edit,
+  } }, 409);
+  assert.equal(stalePreview.error.code, 'VERSION_CONFLICT');
+  const staleBlueprintPreview = await request(instance.base, 'editor', previewRoute, { method: 'POST', body: {
+    expectedVersion: project.version, command: { ...edit, blueprintVersion: edit.blueprintVersion + 1 },
+  } }, 409);
+  assert.equal(staleBlueprintPreview.error.code, 'ENTERPRISE_BLUEPRINT_STALE');
   let saved = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
   assert.equal(saved.data.version, project.version);
+  assert.equal(saved.data.latestBlueprint.id, view.data.context.blueprintId, 'rejected caller assertions cannot mutate design authority or layout');
 
   const body = commandBody(view, 'map-edit-through-semantic-command', edit);
   const accepted = await postCommand(instance.base, 'editor', project.id, body);

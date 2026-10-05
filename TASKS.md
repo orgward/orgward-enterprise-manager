@@ -8202,3 +8202,33 @@ revision expectation (branch-only scope creation had already added revision 2);
 the expected object-edit revision was corrected to 3 and the final focused run
 passed. Syntax and diff checks passed. This is one T-121 branch editing surface;
 PR-17 remains open, PR-15 remains the active cursor and no release gate changed.
+
+PR-17 T-121 canonical edit rejection of caller authority and layout claims
+(2026-10-05): the primary `/enterprise/commands` edit-path regression now asserts
+that caller-supplied authority and principal identity are denied, unsupported
+layout data is rejected, and neither attempt changes the aggregate version or
+saved blueprint. This complements the legacy endpoint authority-claim test.
+
+PR-17 T-122 read-only map impact preview (2026-10-05): the main map edit form now
+requests an exact-current preview before it enables the apply step. The read-only
+API pins aggregate version plus blueprint ID/version/snapshot hash, validates the
+same semantic edit, and reports changed fields, direct relationship neighbors
+and their source pins. It explicitly returns `INCOMPLETE`, marks operational and
+downstream impact `UNKNOWN`, and names uncomputed role constraints, Sentinel/SDLC,
+approvals and work. Previewing writes no project state and grants no publication
+or approval authority; this slice does not add a stale-approval or publication
+barrier, and branch/import/other write-entry previews remain open. T-90 is not a
+code dependency for this direct blueprint calculation; unresolved downstream
+runtime and approval impact remains explicitly unknown.
+
+Focused command
+`npm test -- tests/enterprise/server.test.mjs tests/enterprise/view.test.mjs
+--test-name-pattern='interactive map edits use the shared semantic command
+boundary with denial, conflict, replay and restart|blueprint impact preview
+shows exact pins, direct changes and explicit unknown downstream areas'` passed
+2/2 (0 failures, 0 skips; 2.47s; log
+`/tmp/orgward-tests-XXA7bL/node-test.tap.log`). Coverage includes denied
+authority/identity/layout assertions without mutation, stale project and blueprint
+pin conflicts, direct field/neighbor calculation, exact source display and
+incomplete/unknown warnings. Syntax and diff checks passed. T-121, T-122, PR-17
+remain open; PR-15 remains the active cursor and no release gate changed.

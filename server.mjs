@@ -45,6 +45,7 @@ import { createLoopbackSandboxHttpAdapter } from './src/enterprise/loopback-sand
 import { createEnterpriseInterchangeBundle, createEnterpriseDesignPack, ENTERPRISE_INTERCHANGE_KINDS,
   previewEnterpriseDesignPack, previewEnterpriseInterchange } from './src/enterprise/interchange.mjs';
 import { previewEnterpriseSourceEvidence } from './src/enterprise/source-onboarding.mjs';
+import { previewEnterpriseEditImpact } from './src/enterprise/impact-preview.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -1704,6 +1705,31 @@ export function createApp({
           throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
         }
         return deliverProject(project);
+      }
+
+      const enterpriseImpactPreviewMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/enterprise\/impact-preview$/);
+      if (request.method === 'POST' && enterpriseImpactPreviewMatch) {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified project member is required to preview design impact.');
+        requirePrincipalStoreMethod(store, 'getWithPrincipalAuthority');
+        const body = await readJson(request);
+        if (!body || typeof body !== 'object' || Array.isArray(body)
+          || Object.keys(body).some((field) => !['expectedVersion', 'command'].includes(field))
+          || !Number.isSafeInteger(body.expectedVersion) || body.expectedVersion < 1
+          || !body.command || typeof body.command !== 'object' || Array.isArray(body.command)) {
+          throw apiFailure(400, 'INVALID_IMPACT_PREVIEW', 'Provide the current project version and one proposed-design edit command.');
+        }
+        rejectAuthorityClaims(body); rejectAuthorityClaims(body.command);
+        const found = await store.getWithPrincipalAuthority({ id: enterpriseImpactPreviewMatch[1], tenantId: requestTenant(request),
+          principal: requestActor(request), anyPrincipalRoleGroups: [['workspace-read', 'workspace-write', 'tenant-admin']],
+          authzGeneration: request.identity.authzGeneration,
+          operation(project) {
+            if (project.version !== body.expectedVersion) throw apiFailure(409, 'VERSION_CONFLICT', 'The workspace changed. Reload it before previewing impact.');
+            const preview = previewEnterpriseEditImpact(project, body.command);
+            sendApi(response, 200, preview, { correlationId });
+            return project;
+          } });
+        if (!found) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
+        return;
       }
 
       const enterpriseMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/enterprise(?:\/(commands))?$/);
