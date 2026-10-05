@@ -353,7 +353,7 @@ export function renderEnterpriseObject({ projectId = null, model, object, pendin
     pending: pending?.envelope?.payload, loading, el, ui: { field, form }, onCommand, onInspectDraft });
   if (refinementPanel) root.append(refinementPanel);
   const pendingPayload = pending?.envelope?.payload;
-  const interchangePanel = renderEnterpriseInterchange({ projectId, model,
+  const interchangePanel = renderEnterpriseInterchange({ projectId, model, object,
     draft: ENTERPRISE_INTERCHANGE_COMMANDS.includes(pendingPayload?.kind) ? pendingPayload : interchangeDraft, pending: pendingPayload,
     loading, el, ui: { field, form }, api, onCommand, onDraftChange, isCurrentContext });
   if (interchangePanel) root.append(interchangePanel);

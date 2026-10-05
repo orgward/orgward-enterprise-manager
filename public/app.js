@@ -574,7 +574,11 @@ async function loadProject(id, { history = 'push', route = null, focusOutcomes =
     const validTypes = new Set(state.project.graph.types);
     state.activeTypes = new Set(route?.types?.filter((type) => validTypes.has(type)) ?? state.project.graph.types);
     if (!state.activeTypes.size) state.activeTypes = new Set(state.project.graph.types);
-    const importRoute = focusImport ? portfolioImportWorkspaceRoute(state.project.latestBlueprint) : null;
+    if (focusImport) {
+      try { state.enterpriseInterchangeDraft = restoreEnterpriseInterchangeDraft(localStorage, state.sessionPrincipal, id); }
+      catch (error) { state.enterpriseStatus = `${error.message} The retained import draft could not be restored.`; }
+    }
+    const importRoute = focusImport ? portfolioImportWorkspaceRoute(state.enterpriseInterchangeDraft?.bundle ?? state.project.latestBlueprint) : null;
     state.selectedId = route?.selectedId ?? importRoute?.selectedId ?? null;
     state.mapAreaFilter = route?.area ?? null;
     state.coverageReturnContext = null;

@@ -1,4 +1,4 @@
-export const ENTERPRISE_INTERCHANGE_COMMANDS = ['bulk-edit-objects', 'accept-source-evidence'];
+export const ENTERPRISE_INTERCHANGE_COMMANDS = ['bulk-edit-objects', 'accept-source-evidence', 'import-design-pack'];
 export function enterpriseInterchangeWritable(model) {
   return Boolean(model?.permissions?.write && model.context?.isCurrent === true && model.blueprint
     && model.context?.effectiveAt == null && model.context?.recordedAtCutoff == null && !model.context?.proposalId && !model.context?.branchId);
@@ -7,6 +7,8 @@ export function enterpriseInterchangeCommandPayload(model, payload) {
   if (!enterpriseInterchangeWritable(model) || !ENTERPRISE_INTERCHANGE_COMMANDS.includes(payload?.kind)) return null;
   if (payload.kind === 'accept-source-evidence' && (!/^[a-f0-9]{64}$/.test(payload.blueprintHash ?? '')
     || !/^[a-f0-9]{64}$/.test(payload.previewHash ?? '') || !Array.isArray(payload.selections) || !payload.selections.length)) return null;
+  if (payload.kind === 'import-design-pack' && (!/^[a-f0-9]{64}$/.test(payload.previewHash ?? '')
+    || !payload.bundle || typeof payload.bundle !== 'object' || !payload.mappings || typeof payload.mappings !== 'object')) return null;
   return { ...payload, blueprintId: model.context.blueprintId, blueprintVersion: model.context.blueprintVersion };
 }
 
@@ -19,7 +21,7 @@ function fieldSummary(label, values, el) {
   return box;
 }
 
-export function renderEnterpriseInterchange({ projectId, model, draft = null, pending = null, loading = false, el, ui, api, onCommand, onDraftChange,
+export function renderEnterpriseInterchange({ projectId, model, object = null, draft = null, pending = null, loading = false, el, ui, api, onCommand, onDraftChange,
   isCurrentContext = () => true }) {
   if (!model.blueprint) return null;
   const root = el('section', { attrs: { 'data-enterprise-interchange': '', 'aria-label': 'Proposed design export and import' } }, [
@@ -36,6 +38,24 @@ export function renderEnterpriseInterchange({ projectId, model, draft = null, pe
   const setDraft = (value) => { if (onDraftChange) onDraftChange(value); };
   let activeDraft = draft;
   let previewAttempt = 0;
+  const packExport = object?.type === 'process' && model.context?.isCurrent === true
+    ? el('button', { className: 'button ghost', text: 'Export this process and its design dependencies as a pack', attrs: { type: 'button', disabled: loading } }) : null;
+  if (packExport) packExport.addEventListener('click', async () => {
+    packExport.disabled = true; status.textContent = 'Preparing a pinned process pack…';
+    let url = null;
+    try {
+      const response = await api(`/api/v1/projects/${encodeURIComponent(projectId)}/enterprise/process-pack-export`, {
+        method: 'POST', body: JSON.stringify({ blueprintId: model.context.blueprintId,
+          blueprintVersion: model.context.blueprintVersion, rootId: object.id }),
+      });
+      const bundle = response.data;
+      url = URL.createObjectURL(new Blob([`${JSON.stringify(bundle, null, 2)}\n`], { type: 'application/json' }));
+      const anchor = el('a', { attrs: { href: url, download: `orgward-process-pack-${bundle.rootId}-${bundle.packHash.slice(0, 12)}.json` } });
+      root.append(anchor); anchor.click(); anchor.remove();
+      status.textContent = `Downloaded process pack for ${bundle.records.find((record) => record.id === bundle.rootId)?.name ?? bundle.rootId}. The source is proposed design; uploaded pack identity is not authenticated.`;
+    } catch (error) { status.textContent = `Process pack export failed: ${error.message}.`; }
+    finally { if (url) setTimeout(() => URL.revokeObjectURL(url), 1000); packExport.disabled = loading; }
+  });
   download.addEventListener('click', async () => {
     download.disabled = true; status.textContent = 'Preparing the exact proposed design export…';
     let url = null;
@@ -140,6 +160,54 @@ export function renderEnterpriseInterchange({ projectId, model, draft = null, pe
       previewRegion.append(submit);
       return;
     }
+    if (preview.mode === 'DESIGN_PACK_PREVIEW') {
+      previewRegion.append(el('h5', { text: 'Reusable process pack preview' }),
+        el('p', { text: `Source workspace ${preview.source.projectId} · blueprint ${preview.source.blueprintId} v${preview.source.blueprintVersion} · hash ${preview.source.snapshotHash}` }),
+        el('p', { text: `Destination workspace ${preview.currentSource.projectId} · blueprint ${preview.currentSource.blueprintId} v${preview.currentSource.blueprintVersion} · hash ${preview.currentSource.snapshotHash}` }),
+        el('p', { text: `Root process ${preview.rootName} · ${preview.recordCount} linked design records · pack ${preview.packHash}` }),
+        el('p', { text: 'Uploaded JSON and its claimed source identity are untrusted. Hashes check internal consistency only; they do not authenticate who created the pack or prove its design is correct. Applying it creates proposed design only.' }));
+      const mapChoices = [];
+      for (const row of preview.rows) {
+        const detail = el('p', { text: `${row.sourceName} · ${row.type} · ${row.status}${row.targetId ? ` → ${row.targetId}` : ''}` });
+        previewRegion.append(detail);
+        if (row.candidates?.length) {
+          const saved = activeDraft?.mappings?.[row.sourceRecordId];
+          const select = el('select', { attrs: { 'aria-label': `Resolve matching ${row.type} ${row.sourceName}`, name: `pack-map-${row.sourceRecordId}` } }, [
+            el('option', { text: 'Choose: create a new copy or reuse a target record', attrs: { value: '' } }),
+            el('option', { text: 'Create a new local copy', attrs: { value: '__new__' } }),
+            ...row.candidates.map((candidate) => el('option', { text: `Reuse ${candidate.name} · ${candidate.id}`, attrs: { value: candidate.id } })),
+          ]);
+          select.value = Object.hasOwn(activeDraft?.mappings ?? {}, row.sourceRecordId) ? (saved === null ? '__new__' : saved) : '';
+          select.addEventListener('change', async () => {
+            const mappings = { ...(activeDraft?.mappings ?? {}), [row.sourceRecordId]: select.value === '__new__' ? null : select.value };
+            const next = { ...activeDraft, mappings, preview: null }; activeDraft = next; setDraft(next);
+            status.textContent = 'Rechecking process pack choices against the current destination…';
+            try {
+              const response = await api(`/api/v1/projects/${encodeURIComponent(projectId)}/enterprise/import-preview`, {
+                method: 'POST', body: JSON.stringify({ bundle: next.bundle, mappings }),
+              });
+              if (activeDraft === next && isCurrentContext()) showPreview({ ...next, preview: response.data });
+            } catch (error) { if (activeDraft === next && isCurrentContext()) status.textContent = `Process pack mapping needs review: ${error.message}.`; }
+          });
+          mapChoices.push(el('label', { text: `Resolve name collision for ${row.sourceName}` }, [select]));
+        }
+      }
+      if (mapChoices.length) previewRegion.append(el('fieldset', {}, [el('legend', { text: 'Resolve matching records explicitly' }), ...mapChoices]));
+      previewRegion.append(fieldSummary('Declared process dependencies', preview.dependencies.map((entry) => ({ recordId: preview.rootId,
+        field: `${entry.field} → ${entry.sourceName ?? entry.sourceId} · ${entry.includedInPack ? 'included in pack' : 'missing from pack'}` })), el));
+      if (preview.omissions?.length) previewRegion.append(fieldSummary('Out-of-pack relationships omitted', preview.omissions.map((entry) => ({ recordId: entry.recordId, field: `${entry.field} · ${entry.count} omitted · ${entry.meaning}` })), el));
+      if (preview.unresolvedDependencies?.length) previewRegion.append(fieldSummary('Missing dependencies and unresolved collisions', preview.unresolvedDependencies, el));
+      if (!preview.ready) { previewRegion.append(el('p', { text: 'Resolve all pack dependencies and name collisions before applying.' })); return; }
+      if (!writable) { previewRegion.append(el('p', { text: 'Applying a process pack requires a human workspace owner or editor with write access on the exact current target.' })); return; }
+      const reason = ui.field('reason', 'Reason for importing this process pack', { multiline: true, maximum: 500, value: value.reason ?? '' });
+      const apply = ui.form('import-design-pack', 'Apply reviewed process pack as one proposed version', [reason.node], () => {
+        const payload = { kind: 'import-design-pack', bundle: activeDraft.bundle, mappings: activeDraft.mappings ?? {},
+          previewHash: preview.previewHash, reason: reason.control.value.trim() };
+        const next = { ...activeDraft, reason: payload.reason }; showPreview(next); onCommand(payload);
+      }, !writable);
+      previewRegion.append(apply);
+      return;
+    }
     previewRegion.append(el('h5', { text: 'Import preview' }),
       el('p', { text: `Source project ${preview.source.projectId} · blueprint ${preview.source.blueprintId} v${preview.source.blueprintVersion} · hash ${preview.source.snapshotHash}` }),
       el('p', { text: `Current destination: blueprint ${preview.currentSource.blueprintId} v${preview.currentSource.blueprintVersion} · hash ${preview.currentSource.snapshotHash}` }),
@@ -170,7 +238,8 @@ export function renderEnterpriseInterchange({ projectId, model, draft = null, pe
     const attempt = ++previewAttempt;
     try {
       const response = await api(`/api/v1/projects/${encodeURIComponent(projectId)}/enterprise/import-preview`, {
-        method: 'POST', body: JSON.stringify({ bundle: value.bundle }),
+        method: 'POST', body: JSON.stringify({ bundle: value.bundle,
+          ...(value.bundle?.kind === 'orgward-enterprise-process-pack' ? { mappings: value.mappings ?? {} } : {}) }),
       });
       if (activeDraft !== value || attempt !== previewAttempt || !isCurrentContext()) return;
       showPreview({ ...value, preview: response.data });
@@ -198,8 +267,10 @@ export function renderEnterpriseInterchange({ projectId, model, draft = null, pe
         method: 'POST', body: JSON.stringify({ bundle: parsedBundle }),
       });
       if (attempt !== previewAttempt || !isCurrentContext()) return;
-      showPreview({ fileName: selectedFile.name, bundle: parsedBundle, preview: response.data, recordIds: response.data.readyRecordIds ?? [], reason: '' });
-      status.textContent = response.data.mode === 'SOURCE_ONBOARDING_PREVIEW'
+      showPreview({ fileName: selectedFile.name, bundle: parsedBundle, preview: response.data, mappings: {}, recordIds: response.data.readyRecordIds ?? [], reason: '' });
+      status.textContent = response.data.mode === 'DESIGN_PACK_PREVIEW'
+        ? 'Process pack preview ready. Review untrusted source provenance, dependency closure, omissions, target mappings and exact target pin before applying.'
+        : response.data.mode === 'SOURCE_ONBOARDING_PREVIEW'
         ? 'Source evidence preview ready. Review provenance, candidate identities, unknowns and collisions. Nothing has been saved or published.'
         : 'Import preview ready. Review every recognized, unknown, loss and collision field before applying.';
     } catch (error) {
@@ -209,7 +280,7 @@ export function renderEnterpriseInterchange({ projectId, model, draft = null, pe
     }
     finally { if (attempt === previewAttempt && isCurrentContext()) upload.disabled = !previewable; }
   });
-  root.append(download, file, upload, status, previewRegion);
+  root.append(...(packExport ? [packExport] : []), download, file, upload, status, previewRegion);
   const hasActiveBundle = activeDraft && Object.hasOwn(activeDraft, 'bundle');
   if (hasActiveBundle && activeDraft.preview) showPreview(activeDraft);
   else if (hasActiveBundle) { status.textContent = 'Rechecking the saved import draft against the current proposed design…'; void restorePreview(activeDraft); }

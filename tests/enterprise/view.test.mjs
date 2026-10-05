@@ -690,6 +690,62 @@ test('portfolio import opens the selected workspace information detail with its 
     'the selected workspace detail visibly contains the saved draft preview');
 });
 
+test('portfolio process-pack import opens its exact destination on the packed root process and exposes reviewed mappings', async () => {
+  const blueprint = { id: 'blueprint-00000000-0000-4000-8000-000000000001', version: 8, areas: { capabilitiesProcesses: { items: [
+    { id: 'process-source', type: 'process', name: 'Pack root process', detail: 'Reusable work.' },
+    { id: 'process-target', type: 'process', name: 'Pack root process', detail: 'Existing target work.' },
+  ] } } };
+  const bundle = { kind: 'orgward-enterprise-process-pack', rootId: 'process-source', packHash: 'c'.repeat(64), source: {
+    projectId: 'workspace-source', blueprintId: 'blueprint-source', blueprintVersion: 2, snapshotHash: 'a'.repeat(64) } };
+  assert.deepEqual(portfolioImportWorkspaceRoute(bundle), { view: 'map', selectedId: 'process-source' });
+  const model = { context: { isCurrent: true, blueprintId: blueprint.id, blueprintVersion: blueprint.version,
+      projectVersion: 20, effectiveAt: null, recordedAtCutoff: null }, blueprint,
+    permissions: { write: true }, scopes: [], graph: { nodes: [] }, selection: null };
+  const sourceProcess = blueprint.areas.capabilitiesProcesses.items[0];
+  const blockedPreview = { mode: 'DESIGN_PACK_PREVIEW', source: bundle.source, sourceTrust: 'UNTRUSTED_UPLOADED_JSON',
+    currentSource: { projectId: 'workspace-target', blueprintId: blueprint.id, blueprintVersion: blueprint.version, snapshotHash: 'b'.repeat(64) },
+    rootId: sourceProcess.id, rootName: sourceProcess.name, recordCount: 2, packHash: bundle.packHash,
+    rows: [
+      { sourceRecordId: 'process-source', sourceName: 'Pack root process', type: 'process', status: 'MAPPING_REQUIRED', targetId: null,
+        candidates: [{ id: 'process-target', name: 'Pack root process', type: 'process' }] },
+      { sourceRecordId: 'capability-source', sourceName: 'Pack capability', type: 'capability', status: 'CREATE_NEW', targetId: 'capability-generated', candidates: [] },
+    ], identityMap: {}, unresolvedDependencies: [{ sourceRecordId: 'process-source', candidates: [{ id: 'process-target' }], reason: 'Choose reuse or new.' }],
+    dependencies: [], omissions: [], ready: false, previewHash: 'd'.repeat(64) };
+  const readyPreview = { ...blockedPreview, rows: blockedPreview.rows.map((row) => ({ ...row,
+    status: 'CREATE_NEW', targetId: row.type === 'process' ? 'process-generated' : row.targetId })),
+    dependencies: [{ sourceId: 'capability-source', sourceName: 'Pack capability', field: 'capability', includedInPack: true }],
+    identityMap: { 'process-source': 'process-generated', 'capability-source': 'capability-generated' },
+    unresolvedDependencies: [], ready: true, previewHash: 'e'.repeat(64) };
+  const draft = { fileName: 'process-pack.json', bundle, mappings: {}, preview: blockedPreview, reason: '' };
+  const processPanel = renderEnterpriseObject({ projectId: 'workspace-target', model, object: sourceProcess, interchangeDraft: draft,
+    el, ui: branchUi, api: async (_path, options) => {
+      assert.equal(JSON.parse(options.body).mappings['process-source'], null);
+      return { data: readyPreview };
+    }, onCommand() {} });
+  assert.match(processPanel.textContent, /workspace-source/);
+  assert.match(processPanel.textContent, /workspace-target/);
+  assert.match(processPanel.textContent, /Uploaded JSON and its claimed source identity are untrusted/);
+  assert.match(processPanel.textContent, /Resolve name collision/);
+  const choice = processPanel.querySelectorAll('select').find((control) => control.attrs.name === 'pack-map-process-source');
+  assert.ok(choice);
+  choice.value = '__new__';
+  await choice.listeners.get('change')();
+  await new Promise((resolve) => setImmediate(resolve));
+  const applyForm = processPanel.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === 'import-design-pack');
+  assert.ok(applyForm, 'a reviewed mapping exposes one deliberate apply form');
+  applyForm.querySelectorAll('textarea')[0].value = 'Reuse this process after reviewing its local copy.';
+  let applied;
+  // Re-render with the command callback so submission proves the exact pack and explicit choice are sent.
+  const readyPanel = renderEnterpriseObject({ projectId: 'workspace-target', model, object: sourceProcess,
+    interchangeDraft: { ...draft, mappings: { 'process-source': null }, preview: readyPreview }, el, ui: branchUi,
+    api: async () => ({ data: readyPreview }), onCommand: (payload) => { applied = payload; } });
+  const readyForm = readyPanel.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === 'import-design-pack');
+  readyForm.querySelectorAll('textarea')[0].value = 'Reuse this process after reviewing its local copy.';
+  readyForm.listeners.get('submit')({ preventDefault() {} });
+  assert.deepEqual(applied, { kind: 'import-design-pack', bundle, mappings: { 'process-source': null },
+    previewHash: readyPreview.previewHash, reason: 'Reuse this process after reviewing its local copy.' });
+});
+
 test('portfolio import round trip previews, applies one reviewed record and persists the saved change', async () => {
   const projectId = 'portfolio-import-destination';
   const blueprint = { id: 'blueprint-current', version: 8, areas: { responsibilityAuthority: { items: [

@@ -7607,3 +7607,25 @@ shows the new active case. Requested handoff/routing/persistence cases passed
 `tests/enterprise/view.test.mjs`, `tests/outcomes/view.test.mjs`, and
 `tests/enterprise/server.test.mjs`; `git diff --check` passed. No full check run;
 PR-15 remains open and active.
+
+PR-15 selected process pack portability (2026-10-05): current process detail can
+export a bounded pinned pack containing the selected process, its declared
+capability, accountable roles, information inputs/outputs, resources and
+supporting systems. Out-of-pack metrics, realization links, scope and unrelated
+responsibilities are disclosed as omissions. A member can upload the pack into
+another workspace; target preview requires human owner/editor write authority,
+shows exact source and destination pins, dependency rows, same-name collisions,
+explicit reuse-or-copy mappings, and states that uploaded JSON and source identity
+are untrusted. Apply allocates deterministic target-local IDs, remaps references,
+rechecks the exact target pin and preview in the existing transaction, validates
+the full candidate blueprint, and saves one proposed version with source pack
+provenance. PostgreSQL acceptance proves reader preview/apply denial, unresolved
+collision and invalid-hash rejection, target restart/readback and unchanged source
+state. The first focused run exposed two test-fixture omissions (dependency preview
+data and response event nesting); both were corrected. Final focused tests passed
+4/4 (0 failures/skips; 2.94s; TAP log:
+`/tmp/orgward-tests-x0sU7k/node-test.tap.log`):
+`npm test -- tests/enterprise/interchange.test.mjs tests/enterprise/server.test.mjs tests/enterprise/view.test.mjs --test-name-pattern='selected process pack|process pack import|portfolio process-pack'`.
+Static `node --check` passed for all changed JavaScript files and
+`git diff --check` passed. No provider, source-workspace write, full check or
+live external effect. PR-15 remains open and active.

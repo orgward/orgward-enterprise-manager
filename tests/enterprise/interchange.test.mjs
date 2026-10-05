@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { addConversationTurn, createProject, latestBlueprint } from '../../src/model.mjs';
 import { digest } from '../../src/sdlc/contracts.mjs';
-import { applyEnterpriseBulkEdit, createEnterpriseInterchangeBundle, normalizeEnterpriseInterchangeCommand,
-  previewEnterpriseInterchange } from '../../src/enterprise/interchange.mjs';
+import { applyEnterpriseBulkEdit, applyEnterpriseDesignPack, createEnterpriseDesignPack, createEnterpriseInterchangeBundle,
+  normalizeEnterpriseInterchangeCommand, previewEnterpriseDesignPack, previewEnterpriseInterchange } from '../../src/enterprise/interchange.mjs';
 import { previewEnterpriseSourceEvidence } from '../../src/enterprise/source-onboarding.mjs';
 import { applyEnterpriseSourceAcceptance, normalizeEnterpriseSourceAcceptanceCommand } from '../../src/enterprise/source-acceptance.mjs';
 
@@ -243,4 +243,80 @@ test('enterprise import preview blocks malformed source, unknown fields and refe
   assert.throws(() => applyEnterpriseBulkEdit(project, atomicCommand, 'human:owner'),
     { code: 'ENTERPRISE_IMPORT_REVIEW_REQUIRED', statusCode: 409 });
   assert.equal(JSON.stringify(project.blueprintVersions), before, 'one invalid selected record prevents every edit from being saved');
+});
+
+test('selected process pack carries its dependency closure across workspaces with explicit collision choices and local reference remapping', () => {
+  const source = completeProject(); const target = completeProject();
+  const sourceBlueprint = latestBlueprint(source); const targetBlueprint = latestBlueprint(target);
+  const sourceBefore = JSON.stringify(source); const targetBefore = JSON.stringify(target);
+  const pack = createEnterpriseDesignPack(source.id, sourceBlueprint, 'process-deliver');
+  assert.equal(pack.kind, 'orgward-enterprise-process-pack');
+  assert.equal(pack.source.projectId, source.id);
+  assert.equal(pack.source.blueprintId, sourceBlueprint.id);
+  assert.match(pack.source.snapshotHash, /^[a-f0-9]{64}$/);
+  assert.ok(pack.records.length >= 7, 'the process pack includes a coherent multi-record dependency closure');
+  assert.deepEqual(new Set(pack.records.map((record) => record.type)), new Set(['process', 'capability', 'role', 'information', 'resource', 'system']));
+  assert.equal(pack.records.some((record) => record.type === 'customer'), false, 'the pack does not become a whole-blueprint export');
+
+  const blocked = previewEnterpriseDesignPack(target, pack);
+  assert.equal(blocked.sourceTrust, 'UNTRUSTED_UPLOADED_JSON');
+  assert.equal(blocked.currentSource.projectId, target.id);
+  assert.equal(blocked.currentSource.blueprintId, targetBlueprint.id);
+  assert.equal(blocked.ready, false, 'same-name target records require an explicit reuse or copy decision');
+  assert.ok(blocked.unresolvedDependencies.some((entry) => entry.candidates?.length));
+  const reusedRole = pack.records.find((record) => record.type === 'role' && record.name === 'Operations owner');
+  assert.ok(reusedRole);
+  const mappings = Object.fromEntries(pack.records.map((record) => [record.id, null]));
+  mappings[reusedRole.id] = 'role-operations';
+  const preview = previewEnterpriseDesignPack(target, pack, mappings);
+  assert.equal(preview.ready, true);
+  assert.equal(preview.rows.find((row) => row.sourceRecordId === reusedRole.id).status, 'REUSE_TARGET');
+  assert.deepEqual(preview.unresolvedDependencies, []);
+  const command = normalizeEnterpriseInterchangeCommand({ kind: 'import-design-pack', blueprintId: targetBlueprint.id,
+    blueprintVersion: targetBlueprint.version, bundle: pack, mappings, previewHash: preview.previewHash,
+    reason: 'Review and reuse the selected customer delivery process and its declared dependencies.' });
+  const applied = applyEnterpriseDesignPack(target, command, 'human:editor');
+  assert.equal(applied.blueprint.version, targetBlueprint.version + 1);
+  assert.equal(applied.blueprint.edit.objectType, 'process-pack');
+  assert.equal(applied.blueprint.edit.packHash, pack.packHash);
+  assert.equal(applied.blueprint.edit.source.projectId, source.id);
+  assert.equal(applied.blueprint.edit.importedRecordIds.length, pack.records.length - 1);
+  assert.notEqual(applied.affectedObjectId, 'process-deliver');
+  const imported = new Map(Object.values(applied.blueprint.areas).flatMap((area) => area.items).map((record) => [record.id, record]));
+  const importedRoot = imported.get(applied.affectedObjectId);
+  assert.equal(importedRoot.type, 'process');
+  assert.notEqual(importedRoot.capability, 'capability-delivery');
+  assert.ok(imported.has(importedRoot.capability));
+  const targetIds = new Set([...imported.keys(), ...Object.values(targetBlueprint.areas).flatMap((area) => area.items).map((record) => record.id)]);
+  for (const id of [...importedRoot.inputs, ...importedRoot.outputs, ...importedRoot.resources, ...importedRoot.systems, importedRoot.owner]) {
+    assert.ok(targetIds.has(id), `remapped process dependency ${id} exists in the target`);
+  }
+  assert.ok(importedRoot.provenance.at(-1).note.includes('source identity is not authenticated'));
+  assert.equal(JSON.stringify(source), sourceBefore, 'pack creation and target apply never mutate the source workspace');
+  assert.equal(target.blueprintVersions.length, 2);
+  assert.equal(target.blueprintVersions[0].id, targetBlueprint.id);
+  assert.notEqual(JSON.stringify(target), targetBefore);
+  assert.throws(() => applyEnterpriseDesignPack(target, command, 'human:editor'), { code: 'ENTERPRISE_BLUEPRINT_STALE', statusCode: 409 });
+});
+
+test('process pack import rejects invalid source content, unresolved collisions, and malformed target mappings without writes', () => {
+  const source = completeProject(); const target = completeProject();
+  const pack = createEnterpriseDesignPack(source.id, latestBlueprint(source), 'process-deliver');
+  const before = JSON.stringify(target);
+  const tampered = structuredClone(pack); tampered.records[0].name = 'Tampered process';
+  assert.throws(() => previewEnterpriseDesignPack(target, tampered), { code: 'DESIGN_PACK_CONTENT_INVALID', statusCode: 400 });
+  const invalidHash = structuredClone(pack); invalidHash.baseline.title = 'Changed source baseline';
+  assert.throws(() => previewEnterpriseDesignPack(target, invalidHash), { code: 'DESIGN_PACK_SOURCE_INVALID', statusCode: 400 });
+  const invalidSchema = structuredClone(pack); invalidSchema.schemaVersion = '2.0';
+  assert.throws(() => previewEnterpriseDesignPack(target, invalidSchema), { code: 'INVALID_DESIGN_PACK', statusCode: 400 });
+  const unresolved = previewEnterpriseDesignPack(target, pack);
+  const blockedCommand = normalizeEnterpriseInterchangeCommand({ kind: 'import-design-pack', blueprintId: latestBlueprint(target).id,
+    blueprintVersion: latestBlueprint(target).version, bundle: pack, mappings: {}, previewHash: unresolved.previewHash,
+    reason: 'Attempt to apply unresolved collisions.' });
+  assert.throws(() => applyEnterpriseDesignPack(target, blockedCommand, 'human:editor'), { code: 'DESIGN_PACK_REVIEW_REQUIRED', statusCode: 409 });
+  const record = pack.records.find((entry) => entry.type === 'process');
+  const wrongType = previewEnterpriseDesignPack(target, pack, { [record.id]: 'information-customer-signal' });
+  assert.equal(wrongType.ready, false);
+  assert.ok(wrongType.unresolvedDependencies.some((entry) => entry.sourceRecordId === record.id));
+  assert.equal(JSON.stringify(target), before, 'preview and rejected apply do not mutate target state');
 });

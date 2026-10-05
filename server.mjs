@@ -40,7 +40,8 @@ import { ENTERPRISE_INTEGRITY_KINDS } from './src/enterprise/integrity.mjs';
 import { ENTERPRISE_SOURCE_ACCEPTANCE_KINDS } from './src/enterprise/source-acceptance.mjs';
 import { ENTERPRISE_GOVERNANCE_KINDS } from './src/enterprise/governance.mjs';
 import { ENTERPRISE_STEWARDSHIP_KINDS } from './src/enterprise/stewardship.mjs';
-import { createEnterpriseInterchangeBundle, ENTERPRISE_INTERCHANGE_KINDS, previewEnterpriseInterchange } from './src/enterprise/interchange.mjs';
+import { createEnterpriseInterchangeBundle, createEnterpriseDesignPack, ENTERPRISE_INTERCHANGE_KINDS,
+  previewEnterpriseDesignPack, previewEnterpriseInterchange } from './src/enterprise/interchange.mjs';
 import { previewEnterpriseSourceEvidence } from './src/enterprise/source-onboarding.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -1682,22 +1683,58 @@ export function createApp({
         if (!found) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
         return;
       }
+      const enterprisePackExportMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/enterprise\/process-pack-export$/);
+      if (enterprisePackExportMatch && request.method === 'POST') {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified project member is required to export a process pack.');
+        requirePrincipalStoreMethod(store, 'getWithPrincipalAuthority');
+        const body = await readJson(request);
+        if (!body || typeof body !== 'object' || Array.isArray(body)
+          || Object.keys(body).some((key) => !['blueprintId', 'blueprintVersion', 'rootId'].includes(key))
+          || !/^blueprint-[0-9a-f-]{36}$/.test(body.blueprintId ?? '') || !Number.isSafeInteger(body.blueprintVersion)
+          || typeof body.rootId !== 'string') {
+          throw apiFailure(400, 'INVALID_DESIGN_PACK_EXPORT', 'Bind the process pack export to one saved blueprint and process record.');
+        }
+        rejectAuthorityClaims(body);
+        const found = await store.getWithPrincipalAuthority({ id: enterprisePackExportMatch[1], tenantId: requestTenant(request),
+          principal: requestActor(request), anyPrincipalRoleGroups: [['workspace-read', 'workspace-write', 'tenant-admin']],
+          authzGeneration: request.identity.authzGeneration,
+          operation(project) {
+            const blueprint = latestBlueprint(project);
+            if (!blueprint || blueprint.id !== body.blueprintId || blueprint.version !== body.blueprintVersion) {
+              throw apiFailure(409, 'ENTERPRISE_BLUEPRINT_STALE', 'Reload the current saved design before exporting a process pack.');
+            }
+            sendApi(response, 200, createEnterpriseDesignPack(project.id, blueprint, body.rootId), { correlationId });
+            return project;
+          } });
+        if (!found) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
+        return;
+      }
       const enterpriseImportPreviewMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/enterprise\/import-preview$/);
       if (enterpriseImportPreviewMatch && request.method === 'POST') {
         if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified project member is required to preview an enterprise import.');
         requirePrincipalStoreMethod(store, 'getWithPrincipalAuthority');
         const body = await readJson(request);
-        if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length !== 1 || !Object.hasOwn(body, 'bundle')) {
-          throw apiFailure(400, 'INVALID_ENTERPRISE_IMPORT_PREVIEW', 'Provide only the enterprise JSON bundle for preview.');
+        if (!body || typeof body !== 'object' || Array.isArray(body) || !Object.hasOwn(body, 'bundle')
+          || Object.keys(body).some((key) => !['bundle', 'mappings'].includes(key))) {
+          throw apiFailure(400, 'INVALID_ENTERPRISE_IMPORT_PREVIEW', 'Provide an enterprise JSON bundle and optional explicit process-pack mappings.');
         }
         rejectAuthorityClaims(body);
         const found = await store.getWithPrincipalAuthority({ id: enterpriseImportPreviewMatch[1], tenantId: requestTenant(request),
           principal: requestActor(request), anyPrincipalRoleGroups: [['workspace-read', 'workspace-write', 'tenant-admin']],
           authzGeneration: request.identity.authzGeneration,
-          operation(project) {
+          operation(project, membership) {
+            const isProcessPack = body.bundle?.kind === 'orgward-enterprise-process-pack';
+            if (!isProcessPack && Object.hasOwn(body, 'mappings')) {
+              throw apiFailure(400, 'INVALID_ENTERPRISE_IMPORT_PREVIEW', 'Explicit record mappings apply only to process packs.');
+            }
+            if (isProcessPack && (!['owner', 'editor'].includes(membership?.access)
+              || !requestRoles(request).includes('workspace-write') || request.identity.actorType !== 'human')) {
+              throw apiFailure(403, 'ACTION_FORBIDDEN', 'A human workspace owner or editor with workspace write access must review a process pack for this target.');
+            }
             const preview = body.bundle?.kind === 'orgward-enterprise-source-evidence'
               ? previewEnterpriseSourceEvidence(project, body.bundle)
-              : previewEnterpriseInterchange(project, body.bundle);
+              : isProcessPack ? previewEnterpriseDesignPack(project, body.bundle, body.mappings ?? {})
+                : previewEnterpriseInterchange(project, body.bundle);
             sendApi(response, 200, preview, { correlationId });
             return project;
           } });
@@ -1789,6 +1826,7 @@ export function createApp({
                 branchId: changed.branchId ?? null, branchRevision: changed.branchRevision ?? null,
                 candidateId: changed.candidateId ?? null, candidateHash: changed.candidateHash ?? null,
                 importedRecordIds: changed.importedRecordIds ?? null,
+                ...(changed.packHash ? { designPackHash: changed.packHash } : {}),
                 acceptedSourceClaims: changed.acceptedClaims ?? null,
                 importSource: changed.source ?? null, importSourceHash: changed.sourceHash ?? null,
                 simulationId: changed.simulationId ?? null, economicEvaluationId: changed.economicEvaluationId ?? null,
@@ -1816,6 +1854,7 @@ export function createApp({
           candidateId: receipt.candidateId ?? null, candidateHash: receipt.candidateHash ?? null,
           importedRecordIds: receipt.importedRecordIds ?? null, importSource: receipt.importSource ?? null,
           importSourceHash: receipt.importSourceHash ?? null,
+          ...(receipt.designPackHash ? { designPackHash: receipt.designPackHash } : {}),
           acceptedClaims: receipt.acceptedSourceClaims ?? null,
           ...(simulation ? { simulation } : {}), ...(economicEvaluation ? { economicEvaluation } : {}),
           ...(integrityAssessment ? { integrityAssessment } : {}), ...(integrityException ? { integrityException } : {}),

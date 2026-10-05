@@ -48,6 +48,10 @@ export async function readPortfolioImportFile(file) {
 }
 
 export function portfolioImportWorkspaceRoute(blueprint) {
+  if (blueprint?.kind === 'orgward-enterprise-process-pack'
+    && typeof blueprint.rootId === 'string' && /^process-[a-z0-9_-]+$/i.test(blueprint.rootId)) {
+    return { view: 'map', selectedId: blueprint.rootId };
+  }
   const items = Object.values(blueprint?.areas ?? {}).flatMap((area) => area.items ?? []);
   const target = items.find((item) => item.type === 'information') ?? items[0] ?? null;
   return { view: 'map', selectedId: target?.id ?? null };

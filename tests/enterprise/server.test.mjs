@@ -1704,6 +1704,103 @@ test('portfolio import round trip previews, applies one reviewed record and pers
   assert.deepEqual(reloadedView.data.blueprint.edit.importedRecordIds, [customerRecord.id]);
 });
 
+test('selected process pack moves a reviewed dependency closure between workspaces and survives restart without source writes', async (t) => {
+  const postgres = await startPostgres(); let root; let instance;
+  t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-process-pack-round-trip-'));
+  instance = await startApp(postgres, root);
+  for (const identity of identities.values()) await postgres.query(`insert into orgward.oidc_principals
+    (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+  [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  const source = await seedProject(postgres, 'Reusable source workspace');
+  const target = await seedProject(postgres, 'Pack destination workspace');
+  const sourceBefore = await request(instance.base, 'owner', `/api/v1/projects/${source.id}`);
+  const targetBefore = await request(instance.base, 'owner', `/api/v1/projects/${target.id}`);
+  const sourceBlueprint = sourceBefore.data.blueprintVersions.at(-1);
+  const targetView = await currentView(instance.base, 'editor', target.id, { lensId: 'all' });
+  const exported = await request(instance.base, 'owner', `/api/v1/projects/${source.id}/enterprise/process-pack-export`, { method: 'POST', body: {
+    blueprintId: sourceBlueprint.id, blueprintVersion: sourceBlueprint.version, rootId: 'process-deliver',
+  } });
+  const pack = exported.data;
+  assert.equal(pack.kind, 'orgward-enterprise-process-pack');
+  assert.equal(pack.source.projectId, source.id);
+  assert.equal(pack.source.blueprintId, sourceBlueprint.id);
+  assert.equal(pack.source.blueprintVersion, sourceBlueprint.version);
+  assert.match(pack.source.snapshotHash, /^[a-f0-9]{64}$/);
+  assert.ok(pack.records.length >= 7, 'the export includes process, capability, accountable roles, information, resource, and system dependencies');
+  await request(instance.base, 'owner', `/api/v1/projects/${source.id}/enterprise/process-pack-export`, { method: 'POST', body: {
+    blueprintId: sourceBlueprint.id, blueprintVersion: sourceBlueprint.version, rootId: 'process-deliver',
+  } }, 200);
+  await request(instance.base, 'outsider', `/api/v1/projects/${source.id}/enterprise/process-pack-export`, { method: 'POST', body: {
+    blueprintId: sourceBlueprint.id, blueprintVersion: sourceBlueprint.version, rootId: 'process-deliver',
+  } }, 404);
+  const previewRoute = `/api/v1/projects/${target.id}/enterprise/import-preview`;
+  const readerPreview = await request(instance.base, 'reader', previewRoute, { method: 'POST', body: {
+    bundle: pack, mappings: Object.fromEntries(pack.records.map((record) => [record.id, null])),
+  } }, 403);
+  assert.equal(readerPreview.error.code, 'ACTION_FORBIDDEN');
+  const unresolved = await request(instance.base, 'editor', previewRoute, { method: 'POST', body: { bundle: pack } });
+  assert.equal(unresolved.data.mode, 'DESIGN_PACK_PREVIEW');
+  assert.equal(unresolved.data.sourceTrust, 'UNTRUSTED_UPLOADED_JSON');
+  assert.equal(unresolved.data.source.projectId, source.id);
+  assert.equal(unresolved.data.currentSource.projectId, target.id);
+  assert.equal(unresolved.data.currentSource.blueprintId, targetView.data.context.blueprintId);
+  assert.equal(unresolved.data.ready, false);
+  assert.ok(unresolved.data.unresolvedDependencies.some((entry) => entry.candidates?.length));
+  const mappings = Object.fromEntries(pack.records.map((record) => [record.id, null]));
+  const preview = await request(instance.base, 'editor', previewRoute, { method: 'POST', body: { bundle: pack, mappings } });
+  assert.equal(preview.data.ready, true);
+  assert.equal(preview.data.rows.length, pack.records.length);
+  assert.ok(preview.data.rows.every((row) => row.targetId && row.status === 'CREATE_NEW'));
+  assert.match(preview.data.previewHash, /^[a-f0-9]{64}$/);
+  const badHashPack = structuredClone(pack); badHashPack.baseline.title += ' tampered';
+  await request(instance.base, 'editor', previewRoute, { method: 'POST', body: { bundle: badHashPack, mappings } }, 400);
+  const unresolvedCommand = commandBody(targetView, 'process-pack-unresolved-apply', { kind: 'import-design-pack',
+    bundle: pack, mappings: {}, previewHash: unresolved.data.previewHash, reason: 'Unresolved name collisions must block import.' });
+  const blocked = await postCommand(instance.base, 'editor', target.id, unresolvedCommand, 409);
+  assert.equal(blocked.error.code, 'DESIGN_PACK_REVIEW_REQUIRED');
+  const applyCommand = commandBody(targetView, 'process-pack-reviewed-apply', { kind: 'import-design-pack', bundle: pack, mappings,
+    previewHash: preview.data.previewHash, reason: 'Reuse this reviewed delivery process in the destination workspace.' });
+  const beforeReaderApply = await request(instance.base, 'owner', `/api/v1/projects/${target.id}`);
+  const readerApply = await postCommand(instance.base, 'reader', target.id, applyCommand, 403);
+  assert.equal(readerApply.error.code, 'ACTION_FORBIDDEN');
+  const afterReaderApply = await request(instance.base, 'owner', `/api/v1/projects/${target.id}`);
+  assert.equal(afterReaderApply.data.version, beforeReaderApply.data.version);
+  assert.deepEqual(afterReaderApply.data.blueprintVersions, beforeReaderApply.data.blueprintVersions);
+  const applied = await postCommand(instance.base, 'editor', target.id, applyCommand);
+  assert.equal(applied.data.blueprintVersion, targetView.data.context.blueprintVersion + 1);
+  assert.equal(applied.data.importedRecordIds.length, pack.records.length);
+  assert.notEqual(applied.data.affectedObjectId, 'process-deliver');
+  assert.equal(applied.data.designPackHash, pack.packHash);
+  assert.equal(applied.event.type, 'EnterpriseDesignChanged');
+  const afterSource = await request(instance.base, 'owner', `/api/v1/projects/${source.id}`);
+  assert.equal(afterSource.data.version, sourceBefore.data.version);
+  assert.deepEqual(afterSource.data.blueprintVersions, sourceBefore.data.blueprintVersions,
+    'the import path never writes to the source workspace');
+  const latestTarget = await request(instance.base, 'owner', `/api/v1/projects/${target.id}`);
+  assert.equal(latestTarget.data.blueprintVersions.length, targetBefore.data.blueprintVersions.length + 1);
+  assert.equal(latestTarget.data.blueprintVersions.at(-1).edit.packHash, pack.packHash);
+  assert.equal(latestTarget.data.blueprintVersions.at(-1).edit.source.projectId, source.id);
+  assert.ok(latestTarget.data.blueprintVersions.at(-1).edit.importedRecordIds.every((id) => id !== 'process-deliver'));
+  const staleCommand = { ...applyCommand, commandId: 'process-pack-stale-target', expectedVersion: latestTarget.data.version };
+  const stale = await postCommand(instance.base, 'editor', target.id, staleCommand, 409);
+  assert.equal(stale.error.code, 'ENTERPRISE_BLUEPRINT_STALE');
+  await closeApp(instance); instance = await startApp(postgres, root);
+  const restartedTarget = await currentView(instance.base, 'editor', target.id, { lensId: 'all' });
+  const importedRootId = applied.data.affectedObjectId;
+  const importedRoot = items(restartedTarget.data.blueprint).find((entry) => entry.id === importedRootId);
+  assert.equal(importedRoot?.type, 'process');
+  assert.notEqual(importedRoot?.id, 'process-deliver');
+  const importedIds = new Set(items(restartedTarget.data.blueprint).map((entry) => entry.id));
+  for (const id of [...importedRoot.inputs, ...importedRoot.outputs, ...importedRoot.resources, ...importedRoot.systems, importedRoot.capability, importedRoot.owner]) {
+    assert.ok(importedIds.has(id), `restarted destination has remapped dependency ${id}`);
+  }
+  assert.equal(restartedTarget.data.blueprint.edit.packHash, pack.packHash);
+  assert.equal(restartedTarget.data.context.blueprintVersion, applied.data.blueprintVersion);
+  const restartedSource = await request(instance.base, 'owner', `/api/v1/projects/${source.id}`);
+  assert.deepEqual(restartedSource.data.blueprintVersions, sourceBefore.data.blueprintVersions);
+});
+
 test('source evidence import preview is reader-authorized, exact-source bound and leaves project state untouched', async (t) => {
   const postgres = await startPostgres(); let root; let instance;
   t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });

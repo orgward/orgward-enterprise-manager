@@ -7,7 +7,7 @@ import { applyEnterpriseBranchCommand, ENTERPRISE_BRANCH_KINDS, normalizeEnterpr
 import { applyEnterpriseProcessCommand, ENTERPRISE_PROCESS_KINDS, normalizeEnterpriseProcessCommand } from './process-commands.mjs';
 import { applyEnterpriseEconomicCommand, ENTERPRISE_ECONOMIC_KINDS, normalizeEnterpriseEconomicCommand } from './economics-commands.mjs';
 import { applyEnterpriseRefinementCommand, ENTERPRISE_REFINEMENT_KINDS, normalizeEnterpriseRefinementCommand } from './refinement-commands.mjs';
-import { applyEnterpriseBulkEdit, ENTERPRISE_INTERCHANGE_KINDS, normalizeEnterpriseInterchangeCommand } from './interchange.mjs';
+import { applyEnterpriseBulkEdit, applyEnterpriseDesignPack, ENTERPRISE_INTERCHANGE_KINDS, normalizeEnterpriseInterchangeCommand } from './interchange.mjs';
 import { applyEnterpriseIntegrityCommand, ENTERPRISE_INTEGRITY_KINDS, normalizeEnterpriseIntegrityCommand } from './integrity.mjs';
 import { applyEnterpriseSourceAcceptance, ENTERPRISE_SOURCE_ACCEPTANCE_KINDS, normalizeEnterpriseSourceAcceptanceCommand } from './source-acceptance.mjs';
 import { applyEnterpriseGovernanceCommand, ENTERPRISE_GOVERNANCE_KINDS, normalizeEnterpriseGovernanceCommand } from './governance.mjs';
@@ -94,7 +94,8 @@ export function applyEnterpriseCommand(project, command, actor, options = {}) {
   if (ENTERPRISE_PROCESS_KINDS.has(command.kind)) return applyEnterpriseProcessCommand(project, command, actor);
   if (ENTERPRISE_ECONOMIC_KINDS.has(command.kind)) return applyEnterpriseEconomicCommand(project, command, actor);
   if (ENTERPRISE_REFINEMENT_KINDS.has(command.kind)) return applyEnterpriseRefinementCommand(project, command, actor);
-  if (ENTERPRISE_INTERCHANGE_KINDS.has(command.kind)) return applyEnterpriseBulkEdit(project, command, actor);
+  if (command.kind === 'import-design-pack') return applyEnterpriseDesignPack(project, command, actor);
+  if (command.kind === 'bulk-edit-objects') return applyEnterpriseBulkEdit(project, command, actor);
   if (ENTERPRISE_BRANCH_KINDS.has(command.kind)) return applyEnterpriseBranchCommand(project, command, actor, options);
   const previous = latestBlueprint(project);
   if (!previous) throw enterpriseFailure('BLUEPRINT_NOT_FOUND', 'Save the initial blueprint before defining enterprise scopes.', 409);

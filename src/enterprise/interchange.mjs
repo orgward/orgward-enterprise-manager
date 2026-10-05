@@ -4,7 +4,7 @@ import { digest } from '../sdlc/contracts.mjs';
 import { blueprintObjects, enterpriseFailure, enterpriseText } from './types.mjs';
 
 export const ENTERPRISE_INTERCHANGE_LIMITS = Object.freeze({ bundleBytes: 1_000_000, records: 500, selectedRecords: 100 });
-export const ENTERPRISE_INTERCHANGE_KINDS = new Set(['bulk-edit-objects']);
+export const ENTERPRISE_INTERCHANGE_KINDS = new Set(['bulk-edit-objects', 'import-design-pack']);
 const fail = (code, message, status = 400) => { throw enterpriseFailure(code, message, status); };
 const recordId = (value) => typeof value === 'string' && /^[a-z0-9][a-z0-9_-]{0,119}$/i.test(value);
 const objectMap = (blueprint) => new Map(blueprintObjects(blueprint).map((object) => [object.id, object]));
@@ -45,7 +45,265 @@ export function createEnterpriseInterchangeBundle(projectId, blueprint) {
     meaning: 'PROPOSED_DESIGN_EDITABLE_FIELDS_ONLY' };
 }
 
+const PACK_TYPES = Object.freeze({
+  process: 'capabilitiesProcesses', capability: 'capabilitiesProcesses', role: 'responsibilityAuthority',
+  information: 'informationTechnology', resource: 'resources', system: 'informationTechnology',
+});
+const PACK_REFERENCE_FIELDS = Object.freeze({
+  process: ['capability', 'owner', 'inputs', 'outputs', 'resources', 'systems'],
+  capability: ['owner'], role: ['owner', 'responsibilities'], information: ['owner'], resource: ['owner'], system: ['owner', 'supports'],
+});
+const PACK_ARRAY_REFERENCE_FIELDS = new Set(['inputs', 'outputs', 'resources', 'systems', 'responsibilities', 'supports']);
+const PACK_CONTENT_FIELDS = Object.freeze({
+  process: ['trigger', 'capability', 'inputs', 'outputs', 'resources', 'systems', 'owner'],
+  capability: ['owner'], role: ['owner', 'responsibilities', 'proposedInstructions', 'proposedScopeStatements', 'proposedToolStatements', 'proposedEscalationRules'],
+  information: ['owner'], resource: ['owner'], system: ['owner', 'supports'],
+});
+
+function packObjects(baseline) { return blueprintObjects(baseline); }
+
+function packRecord(record, includedIds, rootId) {
+  const allowed = new Set(['id', 'type', 'name', 'detail', 'status', 'confidence', 'provenance', ...PACK_CONTENT_FIELDS[record.type]]);
+  const result = Object.fromEntries(Object.entries(record).filter(([key]) => allowed.has(key)).map(([key, value]) => [key, structuredClone(value)]));
+  if (record.type === 'capability') { delete result.metrics; delete result.realisers; }
+  if (record.type === 'role') result.responsibilities = (record.responsibilities ?? []).filter((id) => includedIds.has(id));
+  if (record.type === 'system') result.supports = (record.supports ?? []).filter((id) => includedIds.has(id) && id === rootId);
+  return result;
+}
+
+function processPackRecords(baseline, rootId) {
+  const objects = packObjects(baseline); const byId = new Map(objects.map((object) => [object.id, object]));
+  const root = byId.get(rootId);
+  if (!root || root.type !== 'process') fail('INVALID_DESIGN_PACK_ROOT', 'Choose a saved process as the root of a reusable process pack.');
+  if (!root.capability || !root.owner || ![...(root.inputs ?? []), ...(root.outputs ?? [])].length) {
+    fail('DESIGN_PACK_DEPENDENCY_MISSING', 'A reusable process pack needs a declared capability, accountable role, and at least one information input or output.', 409);
+  }
+  if (root.processFlow || root.decisionTable || (root.inputs ?? []).some((id) => byId.get(id)?.type === 'decision')
+    || (root.outputs ?? []).some((id) => byId.get(id)?.type === 'decision')) {
+    fail('DESIGN_PACK_PROCESS_UNSUPPORTED', 'This first process pack supports a declared process with information inputs and outputs; attached decision or executable flow models need separate review.');
+  }
+  const ids = new Set([root.id]);
+  const addReference = (id, expectedType, label) => {
+    const target = byId.get(id);
+    if (!target || target.type !== expectedType || !PACK_TYPES[target.type]) {
+      fail('DESIGN_PACK_DEPENDENCY_MISSING', `The process pack dependency ${label} is missing or has the wrong type.`, 409);
+    }
+    ids.add(id);
+  };
+  if (root.capability) addReference(root.capability, 'capability', 'capability');
+  if (root.owner) addReference(root.owner, 'role', 'process owner');
+  for (const id of [...(root.inputs ?? []), ...(root.outputs ?? [])]) addReference(id, 'information', 'information input/output');
+  for (const id of root.resources ?? []) addReference(id, 'resource', 'resource');
+  for (const id of root.systems ?? []) addReference(id, 'system', 'system');
+  // Ownership is part of the pack closure, including owners of its supporting records.
+  for (const id of [...ids]) {
+    const owner = byId.get(id)?.owner;
+    if (owner) addReference(owner, 'role', 'accountable role');
+  }
+  if (ids.size > ENTERPRISE_INTERCHANGE_LIMITS.selectedRecords) fail('DESIGN_PACK_TOO_LARGE', 'The process dependency closure exceeds the 100-record pack limit.');
+  const ordered = objects.filter((object) => ids.has(object.id));
+  const packRows = ordered.map((object) => packRecord(object, ids, root.id));
+  const omissions = [];
+  for (const object of ordered) {
+    for (const field of Object.keys(object)) {
+      if (!['metrics', 'realisers', 'supports', 'responsibilities', 'enterpriseScope'].includes(field)) continue;
+      const retained = packRows.find((row) => row.id === object.id)?.[field];
+      const removed = Array.isArray(object[field]) ? object[field].filter((id) => !retained?.includes(id)) : object[field] ? [object[field]] : [];
+      if (removed.length) omissions.push({ recordId: object.id, field, count: removed.length,
+        meaning: field === 'enterpriseScope' ? 'Organizational scope is not copied by this process pack.' : 'Relationships outside the selected process dependency closure are not copied.' });
+    }
+  }
+  return { root, ids, records: packRows, omissions };
+}
+
+export function createEnterpriseDesignPack(projectId, blueprint, rootId) {
+  if (!blueprint) fail('BLUEPRINT_NOT_FOUND', 'Save an initial proposed design before exporting a process pack.', 409);
+  const { root, records, omissions } = processPackRecords(blueprint, rootId);
+  const source = { projectId, blueprintId: blueprint.id, blueprintVersion: blueprint.version, snapshotHash: digest(blueprint) };
+  const core = { kind: 'orgward-enterprise-process-pack', schemaVersion: '1.0', source, baseline: structuredClone(blueprint),
+    rootId: root.id, records, omissions, meaning: 'UNTRUSTED_PROPOSED_PROCESS_DESIGN_AND_DECLARED_DEPENDENCIES' };
+  if (jsonSize(core) > ENTERPRISE_INTERCHANGE_LIMITS.bundleBytes) fail('ENTERPRISE_IMPORT_TOO_LARGE', 'The selected process dependency pack is larger than 1 MB.');
+  return { ...core, packHash: digest(core) };
+}
+
+function verifyEnterpriseDesignPack(bundle) {
+  if (!plainObject(bundle) || jsonSize(bundle) > ENTERPRISE_INTERCHANGE_LIMITS.bundleBytes
+    || bundle.kind !== 'orgward-enterprise-process-pack' || bundle.schemaVersion !== '1.0'
+    || !plainObject(bundle.source) || !plainObject(bundle.baseline) || !Array.isArray(bundle.records)
+    || !Array.isArray(bundle.omissions) || bundle.records.length < 2 || bundle.records.length > ENTERPRISE_INTERCHANGE_LIMITS.selectedRecords
+    || !recordId(bundle.rootId) || typeof bundle.packHash !== 'string' || !/^[a-f0-9]{64}$/.test(bundle.packHash)) {
+    fail('INVALID_DESIGN_PACK', 'Choose a supported process pack with a valid schema and no more than 100 records.');
+  }
+  if (Object.keys(bundle).some((key) => !['kind', 'schemaVersion', 'source', 'baseline', 'rootId', 'records', 'omissions', 'meaning', 'packHash'].includes(key))
+    || Object.keys(bundle.source).some((key) => !['projectId', 'blueprintId', 'blueprintVersion', 'snapshotHash'].includes(key))) {
+    fail('INVALID_DESIGN_PACK', 'The process pack contains unsupported manifest or source fields.');
+  }
+  if (!canonicalBaselineAreas(bundle.baseline) || !recordId(bundle.source.projectId)
+    || !/^blueprint-[0-9a-f-]{36}$/.test(bundle.source.blueprintId ?? '')
+    || !Number.isSafeInteger(bundle.source.blueprintVersion) || bundle.source.blueprintVersion < 1
+    || bundle.baseline.id !== bundle.source.blueprintId || bundle.baseline.version !== bundle.source.blueprintVersion
+    || !/^[a-f0-9]{64}$/.test(bundle.source.snapshotHash ?? '') || digest(bundle.baseline) !== bundle.source.snapshotHash) {
+    fail('DESIGN_PACK_SOURCE_INVALID', 'The process pack source pin does not match its self-consistent baseline. Uploaded source identity is not authenticated.');
+  }
+  const expected = createEnterpriseDesignPack(bundle.source.projectId, bundle.baseline, bundle.rootId);
+  const packCore = { ...bundle }; delete packCore.packHash;
+  if (digest(packCore) !== bundle.packHash || digest(expected.records) !== digest(bundle.records)
+    || digest(expected.omissions) !== digest(bundle.omissions) || bundle.meaning !== expected.meaning) {
+    fail('DESIGN_PACK_CONTENT_INVALID', 'The process pack records or omissions do not match the pinned baseline and selected process.');
+  }
+  return expected;
+}
+
+function packCollisionCandidates(project, record) {
+  return blueprintObjects(latestBlueprint(project)).filter((target) => target.type === record.type
+    && target.name.trim().toLocaleLowerCase() === record.name.trim().toLocaleLowerCase()).map((target) => ({ id: target.id, name: target.name, type: target.type }));
+}
+
+export function previewEnterpriseDesignPack(project, bundle, mappings = {}) {
+  const verified = verifyEnterpriseDesignPack(bundle);
+  const current = latestBlueprint(project);
+  if (!current) fail('BLUEPRINT_NOT_FOUND', 'Save an initial proposed design before importing a process pack.', 409);
+  if (!plainObject(mappings) || Object.keys(mappings).length > verified.records.length
+    || Object.keys(mappings).some((id) => !verified.records.some((record) => record.id === id)
+      || (mappings[id] !== null && !recordId(mappings[id])))) {
+    fail('INVALID_DESIGN_PACK_MAPPINGS', 'Provide only explicit choices for records in this process pack.');
+  }
+  const currentObjects = blueprintObjects(current); const currentById = new Map(currentObjects.map((object) => [object.id, object]));
+  const identityMap = {}; const rows = []; const unresolvedDependencies = [];
+  for (const record of verified.records) {
+    const candidates = packCollisionCandidates(project, record);
+    const hasChoice = Object.hasOwn(mappings, record.id);
+    const requested = hasChoice ? mappings[record.id] : undefined;
+    let targetId;
+    let status = 'CREATE_NEW';
+    if (requested === null) targetId = `${record.type}-${digest({ projectId: project.id, current: { id: current.id, version: current.version }, packHash: bundle.packHash, sourceId: record.id }).slice(0, 32)}`;
+    else if (typeof requested === 'string') {
+      const target = currentById.get(requested);
+      if (!target || target.type !== record.type) {
+        unresolvedDependencies.push({ sourceRecordId: record.id, sourceName: record.name, expectedType: record.type,
+          targetId: requested, reason: 'The explicit mapping is missing or has a different type.' });
+        status = 'INVALID_MAPPING';
+      } else { targetId = target.id; status = 'REUSE_TARGET'; }
+    } else if (candidates.length) {
+      unresolvedDependencies.push({ sourceRecordId: record.id, sourceName: record.name, expectedType: record.type,
+        candidates, reason: 'Choose a matching target record or explicitly create a separate local copy.' });
+      status = 'MAPPING_REQUIRED';
+    } else targetId = `${record.type}-${digest({ projectId: project.id, current: { id: current.id, version: current.version }, packHash: bundle.packHash, sourceId: record.id }).slice(0, 32)}`;
+    if (targetId) identityMap[record.id] = targetId;
+    rows.push({ sourceRecordId: record.id, sourceName: record.name, type: record.type, status, targetId: targetId ?? null, candidates });
+  }
+  const mappedTargets = Object.values(identityMap);
+  for (const [sourceId, targetId] of Object.entries(identityMap)) {
+    if (targetId !== sourceId && currentById.has(targetId) && rows.find((row) => row.sourceRecordId === sourceId)?.status === 'CREATE_NEW') {
+      unresolvedDependencies.push({ sourceRecordId: sourceId, targetId, reason: 'A generated local ID collides with an existing target record.' });
+    }
+  }
+  if (new Set(mappedTargets).size !== mappedTargets.length) unresolvedDependencies.push({ sourceRecordId: null, reason: 'Two pack records cannot map to the same destination record.' });
+  const sourceIds = new Set(verified.records.map((record) => record.id));
+  for (const record of verified.records) {
+    for (const field of PACK_REFERENCE_FIELDS[record.type] ?? []) {
+      const value = record[field]; const refs = PACK_ARRAY_REFERENCE_FIELDS.has(field) ? value ?? [] : value ? [value] : [];
+      for (const ref of refs) if (!sourceIds.has(ref)) unresolvedDependencies.push({ sourceRecordId: record.id, sourceName: record.name,
+        dependencyId: ref, field, reason: 'The process pack is missing a declared dependency.' });
+    }
+  }
+  const currentSource = { projectId: project.id, blueprintId: current.id, blueprintVersion: current.version, snapshotHash: digest(current) };
+  const dependencies = verified.records.flatMap((record) => (PACK_REFERENCE_FIELDS[record.type] ?? []).flatMap((field) => {
+    const value = record[field]; const refs = PACK_ARRAY_REFERENCE_FIELDS.has(field) ? value ?? [] : value ? [value] : [];
+    return refs.map((sourceId) => ({ recordId: record.id, recordName: record.name, sourceId, field,
+      sourceName: verified.records.find((entry) => entry.id === sourceId)?.name ?? null,
+      includedInPack: verified.records.some((entry) => entry.id === sourceId) }));
+  }));
+  const core = { mode: 'DESIGN_PACK_PREVIEW', source: structuredClone(bundle.source), sourceTrust: 'UNTRUSTED_UPLOADED_JSON',
+    currentSource, rootId: bundle.rootId, rootName: verified.records.find((record) => record.id === bundle.rootId)?.name,
+    recordCount: verified.records.length, rows, identityMap, dependencies, missingDependencies: unresolvedDependencies,
+    unresolvedDependencies, omissions: verified.omissions,
+    ready: unresolvedDependencies.length === 0, meaning: 'PROPOSED_DESIGN_ONLY', packHash: bundle.packHash };
+  return { ...core, previewHash: digest(core) };
+}
+
+export function normalizeEnterpriseDesignPackCommand(input) {
+  if (!plainObject(input) || input.kind !== 'import-design-pack'
+    || !/^blueprint-[0-9a-f-]{36}$/.test(input.blueprintId ?? '') || !Number.isSafeInteger(input.blueprintVersion) || input.blueprintVersion < 1
+    || !plainObject(input.bundle) || !/^[a-f0-9]{64}$/.test(input.previewHash ?? '') || !plainObject(input.mappings)
+    || Object.keys(input).some((key) => !['kind', 'blueprintId', 'blueprintVersion', 'reason', 'bundle', 'previewHash', 'mappings'].includes(key))) {
+    fail('INVALID_DESIGN_PACK_COMMAND', 'Bind the reviewed process pack to the exact current target design and preview.');
+  }
+  if (jsonSize(input.bundle) > ENTERPRISE_INTERCHANGE_LIMITS.bundleBytes) fail('ENTERPRISE_IMPORT_TOO_LARGE', 'Choose a process pack no larger than 1 MB.');
+  return { kind: input.kind, blueprintId: input.blueprintId, blueprintVersion: input.blueprintVersion,
+    reason: enterpriseText(input.reason, 'Process pack import reason', 500), bundle: structuredClone(input.bundle),
+    previewHash: input.previewHash, mappings: structuredClone(input.mappings) };
+}
+
+export function applyEnterpriseDesignPack(project, command, actor) {
+  const current = latestBlueprint(project);
+  if (!current || current.id !== command.blueprintId || current.version !== command.blueprintVersion) {
+    fail('ENTERPRISE_BLUEPRINT_STALE', 'Reload the exact current target design before applying this process pack.', 409);
+  }
+  const preview = previewEnterpriseDesignPack(project, command.bundle, command.mappings);
+  if (!preview.ready || preview.previewHash !== command.previewHash) {
+    fail('DESIGN_PACK_REVIEW_REQUIRED', 'Resolve every process pack dependency and collision in a fresh preview before applying.', 409);
+  }
+  const scratch = structuredClone(current); const targetObjects = blueprintObjects(scratch);
+  const sourceRecords = new Map(command.bundle.records.map((record) => [record.id, record]));
+  const existingIds = new Set(targetObjects.map((object) => object.id));
+  const targetById = new Map(targetObjects.map((object) => [object.id, object]));
+  const remap = preview.identityMap;
+  const records = [];
+  for (const row of preview.rows) {
+    if (row.status === 'REUSE_TARGET') continue;
+    const source = sourceRecords.get(row.sourceRecordId); const record = structuredClone(source);
+    record.id = remap[source.id];
+    for (const field of PACK_REFERENCE_FIELDS[record.type] ?? []) {
+      if (PACK_ARRAY_REFERENCE_FIELDS.has(field)) record[field] = (record[field] ?? []).map((id) => remap[id] ?? id);
+      else if (record[field]) record[field] = remap[record[field]] ?? record[field];
+    }
+    record.provenance = [...(record.provenance ?? []), { source: 'workspace:enterprise-process-pack', note: `Imported from untrusted pack ${command.bundle.packHash}; source identity is not authenticated.` }];
+    records.push(record);
+  }
+  for (const row of preview.rows.filter((entry) => entry.status === 'REUSE_TARGET')) {
+    const incoming = sourceRecords.get(row.sourceRecordId);
+    if (!targetById.has(row.targetId) || targetById.get(row.targetId).type !== incoming.type) {
+      fail('DESIGN_PACK_REVIEW_REQUIRED', 'A mapped target record changed. Preview the current target again.', 409);
+    }
+  }
+  for (const record of records) {
+    if (existingIds.has(record.id) || targetById.has(record.id)) fail('DESIGN_PACK_ID_COLLISION', 'A generated target record ID already exists. Preview the current target again.', 409);
+    const area = scratch.areas[PACK_TYPES[record.type]];
+    if (!area) fail('DESIGN_PACK_TYPE_UNSUPPORTED', `The process pack contains unsupported record type ${record.type}.`);
+    area.items.push(record); existingIds.add(record.id);
+  }
+  const allObjects = blueprintObjects(scratch); const byId = new Map(allObjects.map((object) => [object.id, object]));
+  const sourceObjects = new Map(command.bundle.records.map((record) => [record.id, record]));
+  for (const record of records) for (const field of PACK_REFERENCE_FIELDS[record.type] ?? []) {
+    const refs = PACK_ARRAY_REFERENCE_FIELDS.has(field) ? record[field] ?? [] : record[field] ? [record[field]] : [];
+    for (const ref of refs) {
+      const expectedSource = sourceObjects.get(Object.keys(remap).find((sourceId) => remap[sourceId] === ref) ?? '');
+      if (!byId.has(ref) || (expectedSource && byId.get(ref).type !== expectedSource.type)) {
+        fail('DESIGN_PACK_DEPENDENCY_MISSING', `The imported ${field} dependency ${ref} is missing or has the wrong type.`, 409);
+      }
+    }
+  }
+  const at = new Date().toISOString();
+  scratch.id = `blueprint-${randomUUID()}`; scratch.version = current.version + 1; scratch.createdAt = at;
+  scratch.epistemicStatus = 'proposed-design'; scratch.relations = buildRelations(scratch.areas);
+  scratch.integrity = validateBlueprint(scratch);
+  if (!scratch.integrity.valid) fail('INVALID_DESIGN_PACK', scratch.integrity.errors[0]?.message ?? 'The combined process pack is not a valid proposed design.', 409);
+  scratch.summary = { areaCount: Object.keys(scratch.areas).length, objectCount: allObjects.length,
+    relationCount: scratch.relations.length, designedAreas: Object.values(scratch.areas).filter((entry) => entry.status === 'designed').length };
+  scratch.edit = { actor, at, objectIds: records.map((record) => record.id), objectType: 'process-pack', changedFields: ['enterpriseProcessPack'],
+    before: null, after: null, reason: command.reason, source: structuredClone(command.bundle.source), sourceHash: command.bundle.source.snapshotHash,
+    packHash: command.bundle.packHash, rootId: remap[command.bundle.rootId], importedRecordIds: records.map((record) => record.id),
+    mappings: Object.fromEntries(preview.rows.map((row) => [row.sourceRecordId, row.targetId])) };
+  project.blueprintVersions.push(scratch); project.audit ??= [];
+  project.audit.push({ at, action: 'enterprise.import-design-pack', actor,
+    detail: `Imported reviewed process pack ${command.bundle.packHash} from untrusted source ${command.bundle.source.projectId}; source identity is not authenticated.` });
+  return { blueprint: scratch, affectedObjectId: remap[command.bundle.rootId], proposalId: null, recordedAt: at,
+    importedRecordIds: records.map((record) => record.id), source: structuredClone(command.bundle.source), packHash: command.bundle.packHash };
+}
+
 export function normalizeEnterpriseInterchangeCommand(input) {
+  if (input?.kind === 'import-design-pack') return normalizeEnterpriseDesignPackCommand(input);
   if (!plainObject(input) || input.kind !== 'bulk-edit-objects'
     || !/^blueprint-[0-9a-f-]{36}$/.test(input.blueprintId ?? '') || !Number.isSafeInteger(input.blueprintVersion) || input.blueprintVersion < 1
     || !plainObject(input.bundle) || !Array.isArray(input.recordIds) || !input.recordIds.length
