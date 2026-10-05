@@ -223,11 +223,15 @@ export async function lockProjectAccess(client, { tenantId, projectId, principal
   if (minimum === 'editor' && !['owner', 'editor'].includes(access)) throw projectAccessDenied();
   if (minimum === 'owner' && access !== 'owner') throw projectAccessDenied();
   const project = await client.query(`
-    select 1 from orgward.aggregates
+    select state, version, state_hash from orgward.aggregates
     where tenant_id = $1 and aggregate_kind = 'project' and aggregate_id = $2
     for key share
   `, [tenantId, projectId]);
   if (!project.rowCount) throw projectAccessDenied();
+  if (minimum !== 'reader') {
+    const parent = verifyAggregateRow({ ...project.rows[0], aggregate_id: projectId, tenant_id: tenantId });
+    if (parent.lifecycle?.status === 'archived') throw conflict('This workspace is archived and read-only. Its owner must restore it before making changes.', parent.version, 'PROJECT_ARCHIVED');
+  }
   return { access, generation: Number(membership.rows[0].generation) };
 }
 
@@ -1009,6 +1013,13 @@ class PostgresDocumentStore {
       if (this.kind !== 'project' && principal) {
         membershipAuthority = await lockProjectAccess(client, { tenantId: state.tenantId, projectId: state.projectId, principal, minimum: 'editor' });
       }
+      if (this.kind !== 'project' && state.projectId) {
+        const parentProject = await client.query(`select * from orgward.aggregates
+          where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2 for share`, [state.tenantId, state.projectId]);
+        if (!parentProject.rowCount) throw projectAccessDenied();
+        const parentState = verifyAggregateRow(parentProject.rows[0]);
+        if (parentState.lifecycle?.status === 'archived') throw conflict('This workspace is archived and read-only. Its owner must restore it before making changes.', parentState.version, 'PROJECT_ARCHIVED');
+      }
       if (requiredPrincipalRoles) {
         if (!principal || !Array.isArray(requiredPrincipalRoles) || !requiredPrincipalRoles.length) throw projectAccessDenied();
         await requirePrincipalAuthority(client, {
@@ -1409,7 +1420,7 @@ export class PostgresProjectStore extends PostgresDocumentStore {
   constructor(persistence) { super(persistence, 'project'); }
 
   async listWithPrincipalAuthority({
-    tenantId, principal, anyPrincipalRoleGroups = [], authzGeneration, operation,
+    tenantId, principal, anyPrincipalRoleGroups = [], authzGeneration, operation, lifecycle = 'active',
   }) {
     if (!tenantId || !principal || typeof operation !== 'function') return null;
     return this.persistence.transaction(async (client) => {
@@ -1431,9 +1442,11 @@ export class PostgresProjectStore extends PostgresDocumentStore {
         ) outcomes on true
         where a.tenant_id = $1 and a.aggregate_kind = 'project'
           and m.principal = $2 and m.revoked_at is null
+          and (($3 = 'active' and coalesce(a.state #>> '{lifecycle,status}', 'active') = 'active')
+            or ($3 = 'archived' and a.state #>> '{lifecycle,status}' = 'archived'))
         order by a.updated_at desc, a.aggregate_id
         for share of a, m
-      `, [tenantId, principal]);
+      `, [tenantId, principal, lifecycle]);
       const caseRows = await client.query(`
         select a.*, s.project_id as scoped_project_id
         from orgward.aggregates a
@@ -1477,6 +1490,8 @@ export class PostgresProjectStore extends PostgresDocumentStore {
           records.push({
             id: project.id, name: project.name, tenantId: project.tenantId,
             version: project.version, phase: project.phase, updatedAt: project.updatedAt,
+            lifecycle: project.lifecycle ?? { status: 'active' },
+            historyEventCount: Array.isArray(project.events) ? project.events.length : 0,
             blueprintVersion: project.blueprintVersions?.at(-1)?.version ?? null,
             workspaceAccess: row.scoped_membership_access,
             openIncidentCount: row.open_incident_count,
@@ -1781,6 +1796,7 @@ export class PostgresProjectStore extends PostgresDocumentStore {
       await requirePrincipalAuthority(client, {
         tenantId, principal: actor, roles: ['workspace-write'], authzGeneration: actorAuthzGeneration,
       });
+      await lockProjectAccess(client, { tenantId, projectId, principal: actor, minimum: 'owner' });
       const ownerMembership = await client.query(`
         select access from orgward.project_memberships
         where tenant_id = $1 and project_id = $2 and principal = $3 and revoked_at is null
@@ -1832,6 +1848,7 @@ export class PostgresProjectStore extends PostgresDocumentStore {
       await requirePrincipalAuthority(client, {
         tenantId, principal: actor, roles: ['workspace-write'], authzGeneration: actorAuthzGeneration,
       });
+      await lockProjectAccess(client, { tenantId, projectId, principal: actor, minimum: 'owner' });
       const ownerMembership = await client.query(`
         select access from orgward.project_memberships
         where tenant_id = $1 and project_id = $2 and principal = $3 and revoked_at is null
@@ -1989,6 +2006,9 @@ export class PostgresProjectStore extends PostgresDocumentStore {
       `, [tenantId, id]);
       if (!selected.rowCount) return null;
       const project = verifyAggregateRow(selected.rows[0]);
+      if (project.lifecycle?.status === 'archived' && operation !== 'project.restore') {
+        throw conflict('This workspace is archived and read-only. Its owner must restore it before making changes.', project.version, 'PROJECT_ARCHIVED');
+      }
       if (project.version !== expectedVersion) {
         throw conflict(`Version conflict: the current version is ${project.version}. Reload before retrying.`, project.version);
       }
@@ -2006,6 +2026,52 @@ export class PostgresProjectStore extends PostgresDocumentStore {
     });
     if (result && !result.replayed) await this.persistence.afterCommit({ operation, commandId, tenantId });
     return result;
+  }
+
+  async transitionLifecycle({ id, tenantId, principal, authzGeneration = null, expectedVersion, action, reason = null }) {
+    if (!['archive', 'restore'].includes(action)) throw new TypeError('Unsupported workspace lifecycle action.');
+    return this.persistence.transaction(async (client) => {
+      await requirePrincipalAuthority(client, { tenantId, principal, roles: ['workspace-write'], authzGeneration, actorType: 'human' });
+      const membership = await client.query(`select access from orgward.project_memberships
+        where tenant_id=$1 and project_id=$2 and principal=$3 and revoked_at is null for update`, [tenantId, id, principal]);
+      if (!membership.rowCount) return null;
+      if (membership.rows[0].access !== 'owner') throw projectAccessDenied();
+      const selected = await client.query(`select * from orgward.aggregates
+        where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2 for update`, [tenantId, id]);
+      if (!selected.rowCount) return null;
+      const project = verifyAggregateRow(selected.rows[0]);
+      if (project.version !== expectedVersion) throw conflict(`Version conflict: the current version is ${project.version}. Reload before retrying.`, project.version);
+      const currentlyArchived = project.lifecycle?.status === 'archived';
+      if (action === 'archive' && currentlyArchived) throw conflict('This workspace is already archived.', project.version, 'PROJECT_ALREADY_ARCHIVED');
+      if (action === 'restore' && !currentlyArchived) throw conflict('This workspace is already active.', project.version, 'PROJECT_ALREADY_ACTIVE');
+      if (action === 'archive') {
+        const activeRuns = await client.query(`select count(*)::int as count from orgward.aggregates a
+          join orgward.aggregate_project_scopes s on s.tenant_id=a.tenant_id and s.aggregate_kind=a.aggregate_kind and s.aggregate_id=a.aggregate_id
+          where s.tenant_id=$1 and s.project_id=$2 and a.aggregate_kind='execution_run'
+            and a.state->>'status' not in ('SUCCEEDED','FAILED','INTERRUPTED','CANCELLED')`, [tenantId, id]);
+        const activeCases = await client.query(`select count(*)::int as count from orgward.aggregates a
+          join orgward.aggregate_project_scopes s on s.tenant_id=a.tenant_id and s.aggregate_kind=a.aggregate_kind and s.aggregate_id=a.aggregate_id
+          where s.tenant_id=$1 and s.project_id=$2 and a.aggregate_kind='change_case'
+            and a.state->>'status' not in ('PASSED','STOPPED')`, [tenantId, id]);
+        const runs = Number(activeRuns.rows[0]?.count ?? 0), cases = Number(activeCases.rows[0]?.count ?? 0);
+        if (runs || cases) throw conflict(`Archive is paused because ${runs} execution run${runs === 1 ? '' : 's'} and ${cases} governed change${cases === 1 ? '' : 's'} are still active. Let them reach a terminal state, then retry. No work was cancelled.`, project.version, 'PROJECT_ARCHIVE_ACTIVE_WORK');
+        project.lifecycle = { status: 'archived', archivedAt: new Date().toISOString(), archivedBy: principal, reason };
+      } else {
+        project.lifecycle = { status: 'active', restoredAt: new Date().toISOString(), restoredBy: principal,
+          previousArchive: project.lifecycle };
+      }
+      project.version += 1;
+      project.updatedAt = new Date().toISOString();
+      project.updatedBy = principal;
+      const event = { eventId: randomUUID(), type: action === 'archive' ? 'ProjectArchived' : 'ProjectRestored',
+        at: project.updatedAt, actor: principal, version: project.version,
+        data: action === 'archive' ? { reason } : { archivedAt: project.lifecycle.previousArchive?.archivedAt ?? null } };
+      project.events ??= [];
+      project.events.push(event);
+      await updateAggregate(client, project, 'project', expectedVersion);
+      await recordEvent(client, { tenantId, kind: 'project', id, version: project.version, event });
+      return project;
+    });
   }
 }
 

@@ -13,6 +13,7 @@ import { downloadPortfolioDesign, portfolioImportWorkspaceRoute, readPortfolioIm
 
 const state = {
   projects: [],
+  archivedProjects: [],
   portfolioFilters: { search: '', access: 'all', sort: 'default' },
   portfolioRefreshPromise: null,
   project: null,
@@ -436,8 +437,9 @@ function announceFounderConversation(project, options) {
 async function refreshProjects() {
   if (state.portfolioRefreshPromise) return state.portfolioRefreshPromise;
   state.portfolioRefreshPromise = (async () => {
-    const result = await api('/api/v1/projects');
+    const [result, archived] = await Promise.all([api('/api/v1/projects'), api('/api/v1/projects?lifecycle=archived')]);
     state.projects = result.data;
+    state.archivedProjects = archived.data;
     select.replaceChildren(element('option', { text: state.projects.length ? 'Choose project…' : 'No projects yet', attrs: { value: '' } }));
     for (const project of state.projects) select.append(element('option', { text: project.name, attrs: { value: project.id } }));
     select.value = state.project?.id ?? '';
@@ -451,6 +453,7 @@ function renderPortfolio() {
   const target = document.querySelector('#portfolio-list');
   if (!target) return;
   target.replaceChildren(renderProjectPortfolio(state.projects, {
+    archivedProjects: state.archivedProjects,
     el: element,
     filters: state.portfolioFilters,
     onFiltersChange: (filters) => { state.portfolioFilters = filters; },
@@ -467,6 +470,15 @@ function renderPortfolio() {
         const result = await downloadPortfolioDesign(id, { api, el: element });
         notify(`Downloaded ${result.fileName} from blueprint ${result.source.blueprintId} v${result.source.blueprintVersion}.`);
       } catch (error) { notify(`Export failed: ${error.message}`); }
+      finally { button.disabled = false; }
+    },
+    onLifecycle: async (id, payload, button) => {
+      button.disabled = true;
+      try {
+        await api(`/api/v1/projects/${encodeURIComponent(id)}/lifecycle`, { method: 'POST', body: JSON.stringify(payload) });
+        await refreshProjects();
+        notify(payload.action === 'archive' ? 'Workspace archived with its records and history retained.' : 'Workspace restored to the active portfolio.');
+      } catch (error) { notify(`Workspace lifecycle change failed: ${error.message}`); }
       finally { button.disabled = false; }
     },
     onImport: async (id, file) => {
@@ -623,11 +635,18 @@ async function loadProject(id, { history = 'push', route = null, focusOutcomes =
 
 function renderStudio() {
   app.replaceChildren(document.querySelector('#studio-template').content.cloneNode(true));
+  if (state.project.lifecycle?.status === 'archived') {
+    const archivedNotice = element('section', { className: 'workspace-archived-notice', attrs: { role: 'status', 'aria-label': 'Archived workspace' } }, [
+      element('strong', { text: 'Archived workspace · read only' }),
+      element('p', { text: `Archived by ${state.project.lifecycle.archivedBy ?? 'workspace owner'} on ${state.project.lifecycle.archivedAt ?? 'an earlier date'}. Reason: ${state.project.lifecycle.reason ?? 'not recorded'}. Restore from the archived portfolio view before making changes.` }),
+    ]);
+    app.prepend(archivedNotice);
+  }
   document.querySelector('.studio').classList.toggle('complete', state.project.phase !== 'discovery');
   document.querySelector('#project-title').textContent = state.project.name;
   setupGitHubOnboarding();
   if (!enterpriseReadOnly()) app.append(renderOutcomeInbox({ projectId: state.project.id, principal: state.sessionPrincipal, el: element, api,
-    preferredCategory: state.outcomeCategoryFocus }));
+    preferredCategory: state.outcomeCategoryFocus, readOnly: state.project.lifecycle?.status === 'archived' }));
   renderConversation();
   document.querySelector('#message-form').addEventListener('submit', sendMessage);
   const textarea = document.querySelector('#message-input');

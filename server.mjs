@@ -752,7 +752,7 @@ async function sendAuthorizedSdlcReplay(sdlcStore, response, {
 }
 
 async function listProjectsForPrincipal(store, tenantId, principal, {
-  diagnostics = false, authzGeneration = null, onProjects = null,
+  diagnostics = false, authzGeneration = null, onProjects = null, lifecycle = 'active',
 } = {}) {
   if (diagnostics) throw scopedAccessStoreUnavailable();
   const deliver = async (records) => {
@@ -762,7 +762,7 @@ async function listProjectsForPrincipal(store, tenantId, principal, {
   requirePrincipalStoreMethod(store, 'listWithPrincipalAuthority');
   return store.listWithPrincipalAuthority({
     tenantId, principal, anyPrincipalRoleGroups: [['workspace-read', 'workspace-write', 'tenant-admin']],
-    authzGeneration, operation: ({ records }) => deliver(records),
+    authzGeneration, lifecycle, operation: ({ records }) => deliver(records),
   });
 }
 
@@ -1243,16 +1243,38 @@ export function createApp({
 
       if (request.method === 'GET' && pathname === '/api/v1/projects') {
         const tenantId = requestTenant(request);
+        const lifecycle = url.searchParams.get('lifecycle') ?? 'active';
+        if (!['active', 'archived'].includes(lifecycle)) throw apiFailure(400, 'INVALID_PROJECT_VIEW', 'Choose the active or archived workspace view.');
         const deliverProjects = (projects) => sendApi(response, 200, projects, {
           correlationId, meta: { asOf: new Date().toISOString(), partial: false },
         });
         const projects = request.identity
           ? await listProjectsForPrincipal(store, tenantId, requestActor(request), {
-            authzGeneration: request.identity.authzGeneration, onProjects: deliverProjects,
+            authzGeneration: request.identity.authzGeneration, onProjects: deliverProjects, lifecycle,
           })
-          : await store.list(tenantId);
+          : (await store.list(tenantId)).filter((project) => (project.lifecycle?.status === 'archived' ? 'archived' : 'active') === lifecycle);
         if (request.identity) return;
         return deliverProjects(projects);
+      }
+
+      const lifecycleMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/lifecycle$/);
+      if (request.method === 'POST' && lifecycleMatch) {
+        requireWriteAccess(request);
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified workspace owner is required to change workspace lifecycle.');
+        requirePrincipalStoreMethod(store, 'transitionLifecycle');
+        const body = await readJson(request);
+        if (!body || typeof body !== 'object' || Array.isArray(body)
+          || Object.keys(body).some((key) => !['action', 'expectedVersion', 'reason'].includes(key))
+          || !['archive', 'restore'].includes(body.action) || !Number.isSafeInteger(body.expectedVersion)
+          || (body.action === 'archive' && (typeof body.reason !== 'string' || !body.reason.trim() || body.reason.trim().length > 500))
+          || (body.action === 'restore' && body.reason !== undefined)) {
+          throw apiFailure(400, 'INVALID_LIFECYCLE_COMMAND', 'Provide an action and current workspace version; archiving also requires a reason of 1 to 500 characters.');
+        }
+        const project = await store.transitionLifecycle({ id: lifecycleMatch[1], tenantId: requestTenant(request),
+          principal: requestActor(request), authzGeneration: request.identity.authzGeneration,
+          expectedVersion: body.expectedVersion, action: body.action, reason: body.reason?.trim() ?? null });
+        if (!project) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
+        return sendApi(response, 200, projectView(project), { correlationId, event: project.events.at(-1) });
       }
 
       if (request.method === 'POST' && pathname === '/api/v1/projects') {

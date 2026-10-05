@@ -54,6 +54,7 @@ class NodeFixture {
   contains(node) { return node === this || this.children.some((child) => child.contains(node)); }
   remove() { if (this.parent) this.parent.children = this.parent.children.filter((child) => child !== this); this.parent = null; }
   addEventListener(type, handler) { this.listeners.set(type, handler); }
+  setAttribute(name, value) { this.attrs[name] = String(value); }
   querySelectorAll(selector) {
     const selectors = selector.split(',').map((part) => part.trim());
     const matches = (child) => selectors.some((entry) => {
@@ -405,6 +406,34 @@ test('portfolio search and access filter find the matching workspace and preserv
     { id: 'project-north', options: { focusOutcomes: true, focusOutcomeCategory: 'incident' } }]);
   assert.deepEqual(exported, ['project-north']);
   assert.deepEqual(imported, [['project-north', 'filtered-import.json']]);
+});
+
+test('portfolio exposes separate active and archived views with owner lifecycle controls', () => {
+  const opened = [];
+  const active = [{ id: 'project-active', name: 'Active', version: 3, blueprintVersion: 2,
+    workspaceAccess: 'owner', historyEventCount: 8 },
+  { id: 'project-editor', name: 'Editor workspace', version: 2, blueprintVersion: 1, workspaceAccess: 'editor' }];
+  const archived = [{ id: 'project-retired', name: 'Retired', version: 5, blueprintVersion: 4,
+    workspaceAccess: 'owner', historyEventCount: 13, openIncidentCount: 1,
+    lifecycle: { status: 'archived', archivedBy: 'owner-id', archivedAt: '2026-10-04T10:00:00.000Z', reason: 'Superseded.' } }];
+  const portfolio = renderProjectPortfolio(active, { el, archivedProjects: archived, onOpen: (id) => opened.push(id), onExport() {} });
+  const views = portfolio.querySelectorAll('button');
+  const activeView = views.find((button) => button.text === 'Active workspaces');
+  const archivedView = views.find((button) => button.text === 'Archived workspaces');
+  assert.ok(activeView); assert.ok(archivedView);
+  assert.deepEqual(Array.from(portfolio.querySelectorAll('[data-project-id]'), (card) => card.attrs['data-project-id']), ['project-active', 'project-editor']);
+  const activeCard = portfolio.querySelectorAll('[data-project-id]').find((card) => card.attrs['data-project-id'] === 'project-active');
+  const editorCard = portfolio.querySelectorAll('[data-project-id]').find((card) => card.attrs['data-project-id'] === 'project-editor');
+  assert.ok(activeCard.querySelectorAll('button').some((button) => button.text === 'Archive workspace'));
+  assert.equal(editorCard.querySelectorAll('button').some((button) => button.text === 'Archive workspace'), false);
+  archivedView.listeners.get('click')();
+  assert.deepEqual(Array.from(portfolio.querySelectorAll('[data-project-id]'), (card) => card.attrs['data-project-id']), ['project-retired']);
+  assert.match(portfolio.textContent, /Superseded\./);
+  assert.match(portfolio.textContent, /13 history events retained/);
+  assert.ok(portfolio.querySelectorAll('button').some((button) => button.text === 'Restore workspace'));
+  const open = portfolio.querySelectorAll('button').find((button) => button.text === 'Open workspace');
+  open.listeners.get('click')();
+  assert.deepEqual(opened, ['project-retired']);
 });
 
 test('portfolio filters are restored after opening a workspace and returning', () => {

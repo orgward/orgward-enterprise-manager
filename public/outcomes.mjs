@@ -1,5 +1,5 @@
 // Each uncertain command remains an exact, recoverable request after reload.
-export function renderOutcomeInbox({ projectId, principal, el, api, preferredSource = null, preferredCategory = null }) {
+export function renderOutcomeInbox({ projectId, principal, el, api, preferredSource = null, preferredCategory = null, readOnly = false }) {
   const base = `/api/v1/projects/${encodeURIComponent(projectId)}/outcomes`;
   const storageKey = `orgward:outcome-command:${encodeURIComponent(principal ?? '')}:${encodeURIComponent(projectId)}`;
   const focusedCategory = ['incident', 'support'].includes(preferredCategory) ? preferredCategory : null;
@@ -273,7 +273,7 @@ export function renderOutcomeInbox({ projectId, principal, el, api, preferredSou
       const result = await api(base);
       if (requestId !== loadId) return;
       body.replaceChildren();
-      if (pending) body.append(text('An earlier command has an uncertain response. Recover its saved result before starting another action.'), button(`Retry saved command: ${pending.label}`, () => command(pending.route, pending.payload, pending.label)));
+      if (pending && !readOnly) body.append(text('An earlier command has an uncertain response. Recover its saved result before starting another action.'), button(`Retry saved command: ${pending.label}`, () => command(pending.route, pending.payload, pending.label)));
       if (pending && !retainedOnDisk) body.append(text('Browser storage is unavailable. Keep this page open until the saved command is recovered.'));
       if (result.available === false) { body.append(text('The outcome inbox requires the configured durable project store. Ask the workspace operator to enable it.')); return; }
       if (focusedCategory) {
@@ -281,14 +281,18 @@ export function renderOutcomeInbox({ projectId, principal, el, api, preferredSou
         if (active && !expandedId) expandedId = active.id;
         focusStatus.textContent = active ? `Focused on the first active ${focusedCategory} item.` : `No active ${focusedCategory} items are currently in the inbox.`;
       }
-      body.append(el('details', {}, [el('summary', { text: 'Add an outcome, incident or support item' }), createForm(result)]));
-      body.append(importForm(result));
+      const viewResult = readOnly ? { ...result, permissions: { write: false, review: false, assign: false, followUp: false } } : result;
+      if (readOnly) body.append(text('Archived workspace: outcome evidence and activity are available read-only. Restore the workspace before making changes.'));
+      else {
+        body.append(el('details', {}, [el('summary', { text: 'Add an outcome, incident or support item' }), createForm(result)]));
+        body.append(importForm(result));
+      }
       if (!result.outcomes?.length) body.append(text('No outcomes recorded. Add a saved release, task result or human reported context to begin.'));
-      for (const outcome of result.outcomes ?? []) body.append(renderOutcome(outcome, result));
+      for (const outcome of result.outcomes ?? []) body.append(renderOutcome(outcome, viewResult));
     } catch (error) {
       if (requestId !== loadId) return;
       body.replaceChildren(text(`${error.message} The inbox could not be loaded. Refresh to review its current state.`));
-      if (pending) body.append(button(`Retry saved command: ${pending.label}`, () => command(pending.route, pending.payload, pending.label)));
+      if (pending && !readOnly) body.append(button(`Retry saved command: ${pending.label}`, () => command(pending.route, pending.payload, pending.label)));
     }
   }
   root.append(el('h3', { text: 'Outcome and next-action inbox' }), text('Record observations, review learning and assign the next action. Acceptance creates a proposal for follow-up; creating its change case is a separate action.'), status, focusStatus, button('Refresh outcome inbox', refresh), body);

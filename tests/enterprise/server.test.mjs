@@ -174,6 +174,82 @@ test('portfolio project list returns each caller’s persisted workspace access'
   assert.equal(current?.openSupportCount, 1);
 });
 
+test('workspace retirement is owner-only, reversible, audited, isolated, and fenced from active work', async (t) => {
+  const postgres = await startPostgres();
+  const root = await mkdtemp(path.join(tmpdir(), 'orgward-enterprise-archive-'));
+  let instance = await startApp(postgres, root);
+  t.after(async () => { await closeApp(instance); await postgres.close(); await rm(root, { recursive: true, force: true }); });
+  for (const identity of identities.values()) await postgres.query(`insert into orgward.oidc_principals
+    (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+  [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  const project = await seedProject(postgres, 'Archive lifecycle fixture');
+  const route = `/api/v1/projects/${project.id}/lifecycle`;
+  const activeRunId = `execution-run-${randomUUID()}`;
+  const activeCaseId = `change-case-${randomUUID()}`;
+  const runState = { id: activeRunId, tenantId, projectId: project.id, version: 1, status: 'RUNNING', events: [] };
+  const caseState = { id: activeCaseId, tenantId, projectId: project.id, version: 1, status: 'RUNNING', events: [] };
+  await postgres.query(`insert into orgward.aggregates (tenant_id,aggregate_kind,aggregate_id,version,state,state_hash,updated_at)
+    values ($1,'execution_run',$2,1,$3::jsonb,$4,now())`, [tenantId, activeRunId, JSON.stringify(runState), contentHash(runState)]);
+  await postgres.query(`insert into orgward.aggregate_project_scopes (tenant_id,aggregate_kind,aggregate_id,project_id)
+    values ($1,'execution_run',$2,$3)`, [tenantId, activeRunId, project.id]);
+  await postgres.query(`insert into orgward.aggregates (tenant_id,aggregate_kind,aggregate_id,version,state,state_hash,updated_at)
+    values ($1,'change_case',$2,1,$3::jsonb,$4,now())`, [tenantId, activeCaseId, JSON.stringify(caseState), contentHash(caseState)]);
+  await postgres.query(`insert into orgward.aggregate_project_scopes (tenant_id,aggregate_kind,aggregate_id,project_id)
+    values ($1,'change_case',$2,$3)`, [tenantId, activeCaseId, project.id]);
+  const blocked = await request(instance.base, 'owner', route, { method: 'POST', body: {
+    action: 'archive', expectedVersion: project.version, reason: 'Retiring the completed workspace.' } }, 409);
+  assert.equal(blocked.error.code, 'PROJECT_ARCHIVE_ACTIVE_WORK');
+  assert.match(blocked.error.message, /1 execution run and 1 governed change are still active/);
+  assert.equal((await request(instance.base, 'owner', `/api/v1/projects/${project.id}`)).data.lifecycle, undefined,
+    'a rejected retirement does not change the project lifecycle');
+  const unchangedRun = await postgres.query(`select state->>'status' as status from orgward.aggregates where aggregate_id=$1`, [activeRunId]);
+  assert.equal(unchangedRun.rows[0].status, 'RUNNING', 'archive conflict leaves active execution untouched');
+  const unchangedCase = await postgres.query(`select state->>'status' as status from orgward.aggregates where aggregate_id=$1`, [activeCaseId]);
+  assert.equal(unchangedCase.rows[0].status, 'RUNNING', 'archive conflict does not stop an active governed change');
+  const terminal = { ...runState, status: 'SUCCEEDED' };
+  await postgres.query(`update orgward.aggregates set state=$2::jsonb,state_hash=$3 where aggregate_id=$1`, [activeRunId, JSON.stringify(terminal), contentHash(terminal)]);
+  const stoppedCase = { ...caseState, status: 'STOPPED' };
+  await postgres.query(`update orgward.aggregates set state=$2::jsonb,state_hash=$3 where aggregate_id=$1`, [activeCaseId, JSON.stringify(stoppedCase), contentHash(stoppedCase)]);
+  await request(instance.base, 'editor', route, { method: 'POST', body: { action: 'archive', expectedVersion: project.version, reason: 'x' } }, 403);
+  await request(instance.base, 'reader', route, { method: 'POST', body: { action: 'archive', expectedVersion: project.version, reason: 'x' } }, 403);
+  const archived = await request(instance.base, 'owner', route, { method: 'POST', body: {
+    action: 'archive', expectedVersion: project.version, reason: 'Portfolio no longer needs active access.' } });
+  assert.equal(archived.data.id, project.id);
+  assert.equal(archived.data.lifecycle.status, 'archived');
+  assert.equal(archived.data.lifecycle.archivedBy, identities.get('owner').principal);
+  assert.ok(Date.parse(archived.data.lifecycle.archivedAt));
+  assert.equal(archived.data.lifecycle.reason, 'Portfolio no longer needs active access.');
+  assert.equal(archived.data.events.at(-1).type, 'ProjectArchived');
+  assert.equal(archived.data.events.at(-1).actor, identities.get('owner').principal);
+  assert.equal((await request(instance.base, 'owner', '/api/v1/projects')).data.some((item) => item.id === project.id), false);
+  assert.equal((await request(instance.base, 'owner', '/api/v1/projects?lifecycle=archived')).data.some((item) => item.id === project.id), true);
+  assert.equal((await request(instance.base, 'reader', '/api/v1/projects?lifecycle=archived')).data.find((item) => item.id === project.id)?.workspaceAccess, 'reader');
+  assert.equal((await request(instance.base, 'outsider', '/api/v1/projects?lifecycle=archived')).data.length, 0);
+  const stale = await request(instance.base, 'owner', route, { method: 'POST', body: {
+    action: 'restore', expectedVersion: project.version, } }, 409);
+  assert.equal(stale.error.code, 'VERSION_CONFLICT');
+  await request(instance.base, 'owner', `/api/v1/projects/${project.id}/messages`, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'archive-mutation-denied', expectedVersion: archived.data.version,
+    payload: { content: 'This must remain blocked.' } } }, 409);
+  const outcomeDenied = await request(instance.base, 'owner', `/api/v1/projects/${project.id}/outcomes`, { method: 'POST', body: {
+    commandId: 'archive-outcome-denied', title: 'Archived evidence', category: 'incident',
+    source: { kind: 'manual', summary: 'Should remain unchanged while archived.' }, ownerPrincipal: identities.get('owner').principal,
+  } }, 409);
+  assert.equal(outcomeDenied.error.code, 'PROJECT_ARCHIVED');
+  const exportAfterArchive = await request(instance.base, 'reader', `/api/v1/projects/${project.id}/enterprise/export`);
+  assert.equal(exportAfterArchive.data.source.projectId, project.id, 'archived workspaces remain readable and exportable');
+  instance = await (async () => { await closeApp(instance); return startApp(postgres, root); })();
+  const persisted = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  assert.equal(persisted.data.lifecycle.reason, 'Portfolio no longer needs active access.');
+  const restored = await request(instance.base, 'owner', route, { method: 'POST', body: {
+    action: 'restore', expectedVersion: persisted.data.version } });
+  assert.equal(restored.data.id, project.id);
+  assert.equal(restored.data.lifecycle.status, 'active');
+  assert.equal(restored.data.events.at(-1).type, 'ProjectRestored');
+  assert.equal(restored.data.events.some((event) => event.type === 'ProjectArchived'), true);
+  assert.equal((await request(instance.base, 'owner', '/api/v1/projects')).data.some((item) => item.id === project.id), true);
+});
+
 test('project membership changes persist and update the recipient portfolio', async (t) => {
   const postgres = await startPostgres();
   const root = await mkdtemp(path.join(tmpdir(), 'orgward-enterprise-membership-roundtrip-'));

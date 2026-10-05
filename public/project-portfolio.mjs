@@ -101,7 +101,7 @@ export async function downloadPortfolioDesign(projectId, { api, el, createObject
 }
 
 export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImport,
-  filters: savedFilters = {}, onFiltersChange = () => {} }) {
+  filters: savedFilters = {}, onFiltersChange = () => {}, archivedProjects = [], onLifecycle = () => {} }) {
   const section = el('section', { className: 'portfolio-list', attrs: { 'aria-labelledby': 'portfolio-heading' } });
   const headingContent = el('div', {}, [el('span', { className: 'eyebrow', text: 'Your portfolio' }),
     el('h2', { text: 'Workspaces' }),
@@ -129,13 +129,20 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
     clearFilters,
   ]);
   headingContent.append(filters, count);
+  let view = 'active';
+  const views = el('div', { className: 'portfolio-lifecycle-views', attrs: { role: 'group', 'aria-label': 'Workspace lifecycle view' } });
+  const activeView = el('button', { className: 'button ghost', text: 'Active workspaces', attrs: { type: 'button', 'aria-pressed': 'true' } });
+  const archivedView = el('button', { className: 'button ghost', text: 'Archived workspaces', attrs: { type: 'button', 'aria-pressed': 'false' } });
+  views.append(activeView, archivedView);
+  headingContent.append(views);
   section.append(heading);
   const list = el('div', { className: 'portfolio-cards', attrs: { role: 'list' } });
   const renderCards = () => {
     list.replaceChildren();
+    const sourceProjects = view === 'archived' ? archivedProjects : projects;
     const term = search.value.trim().toLocaleLowerCase();
     clearFilters.hidden = !term && access.value === 'all' && sort.value === 'default';
-    const filtered = projects.filter((project) => {
+    const filtered = sourceProjects.filter((project) => {
       const matchesName = !term || projectPortfolioFacts(project).name.toLocaleLowerCase().includes(term);
       const matchesAccess = access.value === 'all' || project.workspaceAccess === access.value;
       return matchesName && matchesAccess;
@@ -152,12 +159,12 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
         return rightTime - leftTime;
       });
     }
-    const countText = filtered.length === projects.length
-      ? `${projects.length} ${projects.length === 1 ? 'workspace' : 'workspaces'}`
-      : `Showing ${filtered.length} of ${projects.length} workspaces`;
-    count.textContent = !filtered.length && projects.length
+    const countText = filtered.length === sourceProjects.length
+      ? `${sourceProjects.length} ${sourceProjects.length === 1 ? 'workspace' : 'workspaces'}`
+      : `Showing ${filtered.length} of ${sourceProjects.length} workspaces`;
+    count.textContent = `${view === 'archived' ? 'Archived' : 'Active'} · ${!filtered.length && sourceProjects.length
       ? `${countText}. No workspaces match these filters. Adjust the search or access level, or clear filters and sorting.`
-      : !projects.length ? '0 workspaces. No workspaces are available to your account yet.' : countText;
+      : !sourceProjects.length ? '0 workspaces.' : countText}`;
     if (!filtered.length) {
       return;
     }
@@ -170,6 +177,13 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
       ]));
       card.append(el('p', { className: 'portfolio-blueprint', text: facts.blueprint }));
       card.append(el('p', { className: 'portfolio-updated', text: `Last saved ${facts.updated}` }));
+      const archived = project.lifecycle?.status === 'archived' || view === 'archived';
+      const historyCount = project.historyEventCount ?? project.eventCount;
+      if (archived) {
+        const lifecycle = project.lifecycle ?? {};
+        card.append(el('p', { className: 'portfolio-lifecycle', text: `Archived ${lifecycle.archivedAt ? new Date(lifecycle.archivedAt).toLocaleString() : ''} by ${lifecycle.archivedBy ?? 'workspace owner'} · ${historyCount ?? 'Full'} history events retained · reason: ${lifecycle.reason ?? 'not recorded'}` }));
+      }
+      card.append(el('p', { className: 'portfolio-summary', text: `Blueprint ${facts.blueprint} · ${historyCount ?? 'Full'} history events · incidents ${facts.incidents} · support ${facts.support} · governed changes ${facts.changeCases}` }));
       card.append(el('p', { className: 'portfolio-issues', text: `Active incidents: ${facts.incidents} · Active support: ${facts.support}` }));
       card.append(el('p', { className: 'portfolio-changes', text: facts.changeCaseProjectionIncomplete
         ? `${facts.changeCases} active governed changes · some case details are unavailable`
@@ -194,7 +208,7 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
       const open = el('button', { className: 'button secondary', text: 'Open workspace', attrs: { type: 'button' } });
       open.addEventListener('click', () => onOpen(project.id));
       card.append(open);
-      if (project.workspaceAccess === 'owner') {
+      if (project.workspaceAccess === 'owner' && !archived) {
         card.append(el('a', { className: 'button ghost', text: 'Manage workspace access',
           attrs: { href: portfolioManageAccessRoute(project.id) } }));
       }
@@ -204,12 +218,28 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
       card.append(exportButton);
       const importFile = el('input', { attrs: { type: 'file', accept: '.json,application/json',
         'aria-label': `Import proposed design JSON for ${facts.name}`,
-        ...(!facts.hasBlueprint || !hasWorkspaceAccess ? { disabled: 'disabled' } : {}) } });
+        ...(!facts.hasBlueprint || !hasWorkspaceAccess || archived ? { disabled: 'disabled' } : {}) } });
       importFile.addEventListener('change', () => {
         const file = importFile.files?.[0];
         if (file) onImport?.(project.id, file);
       });
       card.append(el('label', { className: 'portfolio-import', text: 'Import proposed design JSON' }, [importFile]));
+      if (project.workspaceAccess === 'owner') {
+        const lifecycleButton = el('button', { className: 'button ghost', text: archived ? 'Restore workspace' : 'Archive workspace', attrs: { type: 'button' } });
+        lifecycleButton.addEventListener('click', async () => {
+          if (!archived) {
+            if (!window.confirm(`Retire ${facts.name}? Blueprint ${facts.blueprint}; ${historyCount ?? 'all'} history events; ${facts.incidents} incidents; ${facts.support} support items; ${facts.changeCases} active governed changes. Workspace ID ${project.id}, records, members, evidence and history will be retained. No purge will occur.`)) return;
+            const reason = window.prompt('Required archive reason (1 to 500 characters):', '');
+            if (typeof reason !== 'string' || !reason.trim()) return;
+            if (reason.trim().length > 500) { window.alert('Use an archive reason of no more than 500 characters.'); return; }
+            await onLifecycle(project.id, { action: 'archive', expectedVersion: project.version, reason: reason.trim() }, lifecycleButton);
+          } else {
+            if (!window.confirm(`Restore ${facts.name} (${project.id}) to the active portfolio with its retained records and history?`)) return;
+            await onLifecycle(project.id, { action: 'restore', expectedVersion: project.version }, lifecycleButton);
+          }
+        });
+        card.append(lifecycleButton);
+      }
       if (facts.incidents) {
         const reviewIncidents = el('button', { className: 'button ghost', text: `Review incidents (${facts.incidents})`, attrs: { type: 'button' } });
         reviewIncidents.addEventListener('click', () => onOpen(project.id, { focusOutcomes: true, focusOutcomeCategory: 'incident' }));
@@ -227,6 +257,8 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
   search.addEventListener('input', () => { reportFilterChange(); renderCards(); });
   access.addEventListener('change', () => { reportFilterChange(); renderCards(); });
   sort.addEventListener('change', () => { reportFilterChange(); renderCards(); });
+  activeView.addEventListener('click', () => { view = 'active'; activeView.setAttribute('aria-pressed', 'true'); archivedView.setAttribute('aria-pressed', 'false'); renderCards(); });
+  archivedView.addEventListener('click', () => { view = 'archived'; activeView.setAttribute('aria-pressed', 'false'); archivedView.setAttribute('aria-pressed', 'true'); renderCards(); });
   clearFilters.addEventListener('click', () => {
     search.value = ''; access.value = 'all'; sort.value = 'default'; reportFilterChange(); renderCards(); search.focus?.();
   });
