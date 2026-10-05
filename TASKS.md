@@ -7705,3 +7705,17 @@ archived view tests passed 2/2 (0 failures, 0 skips; TAP duration 0.34s; log
 `node --check` passed for `public/protected-release.mjs` and
 `tests/enterprise/view.test.mjs`; `git diff --check` passed.
 No full check or Sol review; PR-15 remains open and active.
+
+PR-15 pinned repository source in run history (2026-10-05): saved process-task
+runs now show the repository identity from their immutable source reference,
+including Git identity/ref/commit or GitHub repository/ref/commit where present,
+and the exact source tree digest. Configured directory sources show their ID and
+tree digest. The view consumes only the persisted reference metadata; captured
+source bytes remain excluded from the API run view. Focused tests passed 3/3
+(0 failures, 0 skips; TAP duration 0.20s; log
+`/tmp/orgward-tests-8Tjl8L/node-test.tap.log`):
+`npm test -- tests/execution/process-task-repository-view.test.mjs`.
+`node --check` passed for `public/process-task-repository-view.mjs`,
+`public/execution.js`, and `tests/execution/process-task-repository-view.test.mjs`;
+`git diff --check` passed. No external source read, full check or Sol review.
+PR-15 remains open and active.
