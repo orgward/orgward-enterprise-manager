@@ -1,3 +1,8 @@
+import { encodeStudioRoute } from './shared-interactions.mjs';
+
+const PROJECT_ID = /^project-[0-9a-f-]{36}$/i;
+const PROCESS_ID = /^[a-z0-9][a-z0-9_-]{0,119}$/i;
+
 export function processTaskRepositoryReference(run) {
   const repository = run?.processTaskRef?.repository;
   if (!repository || typeof repository.id !== 'string' || !repository.id) return null;
@@ -17,4 +22,12 @@ export function processTaskRepositoryReference(run) {
   }
   fields.push(`tree ${/^[a-f0-9]{64}$/.test(repository.treeDigest ?? '') ? repository.treeDigest : 'digest unavailable'}`);
   return fields.join(' · ');
+}
+
+export function processTaskPinnedDesignRoute(run) {
+  const ref = run?.processTaskRef;
+  if (!PROJECT_ID.test(run?.projectId ?? '') || !Number.isSafeInteger(ref?.blueprintVersion) || ref.blueprintVersion < 1
+    || !PROCESS_ID.test(ref?.processId ?? '')) return null;
+  return encodeStudioRoute({ projectId: run.projectId, view: 'map', selectedId: ref.processId,
+    blueprintVersion: ref.blueprintVersion });
 }

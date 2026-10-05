@@ -29,7 +29,7 @@ import { captureExpandedSavedTaskResultKeys, captureFocusedSavedTaskResult, rest
 import { blockedProcessTaskRecoveryCopy, processTaskRecoveryAction, selectFreshProcessTaskInstance } from './process-task-recovery.mjs';
 import { processTaskAssignmentTransparency } from './process-task-assignment.mjs';
 import { processTaskGuidanceReview } from './process-task-guidance-review.mjs';
-import { processTaskRepositoryReference } from './process-task-repository-view.mjs';
+import { processTaskPinnedDesignRoute, processTaskRepositoryReference } from './process-task-repository-view.mjs';
 import { processTaskSourceReview } from './process-task-source-review.mjs';
 import { deriveBlueprintProposalReviewState, HUMAN_PROPOSAL_RUBRIC, proposalApplyFailureDisposition, proposalDesignLink } from './proposal-review-state.mjs';
 import { acceptProcessTaskRequest, clearPendingProcessTaskRequest, findPendingProcessTaskRequest,
@@ -3139,6 +3139,9 @@ function renderRun() {
       el('p', { text: `Blueprint assignment reference ${ref.actorId} → role ${ref.roleId}. The durable task runtime supplies progress; the saved plan graph remains immutable.` }),
       el('p', { className: 'muted', text: 'This run uses its selected configured profile through the OrgWard worker after independent approval; it does not execute as or impersonate the bound workload identity.' }),
     ];
+    const designRoute = processTaskPinnedDesignRoute(run);
+    if (designRoute) processTaskDetails.push(el('a', { className: 'button ghost', text: `Open pinned design: ${ref.processName ?? 'process'} · blueprint v${ref.blueprintVersion}`,
+      attrs: { href: designRoute } }));
     const repositoryReference = processTaskRepositoryReference(run);
     if (repositoryReference) processTaskDetails.push(el('p', { className: 'muted', text: repositoryReference }));
     if (linkedProcessPlanTarget(run, state.projects, state.runtimePlans)) {

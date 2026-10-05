@@ -1,6 +1,22 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { processTaskRepositoryReference } from '../../public/process-task-repository-view.mjs';
+import { processTaskPinnedDesignRoute, processTaskRepositoryReference } from '../../public/process-task-repository-view.mjs';
+
+test('process task run links back to its exact pinned design and process', () => {
+  const run = { projectId: 'project-11111111-1111-4111-8111-111111111111', processTaskRef: {
+    processId: 'process-order-intake', blueprintVersion: 7,
+  } };
+  assert.equal(processTaskPinnedDesignRoute(run), '/?project=project-11111111-1111-4111-8111-111111111111&view=map&selected=process-order-intake&blueprintVersion=7');
+});
+
+test('process task run omits pinned design navigation for invalid source identity', () => {
+  assert.equal(processTaskPinnedDesignRoute({ projectId: 'not-a-project', processTaskRef: {
+    processId: 'process-order-intake', blueprintVersion: 7,
+  } }), null);
+  assert.equal(processTaskPinnedDesignRoute({ projectId: 'project-11111111-1111-4111-8111-111111111111', processTaskRef: {
+    processId: '../invalid', blueprintVersion: 7,
+  } }), null);
+});
 
 test('process task run view names the exact selected Git repository, ref, commit, and tree', () => {
   const run = { processTaskRef: { repository: { id: 'inventory-service', treeDigest: 'a'.repeat(64), source: {

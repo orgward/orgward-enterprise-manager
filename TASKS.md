@@ -7744,3 +7744,16 @@ duration 0.33s; log `/tmp/orgward-tests-XafBj2/node-test.tap.log`):
 `tests/enterprise/view.test.mjs`; `git diff --check` passed. `npm run task:next`
 reported PR-15 first open. No full check or Sol review; PR-15 remains open and
 active.
+
+PR-15 T-90 pinned design return from SDLC (2026-10-05): saved process-task run
+details now link back to the exact project, process, and blueprint version that
+the run used. The route is omitted when its project/version/process identity is
+invalid; it remains a read path and grants no write authority. Focused repository
+view tests passed 5/5 (0 failures, 0 skips; TAP duration 0.25s; log
+`/tmp/orgward-tests-PUW8gP/node-test.tap.log`):
+`npm test -- tests/execution/process-task-repository-view.test.mjs`.
+`node --check` passed for `public/process-task-repository-view.mjs`,
+`public/execution.js`, and `tests/execution/process-task-repository-view.test.mjs`;
+`git diff --check` passed. `npm run task:next` reports PR-15 first open. This is
+one bounded T-90 contribution, not completion of T-90 or PR-15. No full check or
+Sol review.
