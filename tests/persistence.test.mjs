@@ -3426,7 +3426,21 @@ test('change cases and execution runs use PostgreSQL compare-and-swap state acro
     method: 'POST', body: compileBody('pg-t28-compile-stale-source'),
   }, 409);
   assert.equal(staleSource.error.code, 'SOURCE_BINDING_STALE');
+  assert.match(staleSource.error.message, /pinned source is from an older saved design/i);
+  assert.deepEqual(staleSource.error.recoveryActions, [{
+    type: 'create_new_case', label: 'Create a new case from the current saved design',
+  }]);
   assert.equal((await postgres.query('select count(*)::int count from orgward.software_delivery_plans where case_id = $1', [changeCase.id])).rows[0].count, 2);
+  const staleCompileReadback = await request(app.base, `/api/sdlc/cases/${changeCase.id}`);
+  assert.equal(staleCompileReadback.sourceBinding.sourceHash, sourceHash);
+  assert.equal(staleCompileReadback.artifacts.plan.contentHash, runToCheckpoint.artifacts.plan.contentHash);
+  assert.deepEqual(staleCompileReadback.artifacts.context.guardrails.constraints, runToCheckpoint.intent.constraints);
+  assert.ok(staleCompileReadback.artifacts.plan.workItems.some((item) => item.requirementRefs.includes('REQ-CTL-1')),
+    'the stale compile refusal preserves the accepted screening control requirement');
+  assert.ok(staleCompileReadback.artifacts.plan.workItems.some((item) => item.requirementRefs.includes('REQ-CTL-2')),
+    'the stale compile refusal preserves the accepted manual-review control requirement');
+  assert.equal(staleCompileReadback.artifacts.requirements.acceptedBaseline.contentHash, acceptedRequirements.contentHash);
+  assert.equal(staleCompileReadback.artifacts.architecture.acceptedBaseline.draftHash, acceptedArchitecture.draftHash);
   await postgres.query(`update orgward.aggregates set version = $1, state = $2::jsonb, state_hash = $3 where tenant_id = 'tenant-a' and aggregate_kind = 'project' and aggregate_id = $4`, [originalProjectState.version, JSON.stringify(originalProjectState), contentHash(originalProjectState), project.data.id]);
   await request(app.base, `/api/sdlc/cases/${changeCase.id}/run`, {
     method: 'POST', body: JSON.stringify({ version: requirementsAccepted.version, idempotencyKey: 'pg-case-run', note: 'changed retry' }),

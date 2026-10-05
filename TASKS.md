@@ -7835,6 +7835,22 @@ context clause; the existing planning guard already blocks the case. It does not
 qualify the separate stale-compile or unauthorized-retrieval clauses, or close
 AC2/T-90/PR-15. No full check or Sol review.
 
+PR-15 T-90 AC2 stale-compile evidence (2026-10-05): the existing saved-design
+fence is now asserted through the real PostgreSQL-backed compile API after G6
+has compiled successfully and the project advances. The retry returns
+`SOURCE_BINDING_STALE`, names the old pinned design, and offers creating a case
+from the current saved design. Readback proves no additional delivery draft was
+stored and the original source hash, accepted requirements and architecture,
+G6 plan, context guardrail constraints, and both screening/manual-review control
+requirements remain intact. The named PostgreSQL API/restart test passed 1/1 (0
+failures, 0 skips; runner 6.25s, TAP 5.05s; log
+`/tmp/orgward-tests-qHtGk8/node-test.tap.log`):
+`npm test -- tests/persistence.test.mjs --test-name-pattern='^change cases and execution runs use PostgreSQL compare-and-swap state across restart$'`.
+`node --check tests/persistence.test.mjs` and `git diff --check` passed. No
+behavior defect was found in the stale-source compile fence. This covers AC2's
+stale saved-design compile clause, not concurrent G6 mutation or unauthorized
+retrieval; AC2/T-90/PR-15 remain open. No full check or Sol review.
+
 PR-15 T-90 sealed context coverage and evidence (2026-10-05): saved context
 manifests now hash the retrieval plan and coverage, intent guardrails, explicit
 unknown and excluded dependencies, source pins, and evidence-reference content
