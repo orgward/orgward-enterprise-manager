@@ -8103,3 +8103,44 @@ proves a first-party, separately running loopback test-service effect; it does
 not prove a third-party vendor connector or live supplier fulfilment. No external
 network or commercial effect occurred. T-96 and PR-15 remain open; no task or gate
 status changed.
+
+PR-17 T-121 interactive map edit through shared semantic commands (2026-10-05):
+the interactive map now submits object edits through `POST
+/api/v1/projects/{projectId}/enterprise/commands` as the registered
+`edit-blueprint-object` operation. The shared normalizer pins the exact saved
+blueprint ID/version, validates common edit fields and rejects fields outside
+the command contract; the shared applier uses the established object type,
+relationship and blueprint-integrity validation. The legacy blueprint-edit API
+delegates through the same normalizer/applier for compatibility. The recorded
+proposed-design provenance and audit retain the command reason. A focused
+integration fixture covers reader denial without mutation, editor success,
+same-command replay, changed-payload idempotency conflict, stale aggregate
+version conflict and persisted edit readback after app restart.
+
+Initial exploratory focused run failed the new fixture because it omitted the
+required process trigger; the fixture was corrected. The adjacent
+enterprise-scope history test also failed its permission-projection expectation
+because `sandboxExecute` was present in actual permissions but absent from that
+test's expected object. To establish whether this was introduced here, the exact
+case was rerun with the repository test runner in a detached clean worktree at
+baseline commit `fd2282f8513b545e55eed975e3fef00a63662a2e`; it failed the same
+deep-equality assertion at `tests/enterprise/server.test.mjs:432` with the same
+actual/expected `sandboxExecute` mismatch (test duration 843.72 ms; runner log
+`/tmp/orgward-tests-1Ps2dm/node-test.tap.log`). This is pre-existing and
+unrelated to the map edit path; it was not included in the final focused run.
+Final command
+`npm test -- tests/enterprise/server.test.mjs tests/persistence.test.mjs
+--test-name-pattern='interactive map edits use the shared semantic command
+boundary|authorized blueprint edits create immutable proposed versions'` passed
+2/2 (0 failures, 0 skips; 16.26s; log
+`/tmp/orgward-tests-91u742/node-test.tap.log`), covering the new shared-command
+map path and the legacy edit route. The focused fixture verifies stale blueprint
+and aggregate version conflicts and that audit and provenance retain the reason;
+the UI pins source identity through retries and changes it only after the user
+chooses the current version. `node --check` passed for `server.mjs`,
+`src/model.mjs`, `src/enterprise/commands.mjs`, `public/app.js` and
+`tests/enterprise/server.test.mjs`; `git diff --check` passed. No full check ran.
+This is one T-121 slice only: other edit surfaces, field-level impact,
+publication watermarks, reconciliation, customer-defined concepts and adoption
+remain open. PR-17 remains open; PR-15 remains the active cursor and no release
+gate changed.

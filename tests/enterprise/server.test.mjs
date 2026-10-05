@@ -364,6 +364,52 @@ async function postCommand(base, subject, projectId, body, status = 200) {
 }
 function items(blueprint) { return Object.values(blueprint.areas).flatMap((area) => area.items); }
 
+test('interactive map edits use the shared semantic command boundary with denial, conflict, replay and restart', async (t) => {
+  const postgres = await startPostgres(); let root; let instance;
+  t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-enterprise-map-command-'));
+  instance = await startApp(postgres, root);
+  for (const identity of identities.values()) {
+    await postgres.query(`insert into orgward.oidc_principals
+      (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+    [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  }
+  const project = await seedProject(postgres, 'Shared map command fixture');
+  const view = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  const edit = { kind: 'edit-blueprint-object', objectId: 'process-deliver', name: 'Deliver the shared-command service',
+    detail: 'Complete the service and record its outcome.', trigger: view.data.selection.object.trigger,
+    reason: 'Update the proposed process from the interactive map.',
+    blueprintId: view.data.context.blueprintId, blueprintVersion: view.data.context.blueprintVersion };
+  const denied = await postCommand(instance.base, 'reader', project.id, commandBody(view, 'map-edit-reader-denied', edit), 403);
+  assert.equal(denied.error.code, 'ACTION_FORBIDDEN');
+  let saved = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  assert.equal(saved.data.version, project.version);
+
+  const body = commandBody(view, 'map-edit-through-semantic-command', edit);
+  const accepted = await postCommand(instance.base, 'editor', project.id, body);
+  assert.equal(accepted.data.latestBlueprint.version, view.data.context.blueprintVersion + 1);
+  const savedProcess = items(accepted.data.latestBlueprint).find((object) => object.id === 'process-deliver');
+  assert.equal(savedProcess.name, edit.name);
+  assert.equal(savedProcess.provenance.at(-1).reason, edit.reason);
+  assert.ok(accepted.data.audit.at(-1).detail.includes(edit.reason));
+  assert.equal(accepted.event.type, 'EnterpriseDesignChanged');
+  assert.equal((await postCommand(instance.base, 'editor', project.id, body)).meta.replayed, true);
+  const conflictingReplay = await postCommand(instance.base, 'editor', project.id,
+    commandBody(view, body.commandId, { ...edit, detail: 'Different payload for the same map edit key.' }), 409);
+  assert.equal(conflictingReplay.error.code, 'IDEMPOTENCY_CONFLICT');
+  const staleBlueprint = await postCommand(instance.base, 'owner', project.id,
+    commandBody(view, 'map-edit-stale-blueprint', { ...edit, name: 'Stale blueprint map edit' }, accepted.data.version), 409);
+  assert.equal(staleBlueprint.error.code, 'ENTERPRISE_BLUEPRINT_STALE');
+  const stale = await postCommand(instance.base, 'owner', project.id,
+    commandBody(view, 'map-edit-stale-project', { ...edit, name: 'Stale map edit' }), 409);
+  assert.equal(stale.error.code, 'VERSION_CONFLICT');
+
+  await closeApp(instance);
+  instance = await startApp(postgres, root);
+  saved = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  assert.equal(items(saved.data.latestBlueprint).find((object) => object.id === 'process-deliver').name, edit.name);
+});
+
 test('enterprise scopes retain design identity across sixteen lenses, commands, history, and restart', async (t) => {
   const postgres = await startPostgres();
   let root;

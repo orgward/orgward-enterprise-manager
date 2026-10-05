@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { buildRelations, latestBlueprint, validateBlueprint } from '../model.mjs';
+import { buildRelations, editBlueprintObject, latestBlueprint, validateBlueprint } from '../model.mjs';
 import { ENTERPRISE_SCOPE_TYPES, blueprintObjects, enterpriseFailure, enterpriseText } from './types.mjs';
 import { digest } from '../sdlc/contracts.mjs';
 import { ENTERPRISE_STATE_VALUES, enterpriseInterval, objectBasisHash } from './state.mjs';
@@ -14,6 +14,12 @@ import { applyEnterpriseGovernanceCommand, ENTERPRISE_GOVERNANCE_KINDS, normaliz
 import { applyEnterpriseStewardshipCommand, ENTERPRISE_STEWARDSHIP_KINDS, normalizeEnterpriseStewardshipCommand } from './stewardship.mjs';
 
 const base = ['kind', 'blueprintId', 'blueprintVersion', 'reason'];
+const BLUEPRINT_EDIT_FIELDS = ['objectId', 'name', 'detail', 'ownerRoleName', 'trigger', 'capabilityId',
+  'proposedInstructions', 'proposedScopeStatements', 'proposedToolStatements', 'proposedEscalationRules',
+  'servesCustomerIds', 'enabledByCapabilityIds', 'inputInformationIds', 'outputInformationIds', 'inputDecisionIds',
+  'outputDecisionIds', 'resourceIds', 'systemIds', 'evidenceMetricIds', 'feedbackGoalId', 'feedbackDecisionIds',
+  'readInformationId', 'metricId', 'consumerLoopId', 'mitigatingControlId', 'capabilityMetricIds', 'assignedRoleIds',
+  'responsibilityIds', 'decisionMakerRoleId', 'decisionScopeIds', 'strategyGoalIds'];
 function reference(value, field, { nullable = false } = {}) {
   if (nullable && value === null) return null;
   if (typeof value !== 'string' || !/^[a-z0-9][a-z0-9_-]{0,119}$/i.test(value)) {
@@ -32,7 +38,7 @@ export function normalizeEnterpriseCommand(input) {
   if (input && ENTERPRISE_INTERCHANGE_KINDS.has(input.kind)) return normalizeEnterpriseInterchangeCommand(input);
   if (input && ENTERPRISE_BRANCH_KINDS.has(input.kind)) return normalizeEnterpriseBranchCommand(input);
   if (!input || typeof input !== 'object' || Array.isArray(input)
-    || !['create-scope', 'rename-scope', 'assign-object-scope', 'record-state', 'set-validity', 'propose-future-design'].includes(input.kind)
+    || !['create-scope', 'rename-scope', 'assign-object-scope', 'record-state', 'set-validity', 'propose-future-design', 'edit-blueprint-object'].includes(input.kind)
     || !/^blueprint-[0-9a-f-]{36}$/.test(input.blueprintId ?? '')
     || !Number.isSafeInteger(input.blueprintVersion) || input.blueprintVersion < 1) {
     throw enterpriseFailure('INVALID_ENTERPRISE_COMMAND', 'Choose an available enterprise command and bind it to the saved blueprint.');
@@ -40,7 +46,13 @@ export function normalizeEnterpriseCommand(input) {
   const normalized = { kind: input.kind, blueprintId: input.blueprintId, blueprintVersion: input.blueprintVersion,
     reason: enterpriseText(input.reason, 'Change reason', 500) };
   let allowed;
-  if (input.kind === 'record-state') {
+  if (input.kind === 'edit-blueprint-object') {
+    allowed = [...base, ...BLUEPRINT_EDIT_FIELDS];
+    for (const field of BLUEPRINT_EDIT_FIELDS) if (Object.hasOwn(input, field)) normalized[field] = structuredClone(input[field]);
+    normalized.objectId = reference(input.objectId, 'Design object');
+    normalized.name = enterpriseText(input.name, 'Design object name', 120);
+    normalized.detail = enterpriseText(input.detail, 'Design object detail', 700);
+  } else if (input.kind === 'record-state') {
     allowed = [...base, 'objectId', 'dimension', 'value', 'basisHash', 'evidenceSummary'];
     if (!Object.hasOwn(ENTERPRISE_STATE_VALUES, input.dimension)
       || !ENTERPRISE_STATE_VALUES[input.dimension].includes(input.value) || !/^[a-f0-9]{64}$/.test(input.basisHash ?? '')) {
@@ -88,6 +100,17 @@ export function normalizeEnterpriseCommand(input) {
 }
 export function applyEnterpriseCommand(project, command, actor, options = {}) {
   if (ENTERPRISE_STEWARDSHIP_KINDS.has(command.kind)) return applyEnterpriseStewardshipCommand(project, command, actor);
+  if (command.kind === 'edit-blueprint-object') {
+    const previous = latestBlueprint(project);
+    if (!previous || previous.id !== command.blueprintId || previous.version !== command.blueprintVersion) {
+      throw enterpriseFailure('ENTERPRISE_BLUEPRINT_STALE', 'Reload the exact current proposed design before editing this record.', 409);
+    }
+    const edit = Object.fromEntries(BLUEPRINT_EDIT_FIELDS.filter((field) => Object.hasOwn(command, field)
+      && field !== 'objectId' && field !== 'name' && field !== 'detail').map((field) => [field, command[field]]));
+    Object.assign(edit, { objectId: command.objectId, name: command.name, detail: command.detail });
+    const blueprint = editBlueprintObject(project, edit, actor, command.reason);
+    return { blueprint, affectedObjectId: command.objectId, proposalId: null, recordedAt: blueprint.createdAt };
+  }
   if (ENTERPRISE_GOVERNANCE_KINDS.has(command.kind)) return applyEnterpriseGovernanceCommand(project, command, actor);
   if (ENTERPRISE_INTEGRITY_KINDS.has(command.kind)) return applyEnterpriseIntegrityCommand(project, command, actor);
   if (ENTERPRISE_SOURCE_ACCEPTANCE_KINDS.has(command.kind)) return applyEnterpriseSourceAcceptance(project, command, actor);

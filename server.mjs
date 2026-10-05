@@ -1864,6 +1864,7 @@ export function createApp({
               || ENTERPRISE_BRANCH_KINDS.has(payload.kind) || ENTERPRISE_PROCESS_KINDS.has(payload.kind)
               || ENTERPRISE_ECONOMIC_KINDS.has(payload.kind) || ENTERPRISE_REFINEMENT_KINDS.has(payload.kind)
               || ENTERPRISE_INTERCHANGE_KINDS.has(payload.kind) || ENTERPRISE_SOURCE_ACCEPTANCE_KINDS.has(payload.kind)
+              || payload.kind === 'edit-blueprint-object'
               ? 'EnterpriseDesignChanged' : 'EnterpriseScopeChanged', actor, commandId: body.commandId, correlationId,
               data: { kind: payload.kind, blueprintId: changed.blueprint.id, blueprintVersion: changed.blueprint.version,
                 objectId: changed.affectedObjectId, proposalId: changed.proposalId ?? null,
@@ -1890,6 +1891,10 @@ export function createApp({
         if (!result) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
         const blueprint = latestBlueprint(result.project);
         const receipt = result.project.events.at(-1).data;
+        if (receipt.kind === 'edit-blueprint-object') {
+          return sendApi(response, 200, projectView(result.project),
+            { correlationId, event: result.project.events.at(-1), meta: { replayed: result.replayed } });
+        }
         const simulation = receipt.simulationId ? result.project.enterpriseSimulations.find((entry) => entry.id === receipt.simulationId) : null;
         const economicEvaluation = receipt.economicEvaluationId ? result.project.enterpriseEconomicEvaluations?.find((entry) => entry.id === receipt.economicEvaluationId) : null;
         const integrityAssessment = receipt.integrityAssessmentId
@@ -1964,7 +1969,11 @@ export function createApp({
           expectedVersion: body.expectedVersion,
           apply(project) {
             normalizeProject(project, { tenantId, actor });
-            const blueprint = editBlueprintObject(project, payload, actor);
+            const latest = latestBlueprint(project);
+            const semanticCommand = normalizeEnterpriseCommand({ ...payload, kind: 'edit-blueprint-object',
+              blueprintId: latest?.id, blueprintVersion: latest?.version,
+              reason: 'Edited the proposed design from the interactive map.' });
+            const { blueprint } = applyEnterpriseCommand(project, semanticCommand, actor);
             project.version += 1;
             project.updatedAt = blueprint.createdAt;
             project.updatedBy = actor;

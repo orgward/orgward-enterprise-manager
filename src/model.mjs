@@ -468,7 +468,7 @@ function displayRelations(blueprint, objectId) {
     .map((relation) => ({ type: relation.type, source: objects.get(relation.source), target: objects.get(relation.target) }));
 }
 
-export function editBlueprintObject(project, payload, actor) {
+export function editBlueprintObject(project, payload, actor, reason = null) {
   const previous = latestBlueprint(project);
   if (!previous) editFailure('A saved blueprint is required before editing.', 'BLUEPRINT_NOT_FOUND', 409);
   let original = null;
@@ -886,7 +886,8 @@ export function editBlueprintObject(project, payload, actor) {
   const changedFields = Object.keys(after).filter((field) => JSON.stringify(before[field]) !== JSON.stringify(after[field]));
   if (!changedFields.length) editFailure('This edit does not change the selected object.', 'BLUEPRINT_EDIT_NO_CHANGE');
   itemValue.provenance ??= [];
-  itemValue.provenance.push({ source: 'workspace:blueprint-edit', note: 'Edited by a verified workspace member', actor, at, fields: changedFields });
+  itemValue.provenance.push({ source: 'workspace:blueprint-edit', note: 'Edited by a verified workspace member', actor, at,
+    ...(typeof reason === 'string' && reason.trim() ? { reason: reason.trim() } : {}), fields: changedFields });
   next.id = `blueprint-${randomUUID()}`;
   next.version = Math.max(...project.blueprintVersions.map((entry) => entry.version), previous.version) + 1;
   next.createdAt = at;
@@ -907,7 +908,7 @@ export function editBlueprintObject(project, payload, actor) {
   };
   project.blueprintVersions.push(next);
   project.audit ??= [];
-  project.audit.push({ at, action: 'blueprint.object-edited', actor, detail: `Edited ${itemValue.type} “${itemValue.name}” in blueprint v${next.version}.` });
+  project.audit.push({ at, action: 'blueprint.object-edited', actor, detail: `Edited ${itemValue.type} “${itemValue.name}” in blueprint v${next.version}.${typeof reason === 'string' && reason.trim() ? ` Reason: ${reason.trim()}` : ''}` });
   return next;
 }
 

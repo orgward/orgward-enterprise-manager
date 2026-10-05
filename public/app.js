@@ -1910,6 +1910,8 @@ function renderBlueprintEditForm(node) {
   latestVersion.addEventListener('click', () => {
     if (!state.pendingBlueprintEdit) return;
     state.pendingBlueprintEdit.expectedVersion = state.project.version;
+    state.pendingBlueprintEdit.blueprintId = state.project.latestBlueprint.id;
+    state.pendingBlueprintEdit.blueprintVersion = state.project.latestBlueprint.version;
     state.pendingBlueprintEdit.needsReview = false;
     if (state.pendingBlueprintEdit.needsNewCommandId) {
       state.pendingBlueprintEdit.commandId = `blueprint-edit:${crypto.randomUUID()}`;
@@ -1986,13 +1988,21 @@ function renderBlueprintEditForm(node) {
   form.addEventListener('input', trackDraft);
   form.addEventListener('change', trackDraft);
   const submit = async (commandId, payload, expectedVersion) => {
-    state.pendingBlueprintEdit ??= { projectId: state.project.id, commandId, payload, expectedVersion, needsReview: false };
+    const source = state.pendingBlueprintEdit?.projectId === state.project.id
+      && state.pendingBlueprintEdit.commandId === commandId ? state.pendingBlueprintEdit : null;
+    const currentBlueprint = state.project.latestBlueprint;
+    const blueprintId = source?.blueprintId ?? currentBlueprint.id;
+    const blueprintVersion = source?.blueprintVersion ?? currentBlueprint.version;
+    state.pendingBlueprintEdit ??= { projectId: state.project.id, commandId, payload, expectedVersion,
+      blueprintId, blueprintVersion, needsReview: false };
     const projectId = state.project.id;
     save.disabled = true;
     error.hidden = true;
     try {
-      const result = await api(`/api/v1/projects/${projectId}/blueprint/edits`, {
-        method: 'POST', body: JSON.stringify(command(payload, expectedVersion, commandId)),
+      const semanticPayload = { ...payload, kind: 'edit-blueprint-object', blueprintId,
+        blueprintVersion, reason: 'Edited the proposed design from the interactive map.' };
+      const result = await api(`/api/v1/projects/${projectId}/enterprise/commands`, {
+        method: 'POST', body: JSON.stringify(command(semanticPayload, expectedVersion, commandId)),
       });
       if (state.project?.id !== projectId || state.requestedProjectId !== projectId) return;
       const previousTypes = new Set(state.activeTypes);
@@ -2020,7 +2030,7 @@ function renderBlueprintEditForm(node) {
       error.hidden = false;
       save.disabled = false;
       if (failure.code === 'VERSION_CONFLICT' || failure.code === 'IDEMPOTENCY_CONFLICT') {
-        state.pendingBlueprintEdit = { projectId, commandId, payload, expectedVersion, needsReview: true,
+        state.pendingBlueprintEdit = { projectId, commandId, payload, expectedVersion, blueprintId, blueprintVersion, needsReview: true,
           needsNewCommandId: failure.code === 'IDEMPOTENCY_CONFLICT' };
         showRequestFailure(failure, () => loadProject(projectId, {
           history: 'replace', route: { view: 'map', selectedId: node.id, types: [...state.activeTypes] },
@@ -2045,7 +2055,9 @@ function renderBlueprintEditForm(node) {
     const existing = state.pendingBlueprintEdit?.projectId === state.project.id && state.pendingBlueprintEdit?.payload.objectId === node.id ? state.pendingBlueprintEdit : null;
     let pendingEdit = existing;
     if (!pendingEdit || JSON.stringify(pendingEdit.payload) !== JSON.stringify(payload)) {
-      pendingEdit = { projectId: state.project.id, commandId: `blueprint-edit:${crypto.randomUUID()}`, payload, expectedVersion: state.project.version, needsReview: existing?.needsReview ?? false };
+      pendingEdit = { projectId: state.project.id, commandId: `blueprint-edit:${crypto.randomUUID()}`, payload,
+        expectedVersion: state.project.version, blueprintId: state.project.latestBlueprint.id,
+        blueprintVersion: state.project.latestBlueprint.version, needsReview: existing?.needsReview ?? false };
       state.pendingBlueprintEdit = pendingEdit;
     }
     state.blueprintEditDraft = null;
