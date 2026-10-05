@@ -389,7 +389,39 @@ export function previewEnterpriseInterchange(project, bundle) {
         lossFields: [], collisions: conflicts, validationErrors: [], status: 'REVIEW_REQUIRED', edit: null });
     }
   }
-  const currentSource = { projectId: project.id, blueprintId: current.id, blueprintVersion: current.version, snapshotHash: digest(current) };
+  const currentSource = { projectId: project.id, projectVersion: project.version, blueprintId: current.id,
+    blueprintVersion: current.version, snapshotHash: digest(current) };
+  const impactPins = { ...currentSource };
+  const currentRelations = current.relations ?? [];
+  const currentObjects = objectMap(current);
+  for (const row of rows.filter((entry) => entry.status === 'READY')) {
+    const scratch = { ...structuredClone(project), blueprintVersions: [structuredClone(current)], audit: [] };
+    const candidate = editBlueprintObject(scratch, row.edit, 'interchange-impact-preview');
+    const beforeObject = currentObjects.get(row.id);
+    const afterObject = objectMap(candidate).get(row.id);
+    const direct = (relations, id) => relations.filter((relation) => relation.source === id || relation.target === id);
+    const beforeRelations = direct(currentRelations, row.id);
+    const afterRelations = direct(candidate.relations ?? [], row.id);
+    const affectedIds = new Set([row.id]);
+    for (const relation of [...beforeRelations, ...afterRelations]) {
+      affectedIds.add(relation.source === row.id ? relation.target : relation.source);
+    }
+    const candidateObjects = objectMap(candidate);
+    row.impact = { status: 'INCOMPLETE', source: impactPins,
+      importSource: structuredClone(source),
+      changedFields: row.changedFields.map((field) => ({ field,
+        before: blueprintObjectEditInput(current, beforeObject)[field] ?? null,
+        after: blueprintObjectEditInput(candidate, afterObject)[field] ?? null })),
+      directRelationshipChanges: { before: beforeRelations, after: afterRelations },
+      directlyAffectedObjects: [...affectedIds].sort().flatMap((id) => {
+        const object = candidateObjects.get(id) ?? currentObjects.get(id);
+        return object ? [{ objectId: id, name: object.name, type: object.type, edited: id === row.id,
+          source: impactPins }] : [];
+      }),
+      coverage: { directBlueprintRelationships: 'COMPUTED', operationalAndDownstreamImpact: 'UNKNOWN' },
+      unknownAreas: ['Role constraints, Sentinel/SDLC, approvals, queued or completed work, and cross-project effects'],
+    };
+  }
   const core = { source: structuredClone(source), currentSource, recordCount: rows.length,
     recognizedFields: rows.reduce((sum, row) => sum + row.recognizedFields.length, 0),
     unknownFields: [...bundleUnknownFields.map((field) => ({ recordId: null, field })),

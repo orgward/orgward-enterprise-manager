@@ -930,9 +930,12 @@ test('portfolio import opens the selected workspace information detail with its 
   const model = { context: { isCurrent: true, blueprintId: blueprint.id, blueprintVersion: blueprint.version }, blueprint,
     permissions: { write: true }, scopes: [], graph: { nodes: [] }, selection: null };
   const preview = { source: { projectId: 'source-project', blueprintId: 'source-blueprint', blueprintVersion: 2, snapshotHash: 'source-hash' },
-    currentSource: { blueprintId: blueprint.id, blueprintVersion: blueprint.version, snapshotHash: 'current-hash' }, recordCount: 1,
+    currentSource: { projectId: 'selected-workspace', projectVersion: 11, blueprintId: blueprint.id, blueprintVersion: blueprint.version, snapshotHash: 'current-hash' }, recordCount: 1,
     recognizedFields: 1, readyRecordIds: ['imported-row'], previewHash: 'preview-hash', unknownFields: [], lossyFields: [],
-    collisions: [], validationErrors: [], rows: [{ id: 'imported-row', type: 'information', status: 'READY', changedFields: ['name'], recognizedFields: ['name'] }] };
+    collisions: [], validationErrors: [], rows: [{ id: 'imported-row', type: 'information', status: 'READY', changedFields: ['name'], recognizedFields: ['name'],
+      impact: { status: 'INCOMPLETE', changedFields: [{ field: 'name', before: 'Before import', after: 'After import' }],
+        directlyAffectedObjects: [{ objectId: 'imported-row', name: 'After import', type: 'information', edited: true }],
+        unknownAreas: ['Approvals and work'] } }] };
   const draft = { fileName: 'portfolio.json', bundle: { kind: 'orgward-enterprise-blueprint' } };
   let requestedPath;
   const selectedObject = blueprint.areas.responsibilityAuthority.items[0];
@@ -945,7 +948,10 @@ test('portfolio import opens the selected workspace information detail with its 
   assert.equal(requestedPath, '/api/v1/projects/selected-workspace/enterprise/import-preview');
   assert.match(detail.textContent, /Import target/);
   assert.match(detail.textContent, /Import preview/);
-  assert.match(detail.textContent, /Current destination: blueprint blueprint-current v8/);
+  assert.match(detail.textContent, /Current destination: workspace v11 · blueprint blueprint-current v8/);
+  assert.match(detail.textContent, /Direct impact preview · INCOMPLETE/);
+  assert.match(detail.textContent, /name: "Before import" → "After import"/);
+  assert.match(detail.textContent, /Approvals and work/);
   assert.equal(detail.querySelectorAll('[data-enterprise-interchange]').length, 1,
     'the selected workspace detail visibly contains the saved draft preview');
 });

@@ -8256,3 +8256,24 @@ preview rendering, changed branch fields/affected record, stale aggregate and
 branch-revision conflicts, and no mutation before the eventual branch edit.
 Syntax and diff checks passed. T-122 and PR-17 remain open; PR-15 remains the
 active cursor and no release gate changed.
+
+PR-17 T-122 bulk interchange impact preview (2026-10-05): the existing
+read-only enterprise import preview now attaches impact to each collision-free,
+typed-valid proposed record edit. Each row pins current destination project
+version and blueprint ID/version/hash plus the imported bundle's source pin;
+reports exact changed-field before/after values, before/after direct relationship
+edges, and directly affected saved records. The import panel shows these details
+before the existing explicit atomic apply action. Coverage is marked
+`INCOMPLETE`, operational/downstream effects remain `UNKNOWN`, and blocked rows
+receive no impact claim. No publication or approval currentness barrier was
+added.
+
+Focused command
+`npm test -- tests/enterprise/server.test.mjs tests/enterprise/view.test.mjs --test-name-pattern='enterprise interchange export, preview and bulk apply enforce source, type, version, replay and writer boundaries|portfolio import opens the selected workspace information detail with its current preview'`
+passed 2/2 (0 failures, 0 skips; 2.33s; log
+`/tmp/orgward-tests-gZYBOF/node-test.tap.log`). Coverage includes invalid source
+hash rejection and no mutation, exact destination and import pins, field
+before/after values, direct affected record, unknown downstream status, plus
+existing stale apply conflict and UI rendering before apply. Syntax and diff
+checks passed. T-122 and PR-17 remain open; PR-15 remains the active cursor and
+no release gate changed.

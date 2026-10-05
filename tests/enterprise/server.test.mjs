@@ -2153,14 +2153,38 @@ test('enterprise interchange export, preview and bulk apply enforce source, type
   const afterMalformedPreview = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
   assert.equal(afterMalformedPreview.data.version, beforeMalformedPreview.data.version);
   assert.equal(afterMalformedPreview.data.blueprintVersions.length, beforeMalformedPreview.data.blueprintVersions.length);
+  const invalidSourceBundle = structuredClone(bundle);
+  invalidSourceBundle.source.snapshotHash = '0'.repeat(64);
+  const invalidSourcePreview = await request(instance.base, 'reader', `/api/v1/projects/${project.id}/enterprise/import-preview`, {
+    method: 'POST', body: { bundle: invalidSourceBundle },
+  }, 400);
+  assert.equal(invalidSourcePreview.error.code, 'ENTERPRISE_IMPORT_SOURCE_INVALID');
+  const afterInvalidSourcePreview = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  assert.equal(afterInvalidSourcePreview.data.version, beforeMalformedPreview.data.version);
+  assert.equal(afterInvalidSourcePreview.data.blueprintVersions.length, beforeMalformedPreview.data.blueprintVersions.length);
   const customer = bundle.records.find((record) => record.type === 'customer');
   customer.fields.name = `${customer.fields.name} (reviewed import)`;
   const preview = await request(instance.base, 'reader', `/api/v1/projects/${project.id}/enterprise/import-preview`, {
     method: 'POST', body: { bundle },
   });
+  assert.equal(preview.data.currentSource.projectVersion, project.version);
+  assert.equal(preview.data.currentSource.blueprintId, view.data.context.blueprintId);
   assert.equal(preview.data.currentSource.blueprintVersion, view.data.context.blueprintVersion);
+  assert.equal(preview.data.currentSource.snapshotHash, digest(view.data.blueprint));
   assert.equal(preview.data.rows.find((row) => row.id === customer.id).status, 'READY');
   assert.ok(preview.data.lossyFields.some((entry) => entry.recordId === customer.id && entry.field === 'provenance'));
+  const customerImpact = preview.data.rows.find((row) => row.id === customer.id).impact;
+  assert.equal(customerImpact.status, 'INCOMPLETE');
+  assert.deepEqual(customerImpact.source, preview.data.currentSource);
+  assert.equal(customerImpact.importSource.snapshotHash, bundle.source.snapshotHash);
+  assert.ok(customerImpact.changedFields.some((change) => change.field === 'name'
+    && change.before === view.data.blueprint.areas.customersOfferingsValueEconomics.items.find((entry) => entry.id === customer.id).name
+    && change.after === customer.fields.name));
+  assert.ok(customerImpact.directlyAffectedObjects.some((entry) => entry.objectId === customer.id && entry.edited));
+  assert.equal(customerImpact.coverage.operationalAndDownstreamImpact, 'UNKNOWN');
+  const afterImportPreview = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  assert.equal(afterImportPreview.data.version, project.version);
+  assert.equal(afterImportPreview.data.blueprintVersions.length, 1);
   const editBody = commandBody(view, 'enterprise-interchange-bulk-apply', { kind: 'bulk-edit-objects', bundle,
     recordIds: [customer.id], reason: 'Import reviewed customer wording.' });
   const applied = await postCommand(instance.base, 'editor', project.id, editBody);

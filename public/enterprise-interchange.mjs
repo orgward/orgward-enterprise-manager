@@ -210,12 +210,30 @@ export function renderEnterpriseInterchange({ projectId, model, object = null, d
     }
     previewRegion.append(el('h5', { text: 'Import preview' }),
       el('p', { text: `Source project ${preview.source.projectId} · blueprint ${preview.source.blueprintId} v${preview.source.blueprintVersion} · hash ${preview.source.snapshotHash}` }),
-      el('p', { text: `Current destination: blueprint ${preview.currentSource.blueprintId} v${preview.currentSource.blueprintVersion} · hash ${preview.currentSource.snapshotHash}` }),
+      el('p', { text: `Current destination: workspace v${preview.currentSource.projectVersion} · blueprint ${preview.currentSource.blueprintId} v${preview.currentSource.blueprintVersion} · hash ${preview.currentSource.snapshotHash}` }),
       el('p', { text: `${preview.recordCount} records · ${preview.recognizedFields} recognized fields · ${preview.readyRecordIds.length} ready to apply. Preview hash ${preview.previewHash}.` }),
       fieldSummary('Unknown fields (not applied)', preview.unknownFields, el),
       fieldSummary('Loss fields (preserved in destination)', preview.lossyFields, el),
       fieldSummary('Identity/type/field collisions (blocked)', preview.collisions, el),
       fieldSummary('Typed-reference/model validation errors (blocked)', preview.validationErrors, el));
+    const impactRows = preview.rows.filter((row) => row.impact);
+    if (impactRows.length) {
+      const impactPanel = el('section', { attrs: { 'aria-label': 'Read-only direct import impact preview' } }, [
+        el('h5', { text: 'Direct impact preview · INCOMPLETE' }),
+        el('p', { text: 'Pins identify the exact current destination above. These field and relationship changes are read only; operational and downstream impact is UNKNOWN.' }),
+      ]);
+      for (const row of impactRows) {
+        impactPanel.append(el('h6', { text: `${row.id} · ${row.type}` }));
+        impactPanel.append(fieldSummary('Changed fields before → after', row.impact.changedFields.map((change) => ({
+          recordId: row.id, field: `${change.field}: ${JSON.stringify(change.before)} → ${JSON.stringify(change.after)}`,
+        })), el));
+        impactPanel.append(fieldSummary('Directly affected saved records', row.impact.directlyAffectedObjects.map((entry) => ({
+          recordId: entry.objectId, field: `${entry.name} · ${entry.type}${entry.edited ? ' · edited' : ' · directly connected'}`,
+        })), el));
+      }
+      impactPanel.append(fieldSummary('Not computed', impactRows.flatMap((row) => row.impact.unknownAreas), el));
+      previewRegion.append(impactPanel);
+    }
     const selected = new Set(value.recordIds ?? preview.readyRecordIds);
     const choices = el('fieldset'); choices.append(el('legend', { text: 'Select ready records for one atomic apply' }));
     for (const row of preview.rows) {
