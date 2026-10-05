@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { buildRelations, editBlueprintObject, latestBlueprint, validateBlueprint } from '../model.mjs';
+import { buildRelations, latestBlueprint, validateBlueprint } from '../model.mjs';
 import { digest } from '../sdlc/contracts.mjs';
 import { blueprintObjects, enterpriseFailure, enterpriseText } from './types.mjs';
 import { effectiveStatus, enterpriseInterval } from './state.mjs';
@@ -288,7 +288,10 @@ export function applyEnterpriseBranchCommand(project, command, actor, { authzGen
       const draftProject = { blueprintVersions: [clone(head.snapshot)], audit: [] };
       let next;
       if (command.kind === 'edit-branch-object') {
-        next = editBlueprintObject(draftProject, command.edit, actor); affectedObjectId = command.edit.objectId;
+        const semanticCommand = normalizeEnterpriseCommand({ ...command.edit, kind: 'edit-blueprint-object',
+          blueprintId: head.snapshot.id, blueprintVersion: head.snapshot.version, reason: command.reason });
+        const changed = applyEnterpriseCommand(draftProject, semanticCommand, actor);
+        next = changed.blueprint; affectedObjectId = changed.affectedObjectId;
       } else {
         const change = { ...command.change, blueprintId: head.snapshot.id, blueprintVersion: head.snapshot.version };
         const result = applyEnterpriseCommand(draftProject, change, actor); next = result.blueprint; affectedObjectId = result.affectedObjectId;

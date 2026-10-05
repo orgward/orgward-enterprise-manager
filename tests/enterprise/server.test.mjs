@@ -2827,12 +2827,25 @@ test('enterprise branches merge exact typed changes only after a current owner r
   const draftOnlyOrganizationId = branchOnlyCreate.data.affectedObjectId;
   draft = await readBranch('editor', branchId);
   const branchProcess = items(draft.data.blueprint).find((entry) => entry.id === 'process-deliver');
-  const branchEdit = await postCommand(instance.base, 'editor', project.id,
-    branchCommandBody(draft, 'edit-branch-process', { kind: 'edit-branch-object', edit: {
+  const branchEditBody = branchCommandBody(draft, 'edit-branch-process', { kind: 'edit-branch-object', edit: {
       objectId: branchProcess.id, name: 'Draft delivery process', detail: 'Draft-specific delivery detail.',
       ownerRoleName: role.name, trigger: branchProcess.trigger, inputInformationIds: ['information-delivery-result'],
       outputInformationIds: branchProcess.outputs,
-    }, reason: 'Change process name, reference array and details in the isolated draft.' }));
+    }, reason: 'Change process name, reference array and details in the isolated draft.' });
+  const branchEdit = await postCommand(instance.base, 'editor', project.id, branchEditBody);
+  assert.equal(branchEdit.data.branchRevision, 3);
+  const branchEditReplay = await postCommand(instance.base, 'editor', project.id, branchEditBody);
+  assert.equal(branchEditReplay.meta.replayed, true);
+  const branchEditConflict = structuredClone(branchEditBody);
+  branchEditConflict.payload.edit.detail = 'Conflicting reuse of branch edit command.';
+  const branchEditConflictResult = await postCommand(instance.base, 'editor', project.id, branchEditConflict, 409);
+  assert.equal(branchEditConflictResult.error.code, 'IDEMPOTENCY_CONFLICT');
+  const branchAfterEdit = await readBranch('editor', branchId);
+  const editedBranchProcess = items(branchAfterEdit.data.blueprint).find((entry) => entry.id === branchProcess.id);
+  assert.equal(editedBranchProcess.provenance.at(-1).source, 'workspace:blueprint-edit');
+  assert.equal(editedBranchProcess.provenance.at(-1).reason, 'Change process name, reference array and details in the isolated draft.');
+  const branchEditEvent = branchEdit.event;
+  assert.equal(branchEditEvent.data.reason, 'Change process name, reference array and details in the isolated draft.');
   draft = await readBranch('owner', branchId);
   const draftScope = await postCommand(instance.base, 'editor', project.id,
     branchCommandBody(draft, 'assign-draft-process-scope', { kind: 'edit-branch-scope',
@@ -3048,6 +3061,9 @@ test('enterprise branches merge exact typed changes only after a current owner r
   instance = await startApp(postgres, root);
   const afterRestart = await readMain();
   assert.equal(afterRestart.data.context.blueprintId, applied.data.blueprintId);
+  const branchEditAfterRestart = await readBranch('owner', branchId, 3);
+  const restartedDraftProcess = items(branchEditAfterRestart.data.blueprint).find((entry) => entry.id === 'process-deliver');
+  assert.equal(restartedDraftProcess.provenance.at(-1).reason, 'Change process name, reference array and details in the isolated draft.');
   const applyReplayAfterRestart = await postCommand(instance.base, 'owner', project.id, replayBody);
   assert.equal(applyReplayAfterRestart.meta.replayed, true);
   assert.deepEqual(applyReplayAfterRestart.data, applied.data);

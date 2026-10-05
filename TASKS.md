@@ -8184,3 +8184,21 @@ failures, 0 skips; 0.23s; log `/tmp/orgward-tests-3S7TWZ/node-test.tap.log`),
 checking proposal evaluation denial and integrity failures. Syntax and diff checks
 passed. This is one additional T-121 learning-edit surface; PR-17 remains open,
 PR-15 remains the active cursor and no release gate changed.
+
+PR-17 T-121 branch map object edits through shared semantic commands
+(2026-10-05): the isolated branch editor now normalizes and applies object edits
+through `edit-blueprint-object`, pinned to the exact saved branch-head blueprint
+ID/version. Branch ID/revision validation, immutable branch history and main
+design isolation remain enforced. The branch event records the command reason;
+the changed object retains generic edit provenance with that reason. Focused command
+`npm test -- tests/enterprise/server.test.mjs --test-name-pattern='enterprise
+branches merge exact typed changes only after a current owner review'` passed
+1/1 (0 failures, 0 skips; 12.73s; log
+`/tmp/orgward-tests-Lzbi5H/node-test.tap.log`), covering invalid typed-reference
+denial without revision change, exact idempotent replay, conflicting command-ID
+reuse, branch/main isolation, owner-reviewed merge behavior and durable restart
+readback. The first focused attempt exposed a test fixture’s mistaken branch
+revision expectation (branch-only scope creation had already added revision 2);
+the expected object-edit revision was corrected to 3 and the final focused run
+passed. Syntax and diff checks passed. This is one T-121 branch editing surface;
+PR-17 remains open, PR-15 remains the active cursor and no release gate changed.
