@@ -3217,7 +3217,7 @@ export function createApp({
               operation: (current) => current,
             })
             : await store.get(body.projectId, requestTenant(request));
-          if (!project) throw apiFailure(404, 'SOURCE_PROJECT_NOT_FOUND', 'The saved project source was not found.');
+          if (!project) throw apiFailure(404, 'SOURCE_PROJECT_NOT_FOUND', 'The saved project source is unavailable in this workspace. Choose a saved project you can access and select its current design.');
           project = normalizeProject(project, { tenantId: requestTenant(request) });
           if (!hasSourceSelection) throw apiFailure(400, 'SOURCE_REFERENCE_REQUIRED', 'Choose a saved design object and submit its current project and blueprint versions.');
           sourceBinding = pinProjectSourceObject(project, body);

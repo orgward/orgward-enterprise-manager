@@ -84,6 +84,64 @@ test('SDLC actions block when a sealed context manifest no longer verifies', asy
   assert.equal(unchanged.contextManifestIntegrity.valid, false);
 });
 
+test('source selection from an inaccessible tenant blocks without exposing project data and gives recovery guidance', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'orgward-sdlc-inaccessible-source-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const sourceTenant = 'tenant-source-private';
+  const requestingTenant = 'tenant-requester';
+  const principal = 'principal-without-source-membership';
+  let principalProjectReads = 0;
+  let caseSaves = 0;
+  const projectStore = {
+    async init() {},
+    async getWithPrincipalAuthority(query) {
+      principalProjectReads += 1;
+      assert.equal(query.tenantId, requestingTenant);
+      assert.equal(query.principal, principal);
+      assert.deepEqual(query.anyPrincipalRoleGroups, [['workspace-read', 'workspace-write', 'tenant-admin']]);
+      return null;
+    },
+  };
+  const changeCaseStore = { async init() {}, async saveForPrincipal() { caseSaves += 1; } };
+  const identity = { tenantId: requestingTenant, principal, roles: ['workspace-write'], actorType: 'human' };
+  const app = createApp({
+    dataDirectory: path.join(root, 'blueprints'), sdlcDirectory: path.join(root, 'sdlc'),
+    projectStore, changeCaseStore,
+    oidcAuthenticator: { async authenticate() { return identity; } },
+    oidcSessionStore: { async get() { return null; }, async resolve() { return { ...identity, authzGeneration: 1 }; } },
+  });
+  await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
+  app.base = `http://127.0.0.1:${app.server.address().port}`;
+  t.after(() => close(app.server));
+  const project = createProject('Private source project name');
+  for (const answer of [
+    'A private design goal.',
+    'Only the source tenant can read this design detail.',
+    'Private financial assumptions remain in the source tenant.',
+    'Only the accountable owner may approve changes.',
+  ]) addConversationTurn(project, answer);
+  project.version = 1;
+  project.tenantId = sourceTenant;
+  const blueprint = latestBlueprint(project);
+  const source = Object.values(blueprint.areas).flatMap((area) => area.items).find((item) => item.type === 'information');
+  assert.ok(source);
+  const headers = { authorization: 'Bearer unavailable-source-principal' };
+
+  const denied = await request(app.base, '/api/sdlc/cases', {
+    method: 'POST', headers,
+    body: JSON.stringify({ projectId: project.id, sourceObjectId: source.id,
+      expectedProjectVersion: project.version, expectedBlueprintId: blueprint.id,
+      expectedBlueprintVersion: blueprint.version, mode: 'golden' }),
+  }, 404);
+  assert.match(denied.error, /saved project source is unavailable in this workspace/i);
+  assert.match(denied.error, /choose a saved project you can access and select its current design/i);
+  assert.doesNotMatch(JSON.stringify(denied), new RegExp(project.name));
+  assert.doesNotMatch(JSON.stringify(denied), new RegExp(source.name));
+  assert.doesNotMatch(JSON.stringify(denied), new RegExp(source.detail));
+  assert.equal(principalProjectReads, 1);
+  assert.equal(caseSaves, 0, 'an inaccessible source cannot create a planning case or truncate its context');
+});
+
 test('missing critical context blocks the saved case with domain-specific recovery guidance', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'orgward-sdlc-critical-context-'));
   t.after(() => rm(root, { recursive: true, force: true }));

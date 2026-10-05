@@ -7851,6 +7851,23 @@ behavior defect was found in the stale-source compile fence. This covers AC2's
 stale saved-design compile clause, not concurrent G6 mutation or unauthorized
 retrieval; AC2/T-90/PR-15 remain open. No full check or Sol review.
 
+PR-15 T-90 AC2 unauthorized-source recovery evidence (2026-10-05): when an
+authenticated requester cannot read the selected source project through the
+principal-scoped lookup, source-bound case creation now returns a safe 404 gap
+message that says the source is unavailable in this workspace and directs the
+user to choose an accessible saved project and its current design. A focused API
+test verifies the principal and tenant scope used for lookup, checks that project
+name/design content are absent from the response, and confirms no case write
+occurs. The first test attempt used the unauthenticated local project store with
+a caller-supplied tenant header, which is not a principal authorization fixture;
+the corrected test uses OIDC identity plus a principal-scoped lookup returning no
+authorized project. Focused SDLC server tests passed 18/18 (0 failures, 0 skips;
+duration 1.97s; TAP log `/tmp/orgward-tests-NwBxwD/node-test.tap.log`):
+`npm test -- tests/sdlc/server.test.mjs`. `node --check` passed for `server.mjs`
+and `tests/sdlc/server.test.mjs`; `git diff --check` passed. This covers the
+unauthorized-project-source clause at the API boundary; it does not audit
+principal-store internals or close AC2/T-90/PR-15. No full check or Sol review.
+
 PR-15 T-90 sealed context coverage and evidence (2026-10-05): saved context
 manifests now hash the retrieval plan and coverage, intent guardrails, explicit
 unknown and excluded dependencies, source pins, and evidence-reference content
