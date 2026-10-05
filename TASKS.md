@@ -7757,3 +7757,17 @@ view tests passed 5/5 (0 failures, 0 skips; TAP duration 0.25s; log
 `git diff --check` passed. `npm run task:next` reports PR-15 first open. This is
 one bounded T-90 contribution, not completion of T-90 or PR-15. No full check or
 Sol review.
+
+PR-15 T-90 exact source return-link validation (2026-10-05): the saved-run
+handoff now requires the loaded project to contain the exact referenced blueprint
+ID/version and process before it offers the design link. Tests verify that a
+neighboring version, different blueprint ID, missing process, mismatched project,
+or malformed process does not fall back to another design. Focused repository
+view tests passed 5/5 (0 failures, 0 skips; TAP duration 0.23s; log
+`/tmp/orgward-tests-JkkA3P/node-test.tap.log`):
+`npm test -- tests/execution/process-task-repository-view.test.mjs`.
+`node --check` passed for `public/process-task-repository-view.mjs`,
+`public/execution.js`, and `tests/execution/process-task-repository-view.test.mjs`;
+`git diff --check` passed. `npm run task:next` reports PR-15 first open. This is
+one bounded T-90 increment; T-90 and PR-15 remain open. No full check or Sol
+review.

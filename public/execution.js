@@ -3139,7 +3139,7 @@ function renderRun() {
       el('p', { text: `Blueprint assignment reference ${ref.actorId} → role ${ref.roleId}. The durable task runtime supplies progress; the saved plan graph remains immutable.` }),
       el('p', { className: 'muted', text: 'This run uses its selected configured profile through the OrgWard worker after independent approval; it does not execute as or impersonate the bound workload identity.' }),
     ];
-    const designRoute = processTaskPinnedDesignRoute(run);
+    const designRoute = processTaskPinnedDesignRoute(run, state.runProject);
     if (designRoute) processTaskDetails.push(el('a', { className: 'button ghost', text: `Open pinned design: ${ref.processName ?? 'process'} · blueprint v${ref.blueprintVersion}`,
       attrs: { href: designRoute } }));
     const repositoryReference = processTaskRepositoryReference(run);

@@ -24,10 +24,15 @@ export function processTaskRepositoryReference(run) {
   return fields.join(' · ');
 }
 
-export function processTaskPinnedDesignRoute(run) {
+export function processTaskPinnedDesignRoute(run, project) {
   const ref = run?.processTaskRef;
   if (!PROJECT_ID.test(run?.projectId ?? '') || !Number.isSafeInteger(ref?.blueprintVersion) || ref.blueprintVersion < 1
-    || !PROCESS_ID.test(ref?.processId ?? '')) return null;
+    || !/^blueprint-[0-9a-f-]{36}$/i.test(ref?.blueprintId ?? '') || !PROCESS_ID.test(ref?.processId ?? '')
+    || project?.id !== run.projectId || !Array.isArray(project.blueprintVersions)) return null;
+  const blueprint = project.blueprintVersions.find((entry) => entry?.id === ref.blueprintId
+    && entry.version === ref.blueprintVersion);
+  if (!blueprint || !Object.values(blueprint.areas ?? {}).some((area) => Array.isArray(area?.items)
+    && area.items.some((item) => item?.id === ref.processId && item.type === 'process'))) return null;
   return encodeStudioRoute({ projectId: run.projectId, view: 'map', selectedId: ref.processId,
     blueprintVersion: ref.blueprintVersion });
 }

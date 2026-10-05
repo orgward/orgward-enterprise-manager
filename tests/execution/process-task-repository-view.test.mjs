@@ -4,18 +4,33 @@ import { processTaskPinnedDesignRoute, processTaskRepositoryReference } from '..
 
 test('process task run links back to its exact pinned design and process', () => {
   const run = { projectId: 'project-11111111-1111-4111-8111-111111111111', processTaskRef: {
-    processId: 'process-order-intake', blueprintVersion: 7,
+    processId: 'process-order-intake', blueprintId: 'blueprint-22222222-2222-4222-8222-222222222222', blueprintVersion: 7,
   } };
-  assert.equal(processTaskPinnedDesignRoute(run), '/?project=project-11111111-1111-4111-8111-111111111111&view=map&selected=process-order-intake&blueprintVersion=7');
+  const project = { id: run.projectId, blueprintVersions: [{ id: run.processTaskRef.blueprintId, version: 7,
+    areas: { capabilitiesProcesses: { items: [{ id: 'process-order-intake', type: 'process' }] } } }] };
+  assert.equal(processTaskPinnedDesignRoute(run, project), '/?project=project-11111111-1111-4111-8111-111111111111&view=map&selected=process-order-intake&blueprintVersion=7');
 });
 
 test('process task run omits pinned design navigation for invalid source identity', () => {
+  const projectId = 'project-11111111-1111-4111-8111-111111111111';
+  const blueprintId = 'blueprint-22222222-2222-4222-8222-222222222222';
+  const project = { id: projectId, blueprintVersions: [{ id: blueprintId, version: 7,
+    areas: { capabilitiesProcesses: { items: [{ id: 'process-order-intake', type: 'process' }] } } }] };
   assert.equal(processTaskPinnedDesignRoute({ projectId: 'not-a-project', processTaskRef: {
-    processId: 'process-order-intake', blueprintVersion: 7,
-  } }), null);
+    processId: 'process-order-intake', blueprintId, blueprintVersion: 7,
+  } }, project), null);
   assert.equal(processTaskPinnedDesignRoute({ projectId: 'project-11111111-1111-4111-8111-111111111111', processTaskRef: {
-    processId: '../invalid', blueprintVersion: 7,
-  } }), null);
+    processId: '../invalid', blueprintId, blueprintVersion: 7,
+  } }, project), null);
+  assert.equal(processTaskPinnedDesignRoute({ projectId, processTaskRef: {
+    processId: 'process-order-intake', blueprintId, blueprintVersion: 6,
+  } }, project), null, 'a neighboring blueprint version is not substituted');
+  assert.equal(processTaskPinnedDesignRoute({ projectId, processTaskRef: {
+    processId: 'process-order-intake', blueprintId: 'blueprint-33333333-3333-4333-8333-333333333333', blueprintVersion: 7,
+  } }, project), null, 'a different blueprint identity is not substituted');
+  assert.equal(processTaskPinnedDesignRoute({ projectId, processTaskRef: {
+    processId: 'process-missing', blueprintId, blueprintVersion: 7,
+  } }, project), null, 'a process absent from the pinned blueprint is not linked');
 });
 
 test('process task run view names the exact selected Git repository, ref, commit, and tree', () => {
