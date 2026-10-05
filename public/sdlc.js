@@ -346,6 +346,15 @@ function renderOverview(content) {
   for (const decision of c.gateHistory.slice(-5).reverse()) gates.append(gateCard(decision));
   content.append(section('Latest gate decisions', gates.childNodes.length ? gates : empty('No gate has run yet. Run the first stage to evaluate intent quality.')));
   content.append(section('Machine-queryable lineage', lineageView(c.traceability)));
+  const learningProposals = c.artifacts.learning?.proposals ?? [];
+  if (learningProposals.length) {
+    content.append(section('Proposed design corrections', learningProposals.map((proposal) => el('article', { className: 'checkpoint-callout' }, [
+      el('b', { text: `${proposal.title} · ${proposal.status.replaceAll('_', ' ')}` }),
+      ...(proposal.proposedClaim ? [el('p', { text: proposal.proposedClaim })] : []),
+      ...(proposal.evidence ? [el('p', { text: `Observation ${proposal.evidence.observationRef} · SHA-256 ${proposal.evidence.observationHash} · release ${proposal.evidence.releaseRef}` })] : []),
+      el('p', { text: proposal.authorityRequired ? `Review by ${proposal.reviewOwner ?? 'the accountable owner'} is required. This proposal does not change the saved design or authorize another release.` : 'This proposal is not applied automatically.' }),
+    ]))));
+  }
 }
 
 function workspaceQueue(queue) {

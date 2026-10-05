@@ -7772,6 +7772,19 @@ view tests passed 5/5 (0 failures, 0 skips; TAP duration 0.23s; log
 one bounded T-90 increment; T-90 and PR-15 remain open. No full check or Sol
 review.
 
+PR-15 T-90 runtime evidence correction proposals (2026-10-05): an unhealthy
+runtime observation or recorded control exception now creates a design-correction
+claim proposal bound to the observation hash, release ID, and outcome ID. The
+case overview shows it as proposed, requires accountable-owner review, and states
+that it changes neither the saved design nor release authority. Focused tests
+passed 35/35 (0 failures, 0 skips; duration 1.74s; TAP log
+`/tmp/orgward-tests-6kDbqt/node-test.tap.log`):
+`npm test -- tests/sdlc/engine.test.mjs tests/sdlc/server.test.mjs`.
+`node --check` passed for `src/sdlc/engine.mjs`, `public/sdlc.js`, and
+`tests/sdlc/engine.test.mjs`; `git diff --check` passed. `npm run task:next`
+reports PR-15 first open. This is one bounded T-90 contribution; T-90 and PR-15
+remain open. No full check or Sol review.
+
 PR-15 T-90 dependent context invalidation view (2026-10-05): when a saved
 project advances beyond a source-bound SDLC case's pinned blueprint, the case
 view now identifies accepted requirements and architecture baselines, saved

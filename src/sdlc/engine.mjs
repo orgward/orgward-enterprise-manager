@@ -1430,6 +1430,8 @@ function outcomeEvaluation(changeCase) {
   const controlOutcome = signals.controlExceptions === 0 ? 'PASS' : 'FAIL';
   const businessOutcome = Number(signals.manualWorkReduction) >= 50 ? 'PASS' : 'FAIL';
   const result = { id: id('outcome'), intendedMeasures: changeCase.intent.successMeasures, observedMeasures: signals, observationWindow: changeCase.artifacts.observation.window, confidence: 'HIGH', technicalOutcome, businessOutcome, controlOutcome, findings: [], followUpProposalRefs: [] };
+  if (technicalOutcome === 'FAIL') result.findings.push({ code: 'RUNTIME_HEALTH_NOT_MET', message: 'The recorded runtime observation reports unhealthy technical behavior.' });
+  if (controlOutcome === 'FAIL') result.findings.push({ code: 'CONTROL_EXCEPTION_OBSERVED', message: `The recorded runtime observation reports ${signals.controlExceptions} control exception(s).` });
   if (businessOutcome === 'FAIL') result.findings.push({ code: 'BUSINESS_TARGET_MISSED', message: `Manual-work reduction ${signals.manualWorkReduction}% is below the 50% target.` });
   result.contentHash = digest(result); changeCase.artifacts.outcome = result;
   return pass('outcome-achievement', [result.id], businessOutcome === 'PASS' && technicalOutcome === 'PASS' && controlOutcome === 'PASS' ? 1 : .67, businessOutcome === 'FAIL' ? [finding('BUSINESS_OUTCOME_FAILED', 'MEDIUM', 'Technical and control outcomes passed, but the business target was missed.', result.id, 'Create an evidenced follow-up change rather than declaring success.')] : []);
@@ -1438,6 +1440,27 @@ function outcomeEvaluation(changeCase) {
 function learning(changeCase) {
   const outcome = changeCase.artifacts.outcome;
   const proposals = [];
+  const observation = changeCase.artifacts.observation;
+  const signals = observation?.signals;
+  if (signals && (!signals.technicalHealthy || signals.controlExceptions > 0)) {
+    const affectedSignals = [
+      ...(!signals.technicalHealthy ? ['technical health failure'] : []),
+      ...(signals.controlExceptions > 0 ? [`${signals.controlExceptions} control exception(s)`] : []),
+    ];
+    const proposal = {
+      id: id('design-correction'), type: 'DESIGN_CORRECTION_CLAIM',
+      title: 'Review observed runtime and control evidence',
+      proposedClaim: `Review the saved design for the observed ${affectedSignals.join(' and ')} before further release.`,
+      derivedFrom: [observation.id, observation.contentHash, observation.releaseRef, outcome.id],
+      evidence: { observationRef: observation.id, observationHash: observation.contentHash,
+        releaseRef: observation.releaseRef, signals: structuredClone(signals) },
+      status: 'PROPOSED_NOT_APPLIED', authorityRequired: true,
+      reviewOwner: changeCase.accountableOwner,
+    };
+    proposal.contentHash = digest(proposal);
+    proposals.push(proposal);
+    outcome.followUpProposalRefs.push(proposal.id);
+  }
   if (outcome.businessOutcome === 'FAIL') {
     const proposal = { id: id('follow-up'), type: 'CHANGE_CASE_PROPOSAL', title: 'Reduce residual manual review without weakening controls', derivedFrom: [outcome.id, changeCase.intent.id], rationale: outcome.findings[0]?.message, proposedMeasures: [{ name: 'Manual-work reduction', target: 50, unit: 'percent' }], status: 'PROPOSED_NOT_APPLIED', authorityRequired: true };
     proposal.contentHash = digest(proposal); proposals.push(proposal); outcome.followUpProposalRefs.push(proposal.id);

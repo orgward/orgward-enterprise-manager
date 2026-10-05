@@ -43,6 +43,39 @@ test('golden case runs to protected approval, resumes, observes, and learns', ()
   assert.ok(lineage.nodes.some((node) => node.type === 'FollowUp'));
 });
 
+test('runtime and control findings propose an evidence-linked design correction without applying it', () => {
+  const sourceBinding = { projectId: 'project-runtime', blueprintId: 'blueprint-runtime',
+    blueprintVersion: 2, objectId: 'system-runtime', sourceHash: 'a'.repeat(64) };
+  const changeCase = createChangeCase({ mode: 'custom', createdBy: 'runtime-owner', accountableOwner: 'runtime-owner' }, { sourceBinding });
+  changeCase.currentStageIndex = 11;
+  changeCase.currentStage = 'S11';
+  changeCase.status = 'RUNNING';
+  changeCase.artifacts.release = { id: 'release-runtime-observed', status: 'RELEASED', authorizedBy: 'existing-approval' };
+  const signals = { technicalHealthy: false, controlExceptions: 2, manualWorkReduction: 60, errorRate: 0.04, cost: 42 };
+  changeCase.artifacts.observation = { id: 'observation-runtime-evidence', releaseRef: changeCase.artifacts.release.id,
+    window: 'synthetic:runtime-window', signals, contentHash: digest(signals) };
+  changeCase.artifacts.outcome = { id: 'outcome-runtime-evidence', businessOutcome: 'PASS', findings: [], followUpProposalRefs: [] };
+  const savedSource = structuredClone(changeCase.sourceBinding);
+  const savedRelease = structuredClone(changeCase.artifacts.release);
+
+  advanceCase(changeCase, { actor: 'learning-stage', idempotencyKey: 'runtime-design-proposal' });
+
+  const proposal = changeCase.artifacts.learning.proposals.find((entry) => entry.type === 'DESIGN_CORRECTION_CLAIM');
+  assert.ok(proposal);
+  assert.equal(proposal.status, 'PROPOSED_NOT_APPLIED');
+  assert.equal(proposal.authorityRequired, true);
+  assert.match(proposal.proposedClaim, /technical health failure and 2 control exception/);
+  assert.deepEqual(proposal.derivedFrom, [changeCase.artifacts.observation.id,
+    changeCase.artifacts.observation.contentHash, changeCase.artifacts.observation.releaseRef,
+    changeCase.artifacts.outcome.id]);
+  assert.deepEqual(proposal.evidence.signals, signals);
+  assert.equal(proposal.evidence.observationHash, digest(proposal.evidence.signals));
+  assert.deepEqual(changeCase.sourceBinding, savedSource);
+  assert.deepEqual(changeCase.artifacts.release, savedRelease);
+  assert.equal(changeCase.artifacts.learning.authoritativeModelMutated, false);
+  assert.ok(changeCase.artifacts.outcome.followUpProposalRefs.includes(proposal.id));
+});
+
 for (const [mutation, expectedGate] of Object.entries({
   missing_aml: 'G1', stale_architecture: 'G1', forged_provenance: 'G1', omitted_reporting: 'G2', unresolved_interpretation: 'G3', contradictory_requirement: 'G4',
   direct_database: 'G5', authority_bypass: 'G5', missing_rollback: 'G5', plan_cycle: 'G6', failing_ci: 'G7', artifact_tamper: 'G8', unauthorized_release: 'G9',
