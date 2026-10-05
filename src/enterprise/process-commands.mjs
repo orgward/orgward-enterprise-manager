@@ -5,9 +5,9 @@ import { blueprintObjects, enterpriseFailure, enterpriseText } from './types.mjs
 import { appendEnterpriseBranchDesign } from './branches.mjs';
 import { projectEnterprise } from './projections.mjs';
 import { normalizeDecisionTable, normalizeProcessFlow } from './process-model.mjs';
-import { simulateProcessFlow } from './process-simulation.mjs';
+import { normalizeStaffingScenario, simulateProcessFlow, simulateStaffingCapacity } from './process-simulation.mjs';
 
-export const ENTERPRISE_PROCESS_KINDS = new Set(['define-process-flow', 'define-decision-table', 'simulate-process']);
+export const ENTERPRISE_PROCESS_KINDS = new Set(['define-process-flow', 'define-decision-table', 'simulate-process', 'simulate-staffing']);
 const fail = (code, message, status = 400) => { throw enterpriseFailure(code, message, status); };
 const safeId = (value) => typeof value === 'string' && /^[a-z0-9][a-z0-9_-]{0,119}$/i.test(value);
 export function normalizeEnterpriseProcessCommand(input) {
@@ -24,11 +24,13 @@ export function normalizeEnterpriseProcessCommand(input) {
     }
     allowed.push('branchId', 'branchRevision'); Object.assign(command, { branchId: input.branchId, branchRevision: input.branchRevision });
   }
-  if (input.kind === 'simulate-process') {
+  if (input.kind === 'simulate-process' || input.kind === 'simulate-staffing') {
     allowed.push('processId', 'scenario', 'proposalId');
     if (!safeId(input.processId) || !input.scenario || typeof input.scenario !== 'object' || Array.isArray(input.scenario)) fail('INVALID_ENTERPRISE_PROCESS_COMMAND', 'Choose a saved process and declared scenario.');
     if (input.proposalId != null && (!/^enterprise-proposal-[0-9a-f-]{36}$/.test(input.proposalId) || command.branchId)) fail('INVALID_ENTERPRISE_PROCESS_COMMAND', 'Choose a main, branch or proposal source.');
-    Object.assign(command, { processId: input.processId, scenario: structuredClone(input.scenario), proposalId: input.proposalId ?? null });
+    Object.assign(command, { processId: input.processId,
+      scenario: input.kind === 'simulate-staffing' ? normalizeStaffingScenario(input.scenario) : structuredClone(input.scenario),
+      proposalId: input.proposalId ?? null });
   } else {
     const field = input.kind === 'define-process-flow' ? 'processFlow' : 'decisionTable';
     allowed.push('objectId', field);
@@ -41,7 +43,7 @@ export function normalizeEnterpriseProcessCommand(input) {
 export function applyEnterpriseProcessCommand(project, command, actor) {
   const at = new Date().toISOString(); const current = latestBlueprint(project);
   if (!current) fail('BLUEPRINT_NOT_FOUND', 'Save the initial blueprint first.', 409);
-  if (command.kind === 'simulate-process') {
+  if (command.kind === 'simulate-process' || command.kind === 'simulate-staffing') {
     if ((project.enterpriseSimulations ?? []).length >= 50) fail('PROCESS_SIMULATION_LIMIT', 'This project reached its 50-simulation history limit.', 409);
     const query = command.branchId ? { branchId: command.branchId, branchRevision: command.branchRevision }
       : command.proposalId ? { proposalId: command.proposalId } : { blueprintVersion: command.blueprintVersion };
@@ -50,22 +52,25 @@ export function applyEnterpriseProcessCommand(project, command, actor) {
     const objects = blueprintObjects(source); const byId = new Map(objects.map((object) => [object.id, object]));
     const process = byId.get(command.processId);
     if (process?.type !== 'process') fail('INVALID_PROCESS_REFERENCE', 'Choose a canonical process in the exact simulation source.');
-    const result = simulateProcessFlow(process, command.scenario, byId);
+    const result = command.kind === 'simulate-staffing'
+      ? simulateStaffingCapacity(process, command.scenario)
+      : simulateProcessFlow(process, command.scenario, byId);
     const binding = { projectId: project.id, blueprintId: source.id, blueprintVersion: source.version,
       processId: process.id, snapshotHash: digest(source), branchId: command.branchId ?? null,
       branchRevision: command.branchRevision ?? null, proposalId: command.proposalId ?? null };
-    const referenced = new Set([process.id, ...process.processFlow.steps.flatMap((step) => [step.processId, step.roleId, step.decisionId,
-      ...(step.inputIds ?? []), ...(step.outputIds ?? []),
-      ...(byId.get(step.decisionId)?.decisionTable?.inputs ?? []).map((entry) => entry.informationId)]).filter(Boolean),
+    const referenced = command.kind === 'simulate-staffing' ? new Set([process.id]) : new Set([process.id,
+      ...process.processFlow.steps.flatMap((step) => [step.processId, step.roleId, step.decisionId,
+        ...(step.inputIds ?? []), ...(step.outputIds ?? []),
+        ...(byId.get(step.decisionId)?.decisionTable?.inputs ?? []).map((entry) => entry.informationId)]).filter(Boolean),
       ...result.scenario.inputs.map((entry) => entry.informationId)]);
     const sourceLabels = { records: Object.fromEntries(objects.filter((object) => referenced.has(object.id)).map((object) => [object.id, object.name])),
-      steps: Object.fromEntries(process.processFlow.steps.map((step) => [step.id, step.title])) };
+      steps: Object.fromEntries((process.processFlow?.steps ?? []).map((step) => [step.id, step.title])) };
     const { resultHash: evaluatedHash, ...evaluated } = result;
     const core = { ...evaluated, source: binding, sourceLabels };
     if (Buffer.byteLength(JSON.stringify(core), 'utf8') > 262144) fail('PROCESS_SIMULATION_TOO_LARGE', 'The saved explainable simulation exceeds 256 KiB. Reduce rules, trace length or repeated assumptions.', 409);
     const simulation = { ...core, resultHash: digest(core), id: `process-simulation-${randomUUID()}`, createdAt: at, createdBy: actor, reason: command.reason };
     project.enterpriseSimulations ??= []; project.enterpriseSimulations.push(simulation);
-    project.audit ??= []; project.audit.push({ at, action: 'enterprise.simulate-process', actor,
+    project.audit ??= []; project.audit.push({ at, action: command.kind === 'simulate-staffing' ? 'enterprise.simulate-staffing' : 'enterprise.simulate-process', actor,
       detail: `Saved ${result.status.toLowerCase()} declared simulation for “${process.name}”; no work or business effects performed.` });
     return { blueprint: source, affectedObjectId: process.id, proposalId: command.proposalId ?? null,
       branchId: command.branchId ?? null, branchRevision: command.branchRevision ?? null, simulationId: simulation.id, recordedAt: at };

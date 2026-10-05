@@ -955,6 +955,65 @@ test('enterprise process definitions and simulations stay typed, bounded, source
   assert.ok(flowResult.data.blueprintVersion < ambiguousResult.data.blueprintVersion);
 });
 
+test('enterprise staffing simulations compare exact-source capacity, deny readers and survive restart without starting work', async (t) => {
+  const postgres = await startPostgres(); let root; let instance;
+  t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-enterprise-staffing-simulation-'));
+  instance = await startApp(postgres, root);
+  for (const identity of identities.values()) await postgres.query(`insert into orgward.oidc_principals
+    (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+  [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  const project = await seedProject(postgres, 'Staffing capacity simulation fixture');
+  const scenario = { schemaVersion: '1.0', arrivals: { value: 12, unit: 'requests' }, interval: { value: 1, unit: 'days' },
+    capacityPerWorker: { value: 8, unit: 'requests' }, workerCounts: [1, 2] };
+  const view = await currentView(instance.base, 'editor', project.id, { selectedId: 'process-deliver' });
+  const simulationBody = commandBody(view, 'staffing-capacity-comparison', { kind: 'simulate-staffing', processId: 'process-deliver',
+    scenario, reason: 'Compare declared daily staffing assumptions.' });
+  const readerBody = commandBody(view, 'staffing-reader-denied', { kind: 'simulate-staffing', processId: 'process-deliver',
+    scenario, reason: 'Reader cannot save a staffing simulation.' });
+  const denied = await postCommand(instance.base, 'reader', project.id, readerBody, 403);
+  assert.equal(denied.error.code, 'ACTION_FORBIDDEN');
+  const invalid = await postCommand(instance.base, 'editor', project.id, commandBody(view, 'staffing-unit-mismatch', {
+    kind: 'simulate-staffing', processId: 'process-deliver', scenario: { ...scenario, capacityPerWorker: { value: 8, unit: 'tickets' } },
+    reason: 'Reject mismatched capacity units.' }), 400);
+  assert.equal(invalid.error.code, 'INVALID_STAFFING_SCENARIO');
+  const created = await postCommand(instance.base, 'editor', project.id, simulationBody);
+  const saved = created.data.simulation;
+  assert.equal(saved.simulationType, 'STAFFING_CAPACITY');
+  assert.equal(saved.status, 'SIMULATED');
+  assert.equal(saved.assumptionStatus, 'UNVALIDATED');
+  assert.equal(saved.meaning, 'SIMULATION_ONLY');
+  assert.deepEqual(saved.comparisons.map(({ workers, capacity, throughput, queue }) => ({ workers, capacity, throughput, queue })), [
+    { workers: 1, capacity: 8, throughput: 8, queue: 4 }, { workers: 2, capacity: 16, throughput: 12, queue: 0 }]);
+  assert.equal(saved.source.projectId, project.id);
+  assert.equal(saved.source.blueprintId, view.data.context.blueprintId);
+  assert.equal(saved.source.blueprintVersion, view.data.context.blueprintVersion);
+  assert.equal(saved.source.snapshotHash, view.data.context.snapshotHash);
+  const reopened = await currentView(instance.base, 'editor', project.id, { selectedId: 'process-deliver', simulationId: saved.id });
+  assert.deepEqual(reopened.data.simulation, saved);
+  assert.equal(reopened.data.simulations.find((entry) => entry.id === saved.id).simulationType, 'STAFFING_CAPACITY');
+  assert.equal(reopened.data.simulations.length, 1, 'the rejected reader and invalid-unit submissions saved no forecast');
+
+  const conflictView = await currentView(instance.base, 'owner', project.id);
+  await postCommand(instance.base, 'owner', project.id, commandBody(conflictView, 'staffing-concurrent-blueprint-change', {
+    kind: 'create-scope', scopeType: 'organization', name: 'Concurrent staffing revision', detail: 'Advance the project revision.',
+    ownerRoleId: 'role-founder', reason: 'Create a new design revision before stale submission.' }));
+  const staleBody = commandBody(conflictView, 'staffing-stale-project-version', { kind: 'simulate-staffing', processId: 'process-deliver',
+    scenario, reason: 'A stale project version must not append a result.' });
+  const conflict = await postCommand(instance.base, 'editor', project.id, staleBody, 409);
+  assert.equal(conflict.error.code, 'VERSION_CONFLICT');
+
+  await closeApp(instance); instance = await startApp(postgres, root);
+  const restarted = await currentView(instance.base, 'owner', project.id, { selectedId: 'process-deliver', simulationId: saved.id });
+  assert.deepEqual(restarted.data.simulation, saved);
+  const aggregate = await postgres.query('select state from orgward.aggregates where tenant_id=$1 and aggregate_kind=$2 and aggregate_id=$3',
+    [tenantId, 'project', project.id]);
+  const persisted = typeof aggregate.rows[0].state === 'string' ? JSON.parse(aggregate.rows[0].state) : aggregate.rows[0].state;
+  assert.ok(persisted.audit.some((entry) => entry.action === 'enterprise.simulate-staffing'));
+  assert.equal(persisted.enterpriseSimulations.length, 1, 'the stale project-version conflict appended no result');
+  assert.equal((persisted.processPlans ?? []).length, 0, 'the scenario creates no process plan or live work');
+});
+
 test('manual process flow gates actual human work by audited decision routes, forks, loops, exceptions and instance control', async (t) => {
   const postgres = await startPostgres();
   let root;

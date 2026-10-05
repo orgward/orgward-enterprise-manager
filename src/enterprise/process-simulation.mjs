@@ -3,6 +3,10 @@ import { enterpriseFailure } from './types.mjs';
 import { decisionOutcomes, normalizeDecisionTable, normalizeProcessFlow } from './process-model.mjs';
 
 export const PROCESS_SIMULATION_ENGINE = 'orgward-declared-flow-v1';
+export const STAFFING_SIMULATION_ENGINE = 'orgward-staffing-capacity-v1';
+export const STAFFING_SIMULATION_LIMITS = Object.freeze({ arrivals: 1_000_000, capacityPerWorker: 1_000_000, workers: 100 });
+const STAFFING_QUANTITY_UNITS = new Set(['cases', 'customers', 'orders', 'requests', 'tasks', 'tickets', 'units']);
+const STAFFING_INTERVAL_UNITS = new Set(['minutes', 'hours', 'days', 'weeks']);
 const scalar = (value) => value === null || typeof value === 'boolean' || typeof value === 'string' && value.length <= 240
   || typeof value === 'number' && Number.isFinite(value);
 export function normalizeProcessScenario(input, flow, byId) {
@@ -130,5 +134,57 @@ export function simulateProcessFlow(process, suppliedScenario, byId) {
   const status = limitReached ? 'LIMIT_REACHED' : conflicted ? 'CONFLICTED' : unresolved.length ? 'BLOCKED' : failed ? 'FAILED' : ended ? 'COMPLETED' : 'BLOCKED';
   const core = { engineVersion: PROCESS_SIMULATION_ENGINE, scenarioHash: digest(scenario), status, trace, unresolved,
     meaning: 'SIMULATION_ONLY', scenario };
+  return { ...core, resultHash: digest(core) };
+}
+
+export function normalizeStaffingScenario(input) {
+  const fail = (message) => { throw enterpriseFailure('INVALID_STAFFING_SCENARIO', message); };
+  if (!input || typeof input !== 'object' || Array.isArray(input)
+    || Object.keys(input).some((key) => !['schemaVersion', 'arrivals', 'interval', 'capacityPerWorker', 'workerCounts'].includes(key))
+    || input.schemaVersion !== '1.0' || !input.arrivals || typeof input.arrivals !== 'object' || Array.isArray(input.arrivals)
+    || !input.interval || typeof input.interval !== 'object' || Array.isArray(input.interval)
+    || !input.capacityPerWorker || typeof input.capacityPerWorker !== 'object' || Array.isArray(input.capacityPerWorker)
+    || !Array.isArray(input.workerCounts) || input.workerCounts.length < 1 || input.workerCounts.length > STAFFING_SIMULATION_LIMITS.workers) {
+    fail('Use staffing scenario schema 1.0 with typed arrivals, interval, per-worker capacity, and one or more worker counts.');
+  }
+  const quantity = (entry, label, maximum) => {
+    if (Object.keys(entry).sort().join(',') !== 'unit,value' || !Number.isSafeInteger(entry.value)
+      || entry.value < 0 || entry.value > maximum || !STAFFING_QUANTITY_UNITS.has(entry.unit)) {
+      fail(`${label} must be a bounded nonnegative whole number with a supported work unit.`);
+    }
+    return { value: entry.value, unit: entry.unit };
+  };
+  const arrivals = quantity(input.arrivals, 'Arrivals', STAFFING_SIMULATION_LIMITS.arrivals);
+  const capacityPerWorker = quantity(input.capacityPerWorker, 'Per-worker capacity', STAFFING_SIMULATION_LIMITS.capacityPerWorker);
+  if (arrivals.unit !== capacityPerWorker.unit) fail('Arrivals and per-worker capacity must use the same work unit.');
+  if (Object.keys(input.interval).sort().join(',') !== 'unit,value' || !Number.isSafeInteger(input.interval.value)
+    || input.interval.value < 1 || input.interval.value > 10_000 || !STAFFING_INTERVAL_UNITS.has(input.interval.unit)) {
+    fail('Use a positive bounded interval with a supported time unit.');
+  }
+  const workerCounts = input.workerCounts.map((workers) => {
+    if (!Number.isSafeInteger(workers) || workers < 1 || workers > STAFFING_SIMULATION_LIMITS.workers) {
+      fail(`Worker counts must be whole numbers from 1 to ${STAFFING_SIMULATION_LIMITS.workers}.`);
+    }
+    return workers;
+  });
+  if (new Set(workerCounts).size !== workerCounts.length) fail('Worker count comparison values must be unique.');
+  return { schemaVersion: '1.0', arrivals, interval: { value: input.interval.value, unit: input.interval.unit },
+    capacityPerWorker, workerCounts: [...workerCounts].sort((a, b) => a - b) };
+}
+
+export function simulateStaffingCapacity(process, suppliedScenario) {
+  if (!process || process.type !== 'process') throw enterpriseFailure('INVALID_PROCESS_REFERENCE', 'Choose a canonical saved process.');
+  const scenario = normalizeStaffingScenario(suppliedScenario);
+  const comparisons = scenario.workerCounts.map((workers) => {
+    const capacity = scenario.capacityPerWorker.value * workers;
+    const throughput = Math.min(scenario.arrivals.value, capacity);
+    return { workers, capacity, throughput, queue: scenario.arrivals.value - throughput,
+      workUnit: scenario.arrivals.unit, interval: structuredClone(scenario.interval),
+      meaning: 'SIMULATED_UNVALIDATED_ASSUMPTIONS' };
+  });
+  const core = { simulationType: 'STAFFING_CAPACITY', engineVersion: STAFFING_SIMULATION_ENGINE,
+    meaning: 'SIMULATION_ONLY', assumptionStatus: 'UNVALIDATED', status: 'SIMULATED', scenario, scenarioHash: digest(scenario),
+    comparisons, explanations: ['This is a deterministic hypothetical from unvalidated assumptions, not measured operating performance.',
+      'Changing worker counts changes the scenario only; no hiring, reservation, assignment, spend, or work occurs.'] };
   return { ...core, resultHash: digest(core) };
 }

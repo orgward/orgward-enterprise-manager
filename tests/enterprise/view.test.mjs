@@ -1210,12 +1210,54 @@ test('enterprise process authoring binds current and branch snapshots and requir
     scenario: { inputs: [], activityOutcomes: [], decisionChoices: [], stepLimit: 12 }, reason: 'Inspect the exact draft flow.' });
   assert.equal(simulation.blueprintId, 'blueprint-draft');
   assert.equal(simulation.branchRevision, 4);
+  const staffing = enterpriseProcessCommandPayload(draft, { kind: 'simulate-staffing', processId: process.id,
+    scenario: { schemaVersion: '1.0', arrivals: { value: 12, unit: 'requests' }, interval: { value: 1, unit: 'days' },
+      capacityPerWorker: { value: 8, unit: 'requests' }, workerCounts: [1, 2] }, reason: 'Compare unvalidated assumptions.' });
+  assert.equal(staffing.blueprintId, 'blueprint-draft');
+  assert.equal(staffing.branchRevision, 4);
+  assert.equal(enterpriseProcessCommandPayload({ ...draft, permissions: { write: false, simulate: false } }, {
+    kind: 'simulate-staffing', processId: process.id, scenario: {}, reason: 'Denied.' }), null);
   assert.equal(enterpriseProcessCommandPayload({ ...draft, permissions: { write: false, simulate: false } }, {
     kind: 'simulate-process', processId: process.id, scenario: {}, reason: 'Denied.' }), null);
   assert.equal(enterpriseTypedValue('number', '12.5'), 12.5);
   assert.equal(enterpriseTypedValue('boolean', 'false'), false);
   assert.deepEqual(enterpriseTypedValue('number', '1\n2', true), [1, 2]);
   assert.throws(() => enterpriseTypedValue('number', 'NaN'), /finite number/);
+});
+
+test('enterprise staffing UI submits source-bound assumptions and renders accessible worker comparisons', () => {
+  const process = { id: 'process-service', type: 'process', name: 'Serve requests', detail: 'Provide support.' };
+  const blueprint = { id: 'blueprint-main', areas: { capabilitiesProcesses: { items: [process] } } };
+  const modelValue = { context: { blueprintId: blueprint.id, blueprintVersion: 8, snapshotHash: 'a'.repeat(64), isCurrent: true }, blueprint,
+    permissions: { processWrite: true, simulate: true } };
+  let submitted = null;
+  const root = renderEnterpriseProcess({ model: modelValue, object: process, el, ui: branchUi, onCommand: (value) => { submitted = value; } });
+  assert.match(root.textContent, /unvalidated assumptions/);
+  assert.match(root.textContent, /never hires staff, reserves capacity, or starts work/);
+  const form = root.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === 'simulate-staffing');
+  assert.ok(form);
+  form.listeners.get('submit')?.({ preventDefault() {} });
+  assert.deepEqual(submitted, { kind: 'simulate-staffing', processId: process.id, scenario: { schemaVersion: '1.0',
+    arrivals: { value: 12, unit: 'requests' }, interval: { value: 1, unit: 'hours' },
+    capacityPerWorker: { value: 8, unit: 'requests' }, workerCounts: [1, 2] }, reason: '' });
+  const result = { id: 'process-simulation-00000000-0000-4000-8000-000000000032', status: 'SIMULATED', simulationType: 'STAFFING_CAPACITY',
+    assumptionStatus: 'UNVALIDATED', createdAt: '2026-10-05T12:00:00.000Z', createdBy: 'oidc:operator',
+    source: { blueprintId: blueprint.id, blueprintVersion: 8, processId: process.id, snapshotHash: 'a'.repeat(64) },
+    engineVersion: 'orgward-staffing-capacity-v1', scenarioHash: 'b'.repeat(64), resultHash: 'c'.repeat(64), meaning: 'SIMULATION_ONLY',
+    scenario: { schemaVersion: '1.0', arrivals: { value: 12, unit: 'requests' }, interval: { value: 1, unit: 'days' },
+      capacityPerWorker: { value: 8, unit: 'requests' }, workerCounts: [1, 2] }, comparisons: [
+      { workers: 1, capacity: 8, throughput: 8, queue: 4, workUnit: 'requests' },
+      { workers: 2, capacity: 16, throughput: 12, queue: 0, workUnit: 'requests' }] };
+  const compared = renderEnterpriseSimulation({ simulation: result, model: modelValue, el });
+  const table = compared.querySelectorAll('table').find((entry) => Object.hasOwn(entry.attrs, 'data-staffing-simulation-comparison'));
+  assert.ok(table);
+  assert.equal(table.querySelectorAll('th').length, 6);
+  assert.deepEqual(Array.from(table.querySelectorAll('tr')).slice(1).map((row) => row.textContent), [
+    '1 8 requests 8 requests 4 requests', '2 16 requests 12 requests 0 requests']);
+  assert.match(compared.textContent, /SIMULATED/);
+  assert.match(compared.textContent, /UNVALIDATED/);
+  assert.match(compared.textContent, /does not establish actual staffing or verified operating performance/);
+  assert.match(compared.textContent, /No hiring, reservation, assignment, spending, or work occurs/);
 });
 
 test('enterprise process UI shows a saved simulation as exact hypothetical evidence', () => {

@@ -1,6 +1,6 @@
 import { enterpriseBranchWritable } from './enterprise-branches.mjs';
 
-export const ENTERPRISE_PROCESS_COMMANDS = ['define-process-flow', 'define-decision-table', 'simulate-process'];
+export const ENTERPRISE_PROCESS_COMMANDS = ['define-process-flow', 'define-decision-table', 'simulate-process', 'simulate-staffing'];
 const STEP_KINDS = [['manual', 'Manual activity'], ['manual-exception', 'Manual exception handling'], ['decision', 'Decision routing'], ['fork', 'Parallel fork'], ['join', 'Parallel join'], ['loop', 'Bounded loop'], ['loop-return', 'Return to loop'], ['end', 'End']];
 const OPERATORS = [['eq', 'equals'], ['neq', 'does not equal'], ['lt', 'is less than'], ['lte', 'is at most'], ['gt', 'is greater than'], ['gte', 'is at least'], ['in', 'is one of']];
 const VALUE_TYPES = [['string', 'Text'], ['number', 'Number'], ['boolean', 'True or false']];
@@ -33,7 +33,7 @@ export function enterpriseProcessWritable(model) {
 
 export function enterpriseProcessCommandPayload(model, payload) {
   if (!model?.blueprint || !ENTERPRISE_PROCESS_COMMANDS.includes(payload?.kind)) return null;
-  const simulation = payload.kind === 'simulate-process';
+  const simulation = ['simulate-process', 'simulate-staffing'].includes(payload.kind);
   if (simulation ? !model.permissions?.simulate : !enterpriseProcessWritable(model)) return null;
   const bound = { ...payload, blueprintId: model.context.blueprintId, blueprintVersion: model.context.blueprintVersion };
   if (model.context.branchId) Object.assign(bound, { branchId: model.context.branchId, branchRevision: model.context.branchRevision });
@@ -232,6 +232,30 @@ function decisionEditor({ model, object, el, ui, onCommand, disabled, reasonValu
 }
 
 export function renderEnterpriseSimulation({ simulation, model, el }) {
+  if (simulation.simulationType === 'STAFFING_CAPACITY') {
+    const sourceObject = allObjects(model).find((object) => object.id === simulation.source?.processId);
+    const matching = enterpriseSimulationSourceMatches(model, sourceObject, simulation);
+    const processName = matching ? sourceObject?.name : simulation.sourceLabels?.records?.[simulation.source?.processId] ?? simulation.source?.processId;
+    const root = el('section', { attrs: { 'data-enterprise-simulation-result': simulation.id, 'aria-label': 'Saved staffing capacity simulation comparison' } }, [
+      el('h5', { text: `Staffing capacity · SIMULATED · ${simulation.assumptionStatus ?? 'UNVALIDATED ASSUMPTIONS'}` }),
+      el('p', { text: `Saved hypothetical for ${processName} at ${simulation.createdAt} by ${simulation.createdBy}. Inputs are unvalidated assumptions; this does not establish actual staffing or verified operating performance.` }),
+      el('p', { text: `Arrivals: ${simulation.scenario.arrivals.value} ${simulation.scenario.arrivals.unit} per ${simulation.scenario.interval.value} ${simulation.scenario.interval.unit}. Capacity per worker: ${simulation.scenario.capacityPerWorker.value} ${simulation.scenario.capacityPerWorker.unit} per interval.` }),
+      el('p', { text: 'Worker-count changes compare hypothetical capacity only. No hiring, reservation, assignment, spending, or work occurs.' }),
+    ]);
+    const table = el('table', { attrs: { 'data-staffing-simulation-comparison': '' } }, [el('caption', { text: 'Simulated throughput and queue by worker count' })]);
+    table.append(el('thead', {}, [el('tr', {}, ['Workers', 'Capacity', 'Throughput', 'Queued'].map((label) => el('th', { text: label, attrs: { scope: 'col' } })))]));
+    const body = el('tbody');
+    for (const comparison of simulation.comparisons ?? []) body.append(el('tr', { attrs: { 'data-worker-count': comparison.workers } }, [
+      el('th', { text: String(comparison.workers), attrs: { scope: 'row' } }),
+      el('td', { text: `${comparison.capacity} ${comparison.workUnit}` }),
+      el('td', { text: `${comparison.throughput} ${comparison.workUnit}` }),
+      el('td', { text: `${comparison.queue} ${comparison.workUnit}` }),
+    ]));
+    table.append(body); root.append(table);
+    root.append(el('details', {}, [el('summary', { text: 'Exact simulation source and result identity' }),
+      el('p', { text: `Blueprint ${simulation.source?.blueprintId} · version ${simulation.source?.blueprintVersion} · process ${simulation.source?.processId} · snapshot ${simulation.source?.snapshotHash} · engine ${simulation.engineVersion} · scenario ${simulation.scenarioHash} · result ${simulation.resultHash}` })]));
+    return root;
+  }
   const labels = { COMPLETED: 'Simulation completed', BLOCKED: 'Simulation blocked by missing inputs or scripted results', UNKNOWN: 'Simulation evidence unknown', CONFLICTED: 'Conflicting decision rules', LIMIT_REACHED: 'Simulation step limit reached', FAILED: 'Scripted activity failed' };
   const sourceObject = allObjects(model).find((object) => object.id === simulation.source?.processId);
   const matching = enterpriseSimulationMatches(model, sourceObject, simulation);
@@ -259,6 +283,40 @@ export function renderEnterpriseSimulation({ simulation, model, el }) {
   }
   root.append(trace, el('details', {}, [el('summary', { text: 'Exact simulation source and deterministic result identity' }), el('p', { text: `Blueprint ${simulation.source?.blueprintId} · version ${simulation.source?.blueprintVersion} · process ${simulation.source?.processId} · snapshot ${simulation.source?.snapshotHash} · engine ${simulation.engineVersion} · scenario ${simulation.scenarioHash} · result ${simulation.resultHash}` })]));
   return root;
+}
+
+function staffingSimulationEditor({ model, object, el, ui, onCommand, disabled, scenario = null, reasonValue = '' }) {
+  const { field, form } = ui;
+  const arrivals = field('arrivals', 'Expected arrivals per interval (whole number)', { type: 'number', min: '0', max: '1000000', value: String(scenario?.arrivals?.value ?? 12) });
+  const intervalValue = field('intervalValue', 'Interval length (positive whole number)', { type: 'number', min: '1', max: '10000', value: String(scenario?.interval?.value ?? 1) });
+  const intervalUnit = field('intervalUnit', 'Interval unit', { entries: [['minutes', 'Minutes'], ['hours', 'Hours'], ['days', 'Days'], ['weeks', 'Weeks']], value: scenario?.interval?.unit ?? 'hours' });
+  const capacity = field('capacityPerWorker', 'Capacity per worker per interval (whole number)', { type: 'number', min: '0', max: '1000000', value: String(scenario?.capacityPerWorker?.value ?? 8) });
+  const workUnit = field('workUnit', 'Work unit for arrivals and capacity', { entries: [['cases', 'Cases'], ['customers', 'Customers'], ['orders', 'Orders'], ['requests', 'Requests'], ['tasks', 'Tasks'], ['tickets', 'Tickets'], ['units', 'Units']], value: scenario?.arrivals?.unit ?? 'requests' });
+  for (const control of [arrivals.control, capacity.control]) { control.min = '0'; control.max = '1000000'; control.step = '1'; }
+  intervalValue.control.min = '1'; intervalValue.control.max = '10000'; intervalValue.control.step = '1';
+  const counts = []; const rows = el('div', { className: 'enterprise-editor-rows', attrs: { 'data-staffing-worker-counts': '' } });
+  const addWorkerCount = (value = 1) => {
+    const workerCount = field('workerCount', 'Worker count to compare (1 to 100)', { type: 'number', min: '1', max: '100', value: String(value) });
+    workerCount.control.min = '1'; workerCount.control.max = '100'; workerCount.control.step = '1';
+    const row = el('div', { className: 'enterprise-editor-row' }, [workerCount.node]);
+    const entry = { workerCount, row }; counts.push(entry);
+    const remove = action(el, 'Remove worker-count comparison', () => { counts.splice(counts.indexOf(entry), 1); row.remove();
+      counts.forEach((item) => { item.remove.disabled = disabled || counts.length <= 1; }); }, disabled || counts.length <= 1);
+    entry.remove = remove; row.append(remove);
+    counts.forEach((item) => { item.remove.disabled = disabled || counts.length <= 1; });
+    rows.append(row); disable(row, disabled);
+  };
+  for (const value of scenario?.workerCounts ?? [1, 2]) addWorkerCount(value);
+  const reason = field('reason', 'Scenario purpose', { multiline: true, maximum: 500, value: reasonValue });
+  return form('simulate-staffing', 'Compare staffing capacity', [el('p', { text: 'Enter arrivals and capacity for the same interval. This deterministic forecast uses unvalidated assumptions and never hires staff, reserves capacity, or starts work.' }),
+    arrivals.node, intervalValue.node, intervalUnit.node, capacity.node, workUnit.node, rows,
+    action(el, 'Add worker count to comparison', () => { if (counts.length < 100) addWorkerCount(1); }, disabled || counts.length >= 100), reason.node], () => {
+      onCommand({ kind: 'simulate-staffing', processId: object.id, scenario: { schemaVersion: '1.0',
+        arrivals: { value: Number(arrivals.control.value), unit: workUnit.control.value },
+        interval: { value: Number(intervalValue.control.value), unit: intervalUnit.control.value },
+        capacityPerWorker: { value: Number(capacity.control.value), unit: workUnit.control.value },
+        workerCounts: counts.map(({ workerCount }) => Number(workerCount.control.value)) }, reason: reason.control.value.trim() });
+    }, disabled || !model.permissions?.simulate);
 }
 
 function simulationEditor({ model, object, el, ui, onCommand, disabled, scenario = null, reasonValue = '' }) {
@@ -319,6 +377,7 @@ export function renderEnterpriseProcess({ model, object, pending = null, loading
     root.append(el('details', { attrs: retained?.kind === 'define-process-flow' ? { open: '' } : {} }, [el('summary', { text: 'Author a typed process flow' }), flowEditor({ model, object: edited, el, ui, onCommand, disabled, reasonValue: retained?.kind === 'define-process-flow' ? retained.reason : '' })]));
     if (!object.processFlow) root.append(el('p', { text: 'Save a typed process flow before simulating it. Existing simple planning graphs remain available in Execution.' }));
     root.append(el('details', { attrs: retained?.kind === 'simulate-process' ? { open: '' } : {} }, [el('summary', { text: 'Simulate this exact saved flow' }), simulationEditor({ model, object, el, ui, onCommand, disabled: loading || Boolean(pending) || !model.permissions?.simulate, scenario: retained?.kind === 'simulate-process' ? retained.scenario : null, reasonValue: retained?.kind === 'simulate-process' ? retained.reason : '' })]));
+    root.append(el('details', { attrs: retained?.kind === 'simulate-staffing' ? { open: '' } : {} }, [el('summary', { text: 'Simulate staffing capacity' }), staffingSimulationEditor({ model, object, el, ui, onCommand, disabled: loading || Boolean(pending), scenario: retained?.kind === 'simulate-staffing' ? retained.scenario : null, reasonValue: retained?.kind === 'simulate-staffing' ? retained.reason : '' })]));
     if (object.processFlow) root.append(el('p', { text: 'Authored advanced flows can be designed and simulated here. Real manual routing for these flows is not available yet; the legacy planning graph cannot start them.' }));
     if (enterpriseSimulationSourceMatches(model, object, simulation) && !enterpriseSimulationMatches(model, object, simulation)) {
       root.append(el('p', { text: 'The simulation was saved after this recorded-time cutoff. Its result is excluded from this dated view.', attrs: { role: 'status' } }));

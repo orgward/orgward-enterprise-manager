@@ -118,8 +118,8 @@ export function projectEnterprise(project, query = {}, authority = {}) {
     gaps: ['L-11', 'L-12', 'L-13', 'L-16'].includes(entry.id) ? [{ ...runtimeLensGap }] : [] }));
   if (lens) gaps.push(...lenses.find((entry) => entry.id === lens.id).gaps.map((gap) => ({ ...gap, lensId: lens.id })));
   const visibleSimulations = (project.enterpriseSimulations ?? []).filter((entry) => savedBy(entry.createdAt));
-  const simulations = visibleSimulations.map(({ id, createdAt, createdBy, reason, source, status, meaning, engineVersion, scenarioHash, resultHash, trace }) =>
-    ({ id, createdAt, createdBy, reason, source: structuredClone(source), status, meaning, engineVersion, scenarioHash, resultHash, traceLength: trace.length }));
+  const simulations = visibleSimulations.map(({ id, createdAt, createdBy, reason, source, status, meaning, simulationType = 'PROCESS_FLOW', engineVersion, scenarioHash, resultHash, trace }) =>
+    ({ id, createdAt, createdBy, reason, source: structuredClone(source), status, meaning, simulationType, engineVersion, scenarioHash, resultHash, traceLength: trace?.length ?? 0 }));
   const snapshotHash = blueprint ? digest(blueprint) : null;
   let simulation = context.simulationId ? (project.enterpriseSimulations ?? []).find((entry) => entry.id === context.simulationId)
     : selected?.type === 'process' ? visibleSimulations.filter((entry) => entry.source.processId === selected.id
@@ -130,7 +130,15 @@ export function projectEnterprise(project, query = {}, authority = {}) {
   if (simulation && !savedBy(simulation.createdAt)) throw enterpriseFailure('ENTERPRISE_CONTEXT_NOT_RECORDED', 'This simulation was not yet saved at the selected recorded-time cutoff.', 404);
   if (simulation) {
     const { id, createdAt, createdBy, reason, resultHash, ...core } = simulation;
-    if (digest(core) !== resultHash || digest(core.scenario) !== core.scenarioHash || core.meaning !== 'SIMULATION_ONLY') {
+    const source = core.source;
+    const sourceSnapshot = source?.branchId ? (project.enterpriseBranches ?? []).find((entry) => entry.id === source.branchId)?.revisions
+      .find((entry) => entry.revision === source.branchRevision)?.snapshot
+      : source?.proposalId ? (project.enterpriseProposals ?? []).find((entry) => entry.id === source.proposalId)?.snapshot
+        : project.blueprintVersions.find((entry) => entry.id === source?.blueprintId && entry.version === source?.blueprintVersion);
+    if (digest(core) !== resultHash || digest(core.scenario) !== core.scenarioHash || core.meaning !== 'SIMULATION_ONLY'
+      || source?.projectId !== project.id || !sourceSnapshot || sourceSnapshot.id !== source.blueprintId
+      || sourceSnapshot.version !== source.blueprintVersion || digest(sourceSnapshot) !== source.snapshotHash
+      || !sourceSnapshot.areas || !Object.values(sourceSnapshot.areas).some((area) => (area.items ?? []).some((object) => object.id === source.processId && object.type === 'process'))) {
       throw enterpriseFailure('PROCESS_SIMULATION_INTEGRITY', 'A saved simulation failed its source, scenario or result checks.', 409);
     }
     simulation = structuredClone(simulation);

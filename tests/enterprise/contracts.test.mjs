@@ -5,7 +5,7 @@ import { normalizeEnterpriseCommand } from '../../src/enterprise/commands.mjs';
 import { normalizeEnterpriseQuery, projectEnterprise } from '../../src/enterprise/projections.mjs';
 import { effectiveStatus, enterpriseInstant, enterpriseInterval, objectBasisHash, objectStates } from '../../src/enterprise/state.mjs';
 import { normalizeDecisionTable, normalizeProcessFlow } from '../../src/enterprise/process-model.mjs';
-import { evaluateDecisionTable, simulateProcessFlow } from '../../src/enterprise/process-simulation.mjs';
+import { evaluateDecisionTable, normalizeStaffingScenario, simulateProcessFlow, simulateStaffingCapacity } from '../../src/enterprise/process-simulation.mjs';
 import { normalizeHumanDecisionChoice, planManualProcessFlow, projectManualFlowActivation } from '../../src/enterprise/process-runtime.mjs';
 import { applyEnterpriseIntegrityCommand, applyEnterpriseIntegrityException, evaluateEnterpriseIntegrity,
   normalizeEnterpriseIntegrityCommand, projectEnterpriseIntegrity } from '../../src/enterprise/integrity.mjs';
@@ -415,6 +415,29 @@ test('bounded process flow simulation is deterministic across routes, joins, loo
     decisionChoices: [], stepLimit: 20 }, byId);
   assert.equal(failedActivity.status, 'COMPLETED', 'a declared manual exception route is traceable without performing work');
   assert.ok(failedActivity.trace.some((entry) => entry.stepId === 'exception' && entry.kind === 'manual-exception'));
+});
+
+test('staffing capacity simulation compares deterministic throughput and queue without validated-performance claims', () => {
+  const process = { id: 'process-service', type: 'process', name: 'Serve customers' };
+  const scenario = { schemaVersion: '1.0', arrivals: { value: 12, unit: 'customers' }, interval: { value: 1, unit: 'days' },
+    capacityPerWorker: { value: 8, unit: 'customers' }, workerCounts: [1, 2] };
+  const first = simulateStaffingCapacity(process, scenario);
+  assert.deepEqual(first, simulateStaffingCapacity(process, scenario));
+  assert.equal(first.status, 'SIMULATED');
+  assert.equal(first.meaning, 'SIMULATION_ONLY');
+  assert.equal(first.assumptionStatus, 'UNVALIDATED');
+  assert.deepEqual(first.comparisons.map(({ workers, capacity, throughput, queue }) => ({ workers, capacity, throughput, queue })), [
+    { workers: 1, capacity: 8, throughput: 8, queue: 4 },
+    { workers: 2, capacity: 16, throughput: 12, queue: 0 },
+  ]);
+  assert.ok(first.comparisons.every((entry) => entry.meaning === 'SIMULATED_UNVALIDATED_ASSUMPTIONS'));
+  assert.throws(() => normalizeStaffingScenario({ ...scenario, arrivals: { value: -1, unit: 'customers' } }), { code: 'INVALID_STAFFING_SCENARIO' });
+  assert.throws(() => normalizeStaffingScenario({ ...scenario, arrivals: { value: 12.5, unit: 'customers' } }), { code: 'INVALID_STAFFING_SCENARIO' });
+  assert.throws(() => normalizeStaffingScenario({ ...scenario, arrivals: { value: 12, unit: 'widgets' } }), { code: 'INVALID_STAFFING_SCENARIO' });
+  assert.throws(() => normalizeStaffingScenario({ ...scenario, capacityPerWorker: { value: 8, unit: 'orders' } }), { code: 'INVALID_STAFFING_SCENARIO' });
+  assert.throws(() => normalizeStaffingScenario({ ...scenario, interval: { value: 1, unit: 'fortnight' } }), { code: 'INVALID_STAFFING_SCENARIO' });
+  assert.throws(() => normalizeStaffingScenario({ ...scenario, workerCounts: [1, 1] }), { code: 'INVALID_STAFFING_SCENARIO' });
+  assert.throws(() => normalizeStaffingScenario({ ...scenario, workerCounts: [101] }), { code: 'INVALID_STAFFING_SCENARIO' });
 });
 
 test('manual-flow activation waits for verified outcomes, joins branches, bounds loops and marks unselected work skipped', () => {

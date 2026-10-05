@@ -7629,3 +7629,22 @@ data and response event nesting); both were corrected. Final focused tests passe
 Static `node --check` passed for all changed JavaScript files and
 `git diff --check` passed. No provider, source-workspace write, full check or
 live external effect. PR-15 remains open and active.
+
+PR-15 saved staffing-capacity comparison (2026-10-05): process detail now accepts
+a typed hypothetical with arrivals, interval, per-worker capacity, matching work
+units and one or more worker counts. The bounded deterministic result compares
+capacity, throughput and queue, always marked `SIMULATED` with
+`UNVALIDATED` assumptions. Example acceptance verifies 12 arrivals with capacity
+8 yields throughput 8/queue 4 for one worker and capacity 16/throughput 12/queue
+0 for two. Unsupported/mismatched units, fractional or negative quantities,
+invalid intervals and duplicate/out-of-range worker counts are rejected before a
+result is saved. The accessible comparison table and saved history bind the exact
+project/blueprint/version/snapshot; PostgreSQL acceptance verifies reader denial,
+stale project-version conflict, durable audit, restart readback and no process
+plan/work creation. The first focused runs caught plural interval fixture values
+and the missing scenario hash; both were corrected before the final selection.
+Focused tests passed 5/5 (0 failures, 0 skips; TAP duration 4.67s; runner 5.89s;
+log `/tmp/orgward-tests-08anhz/node-test.tap.log`):
+`npm test -- tests/enterprise/contracts.test.mjs tests/enterprise/server.test.mjs tests/enterprise/view.test.mjs --test-name-pattern='staffing capacity simulation|enterprise staffing simulations|enterprise staffing UI|enterprise process definitions and simulations stay typed|enterprise process UI shows a saved simulation'`.
+No full check or Sol review; no provider, external effect or live work. PR-15
+remains open and active.
