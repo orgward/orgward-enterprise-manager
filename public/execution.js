@@ -30,6 +30,7 @@ import { blockedProcessTaskRecoveryCopy, processTaskRecoveryAction, selectFreshP
 import { processTaskAssignmentTransparency } from './process-task-assignment.mjs';
 import { processTaskGuidanceReview } from './process-task-guidance-review.mjs';
 import { processTaskPinnedDesignRoute, processTaskRepositoryReference } from './process-task-repository-view.mjs';
+import { processTaskPinnedIntegrityContext } from './process-task-integrity-context.mjs';
 import { processTaskSourceReview } from './process-task-source-review.mjs';
 import { deriveBlueprintProposalReviewState, HUMAN_PROPOSAL_RUBRIC, proposalApplyFailureDisposition, proposalDesignLink } from './proposal-review-state.mjs';
 import { acceptProcessTaskRequest, clearPendingProcessTaskRequest, findPendingProcessTaskRequest,
@@ -43,13 +44,14 @@ import { boundedLineDiff, readBoundedUtf8Response } from './repository-text-diff
 import { renderProtectedRelease } from './protected-release.mjs';
 import { renderOutcomeInbox } from './outcomes.mjs';
 import { encodeExecutionRoute, encodeStudioRoute, executionProcessTarget, executionProjectContext, executionRunRouteTarget } from './shared-interactions.mjs';
+import { enterpriseRequestPath } from './enterprise.mjs';
 import { currentProcessPlanFocusTarget, linkedPlanInstanceRouteTarget, linkedProcessPlanTarget, processPlanFreshness, processPlanRevisionFocusTarget, selectLinkedProcessPlanInstance, sourceProcessDesignLink } from './process-plan-navigation.mjs';
 
 const requestedGithubSnapshotHandoffId = new URLSearchParams(window.location.search).get('githubSnapshot');
 const state = {
   meta: null, projects: [], runs: [], taskInstances: [], runtimePlans: [], localRepositories: [], githubExecutionAvailable: false, githubExecutionUnavailableReason: null,
   githubSnapshotHandoffId: /^[a-f0-9]{64}$/.test(requestedGithubSnapshotHandoffId ?? '') ? requestedGithubSnapshotHandoffId : null,
-  githubFileManifests: new Map(), githubFileSelections: new Map(), githubRepositorySelections: new Map(), run: null, runProject: null, proposalMembershipAccess: null, authenticated: false, currentPrincipal: null, planningProject: null, projectContextId: null,
+  githubFileManifests: new Map(), githubFileSelections: new Map(), githubRepositorySelections: new Map(), run: null, runProject: null, runPinnedIntegrity: null, proposalMembershipAccess: null, authenticated: false, currentPrincipal: null, planningProject: null, projectContextId: null,
   actorBindingRows: [], actorBindingProjectId: null, actorBindingReadAvailable: false,
   selectedPlanInstances: new Map(),
   processTaskStatuses: new Map(),
@@ -2458,6 +2460,7 @@ async function load(id, { initiatingControl = null, event = null } = {}) {
       } catch { state.taskInstances = []; }
     }
     await loadProposalApplication(state.run);
+    await loadProcessTaskPinnedIntegrity(state.run);
     syncExecutionRunRoute(state.run);
     renderRun(); renderList();
     if (keyboardInvoked) restoreRunTransitionFocus({
@@ -2473,6 +2476,21 @@ async function load(id, { initiatingControl = null, event = null } = {}) {
   }
   catch (error) { notify(error.message); }
   finally { if (keyboardInvoked) document.removeEventListener('focusin', observeFocusMove); }
+}
+
+async function loadProcessTaskPinnedIntegrity(run) {
+  state.runPinnedIntegrity = null;
+  const runId = run?.id;
+  const ref = run?.processTaskRef;
+  if (!state.authenticated || !run?.projectId || !ref?.blueprintId || !Number.isSafeInteger(ref?.blueprintVersion)
+    || typeof ref.processId !== 'string') return;
+  try {
+    const path = enterpriseRequestPath(run.projectId, { lensId: 'all', blueprintVersion: ref.blueprintVersion }, ref.processId);
+    const result = await api(path);
+    if (state.run?.id === runId) state.runPinnedIntegrity = processTaskPinnedIntegrityContext(run, result.data);
+  } catch {
+    if (state.run?.id === runId) state.runPinnedIntegrity = { kind: 'unavailable' };
+  }
 }
 
 async function loadProposalApplication(run, project = null) {
@@ -3142,6 +3160,17 @@ function renderRun() {
     const designRoute = processTaskPinnedDesignRoute(run, state.runProject);
     if (designRoute) processTaskDetails.push(el('a', { className: 'button ghost', text: `Open pinned design: ${ref.processName ?? 'process'} · blueprint v${ref.blueprintVersion}`,
       attrs: { href: designRoute } }));
+    if (state.runPinnedIntegrity?.kind === 'assessment') {
+      const context = state.runPinnedIntegrity;
+      processTaskDetails.push(el('p', { className: 'muted', attrs: { role: 'status' },
+        text: `Integrity for pinned design v${context.blueprintVersion}: ${context.status} · ${context.findingCount} findings · report ${context.reportId} · report hash ${context.reportHash} · source ${context.snapshotHash}` }));
+    } else if (state.runPinnedIntegrity?.kind === 'not-assessed') {
+      processTaskDetails.push(el('p', { className: 'muted', attrs: { role: 'status' },
+        text: `No saved integrity assessment applies to pinned design v${state.runPinnedIntegrity.blueprintVersion}.` }));
+    } else if (state.runPinnedIntegrity?.kind === 'unavailable') {
+      processTaskDetails.push(el('p', { className: 'muted', attrs: { role: 'status' },
+        text: 'Integrity context for the pinned design is unavailable; open the pinned design to review its evidence.' }));
+    }
     const repositoryReference = processTaskRepositoryReference(run);
     if (repositoryReference) processTaskDetails.push(el('p', { className: 'muted', text: repositoryReference }));
     if (linkedProcessPlanTarget(run, state.projects, state.runtimePlans)) {

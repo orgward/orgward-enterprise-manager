@@ -7771,3 +7771,18 @@ view tests passed 5/5 (0 failures, 0 skips; TAP duration 0.23s; log
 `git diff --check` passed. `npm run task:next` reports PR-15 first open. This is
 one bounded T-90 increment; T-90 and PR-15 remain open. No full check or Sol
 review.
+
+PR-15 T-90 integrity context on saved SDLC runs (2026-10-05): authenticated
+process-task run detail now reads the existing enterprise projection for the
+run's pinned blueprint/process and shows the exact matching integrity report
+status, finding count, report ID/hash, and source snapshot hash. It distinguishes
+an exact pinned blueprint with no applicable assessment from unavailable or
+mismatched projection data. No integrity assessment is created or changed.
+Focused tests passed 3/3 (0 failures, 0 skips; TAP duration 0.24s; log
+`/tmp/orgward-tests-PegszD/node-test.tap.log`):
+`npm test -- tests/execution/process-task-integrity-context.test.mjs`.
+`node --check` passed for `public/process-task-integrity-context.mjs`,
+`public/execution.js`, and `tests/execution/process-task-integrity-context.test.mjs`;
+`git diff --check` passed. `npm run task:next` reports PR-15 first open. This is
+one bounded T-90 increment; T-90 and PR-15 remain open. No full check or Sol
+review.
