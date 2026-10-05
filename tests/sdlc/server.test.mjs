@@ -5,6 +5,8 @@ import path from 'node:path';
 import test from 'node:test';
 import { createApp } from '../../server.mjs';
 import { addConversationTurn, createProject, editBlueprintObject, latestBlueprint } from '../../src/model.mjs';
+import { digest } from '../../src/sdlc/contracts.mjs';
+import { applyEnterpriseIntegrityCommand } from '../../src/enterprise/integrity.mjs';
 import { eligibleActorBindings } from '../../public/sdlc-view.mjs';
 
 async function start(root) {
@@ -99,10 +101,12 @@ test('SDLC case pins a saved design source, rejects stale or unresolved selectio
   assert.equal(changeCase.sourceBinding.sourceHash.length, 64);
   assert.equal(changeCase.sourceBinding.blueprintSchemaVersion, 1);
   assert.equal(changeCase.sourceBindingIntegrity.valid, true);
+  assert.equal(changeCase.sourceBinding.integrityContext.state, 'NOT_ASSESSED');
   changeCase = await request(app.base, `/api/sdlc/cases/${changeCase.id}/run`, { method: 'POST', body: JSON.stringify({ version: changeCase.version, actor: 'orchestrator', idempotencyKey: 'source-pin-run' }) });
   assert.ok(changeCase.artifacts.context.sourceBindingEvidenceRef);
   assert.ok(changeCase.artifacts.context.evidenceRefs.includes(changeCase.artifacts.context.sourceBindingEvidenceRef));
   assert.equal(changeCase.evidenceLedger.find((entry) => entry.id === changeCase.artifacts.context.sourceBindingEvidenceRef).authority, 'SAVED_PROJECT_DESIGN');
+  assert.equal(changeCase.artifacts.context.integrityContext.state, 'NOT_ASSESSED');
   const requestedImpact = changeCase.artifacts.impact.impacts.find((entry) => entry.isRequestedSource);
   assert.equal(requestedImpact.objectRef, source.id);
   assert.equal(requestedImpact.sourceHash, changeCase.sourceBinding.sourceHash);
@@ -127,6 +131,7 @@ test('SDLC case pins a saved design source, rejects stale or unresolved selectio
   assert.deepEqual(changeCase.sourceBinding, originalPin);
   assert.equal(changeCase.sourceBindingIntegrity.valid, true);
   assert.equal(changeCase.artifacts.context.sourceBindingHash, originalPin.sourceHash);
+  assert.deepEqual(changeCase.artifacts.context.integrityContext, originalPin.integrityContext);
   assert.ok(changeCase.artifacts.context.evidenceRefs.includes(changeCase.artifacts.context.sourceBindingEvidenceRef));
   assert.equal(changeCase.artifacts.impact.impacts.find((entry) => entry.isRequestedSource).sourceHash, originalPin.sourceHash);
 
@@ -152,6 +157,51 @@ test('SDLC case pins a saved design source, rejects stale or unresolved selectio
   const unchangedTampered = await request(app.base, `/api/sdlc/cases/${caseId}`);
   assert.equal(unchangedTampered.version, changeCase.version);
   assert.deepEqual(unchangedTampered.events, changeCase.events);
+});
+
+test('SDLC source binding freezes the exact matching integrity report through restart', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'orgward-sdlc-integrity-pin-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let app = await start(root);
+  t.after(async () => { if (app.server.listening) await close(app.server); });
+  const project = createProject('Design with integrity assessment');
+  for (const answer of [
+    'A membership that reduces restaurant equipment downtime.',
+    'Independent restaurant owners need clear maintenance records.',
+    'Monthly membership funds preventive service.',
+    'Owners approve safety critical work.',
+  ]) addConversationTurn(project, answer);
+  const blueprint = latestBlueprint(project);
+  const snapshotHash = digest(blueprint);
+  applyEnterpriseIntegrityCommand(project, { kind: 'run-integrity-checks', blueprintId: blueprint.id,
+    blueprintVersion: blueprint.version, snapshotHash, reason: 'Pin the reviewed saved design.' }, 'test-owner');
+  project.version = 1;
+  await app.store.save(project);
+  const source = Object.values(blueprint.areas).flatMap((area) => area.items).find((item) => item.type === 'information');
+  const changeCase = await request(app.base, '/api/sdlc/cases', { method: 'POST', body: JSON.stringify({
+    mode: 'golden', projectId: project.id, sourceObjectId: source.id,
+    expectedProjectVersion: project.version, expectedBlueprintId: blueprint.id,
+    expectedBlueprintVersion: blueprint.version,
+  }) }, 201);
+  const report = project.enterpriseIntegrityAssessments[0];
+  assert.deepEqual(changeCase.sourceBinding.integrityContext, {
+    state: 'ASSESSED', blueprintSnapshotHash: snapshotHash,
+    assessment: { id: report.id, reportHash: report.reportHash, status: report.status, createdAt: report.createdAt },
+  });
+  const runCase = await request(app.base, `/api/sdlc/cases/${changeCase.id}/run`, { method: 'POST', body: JSON.stringify({
+    version: changeCase.version, actor: 'orchestrator', idempotencyKey: 'integrity-pin-run',
+  }) });
+  assert.deepEqual(runCase.artifacts.context.integrityContext, changeCase.sourceBinding.integrityContext);
+  assert.ok(runCase.artifacts.context.evidenceRefs.includes(runCase.artifacts.context.integrityAssessmentEvidenceRef));
+  const pinnedReport = runCase.evidenceLedger.find((entry) => entry.id === runCase.artifacts.context.integrityAssessmentEvidenceRef);
+  assert.equal(pinnedReport.content.assessment.reportHash, report.reportHash);
+  const caseId = changeCase.id;
+  await close(app.server);
+  app = await start(root);
+  const reloaded = await request(app.base, `/api/sdlc/cases/${caseId}`);
+  assert.equal(reloaded.sourceBindingIntegrity.valid, true);
+  assert.deepEqual(reloaded.sourceBinding.integrityContext, changeCase.sourceBinding.integrityContext);
+  assert.deepEqual(reloaded.artifacts.context.integrityContext, changeCase.sourceBinding.integrityContext);
 });
 
 test('source-bound requirements are revisioned, validated, owner-accepted and integrity-bound across restart', async (t) => {

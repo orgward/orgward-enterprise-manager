@@ -1,5 +1,6 @@
 import { MUTATIONS, STAGES, digest, evaluation, eventEnvelope, evidence, finding, id, now, safeText, stageAt } from './contracts.mjs';
 import { EXPECTED_IMPACTS, referenceOrganization } from './fixture.mjs';
+import { isValidEnterpriseIntegrityAssessment } from '../enterprise/integrity.mjs';
 
 const REQUIRED_CONTEXT_DOMAINS = ['strategy', 'business', 'process', 'ownership', 'information', 'application', 'integration', 'security', 'regulation', 'control', 'operations', 'code/runtime'];
 const ASSURANCE_DIMENSIONS = ['FUNCTIONAL', 'REQUIREMENTS', 'SECURITY', 'PRIVACY', 'DATA', 'ARCHITECTURE', 'REGULATORY_CONTROL', 'OPERATIONAL', 'PERFORMANCE', 'RESILIENCE', 'MAINTAINABILITY', 'AI_BEHAVIOR'];
@@ -53,6 +54,20 @@ export function verifySourceBinding(binding) {
   const snapshot = binding?.snapshot;
   const snapshotKeys = snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)
     ? Object.keys(snapshot).sort() : [];
+  const integrityContext = binding?.integrityContext;
+  const validIntegrityContext = integrityContext === undefined || (integrityContext && typeof integrityContext === 'object'
+    && !Array.isArray(integrityContext)
+    && /^[a-f0-9]{64}$/i.test(integrityContext.blueprintSnapshotHash ?? '')
+    && (integrityContext.state === 'NOT_ASSESSED'
+      ? Object.keys(integrityContext).sort().join(',') === 'blueprintSnapshotHash,state'
+      : integrityContext.state === 'ASSESSED'
+        && Object.keys(integrityContext).sort().join(',') === 'assessment,blueprintSnapshotHash,state'
+        && integrityContext.assessment && typeof integrityContext.assessment === 'object'
+        && /^enterprise-integrity-[0-9a-f-]{36}$/.test(integrityContext.assessment.id ?? '')
+        && /^[a-f0-9]{64}$/i.test(integrityContext.assessment.reportHash ?? '')
+        && ['PASS', 'REVIEW', 'FAIL'].includes(integrityContext.assessment.status)
+        && typeof integrityContext.assessment.createdAt === 'string'
+        && Number.isFinite(Date.parse(integrityContext.assessment.createdAt))));
   const validShape = binding && typeof binding === 'object'
     && typeof binding.projectId === 'string' && /^project-[0-9a-f-]{36}$/i.test(binding.projectId)
     && Number.isInteger(binding.projectVersion) && binding.projectVersion > 0
@@ -64,14 +79,17 @@ export function verifySourceBinding(binding) {
     && typeof binding.bindingHash === 'string' && /^[a-f0-9]{64}$/i.test(binding.bindingHash)
     && snapshotKeys.join(',') === 'detail,id,name,type'
     && snapshot.id === binding.objectId && snapshot.type === binding.objectType
-    && typeof snapshot.name === 'string' && typeof snapshot.detail === 'string';
+    && typeof snapshot.name === 'string' && typeof snapshot.detail === 'string'
+    && validIntegrityContext;
   const actualHash = validShape ? digest(snapshot) : null;
-  const actualBindingHash = validShape ? digest({
+  const bindingPayload = validShape ? {
     projectId: binding.projectId, projectVersion: binding.projectVersion,
     blueprintId: binding.blueprintId, blueprintVersion: binding.blueprintVersion,
     blueprintSchemaVersion: binding.blueprintSchemaVersion,
     objectId: binding.objectId, objectType: binding.objectType, sourceHash: binding.sourceHash,
-  }) : null;
+    ...(integrityContext === undefined ? {} : { integrityContext }),
+  } : null;
+  const actualBindingHash = bindingPayload ? digest(bindingPayload) : null;
   const valid = validShape && actualHash === binding.sourceHash && actualBindingHash === binding.bindingHash;
   return {
     valid,
@@ -108,16 +126,30 @@ export function pinProjectSourceObject(project, selection = {}) {
   }
   const snapshot = { id: source.id, type: source.type, name: source.name, detail: source.detail };
   const sourceHash = digest(snapshot);
+  const blueprintSnapshotHash = digest(blueprint);
+  const matchingAssessment = (project.enterpriseIntegrityAssessments ?? [])
+    .filter((assessment) => isValidEnterpriseIntegrityAssessment(assessment, project.id)
+      && assessment.source.blueprintId === blueprint.id
+      && assessment.source.blueprintVersion === blueprint.version
+      && assessment.source.snapshotHash === blueprintSnapshotHash)
+    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt)
+      || right.id.localeCompare(left.id))[0];
+  const integrityContext = matchingAssessment ? {
+    state: 'ASSESSED', blueprintSnapshotHash,
+    assessment: { id: matchingAssessment.id, reportHash: matchingAssessment.reportHash,
+      status: matchingAssessment.status, createdAt: matchingAssessment.createdAt },
+  } : { state: 'NOT_ASSESSED', blueprintSnapshotHash };
   const binding = {
     projectId: project.id, projectVersion: project.version, blueprintId: blueprint.id,
     blueprintVersion: blueprint.version, blueprintSchemaVersion: blueprint.blueprintSchemaVersion ?? 1,
-    objectId: source.id, objectType: source.type, sourceHash, snapshot,
+    objectId: source.id, objectType: source.type, sourceHash, snapshot, integrityContext,
   };
   binding.bindingHash = digest({
     projectId: binding.projectId, projectVersion: binding.projectVersion,
     blueprintId: binding.blueprintId, blueprintVersion: binding.blueprintVersion,
     blueprintSchemaVersion: binding.blueprintSchemaVersion,
     objectId: binding.objectId, objectType: binding.objectType, sourceHash: binding.sourceHash,
+    integrityContext: binding.integrityContext,
   });
   const verified = verifySourceBinding(binding);
   if (!verified.valid) {
@@ -793,6 +825,7 @@ function contextDiscovery(changeCase) {
     changeCase.evidenceLedger.push(record); evidenceRefs.push(record.id);
   }
   let sourceBindingEvidenceRef = null;
+  let integrityAssessmentEvidenceRef = null;
   if (changeCase.sourceBinding) {
     const binding = changeCase.sourceBinding;
     const record = evidence(changeCase, {
@@ -806,6 +839,24 @@ function contextDiscovery(changeCase) {
     changeCase.evidenceLedger.push(record);
     evidenceRefs.push(record.id);
     sourceBindingEvidenceRef = record.id;
+    if (binding.integrityContext) {
+      const integrity = binding.integrityContext;
+      const integrityRecord = evidence(changeCase, {
+        sourceId: integrity.state === 'ASSESSED'
+          ? `orgward:project:${binding.projectId}:integrity:${integrity.assessment.id}`
+          : `orgward:project:${binding.projectId}:integrity:none:${integrity.blueprintSnapshotHash}`,
+        sourceType: 'saved-design-integrity-context',
+        objectRef: integrity.state === 'ASSESSED' ? integrity.assessment.id : binding.blueprintId,
+        authority: 'SAVED_PROJECT_INTEGRITY', freshness: 'PINNED', classification: 'INTERNAL',
+        content: structuredClone(integrity), relevance: 1,
+        provenanceChain: [`project:${binding.projectId}`, `blueprint:${binding.blueprintId}:v${binding.blueprintVersion}`,
+          `blueprint-snapshot:sha256:${integrity.blueprintSnapshotHash}`,
+          ...(integrity.state === 'ASSESSED' ? [`assessment:${integrity.assessment.id}`, `report:sha256:${integrity.assessment.reportHash}`] : ['assessment:none-at-case-creation'])],
+      });
+      changeCase.evidenceLedger.push(integrityRecord);
+      evidenceRefs.push(integrityRecord.id);
+      integrityAssessmentEvidenceRef = integrityRecord.id;
+    }
   }
   const has = (objectId) => changeCase.enterpriseSnapshot.objects.some((object) => object.id === objectId && object.authority === 'AUTHORITATIVE');
   const coverage = REQUIRED_CONTEXT_DOMAINS.map((domain) => {
@@ -824,9 +875,11 @@ function contextDiscovery(changeCase) {
   for (const entry of untrusted) findings.push(finding('UNTRUSTED_CONTENT_ISOLATED', 'INFO', `${entry.name} was retained as data and excluded from authoritative coverage.`, entry.id, 'No action required unless an authorized owner promotes the source.', evidenceRefs));
   changeCase.artifacts.context = {
     plan, coverage, evidenceRefs,
-    ...(changeCase.sourceBinding ? { sourceBindingHash: changeCase.sourceBinding.sourceHash, sourceBindingIntegrityHash: changeCase.sourceBinding.bindingHash, sourceBindingEvidenceRef } : {}),
+    ...(changeCase.sourceBinding ? { sourceBindingHash: changeCase.sourceBinding.sourceHash, sourceBindingIntegrityHash: changeCase.sourceBinding.bindingHash, sourceBindingEvidenceRef,
+      ...(changeCase.sourceBinding.integrityContext ? { integrityContext: structuredClone(changeCase.sourceBinding.integrityContext), integrityAssessmentEvidenceRef } : {}) } : {}),
     provenanceManifestHash: changeCase.sourceBinding
-      ? digest({ evidenceRefs, sourceBindingHash: changeCase.sourceBinding.sourceHash, sourceBindingIntegrityHash: changeCase.sourceBinding.bindingHash })
+      ? digest({ evidenceRefs, sourceBindingHash: changeCase.sourceBinding.sourceHash, sourceBindingIntegrityHash: changeCase.sourceBinding.bindingHash,
+        ...(changeCase.sourceBinding.integrityContext ? { integrityContext: changeCase.sourceBinding.integrityContext } : {}) })
       : digest(evidenceRefs),
     sourceModel: 'synthetic-reference-model',
   };
