@@ -670,6 +670,52 @@ test('archived protected-release history remains visible while request, approval
   }
 });
 
+test('protected release shows exact candidate status across configured promotion environments', async () => {
+  const originalStorage = globalThis.localStorage;
+  globalThis.localStorage = storageFixture();
+  try {
+    const requests = [];
+    const run = { id: 'execution-run-00000000-0000-4000-8000-000000000021', projectId: 'project-promotion',
+      status: 'SUCCEEDED', execution: { repositoryCandidate: { runId: 'execution-run-00000000-0000-4000-8000-000000000021',
+        source: { type: 'github-app' }, candidateEvidence: { hash: 'candidate-hash' }, treeDigest: 'tree-hash',
+        buildReceipt: { status: 'REPRODUCIBLE', runs: [{ outputManifestHash: 'manifest-hash' }] } } } };
+    const action = { id: 'release-action-00000000-0000-4000-8000-000000000021', version: 1, status: 'AWAITING_APPROVAL',
+      requestHash: 'request-hash', events: [], observations: [], request: { kind: 'release', requestedBy: 'requester', expectedGeneration: 2,
+        environment: { configurationHash: 'configuration-hash' }, candidate: { runId: run.id, candidateEvidenceHash: 'candidate-hash',
+          candidateTreeDigest: 'tree-hash', outputManifestHash: 'manifest-hash', outputManifest: [] } } };
+    const environments = [
+      { id: 'staging', label: 'Staging', riskClass: 'low', assetIds: ['service'],
+        state: { generation: 1, pendingActionId: action.id, current: null, previous: null }, actions: [action],
+        actionsAllowed: ['release', 'rollback'], permissions: { request: true, approve: true, execute: true } },
+      { id: 'production', label: 'Production', riskClass: 'high', assetIds: ['service'],
+        state: { generation: 2, pendingActionId: null, current: { runId: run.id, candidateEvidenceHash: 'candidate-hash' }, previous: null }, actions: [],
+        actionsAllowed: ['release', 'rollback'], permissions: { request: true, approve: true, execute: true } },
+      { id: 'canary', label: 'Canary', riskClass: 'moderate', assetIds: ['service'],
+        state: { generation: 0, pendingActionId: null, current: null, previous: null }, actions: [],
+        actionsAllowed: ['release', 'rollback'], permissions: { request: true, approve: true, execute: true } },
+      { id: 'preproduction', label: 'Preproduction', riskClass: 'moderate', assetIds: ['service'],
+        state: { generation: 3, pendingActionId: null, current: { runId: 'execution-run-other' }, previous: { runId: run.id } }, actions: [],
+        actionsAllowed: ['release', 'rollback'], permissions: { request: true, approve: true, execute: true } },
+    ];
+    const api = async (route, options) => {
+      requests.push({ route, method: options?.method ?? 'GET' });
+      return { available: true, environments };
+    };
+    const releaseEl = (tag, options, children) => { const node = el(tag, options, children); node.style = {}; return node; };
+    const panel = renderProtectedRelease({ run, principal: 'owner', el: releaseEl, api });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.match(panel.textContent, /Selected candidate promotion status/);
+    assert.match(panel.textContent, /Staging · low risk · Action for this candidate: awaiting approval/);
+    assert.match(panel.textContent, /Production · high risk · Selected candidate is currently deployed/);
+    assert.match(panel.textContent, /Canary · moderate risk · Selected candidate has not been promoted here/);
+    assert.match(panel.textContent, /Preproduction · moderate risk · Selected candidate was previously deployed; another candidate is current/);
+    assert.deepEqual(requests.map((entry) => entry.method), ['GET'], 'the progression summary is read-only');
+  } finally {
+    if (originalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = originalStorage;
+  }
+});
+
 test('category focus announcement preserves a rejected outcome command status after inbox refresh', async () => {
   const originalStorage = globalThis.localStorage;
   globalThis.localStorage = storageFixture();

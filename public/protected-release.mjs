@@ -62,6 +62,30 @@ export function renderProtectedRelease({ run, principal, el, api, readOnly = fal
       }
       const candidate = run.execution?.repositoryCandidate;
       body.append(paragraph(`Selected candidate ${candidate?.candidateEvidence?.hash ?? 'unavailable'} · tree ${candidate?.treeDigest ?? 'unavailable'} · build ${candidate?.buildReceipt?.status ?? 'unavailable'} · output manifest ${candidate?.buildReceipt?.runs?.[0]?.outputManifestHash ?? 'unavailable'}`));
+      if (candidate && result.environments.length > 1) {
+        const progress = el('section', { className: 'promotion-progress', attrs: { 'aria-label': 'Selected candidate promotion status' } });
+        progress.append(el('h4', { text: 'Selected candidate promotion status' }),
+          paragraph('Read-only status from saved environment history. Use each environment’s existing request and approval controls to continue.'));
+        const stages = el('ul', { attrs: { 'aria-label': 'Candidate status by configured environment' } });
+        for (const environment of result.environments) {
+          const pendingAction = (environment.actions ?? []).find((action) => action.id === environment.state.pendingActionId);
+          let statusText;
+          if (environment.state.current?.runId === run.id) statusText = 'Selected candidate is currently deployed';
+          else if (pendingAction?.request?.candidate?.runId === run.id) {
+            statusText = `Action for this candidate: ${pendingAction.status.replaceAll('_', ' ').toLowerCase()}`;
+          } else if (pendingAction) statusText = 'Another environment action is unresolved';
+          else if (environment.state.previous?.runId === run.id
+            || (environment.actions ?? []).some((action) => action.request?.kind === 'release'
+              && action.request.candidate?.runId === run.id && ['SUCCEEDED', 'UNHEALTHY'].includes(action.status))) {
+            statusText = environment.state.current?.runId
+              ? 'Selected candidate was previously deployed; another candidate is current'
+              : 'Selected candidate was previously deployed; no candidate is currently deployed';
+          } else statusText = 'Selected candidate has not been promoted here';
+          stages.append(el('li', { text: `${environment.label} · ${environment.riskClass} risk · ${statusText}` }));
+        }
+        progress.append(stages);
+        body.append(progress);
+      }
       for (const environment of result.environments) {
         const state = environment.state;
         const permissions = readOnly ? {} : environment.permissions ?? {};

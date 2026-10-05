@@ -7693,3 +7693,15 @@ log `/tmp/orgward-tests-rIfjAA/node-test.tap.log`):
 `node --check` passed for `public/project-portfolio.mjs` and
 `tests/enterprise/view.test.mjs`; `git diff --check` passed.
 No full check or Sol review; PR-15 remains open and active.
+
+PR-15 cross-environment candidate promotion status (2026-10-05): the protected
+release view now summarizes the selected exact run across configured environments
+as currently deployed, awaiting/under action, previously deployed, or not yet
+promoted. The overview is read-only and points to the existing per-environment
+approval flow; it does not request or advance a release. Focused active and
+archived view tests passed 2/2 (0 failures, 0 skips; TAP duration 0.34s; log
+`/tmp/orgward-tests-RHPZUA/node-test.tap.log`):
+`npm test -- tests/enterprise/view.test.mjs --test-name-pattern='protected release shows exact candidate status across configured promotion environments|archived protected-release history remains visible while request, approval, execution, and retry controls are disabled'`.
+`node --check` passed for `public/protected-release.mjs` and
+`tests/enterprise/view.test.mjs`; `git diff --check` passed.
+No full check or Sol review; PR-15 remains open and active.
