@@ -8144,3 +8144,22 @@ This is one T-121 slice only: other edit surfaces, field-level impact,
 publication watermarks, reconciliation, customer-defined concepts and adoption
 remain open. PR-17 remains open; PR-15 remains the active cursor and no release
 gate changed.
+
+PR-17 T-121 owner-applied learning output through shared semantic commands
+(2026-10-05): the verified human-task output application endpoint now constructs
+the same pinned `edit-blueprint-object` command and calls the shared normalizer
+and applier before appending its task-specific source event evidence. Its prior
+human-owner, completed-checkpoint, exact task/output, source-event-hash,
+unchanged-value and source-design checks remain in place. The resulting revision
+retains both the general semantic edit provenance and the more specific
+human-task evidence-context provenance; audit records the explicit application
+reason. Existing API coverage asserts non-owner denial, incomplete/unverified
+checkpoint denial, stale project/output conflicts, exact provenance, duplicate
+protection, idempotent replay and durable restart readback. Command
+`npm test -- tests/persistence.test.mjs
+--test-name-pattern='owner-authored human task information output is pinned,
+versioned, audited, and replayable after restart'` passed 1/1 (0 failures,
+0 skips; 2.98s; log `/tmp/orgward-tests-mqUrXp/node-test.tap.log`). `node --check`
+passed for `server.mjs` and `tests/persistence.test.mjs`; `git diff --check`
+passed. This advances the learning edit path only; T-121, PR-17 and the PR-15
+active cursor remain open, and no release gate changed.

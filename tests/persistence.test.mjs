@@ -6350,10 +6350,13 @@ test('owner-authored human task information output is pinned, versioned, audited
     .find((entry) => entry.id === output.objectId);
   assert.equal(outputObject.detail, payload.detail);
   assert.equal(outputObject.detail.includes(evidence), false);
+  assert.equal(outputObject.provenance.at(-2).source, 'workspace:blueprint-edit');
+  assert.equal(outputObject.provenance.at(-2).reason, `Apply the verified human task output for ${task.id}.`);
   assert.equal(outputObject.provenance.at(-1).source, 'workspace:human-task-output');
   assert.equal(outputObject.provenance.at(-1).sourceEventId, completed.events.at(-1).id);
   assert.equal(outputObject.provenance.at(-1).sourceEventHash, completionEventHash);
   assert.match(outputObject.provenance.at(-1).note, /contextual provenance and was not copied or treated as validation/i);
+  assert.ok(applied.data.audit.at(-1).detail.includes(`Apply the verified human task output for ${task.id}.`));
   const runtimeAfterApply = (await request(app.base,
     `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances
     .find((runtime) => runtime.taskId === task.id && runtime.planInstanceId === started.planInstanceId);

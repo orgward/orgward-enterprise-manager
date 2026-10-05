@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { addConversationTurn, applyBlueprintProposal, createProject, editBlueprintObject, editProcessTaskGraph, graphForBlueprint, latestBlueprint, planProcessTaskGraph, publishBlueprintInternally } from './src/model.mjs';
+import { addConversationTurn, applyBlueprintProposal, createProject, editProcessTaskGraph, graphForBlueprint, latestBlueprint, planProcessTaskGraph, publishBlueprintInternally } from './src/model.mjs';
 import { ProjectStore } from './src/store.mjs';
 import { MUTATIONS, STAGES, digest } from './src/sdlc/contracts.mjs';
 import { PROOF_ACTION_ATTEMPT_LIMIT, acceptArchitectureDraft, acceptRequirementDraft, advanceCase, answerClarification, approveRelease, assessProofs, commandRequestHash, completeProofAction, createChangeCase, editArchitectureDraft, editRequirementDraft, normalizeChangeCase, openClarification, pinProjectSourceObject, reconcileClarification, recordObservation, recordProofResult, registerProofObligation, releaseApprovalCandidate, resumeProofAction, routeProofResult, runToCheckpoint, traceability, verifyAcceptedG6Plan, verifyContextManifest, verifyEvidenceLedger, verifySourceBinding, workspaceStatus } from './src/sdlc/engine.mjs';
@@ -2088,9 +2088,11 @@ export function createApp({
             if (!verifiedCompletionEvent?.id || !/^[a-f0-9]{64}$/.test(verifiedCompletionEvent.contentHash ?? '')) {
               throw apiFailure(409, 'HUMAN_TASK_CHECKPOINT_UNVERIFIED', 'The succeeded checkpoint has no verifiable source event for provenance.');
             }
-            const blueprint = editBlueprintObject(project, {
-              objectId: original.id, name: original.name, detail: payload.detail.trim(),
-            }, actor);
+            const commandReason = `Apply the verified human task output for ${payload.taskId}.`;
+            const semanticCommand = normalizeEnterpriseCommand({ kind: 'edit-blueprint-object',
+              blueprintId: latest.id, blueprintVersion: latest.version,
+              objectId: original.id, name: original.name, detail: payload.detail.trim(), reason: commandReason });
+            const { blueprint } = applyEnterpriseCommand(project, semanticCommand, actor);
             const updated = Object.values(blueprint.areas).flatMap((area) => area.items)
               .find((candidate) => candidate.id === original.id);
             updated.provenance ??= [];
