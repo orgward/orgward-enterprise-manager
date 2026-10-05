@@ -251,6 +251,13 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
         reviewSupport.addEventListener('click', () => onOpen(project.id, { focusOutcomes: true, focusOutcomeCategory: 'support' }));
         card.append(reviewSupport);
       }
+      if (!archived && ['owner', 'editor'].includes(project.workspaceAccess)) {
+        const reportIncident = el('button', { className: 'button ghost', text: 'Report incident', attrs: { type: 'button' } });
+        reportIncident.addEventListener('click', () => onOpen(project.id, { focusOutcomes: true, focusOutcomeCategory: 'incident' }));
+        const requestSupport = el('button', { className: 'button ghost', text: 'Request support', attrs: { type: 'button' } });
+        requestSupport.addEventListener('click', () => onOpen(project.id, { focusOutcomes: true, focusOutcomeCategory: 'support' }));
+        card.append(reportIncident, requestSupport);
+      }
       list.append(card);
     }
   };

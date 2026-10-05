@@ -186,6 +186,35 @@ test('portfolio starts a governed change from the exact writable workspace', () 
   assert.equal(startLink('project-no-design'), undefined, 'a saved source blueprint is required before starting a case');
 });
 
+test('portfolio incident and support creation handoffs are exact-workspace and writer scoped', () => {
+  const opened = [];
+  const portfolio = renderProjectPortfolio([
+    { id: 'project-owner', name: 'Owner workspace', workspaceAccess: 'owner' },
+    { id: 'project-editor', name: 'Editor workspace', workspaceAccess: 'editor' },
+    { id: 'project-reader', name: 'Reader workspace', workspaceAccess: 'reader' },
+  ], { el, archivedProjects: [{ id: 'project-archived-owner', name: 'Archived owner workspace', workspaceAccess: 'owner',
+    lifecycle: { status: 'archived', reason: 'Retained.' } }], onOpen: (id, options) => opened.push([id, options]), onExport() {} });
+  const cards = portfolio.querySelectorAll('[data-project-id]');
+  const cardFor = (id) => cards.find((card) => card.attrs['data-project-id'] === id);
+  const action = (card, text) => card.querySelectorAll('button').find((button) => button.text === text);
+  for (const id of ['project-owner', 'project-editor']) {
+    assert.ok(action(cardFor(id), 'Report incident'));
+    assert.ok(action(cardFor(id), 'Request support'));
+  }
+  for (const label of ['Report incident', 'Request support']) assert.equal(action(cardFor('project-reader'), label), undefined,
+    `readers do not see ${label.toLowerCase()} handoffs`);
+  action(cardFor('project-owner'), 'Report incident').listeners.get('click')();
+  action(cardFor('project-editor'), 'Request support').listeners.get('click')();
+  assert.deepEqual(opened, [['project-owner', { focusOutcomes: true, focusOutcomeCategory: 'incident' }],
+    ['project-editor', { focusOutcomes: true, focusOutcomeCategory: 'support' }]]);
+
+  portfolio.querySelectorAll('button').find((button) => button.text === 'Archived workspaces').listeners.get('click')();
+  const archivedCard = portfolio.querySelectorAll('[data-project-id]')[0];
+  assert.equal(action(archivedCard, 'Report incident'), undefined);
+  assert.equal(action(archivedCard, 'Request support'), undefined);
+  assert.ok(action(archivedCard, 'Restore workspace'));
+});
+
 test('platform access management deep link selects the requested workspace', async () => {
   const projects = [
     { id: 'workspace-owner-first', workspaceAccess: 'owner' },

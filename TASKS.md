@@ -7719,3 +7719,15 @@ source bytes remain excluded from the API run view. Focused tests passed 3/3
 `public/execution.js`, and `tests/execution/process-task-repository-view.test.mjs`;
 `git diff --check` passed. No external source read, full check or Sol review.
 PR-15 remains open and active.
+
+PR-15 portfolio incident and support creation handoff (2026-10-05): active
+workspace cards now offer owners and editors a direct “Report incident” or
+“Request support” path that opens the exact workspace with the matching category
+focused in its existing inbox. Readers and archived workspaces receive no create
+handoff; archived review/restore paths remain available. Focused portfolio tests
+passed 2/2 (0 failures, 0 skips; TAP duration 0.34s; log
+`/tmp/orgward-tests-jlt7C7/node-test.tap.log`):
+`npm test -- tests/enterprise/view.test.mjs --test-name-pattern='portfolio incident and support creation handoffs are exact-workspace and writer scoped|portfolio cards show saved workspace state and access and open the chosen project'`.
+`node --check` passed for `public/project-portfolio.mjs` and
+`tests/enterprise/view.test.mjs`; `git diff --check` passed. No full check or Sol
+review; PR-15 remains open and active.
