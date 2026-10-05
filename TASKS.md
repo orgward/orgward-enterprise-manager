@@ -7772,6 +7772,19 @@ view tests passed 5/5 (0 failures, 0 skips; TAP duration 0.23s; log
 one bounded T-90 increment; T-90 and PR-15 remain open. No full check or Sol
 review.
 
+PR-15 T-90 return from SDLC case to pinned design object (2026-10-05):
+source-bound change-case evidence now links to the exact saved project, blueprint
+version, and object used by the case. The link appears only when the saved pin
+passes integrity validation and the loaded project contains the matching source
+object; it does not substitute the latest design. Focused SDLC workspace tests
+passed 8/8 (0 failures, 0 skips; TAP duration 0.23s; log
+`/tmp/orgward-tests-FZihZS/node-test.tap.log`):
+`npm test -- tests/sdlc/workspace.test.mjs`.
+`node --check` passed for `public/sdlc-view.mjs`, `public/sdlc.js`, and
+`tests/sdlc/workspace.test.mjs`; `git diff --check` passed. `npm run task:next`
+reports PR-15 first open. This is one bounded T-90 increment; T-90 and PR-15
+remain open. No full check or Sol review.
+
 PR-15 T-90 integrity context on saved SDLC runs (2026-10-05): authenticated
 process-task run detail now reads the existing enterprise projection for the
 run's pinned blueprint/process and shows the exact matching integrity report

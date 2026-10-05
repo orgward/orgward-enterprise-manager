@@ -1,4 +1,4 @@
-import { caseUiModel, createSourceSelectionGuard, eligibleActorBindings } from './sdlc-view.mjs';
+import { caseUiModel, createSourceSelectionGuard, eligibleActorBindings, sourceBindingDesignRoute } from './sdlc-view.mjs';
 import { encodeExecutionRoute, encodeStudioRoute } from './shared-interactions.mjs';
 import { clearPendingSoftwareStart, createSoftwareStartFlightGuard, pendingSoftwareStartKey } from './software-runtime-start.mjs';
 import { openInitialCase, sourceObjectPreview } from './sdlc-routing.mjs';
@@ -465,11 +465,13 @@ function renderContext(content) {
       ]));
       return;
     }
+    const sourceRoute = sourceBindingDesignRoute(state.changeCase, state.activeSourceProject);
     content.append(section('Pinned saved-design evidence', [
       el('p', { text: `${binding.snapshot.name} · ${binding.objectType} · ${binding.snapshot.detail}` }),
       el('p', { text: `Project ${binding.projectId} v${binding.projectVersion} · blueprint ${binding.blueprintId} v${binding.blueprintVersion} · schema v${binding.blueprintSchemaVersion}` }),
       el('p', { text: `Source SHA-256 ${binding.sourceHash} · binding integrity ${binding.bindingHash} · evidence ${context.sourceBindingEvidenceRef}` }),
       el('p', { text: binding.state === 'PINNED_OLDER_VERSION' ? 'Pinned version: this project has a newer saved design. The case still uses this original snapshot.' : binding.state === 'CURRENT' ? 'Pinned version: the case uses this exact current saved design snapshot.' : 'Pinned version: current project state is unavailable; the case retains this exact saved snapshot.' }),
+      ...(sourceRoute ? [el('a', { className: 'button ghost', text: 'Open exact pinned design object', attrs: { href: sourceRoute } })] : []),
       el('small', { text: 'Other context coverage is from the synthetic reference organization; it is not evidence from this project.' }),
     ]));
   }

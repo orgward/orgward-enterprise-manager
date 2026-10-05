@@ -1,3 +1,26 @@
+import { encodeStudioRoute } from './shared-interactions.mjs';
+
+const PROJECT_ID = /^project-[0-9a-f-]{36}$/i;
+const BLUEPRINT_ID = /^blueprint-[0-9a-f-]{36}$/i;
+const OBJECT_ID = /^[a-z0-9][a-z0-9_-]{0,119}$/i;
+
+export function sourceBindingDesignRoute(changeCase, project) {
+  const binding = changeCase?.sourceBinding;
+  if (!binding || changeCase.sourceBindingIntegrity?.valid !== true
+    || !PROJECT_ID.test(binding.projectId ?? '') || project?.id !== binding.projectId
+    || !BLUEPRINT_ID.test(binding.blueprintId ?? '') || !Number.isSafeInteger(binding.blueprintVersion)
+    || binding.blueprintVersion < 1 || !OBJECT_ID.test(binding.objectId ?? '')
+    || !Array.isArray(project.blueprintVersions)) return null;
+  const blueprint = project.blueprintVersions.find((entry) => entry?.id === binding.blueprintId
+    && entry.version === binding.blueprintVersion);
+  const source = blueprint && Object.values(blueprint.areas ?? {}).flatMap((area) => Array.isArray(area?.items) ? area.items : [])
+    .find((item) => item.id === binding.objectId);
+  if (!source || source.type !== binding.objectType || source.type !== binding.snapshot?.type
+    || source.name !== binding.snapshot?.name || source.detail !== binding.snapshot?.detail) return null;
+  return encodeStudioRoute({ projectId: binding.projectId, view: 'map', selectedId: binding.objectId,
+    blueprintVersion: binding.blueprintVersion });
+}
+
 export function eligibleActorBindings(response, blueprintVersion) {
   return (response.data?.proposals ?? []).filter((entry) => entry.status === 'enabled'
     && entry.eligibilityStatus.includes('eligible') && entry.blueprintVersion === blueprintVersion);

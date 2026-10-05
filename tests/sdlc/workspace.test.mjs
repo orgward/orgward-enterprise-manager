@@ -14,7 +14,7 @@ import {
   workspaceStatus,
 } from '../../src/sdlc/engine.mjs';
 import { digest } from '../../src/sdlc/contracts.mjs';
-import { caseUiModel, createSourceSelectionGuard } from '../../public/sdlc-view.mjs';
+import { caseUiModel, createSourceSelectionGuard, sourceBindingDesignRoute } from '../../public/sdlc-view.mjs';
 
 test('source selection guard ignores a slower response for a previous project', () => {
   const guard = createSourceSelectionGuard();
@@ -70,6 +70,24 @@ test('case UI needs full active-project detail to distinguish current pin from u
   };
   assert.equal(caseUiModel(changeCase, {}, detail).sourceBinding.state, 'CURRENT');
   assert.equal(caseUiModel(changeCase, {}, { id: detail.id, version: detail.version }).sourceBinding.state, 'PROJECT_UNAVAILABLE');
+});
+
+test('SDLC source evidence links to the exact pinned design object and omits mismatched context', () => {
+  const source = { id: 'info-pinned', type: 'information', name: 'Pinned information', detail: 'Exact source.' };
+  const projectId = 'project-11111111-1111-4111-8111-111111111111';
+  const blueprintId = 'blueprint-22222222-2222-4222-8222-222222222222';
+  const binding = { projectId, blueprintId, blueprintVersion: 4, objectId: source.id,
+    objectType: source.type, snapshot: source };
+  const changeCase = { sourceBinding: binding, sourceBindingIntegrity: { valid: true } };
+  const project = { id: projectId, blueprintVersions: [{ id: blueprintId, version: 4,
+    areas: { informationTechnology: { items: [source] } } }] };
+  assert.equal(sourceBindingDesignRoute(changeCase, project),
+    '/?project=project-11111111-1111-4111-8111-111111111111&view=map&selected=info-pinned&blueprintVersion=4');
+  assert.equal(sourceBindingDesignRoute(changeCase, { ...project, id: 'project-33333333-3333-4333-8333-333333333333' }), null);
+  assert.equal(sourceBindingDesignRoute({ ...changeCase, sourceBindingIntegrity: { valid: false } }, project), null);
+  assert.equal(sourceBindingDesignRoute(changeCase, { ...project, blueprintVersions: [] }), null);
+  assert.equal(sourceBindingDesignRoute(changeCase, { ...project, blueprintVersions: [{ id: blueprintId, version: 4,
+    areas: { informationTechnology: { items: [{ ...source, detail: 'Changed source.' }] } } }] }), null);
 });
 
 test('workspace status exposes questions and their next allowed decision', () => {
