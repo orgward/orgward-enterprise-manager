@@ -8046,3 +8046,28 @@ PR-15 first open. This is only local fault-injection/recovery evidence, not a
 real provider timeout qualification; no external provider was configured or
 called, no compensation was attempted, and T-96 AC1/AC3/AC4 plus PR-15 remain
 open. No full check, gate change or Sol review.
+
+PR-15 T-96 local two-step partial outcome and compensation journey (2026-10-05):
+adjacent two-step sandbox flows now retain a stable group ID and independent
+step order in each operation. The local harness can deterministically record
+the first step and return `FAILED_IN_SANDBOX` for the configured second step;
+the second step cannot be approved/dispatched before the first is recorded.
+Only an explicitly `compensable` completed step can be selected after its peer
+has a known failure. A human project owner must approve compensation as a new
+linked operation with its own key, evidence and dispatch; the original success
+and failure remain unchanged. The API test proves editor denial creates no
+record/effect, compensation replay does not dispatch again, and all three
+records survive app restart. UI labels the partial group and separate
+compensation without implying atomic rollback. Every adapter result remains
+`LOCAL_TEST_ONLY` with `externalProviderCalled: false`.
+
+Initial focused run failed 1/5 because the test helper treated the intentional
+409 predecessor guard as an unexpected response. The test was corrected to
+assert the expected 409 and exact `SANDBOX_GROUP_PREDECESSOR_INCOMPLETE` code.
+Final command
+`node --test --test-name-pattern='two-step local sandbox|owner-approved sandbox procurement|sandbox procurement UI|sandbox transaction history|local sandbox adapter|sandbox adapter|accepted-then-timeout' tests/enterprise/server.test.mjs tests/enterprise/view.test.mjs tests/enterprise/sandbox-adapter.test.mjs`
+passed 8/8 (0 failures, 0 skips; 5.54s). `node --check` passed for all eight
+changed JS files and `git diff --check` passed. No full check or Sol review.
+This is local harness evidence only, not an authentic provider transaction or
+compensation qualification; T-96 and PR-15 remain open, and no external
+provider was configured or called.

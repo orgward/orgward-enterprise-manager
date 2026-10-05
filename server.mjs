@@ -1807,7 +1807,7 @@ export function createApp({
         const administrative = ['create-scope', 'rename-scope', 'set-validity', 'propose-future-design',
           'set-branch-validity', 'review-merge', 'apply-reviewed-merge', 'abandon-branch'].includes(payload.kind)
           || ['decide-governance-decision', 'review-governance-appeal', 'assign-information-steward'].includes(payload.kind)
-          || ['run-sandbox-procurement-test', 'dispatch-sandbox-procurement-test', 'reconcile-sandbox-procurement-test'].includes(payload.kind)
+          || ['run-sandbox-procurement-test', 'dispatch-sandbox-procurement-test', 'reconcile-sandbox-procurement-test', 'compensate-sandbox-procurement-test'].includes(payload.kind)
           || (payload.kind === 'record-state' && payload.dimension === 'review')
           || (payload.kind === 'edit-branch-scope' && ['create-scope', 'rename-scope'].includes(payload.change.kind));
         if ((administrative || payload.kind === 'record-state' || ENTERPRISE_BRANCH_KINDS.has(payload.kind)
@@ -1851,6 +1851,7 @@ export function createApp({
           project.events.push(projectEvent(project, { type: payload.kind === 'run-sandbox-procurement-test' ? 'SandboxTransactionApproved'
               : payload.kind === 'dispatch-sandbox-procurement-test' ? 'SandboxTransactionDispatched'
               : payload.kind === 'reconcile-sandbox-procurement-test' ? 'SandboxTransactionReconciled'
+              : payload.kind === 'compensate-sandbox-procurement-test' ? 'SandboxCompensationApproved'
               : payload.kind === 'run-integrity-checks' ? 'EnterpriseIntegrityAssessed'
               : payload.kind === 'accept-integrity-exception' ? 'EnterpriseIntegrityExceptionAccepted'
               : ENTERPRISE_GOVERNANCE_KINDS.has(payload.kind) ? 'EnterpriseGovernanceChanged'

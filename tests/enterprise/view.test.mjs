@@ -1549,6 +1549,37 @@ test('sandbox procurement UI makes owner approval and local-only evidence explic
   assert.equal(enterpriseProcessCommandPayload({ ...modelValue, permissions: { ...modelValue.permissions, sandboxExecute: false } }, recoveryCommand), null);
 });
 
+test('sandbox transaction history shows partial two-step outcomes and separate compensation approval', () => {
+  const originalId = 'sandbox-transaction-00000000-0000-4000-8000-000000000001';
+  const original = { operationId: originalId, kind: 'PROCUREMENT_TEST_EFFECT', status: 'RECORDED_IN_SANDBOX', compensable: true,
+    group: { id: 'sandbox-group-a'.padEnd(34, 'a'), sequence: 1, total: 2, stepIds: ['effect-test', 'effect-two'] },
+    label: 'Sandbox test effect · Test procurement', source: { processId: 'process-deliver', blueprintId: model().context.blueprintId,
+      blueprintVersion: model().context.blueprintVersion, blueprintHash: 'a'.repeat(64), stepId: 'effect-test' },
+    providerKey: `orgward-local-sandbox:${'b'.repeat(64)}`, commitment: { quantity: { value: 12, unit: 'hours' } },
+    approval: { at: '2026-10-05T12:00:00.000Z' }, evidenceHash: 'c'.repeat(64) };
+  const failed = { ...original, operationId: 'sandbox-transaction-00000000-0000-4000-8000-000000000002',
+    kind: 'PROCUREMENT_TEST_EFFECT', status: 'FAILED_IN_SANDBOX', compensable: false,
+    label: 'Sandbox test effect · Second step', group: { ...original.group, sequence: 2, stepIds: ['effect-test', 'effect-two'] },
+    source: { ...original.source, stepId: 'effect-two' } };
+  let command = null;
+  const process = { id: 'process-deliver', type: 'process', name: 'Deliver the core offering', processFlow: { schemaVersion: '1.0', startStepId: 'effect-test', steps: [
+    { id: 'effect-test', kind: 'sandbox-procurement', title: 'Test procurement', resourceId: 'resource-capacity', windowId: 'window-delivery', allocationId: 'allocation-delivery', nextStepId: 'effect-two', compensable: true },
+    { id: 'effect-two', kind: 'sandbox-procurement', title: 'Second step', resourceId: 'resource-capacity', windowId: 'window-delivery', allocationId: 'allocation-delivery', nextStepId: 'end-test' },
+    { id: 'end-test', kind: 'end', title: 'End' },
+  ] } };
+  const modelValue = model({ permissions: { processWrite: true, simulate: true, sandboxExecute: true },
+    sandboxTransactions: [original, failed] });
+  const root = renderEnterpriseProcess({ model: modelValue, object: process, el, ui: branchUi, onCommand: (value) => { command = value; } });
+  assert.match(root.textContent, /partial group failure/);
+  assert.match(root.textContent, /two-step group .* step 2 of 2/);
+  const approveCompensation = root.querySelectorAll('button').find((button) => button.textContent === 'Approve separate local compensation');
+  assert.ok(approveCompensation);
+  approveCompensation.listeners.get('click')?.();
+  assert.equal(command.kind, 'compensate-sandbox-procurement-test');
+  assert.equal(command.operationId, originalId);
+  assert.match(command.reason, /separate local compensation/);
+});
+
 test('enterprise process UI shows a saved simulation as exact hypothetical evidence', () => {
   const process = { ...object, id: 'process-transfer', type: 'process', name: 'Transfer funds', owner: 'role-operator', processFlow: {
     schemaVersion: '1.0', startStepId: 'step-intake', steps: [

@@ -107,16 +107,17 @@ export function normalizeProcessFlow(input, byId) {
     } else if (step.kind === 'loop-return') {
       keys(step, [...common, 'loopStepId']); normalized.loopStepId = local(step.loopStepId);
     } else if (step.kind === 'sandbox-procurement') {
-      keys(step, [...common, 'resourceId', 'windowId', 'allocationId', 'nextStepId']);
+      keys(step, [...common, 'resourceId', 'windowId', 'allocationId', 'nextStepId', 'compensable']);
       const resourceId = reference(step.resourceId, byId, 'resource');
       const windowId = enterpriseText(step.windowId, 'Capacity window ID', 120);
       const allocationId = enterpriseText(step.allocationId, 'Committed allocation ID', 120);
+      if (step.compensable !== undefined && typeof step.compensable !== 'boolean') fail('A sandbox step compensable flag must be true or false.', 'INVALID_PROCESS_STEP');
       const window = byId.get(resourceId).resourcePlan?.windows?.find((entry) => entry.id === windowId);
       const allocation = window?.allocations?.find((entry) => entry.id === allocationId);
       if (!window || !allocation || allocation.state !== 'COMMITTED_REPORTED') {
         fail('A sandbox procurement intent must pin a saved committed allocation in the selected resource window.', 'INVALID_PROCESS_REFERENCE');
       }
-      Object.assign(normalized, { resourceId, windowId, allocationId, nextStepId: local(step.nextStepId) });
+      Object.assign(normalized, { resourceId, windowId, allocationId, nextStepId: local(step.nextStepId), compensable: step.compensable === true });
     } else keys(step, common);
     return normalized;
   });

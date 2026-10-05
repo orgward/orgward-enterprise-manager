@@ -8,13 +8,18 @@ const exactKeys = (value, expected) => value && typeof value === 'object' && !Ar
   && Object.keys(value).sort().join(',') === [...expected].sort().join(',');
 
 export function normalizeSandboxEffectRequest(input) {
-  const fields = ['contract', 'schemaVersion', 'adapterId', 'mode', 'operationId', 'operationKey', 'providerKey', 'kind', 'source', 'approval'];
+  const fields = ['contract', 'schemaVersion', 'adapterId', 'mode', 'operationId', 'operationKey', 'providerKey', 'kind',
+    'compensatesOperationId', 'source', 'approval'];
   if (!exactKeys(input, fields) || input.contract !== SANDBOX_EFFECT_CONTRACT || input.schemaVersion !== '1.0'
     || input.adapterId !== LOCAL_SANDBOX_ADAPTER_ID || input.mode !== 'LOCAL_TEST_ONLY'
     || typeof input.operationId !== 'string' || !/^sandbox-transaction-[0-9a-f-]{36}$/.test(input.operationId)
     || typeof input.operationKey !== 'string' || !/^[a-f0-9]{64}$/.test(input.operationKey)
     || input.providerKey !== `orgward-local-sandbox:${input.operationKey}`
-    || input.kind !== 'PROCUREMENT_TEST_EFFECT' || !exactKeys(input.source,
+    || !['PROCUREMENT_TEST_EFFECT', 'PROCUREMENT_TEST_COMPENSATION'].includes(input.kind)
+    || (input.kind === 'PROCUREMENT_TEST_EFFECT' && input.compensatesOperationId !== null)
+    || (input.kind === 'PROCUREMENT_TEST_COMPENSATION' && (typeof input.compensatesOperationId !== 'string'
+      || !/^sandbox-transaction-[0-9a-f-]{36}$/.test(input.compensatesOperationId)))
+    || !exactKeys(input.source,
       ['projectId', 'blueprintId', 'blueprintVersion', 'blueprintHash', 'processId', 'stepId', 'resourceId', 'windowId', 'allocationId'])
     || !exactKeys(input.approval, ['decision', 'actor', 'at', 'authority', 'quantity', 'capacity'])
     || input.approval.decision !== 'APPROVED' || input.approval.authority !== 'HUMAN_PROJECT_OWNER'
@@ -40,10 +45,12 @@ export function normalizeSandboxEffectResponse(input, request) {
   const fields = ['contract', 'schemaVersion', 'adapterId', 'mode', 'operationKey', 'providerKey', 'outcome', 'externalProviderCalled', 'result', 'idempotent'];
   if (!exactKeys(input, fields) || input.contract !== SANDBOX_EFFECT_CONTRACT || input.schemaVersion !== '1.0'
     || input.adapterId !== request.adapterId || input.mode !== 'LOCAL_TEST_ONLY'
-    || input.operationKey !== request.operationKey || input.providerKey !== request.providerKey || input.outcome !== 'RECORDED_IN_SANDBOX'
+    || input.operationKey !== request.operationKey || input.providerKey !== request.providerKey
+    || !({ PROCUREMENT_TEST_EFFECT: ['RECORDED_IN_SANDBOX', 'FAILED_IN_SANDBOX'],
+      PROCUREMENT_TEST_COMPENSATION: ['COMPENSATED_IN_SANDBOX'] }[request.kind] ?? []).includes(input.outcome)
     || input.externalProviderCalled !== false || typeof input.idempotent !== 'boolean'
     || !exactKeys(input.result, ['operationId', 'status', 'detail']) || input.result.operationId !== request.operationId
-    || input.result.status !== 'RECORDED_IN_SANDBOX' || typeof input.result.detail !== 'string' || !input.result.detail) {
+    || input.result.status !== input.outcome || typeof input.result.detail !== 'string' || !input.result.detail) {
     fail('INVALID_SANDBOX_EFFECT_RESPONSE', 'The local sandbox adapter returned an invalid or externally effectful response.');
   }
   return structuredClone(input);
@@ -54,7 +61,7 @@ export function normalizeSandboxEffectResponse(input, request) {
  * registry entry: it cannot contact a connector and only returns a local test
  * receipt. Production connector support requires a separate configured adapter.
  */
-export function createLocalSandboxTestAdapter({ acceptedThenTimeoutOnce = false } = {}) {
+export function createLocalSandboxTestAdapter({ acceptedThenTimeoutOnce = false, failStepIds = [] } = {}) {
   const results = new Map();
   let faultConsumed = false; let dispatchCount = 0; let effectCount = 0; let reconciliationCount = 0;
   return Object.freeze({
@@ -68,11 +75,17 @@ export function createLocalSandboxTestAdapter({ acceptedThenTimeoutOnce = false 
         if (prior.requestHash !== requestHash) fail('SANDBOX_IDEMPOTENCY_CONFLICT', 'The operation key is already bound to a different sandbox request.');
         return normalizeSandboxEffectResponse({ ...prior.response, idempotent: true }, request);
       }
+      const outcome = request.kind === 'PROCUREMENT_TEST_COMPENSATION' ? 'COMPENSATED_IN_SANDBOX'
+        : failStepIds.includes(request.source.stepId) ? 'FAILED_IN_SANDBOX' : 'RECORDED_IN_SANDBOX';
       const response = normalizeSandboxEffectResponse({ contract: SANDBOX_EFFECT_CONTRACT, schemaVersion: '1.0',
         adapterId: LOCAL_SANDBOX_ADAPTER_ID, mode: 'LOCAL_TEST_ONLY', operationKey: request.operationKey,
-        providerKey: request.providerKey, outcome: 'RECORDED_IN_SANDBOX', externalProviderCalled: false, idempotent: false,
-        result: { operationId: request.operationId, status: 'RECORDED_IN_SANDBOX', detail: 'Local deterministic test receipt; no external provider was called.' } }, request);
-      results.set(request.providerKey, { requestHash, request, response }); effectCount += 1;
+        providerKey: request.providerKey, outcome, externalProviderCalled: false, idempotent: false,
+        result: { operationId: request.operationId, status: outcome, detail: outcome === 'FAILED_IN_SANDBOX'
+          ? 'Local deterministic harness failure; no external provider was called.'
+          : outcome === 'COMPENSATED_IN_SANDBOX' ? 'Separate local compensation test receipt; original operation remains recorded.'
+            : 'Local deterministic test receipt; no external provider was called.' } }, request);
+      results.set(request.providerKey, { requestHash, request, response });
+      if (outcome !== 'FAILED_IN_SANDBOX') effectCount += 1;
       if (acceptedThenTimeoutOnce && !faultConsumed) {
         faultConsumed = true;
         fail('SANDBOX_ADAPTER_TIMEOUT_AFTER_ACCEPTANCE', 'The local harness accepted the operation but simulated a lost response.', 504);

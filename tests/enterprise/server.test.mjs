@@ -1252,6 +1252,97 @@ test('owner-approved sandbox procurement records one source-pinned test effect a
   assert.ok(reopened.data.sandboxTransactions[0].approval.approved.quantity.value === 12);
 });
 
+test('two-step local sandbox records partial failure and an owner-approved separate compensation across restart', async (t) => {
+  const postgres = await startPostgres(); let root; let instance;
+  t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });
+  const adapter = createLocalSandboxTestAdapter({ failStepIds: ['sandbox-step-two'] });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-sandbox-compensation-')); instance = await startApp(postgres, root, { sandboxEffectAdapter: adapter });
+  for (const identity of identities.values()) await postgres.query(`insert into orgward.oidc_principals
+    (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+  [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  const project = await seedProject(postgres, 'Two-step sandbox compensation fixture');
+  const processView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  let resourceView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'resource-operating-capacity' });
+  const capacity = { value: 40, unit: 'hours', source: 'Owner-reviewed local test declaration' };
+  const quantity = { value: 12, unit: 'hours', source: 'Owner-reviewed local test declaration' };
+  await postCommand(instance.base, 'owner', project.id, commandBody(resourceView, 'sandbox-comp-capacity', { kind: 'define-resource-plan',
+    objectId: 'resource-operating-capacity', reason: 'Provide local test capacity.', resourcePlan: { schemaVersion: '1.0', provider: 'Local test fixture', windows: [
+      { id: 'delivery-window', window: { start: '2026-10-01T00:00:00.000Z', end: '2026-10-02T00:00:00.000Z', timezone: 'UTC' },
+        capacity, available: capacity, allocations: [{ id: 'sandbox-commitment', processId: 'process-deliver', quantity, state: 'COMMITTED_REPORTED' }] },
+    ] } }));
+  const latestProcess = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  const flow = { schemaVersion: '1.0', startStepId: 'sandbox-step-one', steps: [
+    { id: 'sandbox-step-one', kind: 'sandbox-procurement', title: 'Local step one', resourceId: 'resource-operating-capacity',
+      windowId: 'delivery-window', allocationId: 'sandbox-commitment', nextStepId: 'sandbox-step-two', compensable: true },
+    { id: 'sandbox-step-two', kind: 'sandbox-procurement', title: 'Local step two', resourceId: 'resource-operating-capacity',
+      windowId: 'delivery-window', allocationId: 'sandbox-commitment', nextStepId: 'sandbox-end' },
+    { id: 'sandbox-end', kind: 'end', title: 'End' },
+  ] };
+  await postCommand(instance.base, 'owner', project.id, commandBody(latestProcess, 'sandbox-comp-flow', { kind: 'define-process-flow',
+    objectId: 'process-deliver', processFlow: flow, reason: 'Define a sequential two-step local-only transaction.' }));
+  let ownerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  const approveStep = async (stepId, commandId, expectedStatus = 200) => postCommand(instance.base, 'owner', project.id, commandBody(ownerView, commandId, {
+    kind: 'run-sandbox-procurement-test', processId: 'process-deliver', stepId, reason: `Approve ${stepId} for local testing.` }), expectedStatus);
+  const premature = await approveStep('sandbox-step-two', 'sandbox-comp-premature-step-two', 409);
+  assert.equal(premature.error.code, 'SANDBOX_GROUP_PREDECESSOR_INCOMPLETE');
+  const firstApproval = await approveStep('sandbox-step-one', 'sandbox-comp-approve-first');
+  const first = firstApproval.data.sandboxTransaction;
+  assert.deepEqual(first.group, { id: first.group.id, sequence: 1, total: 2, stepIds: ['sandbox-step-one', 'sandbox-step-two'] });
+  ownerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  const firstDispatch = await postCommand(instance.base, 'owner', project.id, commandBody(ownerView, 'sandbox-comp-dispatch-first', {
+    kind: 'dispatch-sandbox-procurement-test', operationId: first.operationId, reason: 'Dispatch first local step.' }));
+  assert.equal(firstDispatch.data.sandboxTransaction.status, 'RECORDED_IN_SANDBOX');
+  ownerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  const secondApproval = await postCommand(instance.base, 'owner', project.id, commandBody(ownerView, 'sandbox-comp-approve-second', {
+    kind: 'run-sandbox-procurement-test', processId: 'process-deliver', stepId: 'sandbox-step-two', reason: 'Approve second local step.' }));
+  const second = secondApproval.data.sandboxTransaction;
+  assert.equal(second.group.id, first.group.id); assert.equal(second.group.sequence, 2);
+  ownerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  const secondDispatch = await postCommand(instance.base, 'owner', project.id, commandBody(ownerView, 'sandbox-comp-dispatch-second', {
+    kind: 'dispatch-sandbox-procurement-test', operationId: second.operationId, reason: 'Dispatch second local step.' }));
+  assert.equal(secondDispatch.data.sandboxTransaction.status, 'FAILED_IN_SANDBOX');
+  assert.equal(secondDispatch.data.sandboxTransaction.effect.externalProviderCalled, false);
+  assert.match(secondDispatch.data.sandboxTransaction.evidence.detail, /No external provider/);
+  assert.deepEqual(adapter.metrics, { dispatchCount: 2, effectCount: 1, reconciliationCount: 2 });
+
+  ownerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  const compensationPayload = { kind: 'compensate-sandbox-procurement-test', operationId: first.operationId,
+    reason: 'Approve a separate local compensation after the paired test step failed.' };
+  const editorView = await currentView(instance.base, 'editor', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  const denied = await postCommand(instance.base, 'editor', project.id,
+    commandBody(editorView, 'sandbox-comp-editor-denied', compensationPayload), 403);
+  assert.equal(denied.error.code, 'ACTION_FORBIDDEN');
+  const afterDenied = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  assert.equal(afterDenied.data.sandboxTransactions.length, 2, 'denied compensation creates no operation record');
+  assert.deepEqual(adapter.metrics, { dispatchCount: 2, effectCount: 1, reconciliationCount: 2 }, 'denied compensation sends no effect');
+  const approvedCompensation = await postCommand(instance.base, 'owner', project.id,
+    commandBody(ownerView, 'sandbox-comp-owner-approval', compensationPayload));
+  const compensation = approvedCompensation.data.sandboxTransaction;
+  assert.equal(compensation.status, 'APPROVED_PENDING'); assert.equal(compensation.kind, 'PROCUREMENT_TEST_COMPENSATION');
+  assert.equal(compensation.compensatesOperationId, first.operationId);
+  assert.equal(compensation.adapterRequest.compensatesOperationId, first.operationId);
+  assert.equal(compensation.effect.externalProviderCalled, false);
+  ownerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  const dispatchedCompensation = await postCommand(instance.base, 'owner', project.id, commandBody(ownerView, 'sandbox-comp-dispatch-compensation', {
+    kind: 'dispatch-sandbox-procurement-test', operationId: compensation.operationId, reason: 'Dispatch the separate local compensation.' }));
+  assert.equal(dispatchedCompensation.data.sandboxTransaction.status, 'COMPENSATED_IN_SANDBOX');
+  assert.equal(dispatchedCompensation.data.sandboxTransaction.effect.externalProviderCalled, false);
+  ownerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  const replay = await postCommand(instance.base, 'owner', project.id, commandBody(ownerView, 'sandbox-comp-retry-compensation', {
+    kind: 'dispatch-sandbox-procurement-test', operationId: compensation.operationId, reason: 'Retry the completed local compensation.' }));
+  assert.equal(replay.data.idempotent, true);
+  assert.deepEqual(adapter.metrics, { dispatchCount: 3, effectCount: 2, reconciliationCount: 3 }, 'retry does not dispatch a duplicate effect');
+  assert.equal(ownerView.data.sandboxTransactions.find((entry) => entry.operationId === first.operationId).status, 'RECORDED_IN_SANDBOX');
+  assert.equal(ownerView.data.sandboxTransactions.find((entry) => entry.operationId === second.operationId).status, 'FAILED_IN_SANDBOX');
+  assert.ok(ownerView.data.sandboxTransactions.some((entry) => entry.compensatesOperationId === first.operationId));
+  await closeApp(instance); instance = await startApp(postgres, root, { sandboxEffectAdapter: adapter });
+  const reopened = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  assert.equal(reopened.data.sandboxTransactions.length, 3, 'original success, partial failure and separate compensation survive restart');
+  assert.equal(reopened.data.sandboxTransactions.find((entry) => entry.operationId === first.operationId).status, 'RECORDED_IN_SANDBOX');
+  assert.equal(reopened.data.sandboxTransactions.find((entry) => entry.operationId === second.operationId).status, 'FAILED_IN_SANDBOX');
+  assert.equal(reopened.data.sandboxTransactions.find((entry) => entry.operationId === compensation.operationId).status, 'COMPENSATED_IN_SANDBOX');
+});
+
 test('manual process flow gates actual human work by audited decision routes, forks, loops, exceptions and instance control', async (t) => {
   const postgres = await startPostgres();
   let root;

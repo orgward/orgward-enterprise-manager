@@ -9,9 +9,22 @@ import { normalizeStaffingScenario, simulateProcessFlow, simulateStaffingCapacit
 import { createLocalSandboxTestAdapter, LOCAL_SANDBOX_ADAPTER_ID, normalizeSandboxEffectResponse, SANDBOX_EFFECT_CONTRACT } from './sandbox-adapter-contract.mjs';
 
 export const ENTERPRISE_PROCESS_KINDS = new Set(['define-process-flow', 'define-decision-table', 'simulate-process', 'simulate-staffing',
-  'run-sandbox-procurement-test', 'dispatch-sandbox-procurement-test', 'reconcile-sandbox-procurement-test']);
+  'run-sandbox-procurement-test', 'dispatch-sandbox-procurement-test', 'reconcile-sandbox-procurement-test', 'compensate-sandbox-procurement-test']);
 const fail = (code, message, status = 400) => { throw enterpriseFailure(code, message, status); };
 const safeId = (value) => typeof value === 'string' && /^[a-z0-9][a-z0-9_-]{0,119}$/i.test(value);
+function sandboxGroup(process, step, source) {
+  const steps = process.processFlow?.steps ?? [];
+  const previous = steps.find((entry) => entry.kind === 'sandbox-procurement' && entry.nextStepId === step.id);
+  const next = steps.find((entry) => entry.id === step.nextStepId && entry.kind === 'sandbox-procurement');
+  if (previous && next) return null;
+  if (previous && steps.some((entry) => entry.kind === 'sandbox-procurement' && entry.nextStepId === previous.id)) return null;
+  if (next && steps.some((entry) => entry.kind === 'sandbox-procurement' && entry.id === next.nextStepId)) return null;
+  const first = previous ?? step; const second = previous ? step : next;
+  if (!second) return null;
+  const id = `sandbox-group-${digest({ blueprintHash: source.blueprintHash, processId: process.id,
+    firstStepId: first.id, secondStepId: second.id }).slice(0, 24)}`;
+  return { id, sequence: step.id === first.id ? 1 : 2, total: 2, stepIds: [first.id, second.id] };
+}
 export function normalizeEnterpriseProcessCommand(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input) || !ENTERPRISE_PROCESS_KINDS.has(input.kind)
     || !/^blueprint-[0-9a-f-]{36}$/.test(input.blueprintId ?? '') || !Number.isSafeInteger(input.blueprintVersion) || input.blueprintVersion < 1) {
@@ -30,10 +43,10 @@ export function normalizeEnterpriseProcessCommand(input) {
     allowed.push('processId', 'stepId');
     if (!safeId(input.processId) || !safeId(input.stepId)) fail('Choose a saved process and exact sandbox effect step.', 'INVALID_ENTERPRISE_PROCESS_COMMAND');
     Object.assign(command, { processId: input.processId, stepId: input.stepId });
-  } else if (['dispatch-sandbox-procurement-test', 'reconcile-sandbox-procurement-test'].includes(input.kind)) {
+  } else if (['dispatch-sandbox-procurement-test', 'reconcile-sandbox-procurement-test', 'compensate-sandbox-procurement-test'].includes(input.kind)) {
     allowed.push('operationId');
     if (typeof input.operationId !== 'string' || !/^sandbox-transaction-[0-9a-f-]{36}$/.test(input.operationId)) {
-      fail('Choose an exact unknown sandbox operation to reconcile by its stable provider key.', 'INVALID_ENTERPRISE_PROCESS_COMMAND');
+      fail('Choose an exact saved sandbox operation for dispatch, reconciliation or compensation.', 'INVALID_ENTERPRISE_PROCESS_COMMAND');
     }
     command.operationId = input.operationId;
   } else if (input.kind === 'simulate-process' || input.kind === 'simulate-staffing') {
@@ -89,6 +102,44 @@ export function applyEnterpriseProcessCommand(project, command, actor, options =
       evidenceHash: updated.evidenceHash });
     return { blueprint: current, affectedObjectId: existing.source.processId, sandboxTransaction: structuredClone(updated), idempotent: false };
   }
+  if (command.kind === 'compensate-sandbox-procurement-test') {
+    const original = (project.sandboxTransactions ?? []).find((entry) => entry.operationId === command.operationId);
+    if (!original) fail('SANDBOX_TRANSACTION_NOT_FOUND', 'The completed sandbox operation is unavailable; reload the project and try again.', 404);
+    if (original.status !== 'RECORDED_IN_SANDBOX' || !original.compensable || !original.group?.id) {
+      fail('SANDBOX_COMPENSATION_UNAVAILABLE', 'Compensation requires a completed step that explicitly declares local reversibility.', 409);
+    }
+    const operationKey = digest({ projectId: project.id, groupId: original.group.id, compensatesOperationId: original.operationId,
+      source: original.source, kind: 'PROCUREMENT_TEST_COMPENSATION' });
+    const existing = (project.sandboxTransactions ?? []).find((entry) => entry.operationKey === operationKey);
+    if (existing) return { blueprint: current, affectedObjectId: original.source.processId,
+      sandboxTransaction: structuredClone(existing), idempotent: true };
+    const group = (project.sandboxTransactions ?? []).filter((entry) => entry.group?.id === original.group.id);
+    const peer = group.find((entry) => entry.operationId !== original.operationId);
+    if (!peer || peer.status !== 'FAILED_IN_SANDBOX') {
+      fail('SANDBOX_COMPENSATION_NOT_REQUIRED', 'Compensation is available only after the paired step has a known partial failure.', 409);
+    }
+    if (group.some((entry) => ['APPROVED_PENDING', 'UNKNOWN_EFFECT'].includes(entry.status))) {
+      fail('SANDBOX_EFFECT_RECONCILIATION_REQUIRED', 'Resolve every pending or unknown group outcome before authorizing compensation.', 409);
+    }
+    const operationId = `sandbox-transaction-${randomUUID()}`; const providerKey = `orgward-local-sandbox:${operationKey}`;
+    const request = { ...structuredClone(original.adapterRequest), operationId, operationKey, providerKey,
+      kind: 'PROCUREMENT_TEST_COMPENSATION', compensatesOperationId: original.operationId,
+      approval: { ...structuredClone(original.adapterRequest.approval), actor, at, decision: 'APPROVED' } };
+    const core = { operationId, operationKey, providerKey, contract: SANDBOX_EFFECT_CONTRACT, contractVersion: '1.0',
+      mode: 'LOCAL_TEST_ONLY', adapterId: LOCAL_SANDBOX_ADAPTER_ID, kind: 'PROCUREMENT_TEST_COMPENSATION',
+      status: 'APPROVED_PENDING', sandbox: true, group: structuredClone(original.group), compensatesOperationId: original.operationId,
+      compensable: false, adapterRequest: request, source: structuredClone(original.source),
+      label: `Sandbox compensation · ${original.label}`, commitment: structuredClone(original.commitment),
+      capacity: structuredClone(original.capacity), approval: { decision: 'APPROVED', actor, at,
+        authority: 'HUMAN_PROJECT_OWNER', approved: { kind: 'PROCUREMENT_TEST_COMPENSATION', compensatesOperationId: original.operationId,
+          groupId: original.group.id } }, effect: { result: 'NOT_DISPATCHED', externalProviderCalled: false, adapterResponse: null },
+      evidence: { kind: 'SANDBOX_COMPENSATION_APPROVAL', operationKey, createdAt: at, actor,
+        detail: `Separate owner-approved local compensation for ${original.operationId}; original result is preserved and no external provider was called.` } };
+    const transaction = { ...core, evidenceHash: digest(core) }; project.sandboxTransactions.push(transaction);
+    project.audit ??= []; project.audit.push({ at, action: 'enterprise.sandbox-compensation-approved', actor,
+      operationId, compensatesOperationId: original.operationId, providerKey, evidenceHash: transaction.evidenceHash });
+    return { blueprint: current, affectedObjectId: original.source.processId, sandboxTransaction: structuredClone(transaction), idempotent: false };
+  }
   if (command.kind === 'dispatch-sandbox-procurement-test') {
     const existing = (project.sandboxTransactions ?? []).find((entry) => entry.operationId === command.operationId);
     if (!existing) fail('SANDBOX_TRANSACTION_NOT_FOUND', 'The approved sandbox operation is unavailable; reload the project and try again.', 404);
@@ -97,6 +148,10 @@ export function applyEnterpriseProcessCommand(project, command, actor, options =
     }
     if (existing.status !== 'APPROVED_PENDING') return { blueprint: current, affectedObjectId: existing.source.processId,
       sandboxTransaction: structuredClone(existing), idempotent: true };
+    if (existing.group?.sequence === 2) {
+      const first = (project.sandboxTransactions ?? []).find((entry) => entry.group?.id === existing.group.id && entry.group.sequence === 1);
+      if (!first || first.status !== 'RECORDED_IN_SANDBOX') fail('SANDBOX_GROUP_PREDECESSOR_INCOMPLETE', 'The second step cannot dispatch until the first step is recorded as successful.', 409);
+    }
     if (current.id !== existing.source.blueprintId || current.version !== existing.source.blueprintVersion
       || digest(current) !== existing.source.blueprintHash) {
       fail('SANDBOX_TRANSACTION_SOURCE_STALE', 'The approved source changed before dispatch. Review the current design and approve a new request.', 409);
@@ -160,6 +215,13 @@ export function applyEnterpriseProcessCommand(project, command, actor, options =
       || quantity.unit !== available.unit || available.unit !== capacity.unit) {
       fail('SANDBOX_TRANSACTION_CAPACITY_UNAVAILABLE', 'Owner approval requires a current committed allocation with known matching units and enough reported capacity. Update the saved commitment or capacity, then retry.', 409);
     }
+    const source = { projectId: project.id, blueprintId: current.id, blueprintVersion: current.version,
+      blueprintHash, processId: process.id, stepId: step.id, resourceId: resource.id, windowId: window.id, allocationId: allocation.id };
+    const group = sandboxGroup(process, step, { blueprintHash });
+    if (group?.sequence === 2) {
+      const first = (project.sandboxTransactions ?? []).find((entry) => entry.group?.id === group.id && entry.group.sequence === 1);
+      if (!first || first.status !== 'RECORDED_IN_SANDBOX') fail('SANDBOX_GROUP_PREDECESSOR_INCOMPLETE', 'Approve the second step only after the first step is recorded as successful.', 409);
+    }
     const operationKey = digest({ projectId: project.id, blueprintId: current.id, blueprintVersion: current.version,
       blueprintHash, processId: process.id, stepId: step.id, resourceId: resource.id, windowId: window.id, allocationId: allocation.id });
     const existing = (project.sandboxTransactions ?? []).find((entry) => entry.operationKey === operationKey);
@@ -171,13 +233,13 @@ export function applyEnterpriseProcessCommand(project, command, actor, options =
     const providerKey = `orgward-local-sandbox:${operationKey}`;
     const request = { contract: SANDBOX_EFFECT_CONTRACT, schemaVersion: '1.0', adapterId: LOCAL_SANDBOX_ADAPTER_ID,
       mode: 'LOCAL_TEST_ONLY', operationId, operationKey, providerKey, kind: 'PROCUREMENT_TEST_EFFECT',
-      source: { projectId: project.id, blueprintId: current.id, blueprintVersion: current.version, blueprintHash,
-        processId: process.id, stepId: step.id, resourceId: resource.id, windowId: window.id, allocationId: allocation.id },
+      compensatesOperationId: null, source,
       approval: { decision: 'APPROVED', actor, at, authority: 'HUMAN_PROJECT_OWNER',
         quantity: { value: quantity.value, unit: quantity.unit }, capacity: { value: available.value, unit: available.unit } } };
     const core = { operationId, operationKey, providerKey,
       contract: SANDBOX_EFFECT_CONTRACT, contractVersion: '1.0', mode: 'LOCAL_TEST_ONLY',
       adapterId: LOCAL_SANDBOX_ADAPTER_ID, kind: 'PROCUREMENT_TEST_EFFECT', status: 'APPROVED_PENDING', sandbox: true, adapterRequest: request,
+      group, compensable: step.compensable === true,
       label: `Sandbox test effect · ${step.title}`, source: { projectId: project.id, blueprintId: current.id, blueprintVersion: current.version,
         blueprintHash, processId: process.id, stepId: step.id, resourceId: resource.id, windowId: window.id, allocationId: allocation.id },
       commitment: { state: allocation.state, quantity: structuredClone(quantity), source: 'saved owner-reviewed design declaration' },
