@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { buildRelations, editBlueprintObject, latestBlueprint, validateBlueprint } from '../model.mjs';
+import { appendBlueprintProposalProvenance, buildRelations, editBlueprintObject, latestBlueprint, validateBlueprint } from '../model.mjs';
 import { ENTERPRISE_SCOPE_TYPES, blueprintObjects, enterpriseFailure, enterpriseText } from './types.mjs';
 import { digest } from '../sdlc/contracts.mjs';
 import { ENTERPRISE_STATE_VALUES, enterpriseInterval, objectBasisHash } from './state.mjs';
@@ -105,10 +105,21 @@ export function applyEnterpriseCommand(project, command, actor, options = {}) {
     if (!previous || previous.id !== command.blueprintId || previous.version !== command.blueprintVersion) {
       throw enterpriseFailure('ENTERPRISE_BLUEPRINT_STALE', 'Reload the exact current proposed design before editing this record.', 409);
     }
+    if (options.proposal) {
+      const proposal = options.proposal;
+      const original = blueprintObjects(previous).find((object) => object.id === command.objectId);
+      if (proposal.blueprintId !== command.blueprintId || proposal.blueprintVersion !== command.blueprintVersion
+        || proposal.target?.id !== command.objectId || proposal.target?.field !== 'detail'
+        || proposal.target?.name !== command.name || proposal.target?.before !== original?.detail
+        || proposal.proposedDetail !== command.detail) {
+        throw enterpriseFailure('BLUEPRINT_PROPOSAL_INVALID', 'The verified proposal does not match this semantic edit.', 409);
+      }
+    }
     const edit = Object.fromEntries(BLUEPRINT_EDIT_FIELDS.filter((field) => Object.hasOwn(command, field)
       && field !== 'objectId' && field !== 'name' && field !== 'detail').map((field) => [field, command[field]]));
     Object.assign(edit, { objectId: command.objectId, name: command.name, detail: command.detail });
-    const blueprint = editBlueprintObject(project, edit, actor, command.reason);
+    let blueprint = editBlueprintObject(project, edit, actor, command.reason);
+    if (options.proposal) blueprint = appendBlueprintProposalProvenance(blueprint, options.proposal);
     return { blueprint, affectedObjectId: command.objectId, proposalId: null, recordedAt: blueprint.createdAt };
   }
   if (ENTERPRISE_GOVERNANCE_KINDS.has(command.kind)) return applyEnterpriseGovernanceCommand(project, command, actor);

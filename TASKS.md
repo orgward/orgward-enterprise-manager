@@ -8163,3 +8163,24 @@ versioned, audited, and replayable after restart'` passed 1/1 (0 failures,
 passed for `server.mjs` and `tests/persistence.test.mjs`; `git diff --check`
 passed. This advances the learning edit path only; T-121, PR-17 and the PR-15
 active cursor remain open, and no release gate changed.
+
+PR-17 T-121 generated proposal learning edit through shared semantic commands
+(2026-10-05): applying a saved owner-reviewed generated proposal now normalizes
+its pinned information-detail edit as `edit-blueprint-object` and uses the
+shared semantic applier. The API keeps its run/project/proposal integrity,
+passing evaluation, current owner review, proposal/source pin, duplicate and
+aggregate-version checks. The common edit adds the explicit owner review reason
+to audit and generic provenance; proposal-specific run/hash/citation provenance
+remains linked in the same resulting blueprint. Focused command
+`npm test -- tests/persistence.test.mjs
+--test-name-pattern='saved process task requests are linked, idempotent,
+dependency-gated, and durable'` passed 1/1 (0 failures, 0 skips; 23.76s; log
+`/tmp/orgward-tests-WIgyeS/node-test.tap.log`), covering denied writers,
+insufficient/superseded reviews, stale/hash conflicts, changed-payload idempotency
+conflict, proposal replay, application and restart recovery. Focused command
+`npm test -- tests/model.test.mjs --test-name-pattern='structurally blocked or
+unsupported proposals are denied at the model apply boundary'` passed 1/1 (0
+failures, 0 skips; 0.23s; log `/tmp/orgward-tests-3S7TWZ/node-test.tap.log`),
+checking proposal evaluation denial and integrity failures. Syntax and diff checks
+passed. This is one additional T-121 learning-edit surface; PR-17 remains open,
+PR-15 remains the active cursor and no release gate changed.

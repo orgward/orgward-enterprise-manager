@@ -9875,8 +9875,11 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(project.blueprintVersions.find((entry) => entry.id === generatedProposal.blueprintId).version,
     generatedProposal.blueprintVersion, 'the pinned source version remains in immutable project history');
   assert.equal(project.latestBlueprint.edit.proposalProvenance.proposalHash, generatedProposal.proposalHash);
+  assert.equal(appliedTarget.provenance.at(-2).source, 'workspace:blueprint-edit');
+  assert.equal(appliedTarget.provenance.at(-2).reason, 'Apply the owner-reviewed generated proposal.');
   assert.deepEqual(project.latestBlueprint.edit.proposalProvenance.citations,
     [{ id: 'information-customer-signal', hash: generatedProposal.citations[0].hash }]);
+  assert.ok(project.audit.at(-1).detail.includes('Apply the owner-reviewed generated proposal.'));
   assert.deepEqual(Object.values(project.latestBlueprint.areas).flatMap((area) => area.items)
     .filter((item) => item.type === 'actor-human' || item.type === 'actor-agent'), actorDesignBeforeProposalApply,
   'proposal application does not change actor assignments or authority design');
@@ -9898,6 +9901,13 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     && event.data.proposalHash === generatedProposal.proposalHash).length, 1);
   assert.equal(proposalApplyReplay.data.events.filter((event) => event.type === 'BlueprintProposalReviewed'
     && event.data.reviewHash === finalPassedReview.event.data.reviewHash).length, 1);
+  const changedProposalReplay = await request(app.base, proposalApplyPath, {
+    ...as('alice'), method: 'POST', body: command('proposal-apply-success', {
+      proposalHash: generatedProposal.proposalHash, reviewEventId: passedReview.event.eventId,
+      reviewHash: passedReview.event.data.reviewHash,
+    }, projectReadyToApply.version),
+  }, 409);
+  assert.equal(changedProposalReplay.error.code, 'IDEMPOTENCY_CONFLICT');
   const changedProposalHash = await request(app.base, proposalApplyPath, {
     ...as('alice'), method: 'POST', body: command('proposal-apply-hash-mismatch', {
       proposalHash: '0'.repeat(64), reviewEventId: finalPassedReview.event.eventId, reviewHash: finalPassedReview.event.data.reviewHash,

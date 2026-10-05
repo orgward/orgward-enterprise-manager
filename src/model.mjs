@@ -912,7 +912,33 @@ export function editBlueprintObject(project, payload, actor, reason = null) {
   return next;
 }
 
-export function applyBlueprintProposal(project, proposal, actor) {
+export function appendBlueprintProposalProvenance(blueprint, proposal) {
+  const updatedTarget = Object.values(blueprint.areas).flatMap((entry) => entry.items ?? [])
+    .find((object) => object.id === proposal?.target?.id);
+  if (!updatedTarget || updatedTarget.type !== 'information' || proposal.target?.field !== 'detail'
+    || !Array.isArray(proposal.citations) || !proposal.citations.length) {
+    editFailure('The proposal target or citations are invalid for this saved blueprint.', 'BLUEPRINT_PROPOSAL_INVALID', 409);
+  }
+  const proposalProvenance = {
+    proposalId: proposal.id,
+    runId: proposal.runId,
+    proposalHash: proposal.proposalHash,
+    sourceEnvelopeHash: proposal.sourceEnvelopeHash,
+    citations: proposal.citations.map(({ id, hash }) => ({ id, hash })),
+    note: 'Workspace owner applied review-only proposed design content; this does not establish evidence or execution authority.',
+  };
+  updatedTarget.provenance.push({
+    source: `execution-proposal:${proposal.id}`,
+    note: proposalProvenance.note,
+    proposalHash: proposal.proposalHash,
+    citations: proposalProvenance.citations,
+  });
+  blueprint.edit.proposalProvenance = proposalProvenance;
+  blueprint.integrity = validateBlueprint(blueprint);
+  return blueprint;
+}
+
+export function applyBlueprintProposal(project, proposal, actor, reason = null) {
   verifyBlueprintProposalEvaluation(proposal);
   if (proposal?.evaluation?.evaluatorVersion !== 1
     || proposal.evaluation.rubricVersion !== 1
@@ -934,25 +960,8 @@ export function applyBlueprintProposal(project, proposal, actor) {
   }
   const blueprint = editBlueprintObject(project, {
     objectId: target.id, name: target.name, detail: proposal.proposedDetail,
-  }, actor);
-  const updatedTarget = Object.values(blueprint.areas).flatMap((entry) => entry.items).find((object) => object.id === target.id);
-  const proposalProvenance = {
-    proposalId: proposal.id,
-    runId: proposal.runId,
-    proposalHash: proposal.proposalHash,
-    sourceEnvelopeHash: proposal.sourceEnvelopeHash,
-    citations: proposal.citations.map(({ id, hash }) => ({ id, hash })),
-    note: 'Workspace owner applied review-only proposed design content; this does not establish evidence or execution authority.',
-  };
-  updatedTarget.provenance.push({
-    source: `execution-proposal:${proposal.id}`,
-    note: proposalProvenance.note,
-    proposalHash: proposal.proposalHash,
-    citations: proposalProvenance.citations,
-  });
-  blueprint.edit.proposalProvenance = proposalProvenance;
-  blueprint.integrity = validateBlueprint(blueprint);
-  return blueprint;
+  }, actor, reason);
+  return appendBlueprintProposalProvenance(blueprint, proposal);
 }
 
 export function planProcessTaskGraph(project, processId, actor) {
