@@ -84,6 +84,46 @@ test('SDLC actions block when a sealed context manifest no longer verifies', asy
   assert.equal(unchanged.contextManifestIntegrity.valid, false);
 });
 
+test('missing critical context blocks the saved case with domain-specific recovery guidance', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'orgward-sdlc-critical-context-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let app = await start(root);
+  t.after(async () => { if (app.server.listening) await close(app.server); });
+  const created = await request(app.base, '/api/sdlc/cases', {
+    method: 'POST', body: JSON.stringify({ mode: 'golden', mutation: 'missing_aml' }),
+  }, 201);
+  const blocked = await request(app.base, `/api/sdlc/cases/${created.id}/run`, {
+    method: 'POST', body: JSON.stringify({ version: created.version, actor: 'orchestrator', idempotencyKey: 'missing-critical-context-run' }),
+  });
+  assert.equal(blocked.status, 'BLOCKED');
+  assert.equal(blocked.currentStage, 'S1');
+  assert.equal(blocked.gateHistory.at(-1).gate, 'G1');
+  assert.equal(blocked.gateHistory.at(-1).status, 'FAILED');
+  const contextGate = blocked.evaluations.find((entry) => entry.definitionRef === 'context-sufficiency');
+  assert.equal(contextGate.status, 'FAILED');
+  const missingContextFindings = contextGate.findings.filter((entry) => entry.code === 'CRITICAL_CONTEXT_MISSING');
+  assert.deepEqual(missingContextFindings.map((entry) => entry.message).sort(), [
+    'Critical control context is missing.', 'Critical regulation context is missing.',
+  ]);
+  assert.match(missingContextFindings.find((entry) => /regulation/.test(entry.message)).remediation, /Provide current authoritative regulation evidence/);
+  assert.match(missingContextFindings.find((entry) => /control/.test(entry.message)).remediation, /Provide current authoritative control evidence/);
+  assert.equal(blocked.artifacts.requirements, undefined, 'planning artifacts are not created after the critical context gap');
+  assert.equal(blocked.contextManifestIntegrity.valid, true, 'the truthful incomplete-context record remains verifiable');
+  const view = caseUiModel(blocked);
+  assert.match(view.checkpoint.body, /Critical regulation context is missing/);
+  assert.match(view.checkpoint.remediation, /Provide current authoritative regulation evidence/);
+
+  const caseId = blocked.id;
+  await close(app.server);
+  app = await start(root);
+  const reloaded = await request(app.base, `/api/sdlc/cases/${caseId}`);
+  assert.equal(reloaded.version, blocked.version);
+  assert.equal(reloaded.gateHistory.at(-1).gate, 'G1');
+  assert.deepEqual(reloaded.artifacts.context.unknownDependencies.map((entry) => entry.domain), ['regulation', 'control']);
+  assert.equal(reloaded.contextManifestIntegrity.valid, true);
+  assert.match(caseUiModel(reloaded).checkpoint.remediation, /Provide current authoritative regulation evidence/);
+});
+
 test('SDLC case pins a saved design source, rejects stale or unresolved selections, and retains provenance after project edits and restart', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'orgward-sdlc-source-pin-'));
   t.after(() => rm(root, { recursive: true, force: true }));

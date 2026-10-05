@@ -7817,6 +7817,24 @@ reports PR-15 first open. Sentinel still has no authentic version source, so
 T-90 AC1 remains incomplete. This is one bounded T-90 contribution; T-90 and
 PR-15 remain open. No full check or Sol review.
 
+PR-15 T-90 AC2 missing-context recovery evidence (2026-10-05): a saved case
+missing authoritative AML/regulation and control context now has restart-backed
+API coverage through the actual G1 block. The persisted result names each missing
+domain, gives a domain-specific recovery action, creates no downstream
+requirements, remains integrity-valid as an honest incomplete manifest, and the
+SDLC UI model shows the first specific gap and remediation after reload. The
+first focused run failed because the test assumed finding subject references
+were domain IDs; findings correctly reference the context plan, so the assertion
+now checks the user-visible domain messages instead. Corrected focused run passed
+17/17 (0 failures, 0 skips; duration 1.82s; TAP log
+`/tmp/orgward-tests-CJ9j48/node-test.tap.log`):
+`npm test -- tests/sdlc/server.test.mjs`. `node --check` passed for
+`tests/sdlc/server.test.mjs`; `git diff --check` passed; `npm run task:next`
+reports PR-15 first open. This adds direct evidence for AC2's missing-critical-
+context clause; the existing planning guard already blocks the case. It does not
+qualify the separate stale-compile or unauthorized-retrieval clauses, or close
+AC2/T-90/PR-15. No full check or Sol review.
+
 PR-15 T-90 sealed context coverage and evidence (2026-10-05): saved context
 manifests now hash the retrieval plan and coverage, intent guardrails, explicit
 unknown and excluded dependencies, source pins, and evidence-reference content
