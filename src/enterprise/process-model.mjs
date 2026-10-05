@@ -1,6 +1,7 @@
 import { enterpriseFailure, enterpriseText } from './types.mjs';
 
-export const PROCESS_STEP_KINDS = ['manual', 'manual-exception', 'decision', 'fork', 'join', 'loop', 'loop-return', 'end'];
+export const PROCESS_STEP_KINDS = ['manual', 'manual-exception', 'decision', 'fork', 'join', 'loop', 'loop-return', 'sandbox-procurement', 'end'];
+const UNSUPPORTED_EXTERNAL_EFFECT_KINDS = new Set(['payment', 'legal', 'physical', 'service-fulfillment', 'external-effect']);
 export const DECISION_OPERATORS = ['eq', 'neq', 'lt', 'lte', 'gt', 'gte', 'in'];
 const fail = (message, code = 'INVALID_PROCESS_FLOW') => { throw enterpriseFailure(code, message); };
 const safeId = (value) => typeof value === 'string' && /^[a-z0-9][a-z0-9_-]{0,119}$/i.test(value);
@@ -64,6 +65,9 @@ export function normalizeProcessFlow(input, byId) {
   const ids = new Set();
   const steps = input.steps.map((step) => {
     const common = ['id', 'kind', 'title'];
+    if (UNSUPPORTED_EXTERNAL_EFFECT_KINDS.has(step?.kind)) {
+      fail(`“${step.title ?? 'This step'}” requests a ${step.kind} effect, but this workspace has no certified live adapter or separately configured owner approval authority. Real payment, legal, physical and service actions are unavailable; use a local sandbox test effect or configure a supported connector before requesting execution.`, 'EXTERNAL_EFFECT_NOT_CONFIGURED');
+    }
     if (!safeId(step?.id) || ids.has(step.id) || !PROCESS_STEP_KINDS.includes(step.kind)) fail('Step IDs must be unique and use a supported step kind.');
     ids.add(step.id); const normalized = { id: step.id, kind: step.kind, title: enterpriseText(step.title, 'Step title', 120) };
     const local = (value, nullable = false) => {
@@ -102,6 +106,17 @@ export function normalizeProcessFlow(input, byId) {
       Object.assign(normalized, { decisionId, continueOutcome: step.continueOutcome, bodyStepId: local(step.bodyStepId), exitStepId: local(step.exitStepId), maxIterations: step.maxIterations });
     } else if (step.kind === 'loop-return') {
       keys(step, [...common, 'loopStepId']); normalized.loopStepId = local(step.loopStepId);
+    } else if (step.kind === 'sandbox-procurement') {
+      keys(step, [...common, 'resourceId', 'windowId', 'allocationId', 'nextStepId']);
+      const resourceId = reference(step.resourceId, byId, 'resource');
+      const windowId = enterpriseText(step.windowId, 'Capacity window ID', 120);
+      const allocationId = enterpriseText(step.allocationId, 'Committed allocation ID', 120);
+      const window = byId.get(resourceId).resourcePlan?.windows?.find((entry) => entry.id === windowId);
+      const allocation = window?.allocations?.find((entry) => entry.id === allocationId);
+      if (!window || !allocation || allocation.state !== 'COMMITTED_REPORTED') {
+        fail('A sandbox procurement intent must pin a saved committed allocation in the selected resource window.', 'INVALID_PROCESS_REFERENCE');
+      }
+      Object.assign(normalized, { resourceId, windowId, allocationId, nextStepId: local(step.nextStepId) });
     } else keys(step, common);
     return normalized;
   });
@@ -115,7 +130,7 @@ export function normalizeProcessFlow(input, byId) {
     if (step.kind === 'join' && (map.get(step.forkStepId)?.kind !== 'fork' || map.get(step.forkStepId).joinStepId !== step.id)) fail('A join must pair with its declared fork.');
     if (step.kind === 'loop-return' && map.get(step.loopStepId)?.kind !== 'loop') fail('A loop return must identify its bounded loop.');
     if (step.exceptionStepId && map.get(step.exceptionStepId)?.kind !== 'manual-exception') fail('Failure routes must target a manual exception handler.');
-    if (['manual', 'manual-exception', 'join'].includes(step.kind) && !step.nextStepId) fail('Successful manual work and joins must route to an explicit end or another saved step.');
+    if (['manual', 'manual-exception', 'join', 'sandbox-procurement'].includes(step.kind) && !step.nextStepId) fail('Successful work and sandbox steps must route to an explicit end or another saved step.');
   }
   const visiting = new Set(); const visited = new Set();
   const visit = (id) => {
@@ -154,7 +169,7 @@ export function normalizeProcessFlow(input, byId) {
   return flow;
 }
 export function processStepTargets(step) {
-  if (['manual', 'manual-exception'].includes(step.kind)) return [step.nextStepId, step.exceptionStepId].filter(Boolean);
+  if (['manual', 'manual-exception', 'sandbox-procurement'].includes(step.kind)) return [step.nextStepId, ...(step.exceptionStepId ? [step.exceptionStepId] : [])].filter(Boolean);
   if (step.kind === 'decision') return step.routes.map((route) => route.targetStepId);
   if (step.kind === 'fork') return [...step.branchStepIds, step.joinStepId];
   if (step.kind === 'join') return [step.nextStepId].filter(Boolean);
@@ -191,6 +206,7 @@ export function processModelRelations(objects) {
       if (step.processId) add(object.id, step.processId, 'flow-uses-process');
       if (step.decisionId) add(object.id, step.decisionId, 'flow-uses-decision');
       if (step.roleId) add(object.id, step.roleId, 'flow-owned-by');
+      if (step.kind === 'sandbox-procurement') add(object.id, step.resourceId, 'sandbox-procures-with');
       for (const id of step.inputIds ?? []) add(object.id, id, 'flow-reads');
       for (const id of step.outputIds ?? []) add(object.id, id, 'flow-writes');
     }

@@ -1492,6 +1492,41 @@ test('enterprise staffing UI submits source-bound assumptions and renders access
   assert.match(compared.textContent, /No hiring, reservation, assignment, spending, or work occurs/);
 });
 
+test('sandbox procurement UI makes owner approval and local-only evidence explicit', () => {
+  const process = { id: 'process-deliver', type: 'process', name: 'Deliver the core offering', detail: 'Complete the service.', processFlow: {
+    schemaVersion: '1.0', startStepId: 'effect-test', steps: [
+      { id: 'effect-test', kind: 'sandbox-procurement', title: 'Test procurement', resourceId: 'resource-capacity', windowId: 'window-delivery', allocationId: 'allocation-delivery', nextStepId: 'end-test' },
+      { id: 'end-test', kind: 'end', title: 'End' },
+    ],
+  } };
+  const resource = { id: 'resource-capacity', type: 'resource', name: 'Delivery capacity', resourcePlan: { schemaVersion: '1.0', provider: 'reported', windows: [
+    { id: 'window-delivery', window: { start: '2026-10-01T00:00:00.000Z', end: '2026-10-02T00:00:00.000Z', timezone: 'UTC' },
+      capacity: { value: 40, unit: 'hours', source: 'owner report' }, available: { value: 40, unit: 'hours', source: 'owner report' },
+      allocations: [{ id: 'allocation-delivery', processId: process.id, state: 'COMMITTED_REPORTED', quantity: { value: 12, unit: 'hours', source: 'owner report' } }] },
+  ] } };
+  const blueprint = { id: model().context.blueprintId, version: model().context.blueprintVersion,
+    areas: { capabilitiesProcesses: { items: [process] }, resources: { items: [resource] } } };
+  const context = { ...model().context, snapshotHash: 'a'.repeat(64) };
+  const modelValue = model({ context, blueprint, permissions: { processWrite: true, simulate: true, sandboxExecute: true } });
+  let submitted = null;
+  const root = renderEnterpriseProcess({ model: modelValue, object: process, el, ui: branchUi, onCommand: (value) => { submitted = value; } });
+  assert.match(root.textContent, /explicit project-owner approval/);
+  assert.match(root.textContent, /no external provider is contacted/);
+  const approve = root.querySelectorAll('button').find((button) => /Approve and record sandbox test effect/.test(button.textContent));
+  assert.ok(approve); assert.equal(approve.disabled, false); approve.listeners.get('click')?.();
+  assert.deepEqual(submitted, { kind: 'run-sandbox-procurement-test', processId: process.id, stepId: 'effect-test',
+    reason: 'Approve one local sandbox test effect using committed allocation allocation-delivery.' });
+  assert.ok(enterpriseProcessCommandPayload(modelValue, submitted));
+  assert.equal(enterpriseProcessCommandPayload({ ...modelValue, permissions: { ...modelValue.permissions, sandboxExecute: false } }, submitted), null);
+  const record = { operationId: 'sandbox-transaction-00000000-0000-4000-8000-000000000001', status: 'RECORDED_IN_SANDBOX',
+    label: 'Sandbox test effect · Test procurement', source: { processId: process.id, blueprintId: blueprint.id,
+      blueprintVersion: blueprint.version, blueprintHash: context.snapshotHash }, providerKey: `orgward-local-sandbox:${'b'.repeat(64)}`,
+    commitment: { quantity: { value: 12, unit: 'hours' } }, approval: { at: '2026-10-05T12:00:00.000Z' }, evidenceHash: 'c'.repeat(64) };
+  const history = renderEnterpriseProcess({ model: { ...modelValue, sandboxTransactions: [record] }, object: process, el, ui: branchUi, onCommand() {} });
+  assert.match(history.textContent, /RECORDED_IN_SANDBOX · current source/);
+  assert.match(history.textContent, /Local sandbox record only\. No external provider was called/);
+});
+
 test('enterprise process UI shows a saved simulation as exact hypothetical evidence', () => {
   const process = { ...object, id: 'process-transfer', type: 'process', name: 'Transfer funds', owner: 'role-operator', processFlow: {
     schemaVersion: '1.0', startStepId: 'step-intake', steps: [

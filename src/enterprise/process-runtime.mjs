@@ -17,6 +17,8 @@ export function planManualProcessFlow(project, payload, actor) {
   const root = byId.get(payload.processId);
   if (root?.type !== 'process' || !root.processFlow) fail('Choose a saved process with an advanced flow.', 'PROCESS_FLOW_NOT_FOUND');
   const flow = normalizeProcessFlow(root.processFlow, byId);
+  const sandboxStep = flow.steps.find((step) => step.kind === 'sandbox-procurement');
+  if (sandboxStep) fail(`“${sandboxStep.title}” is a sandbox transaction, not a manual task. Use the owner approval action to record its local test effect; ordinary process compilation will not dispatch it.`, 'SANDBOX_TRANSACTION_APPROVAL_REQUIRED');
   const steps = new Map(flow.steps.map((step) => [step.id, step]));
   const body = new Set(); const loop = flow.steps.find((step) => step.kind === 'loop');
   const collect = (id) => { if (body.has(id)) return; body.add(id); const step = steps.get(id); if (step.kind !== 'loop-return') processStepTargets(step).forEach(collect); };

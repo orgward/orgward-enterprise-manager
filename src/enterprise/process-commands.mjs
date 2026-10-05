@@ -7,7 +7,7 @@ import { projectEnterprise } from './projections.mjs';
 import { normalizeDecisionTable, normalizeProcessFlow } from './process-model.mjs';
 import { normalizeStaffingScenario, simulateProcessFlow, simulateStaffingCapacity } from './process-simulation.mjs';
 
-export const ENTERPRISE_PROCESS_KINDS = new Set(['define-process-flow', 'define-decision-table', 'simulate-process', 'simulate-staffing']);
+export const ENTERPRISE_PROCESS_KINDS = new Set(['define-process-flow', 'define-decision-table', 'simulate-process', 'simulate-staffing', 'run-sandbox-procurement-test']);
 const fail = (code, message, status = 400) => { throw enterpriseFailure(code, message, status); };
 const safeId = (value) => typeof value === 'string' && /^[a-z0-9][a-z0-9_-]{0,119}$/i.test(value);
 export function normalizeEnterpriseProcessCommand(input) {
@@ -24,7 +24,11 @@ export function normalizeEnterpriseProcessCommand(input) {
     }
     allowed.push('branchId', 'branchRevision'); Object.assign(command, { branchId: input.branchId, branchRevision: input.branchRevision });
   }
-  if (input.kind === 'simulate-process' || input.kind === 'simulate-staffing') {
+  if (input.kind === 'run-sandbox-procurement-test') {
+    allowed.push('processId', 'stepId');
+    if (!safeId(input.processId) || !safeId(input.stepId)) fail('Choose a saved process and exact sandbox effect step.', 'INVALID_ENTERPRISE_PROCESS_COMMAND');
+    Object.assign(command, { processId: input.processId, stepId: input.stepId });
+  } else if (input.kind === 'simulate-process' || input.kind === 'simulate-staffing') {
     allowed.push('processId', 'scenario', 'proposalId');
     if (!safeId(input.processId) || !input.scenario || typeof input.scenario !== 'object' || Array.isArray(input.scenario)) fail('INVALID_ENTERPRISE_PROCESS_COMMAND', 'Choose a saved process and declared scenario.');
     if (input.proposalId != null && (!/^enterprise-proposal-[0-9a-f-]{36}$/.test(input.proposalId) || command.branchId)) fail('INVALID_ENTERPRISE_PROCESS_COMMAND', 'Choose a main, branch or proposal source.');
@@ -43,6 +47,51 @@ export function normalizeEnterpriseProcessCommand(input) {
 export function applyEnterpriseProcessCommand(project, command, actor) {
   const at = new Date().toISOString(); const current = latestBlueprint(project);
   if (!current) fail('BLUEPRINT_NOT_FOUND', 'Save the initial blueprint first.', 409);
+  if (command.kind === 'run-sandbox-procurement-test') {
+    if (current.id !== command.blueprintId || current.version !== command.blueprintVersion) {
+      fail('SANDBOX_TRANSACTION_SOURCE_STALE', 'The saved process or capacity source changed. Review the current design and request owner approval again.', 409);
+    }
+    const blueprintHash = digest(current);
+    const objects = blueprintObjects(current); const byId = new Map(objects.map((object) => [object.id, object]));
+    const process = byId.get(command.processId); const step = process?.processFlow?.steps?.find((entry) => entry.id === command.stepId);
+    if (process?.type !== 'process' || step?.kind !== 'sandbox-procurement') {
+      fail('SANDBOX_TRANSACTION_INTENT_MISSING', 'The exact saved process has no sandbox procurement intent to approve.', 409);
+    }
+    const resource = byId.get(step.resourceId);
+    const window = resource?.resourcePlan?.windows?.find((entry) => entry.id === step.windowId);
+    const allocation = window?.allocations?.find((entry) => entry.id === step.allocationId);
+    const quantity = allocation?.quantity; const available = window?.available; const capacity = window?.capacity;
+    if (resource?.type !== 'resource' || allocation?.processId !== process.id || allocation.state !== 'COMMITTED_REPORTED'
+      || quantity?.value === null || !Number.isFinite(quantity?.value) || quantity.value <= 0
+      || available?.value === null || !Number.isFinite(available?.value) || available.value < quantity.value
+      || capacity?.value === null || !Number.isFinite(capacity?.value) || capacity.value < available.value
+      || quantity.unit !== available.unit || available.unit !== capacity.unit) {
+      fail('SANDBOX_TRANSACTION_CAPACITY_UNAVAILABLE', 'Owner approval requires a current committed allocation with known matching units and enough reported capacity. Update the saved commitment or capacity, then retry.', 409);
+    }
+    const operationKey = digest({ projectId: project.id, blueprintId: current.id, blueprintVersion: current.version,
+      blueprintHash, processId: process.id, stepId: step.id, resourceId: resource.id, windowId: window.id, allocationId: allocation.id });
+    const existing = (project.sandboxTransactions ?? []).find((entry) => entry.operationKey === operationKey);
+    if (existing) return { blueprint: current, affectedObjectId: process.id, sandboxTransaction: structuredClone(existing), idempotent: true };
+    const operationId = `sandbox-transaction-${randomUUID()}`;
+    const core = { operationId, operationKey, providerKey: `orgward-local-sandbox:${operationKey}`, adapterId: 'orgward.local-sandbox.procurement-test/v1',
+      kind: 'PROCUREMENT_TEST_EFFECT', status: 'RECORDED_IN_SANDBOX', sandbox: true,
+      label: `Sandbox test effect · ${step.title}`, source: { projectId: project.id, blueprintId: current.id, blueprintVersion: current.version,
+        blueprintHash, processId: process.id, stepId: step.id, resourceId: resource.id, windowId: window.id, allocationId: allocation.id },
+      commitment: { state: allocation.state, quantity: structuredClone(quantity), source: 'saved owner-reviewed design declaration' },
+      capacity: { available: structuredClone(available), total: structuredClone(capacity), source: 'saved owner-reviewed design declaration' },
+      approval: { decision: 'APPROVED', actor, at, authority: 'HUMAN_PROJECT_OWNER',
+        approved: { kind: 'PROCUREMENT_TEST_EFFECT', stepId: step.id, resourceId: resource.id, windowId: window.id,
+          allocationId: allocation.id, quantity: structuredClone(quantity), capacity: structuredClone(available) } },
+      effect: { result: 'LOCAL_TEST_RECORD_CREATED', externalProviderCalled: false },
+      evidence: { kind: 'SANDBOX_OPERATION_RECEIPT', operationKey, createdAt: at, actor,
+        detail: 'A local sandbox record represents one test effect. No payment, legal, physical, supplier or other external action was sent.' } };
+    const transaction = { ...core, evidenceHash: digest(core) };
+    project.sandboxTransactions ??= []; project.sandboxTransactions.push(transaction);
+    project.audit ??= []; project.audit.push({ at, action: 'enterprise.sandbox-transaction-recorded', actor,
+      detail: `Approved and recorded one local sandbox procurement test effect for “${process.name}”; no external provider was called.`,
+      operationId, operationKey, evidenceHash: transaction.evidenceHash });
+    return { blueprint: current, affectedObjectId: process.id, sandboxTransaction: structuredClone(transaction), idempotent: false };
+  }
   if (command.kind === 'simulate-process' || command.kind === 'simulate-staffing') {
     if ((project.enterpriseSimulations ?? []).length >= 50) fail('PROCESS_SIMULATION_LIMIT', 'This project reached its 50-simulation history limit.', 409);
     const query = command.branchId ? { branchId: command.branchId, branchRevision: command.branchRevision }

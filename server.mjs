@@ -1804,6 +1804,7 @@ export function createApp({
         const administrative = ['create-scope', 'rename-scope', 'set-validity', 'propose-future-design',
           'set-branch-validity', 'review-merge', 'apply-reviewed-merge', 'abandon-branch'].includes(payload.kind)
           || ['decide-governance-decision', 'review-governance-appeal', 'assign-information-steward'].includes(payload.kind)
+          || payload.kind === 'run-sandbox-procurement-test'
           || (payload.kind === 'record-state' && payload.dimension === 'review')
           || (payload.kind === 'edit-branch-scope' && ['create-scope', 'rename-scope'].includes(payload.change.kind));
         if ((administrative || payload.kind === 'record-state' || ENTERPRISE_BRANCH_KINDS.has(payload.kind)
@@ -1843,7 +1844,8 @@ export function createApp({
             const changed = applyEnterpriseCommand(project, payload, actor, { authzGeneration: request.identity.authzGeneration,
               membershipGeneration: reviewMembershipGeneration });
             project.version += 1; project.updatedAt = changed.recordedAt ?? changed.blueprint.createdAt; project.updatedBy = actor;
-            project.events.push(projectEvent(project, { type: payload.kind === 'run-integrity-checks' ? 'EnterpriseIntegrityAssessed'
+            project.events.push(projectEvent(project, { type: payload.kind === 'run-sandbox-procurement-test' ? 'SandboxTransactionRecorded'
+              : payload.kind === 'run-integrity-checks' ? 'EnterpriseIntegrityAssessed'
               : payload.kind === 'accept-integrity-exception' ? 'EnterpriseIntegrityExceptionAccepted'
               : ENTERPRISE_GOVERNANCE_KINDS.has(payload.kind) ? 'EnterpriseGovernanceChanged'
               : ENTERPRISE_STEWARDSHIP_KINDS.has(payload.kind) ? 'EnterpriseStewardshipChanged'
@@ -1866,7 +1868,11 @@ export function createApp({
                 governanceCaseId: changed.governanceCaseId ?? null, governanceRevision: changed.governanceRevision ?? null,
                 governanceStatus: changed.governanceStatus ?? null,
                 stewardshipRoleId: changed.stewardshipRoleId ?? null, stewardshipRevision: changed.stewardshipRevision ?? null,
-                stewardshipOutcome: changed.stewardshipOutcome ?? null, reason: payload.reason } }));
+                stewardshipOutcome: changed.stewardshipOutcome ?? null,
+                sandboxTransactionId: changed.sandboxTransaction?.operationId ?? null,
+                sandboxOperationKey: changed.sandboxTransaction?.operationKey ?? null,
+                sandboxEvidenceHash: changed.sandboxTransaction?.evidenceHash ?? null,
+                idempotent: changed.idempotent ?? false, reason: payload.reason } }));
           },
         }, actor, { requiredPrincipalRoles: ['workspace-write'], authzGeneration: request.identity.authzGeneration,
           ...(administrative ? { minimumProjectAccess: 'owner' } : {}) });
@@ -1879,12 +1885,15 @@ export function createApp({
           ? result.project.enterpriseIntegrityAssessments?.find((entry) => entry.id === receipt.integrityAssessmentId) : null;
         const integrityException = receipt.integrityExceptionId
           ? result.project.enterpriseIntegrityExceptions?.find((entry) => entry.id === receipt.integrityExceptionId) : null;
+        const sandboxTransaction = receipt.sandboxTransactionId
+          ? result.project.sandboxTransactions?.find((entry) => entry.operationId === receipt.sandboxTransactionId) : null;
         return sendApi(response, 200, { projectVersion: result.project.version, blueprintId: simulation?.source.blueprintId ?? economicEvaluation?.source.blueprintId ?? blueprint.id,
           blueprintVersion: simulation?.source.blueprintVersion ?? economicEvaluation?.source.blueprintVersion ?? blueprint.version, affectedObjectId: receipt.objectId, proposalId: receipt.proposalId ?? null,
           branchId: receipt.branchId ?? null, branchRevision: receipt.branchRevision ?? null,
           candidateId: receipt.candidateId ?? null, candidateHash: receipt.candidateHash ?? null,
           importedRecordIds: receipt.importedRecordIds ?? null, importSource: receipt.importSource ?? null,
           importSourceHash: receipt.importSourceHash ?? null,
+          ...(sandboxTransaction ? { sandboxTransaction: structuredClone(sandboxTransaction), idempotent: Boolean(receipt.idempotent) } : {}),
           ...(receipt.designPackHash ? { designPackHash: receipt.designPackHash } : {}),
           acceptedClaims: receipt.acceptedSourceClaims ?? null,
           ...(simulation ? { simulation } : {}), ...(economicEvaluation ? { economicEvaluation } : {}),

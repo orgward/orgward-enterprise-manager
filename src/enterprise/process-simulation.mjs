@@ -125,6 +125,8 @@ export function simulateProcessFlow(process, suppliedScenario, byId) {
     } else if (step.kind === 'loop-return') {
       if (token.loopId !== step.loopStepId || token.iteration < 1) unknown(token, 'LOOP_NOT_ACTIVATED', 'Loop-return was reached outside its own bounded loop.');
       else { add(token, 'RETURNED', 'Returned to the bounded loop decision.'); go(token, step.loopStepId); }
+    } else if (step.kind === 'sandbox-procurement') {
+      unknown(token, 'SANDBOX_EFFECT_REQUIRES_OWNER_APPROVAL', 'A sandbox procurement effect is never run by simulation. A project owner must approve and record it from the saved process, commitment and capacity source.');
     } else {
       if (token.forks.length || token.loopId) { unknown(token, 'UNCLOSED_CONTROL_SCOPE', 'A path reached an end before its fork or loop scope closed.'); continue; }
       ended = true; add(token, 'ENDED', 'The declared scenario reached an explicit end.');

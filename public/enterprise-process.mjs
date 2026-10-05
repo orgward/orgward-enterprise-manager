@@ -1,7 +1,7 @@
 import { enterpriseBranchWritable } from './enterprise-branches.mjs';
 
-export const ENTERPRISE_PROCESS_COMMANDS = ['define-process-flow', 'define-decision-table', 'simulate-process', 'simulate-staffing'];
-const STEP_KINDS = [['manual', 'Manual activity'], ['manual-exception', 'Manual exception handling'], ['decision', 'Decision routing'], ['fork', 'Parallel fork'], ['join', 'Parallel join'], ['loop', 'Bounded loop'], ['loop-return', 'Return to loop'], ['end', 'End']];
+export const ENTERPRISE_PROCESS_COMMANDS = ['define-process-flow', 'define-decision-table', 'simulate-process', 'simulate-staffing', 'run-sandbox-procurement-test'];
+const STEP_KINDS = [['manual', 'Manual activity'], ['manual-exception', 'Manual exception handling'], ['decision', 'Decision routing'], ['fork', 'Parallel fork'], ['join', 'Parallel join'], ['loop', 'Bounded loop'], ['loop-return', 'Return to loop'], ['sandbox-procurement', 'Sandbox procurement test effect'], ['end', 'End']];
 const OPERATORS = [['eq', 'equals'], ['neq', 'does not equal'], ['lt', 'is less than'], ['lte', 'is at most'], ['gt', 'is greater than'], ['gte', 'is at least'], ['in', 'is one of']];
 const VALUE_TYPES = [['string', 'Text'], ['number', 'Number'], ['boolean', 'True or false']];
 const allObjects = (model) => Object.values(model.blueprint?.areas ?? {}).flatMap((area) => area.items ?? []);
@@ -33,6 +33,7 @@ export function enterpriseProcessWritable(model) {
 
 export function enterpriseProcessCommandPayload(model, payload) {
   if (!model?.blueprint || !ENTERPRISE_PROCESS_COMMANDS.includes(payload?.kind)) return null;
+  if (payload.kind === 'run-sandbox-procurement-test' && !model.permissions?.sandboxExecute) return null;
   const simulation = ['simulate-process', 'simulate-staffing'].includes(payload.kind);
   if (simulation ? !model.permissions?.simulate : !enterpriseProcessWritable(model)) return null;
   const bound = { ...payload, blueprintId: model.context.blueprintId, blueprintVersion: model.context.blueprintVersion };
@@ -166,6 +167,24 @@ function flowEditor({ model, object, el, ui, onCommand, disabled, reasonValue = 
         row.read = () => ({ decisionId: decision.control.value, continueOutcome: continuation.control.value, bodyStepId: start.control.value, exitStepId: exit.control.value, maxIterations: Number(maximum.control.value) });
       } else if (selectedKind === 'loop-return') {
         const loop = target('loopStepId', 'Return to bounded loop', value.loopStepId, false, (entry) => entry.kind.control.value === 'loop'); body.append(loop.node); row.read = () => ({ loopStepId: loop.control.value });
+      } else if (selectedKind === 'sandbox-procurement') {
+        const resources = byType('resource').filter((entry) => entry.resourcePlan?.windows?.length);
+        const resource = field('resourceId', 'Saved capacity resource', { entries: [['', 'Choose a saved resource plan'], ...resources.map((entry) => [entry.id, entry.name])], value: value.resourceId });
+        const window = field('windowId', 'Committed capacity window', { entries: [['', 'Choose a window']], value: value.windowId });
+        const allocation = field('allocationId', 'Human-reported committed allocation', { entries: [['', 'Choose a committed allocation']], value: value.allocationId });
+        const windowsFor = () => resources.find((entry) => entry.id === resource.control.value)?.resourcePlan?.windows ?? [];
+        const allocationsFor = () => windowsFor().find((entry) => entry.id === window.control.value)?.allocations
+          ?.filter((entry) => entry.processId === object.id && entry.state === 'COMMITTED_REPORTED') ?? [];
+        const refreshCommitments = () => {
+          const previousWindow = window.control.value; const windowEntries = [['', 'Choose a window'], ...windowsFor().map((entry) => [entry.id, `${entry.window.start} → ${entry.window.end}`])];
+          replaceOptions(el, window, windowEntries); window.control.value = windowEntries.some(([id]) => id === previousWindow) ? previousWindow : '';
+          const previousAllocation = allocation.control.value; const allocationEntries = [['', 'Choose a committed allocation'], ...allocationsFor().map((entry) => [entry.id, `${entry.id} · ${entry.quantity.value ?? 'unknown'} ${entry.quantity.unit}`])];
+          replaceOptions(el, allocation, allocationEntries); allocation.control.value = allocationEntries.some(([id]) => id === previousAllocation) ? previousAllocation : '';
+        };
+        resource.control.addEventListener('change', refreshCommitments); window.control.addEventListener('change', refreshCommitments); refreshCommitments();
+        const next = target('nextStepId', 'Next step after owner-approved sandbox effect', value.nextStepId);
+        body.append(el('p', { text: 'This declares a local procurement test effect against one saved committed allocation. An owner action records approval and a durable sandbox result; no external connector, payment, supplier, legal or physical action is called.' }), resource.node, window.node, allocation.node, next.node);
+        row.read = () => ({ resourceId: resource.control.value, windowId: window.control.value, allocationId: allocation.control.value, nextStepId: next.control.value });
       } else row.read = () => ({});
       disable(body, disabled); refresh();
     }
@@ -176,7 +195,7 @@ function flowEditor({ model, object, el, ui, onCommand, disabled, reasonValue = 
   for (const descriptor of targets) descriptor.field.control.value = descriptor.initialValue ?? '';
   starts.control.value = saved?.startStepId ?? rows[0]?.id ?? '';
   const reason = field('reason', 'Reason for this flow design', { multiline: true, maximum: 500, value: reasonValue });
-  return form('define-process-flow', 'Save typed process flow', [el('p', { text: 'Activities, decision routes, exceptions, paired parallel forks and joins, and one bounded loop are proposed design. Every step must be reachable; successful work routes to another step or an explicit end. Save decision tables before choosing routing outcomes. Local step identities stay stable across revisions.' }), starts.node, list,
+  return form('define-process-flow', 'Save typed process flow', [el('p', { text: 'Activities, decision routes, exceptions, paired parallel forks and joins, one bounded loop, and local sandbox procurement test effects are proposed design. Sandbox effects require an exact committed capacity allocation and explicit project-owner approval; no external provider is contacted. Every step must be reachable. Local step identities stay stable across revisions.' }), starts.node, list,
     action(el, 'Add step', () => { if (rows.length < 32) addStep({ id: nextId('step', rows.map((row) => row.id)), kind: 'manual', title: '' }); }, disabled), reason.node], () => {
       if (!rows.length) throw new Error('Add at least one step.');
       onCommand({ kind: 'define-process-flow', objectId: object.id, processFlow: { schemaVersion: '1.0', startStepId: starts.control.value, steps: rows.map((row) => ({ id: row.id, kind: row.kind.control.value, title: row.title.control.value.trim(), ...row.read() })) }, reason: reason.control.value.trim() });
@@ -379,6 +398,33 @@ export function renderEnterpriseProcess({ model, object, pending = null, loading
     root.append(el('details', { attrs: retained?.kind === 'simulate-process' ? { open: '' } : {} }, [el('summary', { text: 'Simulate this exact saved flow' }), simulationEditor({ model, object, el, ui, onCommand, disabled: loading || Boolean(pending) || !model.permissions?.simulate, scenario: retained?.kind === 'simulate-process' ? retained.scenario : null, reasonValue: retained?.kind === 'simulate-process' ? retained.reason : '' })]));
     root.append(el('details', { attrs: retained?.kind === 'simulate-staffing' ? { open: '' } : {} }, [el('summary', { text: 'Simulate staffing capacity' }), staffingSimulationEditor({ model, object, el, ui, onCommand, disabled: loading || Boolean(pending), scenario: retained?.kind === 'simulate-staffing' ? retained.scenario : null, reasonValue: retained?.kind === 'simulate-staffing' ? retained.reason : '' })]));
     if (object.processFlow) root.append(el('p', { text: 'Authored advanced flows can be designed and simulated here. Real manual routing for these flows is not available yet; the legacy planning graph cannot start them.' }));
+    const sandboxSteps = (object.processFlow?.steps ?? []).filter((step) => step.kind === 'sandbox-procurement');
+    for (const step of sandboxSteps) {
+      const resource = allObjects(model).find((entry) => entry.id === step.resourceId);
+      const window = resource?.resourcePlan?.windows?.find((entry) => entry.id === step.windowId);
+      const allocation = window?.allocations?.find((entry) => entry.id === step.allocationId);
+      const quantity = allocation?.quantity; const available = window?.available; const capacity = window?.capacity;
+      const capacityReady = Boolean(allocation?.state === 'COMMITTED_REPORTED' && Number.isFinite(quantity?.value) && quantity.value > 0
+        && Number.isFinite(available?.value) && available.value >= quantity.value && Number.isFinite(capacity?.value)
+        && capacity.value >= available.value && quantity.unit === available.unit && available.unit === capacity.unit);
+      const button = action(el, `Approve and record sandbox test effect · ${step.title}`, () => onCommand({ kind: 'run-sandbox-procurement-test', processId: object.id, stepId: step.id,
+        reason: `Approve one local sandbox test effect using committed allocation ${step.allocationId}.` }), !model.permissions?.sandboxExecute || loading || Boolean(pending) || !capacityReady);
+      root.append(el('section', { attrs: { 'data-sandbox-transaction-intent': step.id } }, [el('h5', { text: `Sandbox procurement · ${step.title}` }),
+        el('p', { text: `${resource?.name ?? step.resourceId} · ${step.windowId} · ${quantity?.value ?? 'unknown'} ${quantity?.unit ?? ''} · ${allocation?.state ?? 'allocation unavailable'} · ${capacityReady ? 'reported capacity is sufficient' : 'capacity is unknown or insufficient; update the saved commitment/capacity before approval'}. Owner approval records a local sandbox operation only; it does not call a supplier or external provider.` }), button]));
+    }
+    const sandboxRecords = (model.sandboxTransactions ?? []).filter((entry) => entry.source?.processId === object.id);
+    if (sandboxRecords.length) {
+      const list = el('section', { attrs: { 'data-sandbox-transaction-history': object.id } }, [el('h5', { text: 'Saved sandbox test effects' })]);
+      for (const record of sandboxRecords) {
+        const isCurrent = record.source.blueprintId === model.context.blueprintId && record.source.blueprintVersion === model.context.blueprintVersion
+          && record.source.blueprintHash === model.context.snapshotHash;
+        list.append(el('article', {}, [el('strong', { text: `${record.status} · ${isCurrent ? 'current source' : 'historical source'} · ${record.operationId}` }),
+          el('p', { text: `${record.label} · ${record.commitment.quantity.value} ${record.commitment.quantity.unit} · owner approval ${record.approval.at}` }),
+          el('p', { text: `Stable local key: ${record.providerKey} · evidence ${record.evidenceHash}` }),
+          el('p', { text: 'Local sandbox record only. No external provider was called.' })]));
+      }
+      root.append(list);
+    }
     if (enterpriseSimulationSourceMatches(model, object, simulation) && !enterpriseSimulationMatches(model, object, simulation)) {
       root.append(el('p', { text: 'The simulation was saved after this recorded-time cutoff. Its result is excluded from this dated view.', attrs: { role: 'status' } }));
       if (onInspectSimulation) root.append(action(el, 'Inspect saved simulation at its original source', () => onInspectSimulation(simulation), loading || Boolean(pending)));

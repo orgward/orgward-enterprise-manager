@@ -7963,3 +7963,37 @@ tests passed 6/6 (0 failures, 0 skips; TAP duration 0.23s; log
 `git diff --check` passed. `npm run task:next` reports PR-15 first open. This is
 one bounded T-90 increment; T-90 and PR-15 remain open. No full check or Sol
 review.
+
+PR-15 T-96 owner-approved sandbox procurement slice (2026-10-05): selected T-96
+as the earliest dependency-ready customer-functionality task after T-90/T-91;
+its T-52/T-56 prerequisites are within checked PR-12 and T-77/T-80/T-85 within
+checked PR-14. A saved process may declare one local sandbox procurement effect
+against an exact human-reported committed allocation. A current human project
+owner can explicitly approve it when the pinned source remains current and
+reported matching capacity is sufficient. The durable local operation records
+approval actor/time/decision and what was approved, exact design/commitment/
+capacity source, stable local provider key and hashed evidence. Same-command and
+same-operation-key retries return the one existing operation. The UI shows
+owner approval, current capacity readiness and a restart-readable history.
+Regular process compilation and simulation cannot perform the sandbox effect;
+unsupported live payment/legal/physical/service-effect intents return specific
+adapter/authority guidance. No external provider is configured or called.
+
+The first focused invocation
+`npm test -- tests/enterprise/server.test.mjs tests/enterprise/view.test.mjs
+--test-name-pattern='owner-approved sandbox procurement|sandbox procurement UI'`
+failed 2/2: one fixture expected process plans on the portfolio API projection,
+and the UI command allowlist lacked the new command. After fixing those, the
+next run passed the UI case but the API fixture over-specified owner wording in
+the generic 403 response; it now asserts denial and no operation. Final focused
+run passed 2/2 (0 failures, 0 skips; 3.31s; log
+`/tmp/orgward-tests-An6KA5/node-test.tap.log`). Adjacent process-flow regressions
+passed 4/4 (0 failures, 0 skips; 0.36s; log
+`/tmp/orgward-tests-6EAPCn/node-test.tap.log`):
+`npm test -- tests/enterprise/contracts.test.mjs tests/enterprise/view.test.mjs
+--test-name-pattern='bounded process flow simulation|manual-flow activation|enterprise process UI shows a saved simulation|sandbox procurement UI'`.
+`node --check` passed on the changed server, process, UI and test files;
+`git diff --check` passed. `npm run task:next` still reports PR-15 first open.
+This slice does not complete T-96 AC1, which still requires a genuine external
+sandbox test effect/provider; T-96 AC2 is only partially advanced. T-96 and
+PR-15 remain open. No full check or Sol review.

@@ -152,6 +152,8 @@ export function projectEnterprise(project, query = {}, authority = {}) {
     canAppeal: Boolean(isCurrent && authority.write && authority.human && entry.status === 'DECIDED'
       && entry.requestedBy === authority.actor) })) };
   const stewardship = projectEnterpriseStewardship(project, blueprint, current, savedBy);
+  const sandboxTransactions = (project.sandboxTransactions ?? []).filter((entry) => savedBy(entry.approval?.at))
+    .map((entry) => structuredClone(entry));
   return { context: { projectVersion: project.version, blueprintId: blueprint?.id ?? null, blueprintVersion: blueprint?.version ?? null,
     isCurrent, lensId: context.lensId, scopeId: context.scopeId, branch: context.branchId ?? 'main', proposalId: proposal?.id ?? null,
     branchId: context.branchId, branchRevision: branchContext.revision,
@@ -175,13 +177,14 @@ export function projectEnterprise(project, query = {}, authority = {}) {
       baseBlueprintId: proposal.baseBlueprintId, baseBlueprintVersion: proposal.baseBlueprintVersion, baseSnapshotHash: proposal.baseSnapshotHash,
       snapshotHash: proposal.snapshotHash, baseStale: proposal.baseStale,
       diff: { before: structuredClone(proposal.snapshot.edit.before), after: structuredClone(proposal.snapshot.edit.after), changedFields: proposal.snapshot.edit.changedFields } } : null,
-    branches: branchContext.branches, branch: branchContext.branch, processModel: structuredClone(PROCESS_MODEL), simulations, simulation, economics, integrity, governance,
+    branches: branchContext.branches, branch: branchContext.branch, processModel: structuredClone(PROCESS_MODEL), simulations, simulation, economics, integrity, governance, sandboxTransactions,
     refinementTrace: projectRefinementTrace(objects, selected?.id), stewardship,
     permissions: { write: isCurrent && Boolean(authority.write), scopeAdmin: isCurrent && Boolean(authority.scopeAdmin),
       branchCreate: Boolean(blueprint && !context.branchId && authority.write && authority.human),
       branchWrite: Boolean(branchContext.writable && authority.write && authority.human),
       branchAdmin: Boolean(branchContext.writable && authority.scopeAdmin && authority.human),
       processWrite: Boolean((isCurrent || branchContext.writable) && authority.write && authority.human),
+      sandboxExecute: Boolean(isCurrent && authority.scopeAdmin && authority.human),
       simulate: Boolean(blueprint && authority.write && authority.human),
       economicWrite: Boolean((isCurrent || branchContext.writable) && authority.write && authority.human),
       economicEvaluate: Boolean(blueprint && authority.write && authority.human),

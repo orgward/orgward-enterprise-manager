@@ -1090,6 +1090,117 @@ test('enterprise staffing simulations compare exact-source capacity, deny reader
   assert.equal((persisted.processPlans ?? []).length, 0, 'the scenario creates no process plan or live work');
 });
 
+test('owner-approved sandbox procurement records one source-pinned test effect and replays after restart', async (t) => {
+  const postgres = await startPostgres(); let root; let instance;
+  t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-sandbox-transaction-')); instance = await startApp(postgres, root);
+  for (const identity of identities.values()) await postgres.query(`insert into orgward.oidc_principals
+    (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+  [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  const project = await seedProject(postgres, 'Sandbox procurement transaction fixture');
+  const interval = { start: '2026-10-01T00:00:00.000Z', end: '2026-10-02T00:00:00.000Z', timezone: 'UTC' };
+  const quantity = (value, unit) => ({ value, unit, source: 'Owner-reviewed test capacity declaration' });
+  let view = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'resource-operating-capacity' });
+  const saveResourcePlan = async (commandId, available) => {
+    const body = commandBody(view, commandId, { kind: 'define-resource-plan', objectId: 'resource-operating-capacity',
+      reason: 'Pin a committed allocation and capacity for the local sandbox test.', resourcePlan: { schemaVersion: '1.0', provider: 'Declared sandbox test fixture', windows: [
+        { id: 'delivery-window', window: interval, capacity: quantity(40, 'hours'), available: quantity(available, 'hours'), allocations: [
+          { id: 'sandbox-commitment', processId: 'process-deliver', quantity: quantity(12, 'hours'), state: 'COMMITTED_REPORTED' },
+        ] },
+      ] } });
+    const result = await postCommand(instance.base, 'owner', project.id, body);
+    view = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'resource-operating-capacity' });
+    return result;
+  };
+  await saveResourcePlan('sandbox-transaction-capacity-initial', 40);
+  const processView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  const flow = { schemaVersion: '1.0', startStepId: 'sandbox-effect', steps: [
+    { id: 'sandbox-effect', kind: 'sandbox-procurement', title: 'Test delivery procurement', resourceId: 'resource-operating-capacity',
+      windowId: 'delivery-window', allocationId: 'sandbox-commitment', nextStepId: 'sandbox-end' },
+    { id: 'sandbox-end', kind: 'end', title: 'Sandbox test complete' },
+  ] };
+  await postCommand(instance.base, 'owner', project.id, commandBody(processView, 'sandbox-transaction-define-intent', {
+    kind: 'define-process-flow', objectId: 'process-deliver', processFlow: flow, reason: 'Define one local test effect against the saved commitment.' }));
+  view = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'resource-operating-capacity' });
+  let ownerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  const unsupported = await postCommand(instance.base, 'owner', project.id, commandBody(ownerView, 'sandbox-transaction-live-effect-denied', {
+    kind: 'define-process-flow', objectId: 'process-deliver', processFlow: { schemaVersion: '1.0', startStepId: 'live-payment', steps: [
+      { id: 'live-payment', kind: 'payment', title: 'Send supplier payment' },
+    ] }, reason: 'Reject a real payment without an adapter and authority.' }), 400);
+  assert.equal(unsupported.error.code, 'EXTERNAL_EFFECT_NOT_CONFIGURED');
+  assert.match(unsupported.error.message, /no certified live adapter or separately configured owner approval authority/);
+  const hypothetical = await postCommand(instance.base, 'owner', project.id, commandBody(ownerView, 'sandbox-transaction-hypothetical', {
+    kind: 'simulate-process', processId: 'process-deliver', scenario: { inputs: [], activityOutcomes: [], decisionChoices: [], stepLimit: 20 },
+    reason: 'Confirm simulation cannot run the sandbox effect.' }));
+  assert.equal(hypothetical.data.simulation.status, 'BLOCKED');
+  assert.equal(hypothetical.data.simulation.meaning, 'SIMULATION_ONLY');
+  assert.ok(hypothetical.data.simulation.unresolved.some((entry) => entry.code === 'SANDBOX_EFFECT_REQUIRES_OWNER_APPROVAL'));
+  view = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'resource-operating-capacity' });
+  ownerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  const compileDenied = await request(instance.base, 'owner', `/api/v1/projects/${project.id}/process-plans`, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'sandbox-transaction-ordinary-compile-denied', expectedVersion: ownerView.data.context.projectVersion,
+    payload: { processId: 'process-deliver', mode: 'manual-flow', blueprintId: ownerView.data.context.blueprintId,
+      blueprintVersion: ownerView.data.context.blueprintVersion },
+  } }, 409);
+  assert.equal(compileDenied.error.code, 'SANDBOX_TRANSACTION_APPROVAL_REQUIRED');
+  const afterCompileBlock = await postgres.query('select state from orgward.aggregates where tenant_id=$1 and aggregate_kind=$2 and aggregate_id=$3',
+    [tenantId, 'project', project.id]);
+  const afterCompileState = typeof afterCompileBlock.rows[0].state === 'string' ? JSON.parse(afterCompileBlock.rows[0].state) : afterCompileBlock.rows[0].state;
+  assert.equal((afterCompileState.processPlans ?? []).length, 0,
+    'ordinary flow compilation cannot skip the explicit transaction approval action');
+  const intent = { kind: 'run-sandbox-procurement-test', processId: 'process-deliver', stepId: 'sandbox-effect',
+    reason: 'Approve one local sandbox effect against the committed delivery capacity.' };
+  const oldSource = { blueprintId: ownerView.data.context.blueprintId, blueprintVersion: ownerView.data.context.blueprintVersion };
+
+  await saveResourcePlan('sandbox-transaction-capacity-insufficient', 8);
+  ownerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  const insufficient = await postCommand(instance.base, 'owner', project.id, commandBody(ownerView, 'sandbox-transaction-insufficient-capacity', intent), 409);
+  assert.equal(insufficient.error.code, 'SANDBOX_TRANSACTION_CAPACITY_UNAVAILABLE');
+  const staleBody = commandBody(ownerView, 'sandbox-transaction-stale-source', intent);
+  staleBody.payload.blueprintId = oldSource.blueprintId; staleBody.payload.blueprintVersion = oldSource.blueprintVersion;
+  const stale = await postCommand(instance.base, 'owner', project.id, staleBody, 409);
+  assert.equal(stale.error.code, 'SANDBOX_TRANSACTION_SOURCE_STALE');
+  assert.equal((await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' })).data.sandboxTransactions.length, 0,
+    'capacity and stale-source denials create no operation');
+
+  await saveResourcePlan('sandbox-transaction-capacity-restored', 40);
+  ownerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  const approvalBody = commandBody(ownerView, 'sandbox-transaction-owner-approval', intent);
+  await postCommand(instance.base, 'editor', project.id, approvalBody, 403);
+  assert.equal((await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' })).data.sandboxTransactions.length, 0,
+    'non-owner approval creates no operation');
+
+  const approved = await postCommand(instance.base, 'owner', project.id, approvalBody);
+  const operation = approved.data.sandboxTransaction;
+  assert.equal(operation.status, 'RECORDED_IN_SANDBOX'); assert.equal(operation.sandbox, true);
+  assert.equal(operation.effect.externalProviderCalled, false);
+  assert.equal(operation.approval.decision, 'APPROVED'); assert.equal(operation.approval.authority, 'HUMAN_PROJECT_OWNER');
+  assert.deepEqual(operation.approval.approved, { kind: 'PROCUREMENT_TEST_EFFECT', stepId: 'sandbox-effect', resourceId: 'resource-operating-capacity',
+    windowId: 'delivery-window', allocationId: 'sandbox-commitment', quantity: quantity(12, 'hours'), capacity: quantity(40, 'hours') });
+  assert.equal(operation.source.blueprintId, ownerView.data.context.blueprintId);
+  assert.equal(operation.source.blueprintVersion, ownerView.data.context.blueprintVersion);
+  assert.match(operation.providerKey, /^orgward-local-sandbox:[a-f0-9]{64}$/);
+  const { evidenceHash, ...evidenceCore } = operation;
+  assert.equal(evidenceHash, digest(evidenceCore));
+  const commandReplay = await postCommand(instance.base, 'owner', project.id, approvalBody);
+  assert.equal(commandReplay.meta.replayed, true);
+  assert.equal(commandReplay.data.sandboxTransaction.operationId, operation.operationId);
+
+  ownerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  const operationReplay = await postCommand(instance.base, 'owner', project.id,
+    commandBody(ownerView, 'sandbox-transaction-operation-key-replay', intent));
+  assert.equal(operationReplay.data.idempotent, true);
+  assert.equal(operationReplay.data.sandboxTransaction.operationId, operation.operationId);
+  assert.equal((await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' })).data.sandboxTransactions.length, 1,
+    'stable provider key prevents duplicate local test effects');
+
+  await closeApp(instance); instance = await startApp(postgres, root);
+  const reopened = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  assert.deepEqual(reopened.data.sandboxTransactions, [operation]);
+  assert.equal(reopened.data.permissions.sandboxExecute, true);
+  assert.ok(reopened.data.sandboxTransactions[0].approval.approved.quantity.value === 12);
+});
+
 test('manual process flow gates actual human work by audited decision routes, forks, loops, exceptions and instance control', async (t) => {
   const postgres = await startPostgres();
   let root;
