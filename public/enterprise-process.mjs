@@ -429,9 +429,12 @@ export function renderEnterpriseProcess({ model, object, pending = null, loading
           el('p', { text: `${record.label} · ${record.commitment.quantity.value} ${record.commitment.quantity.unit} · owner approval ${record.approval.at}` }),
           el('p', { text: `Stable local key: ${record.providerKey} · evidence ${record.evidenceHash}` }),
           el('p', { text: record.status === 'UNKNOWN_EFFECT'
-            ? 'The outcome is unknown. Reconcile this provider key before any retry or compensation. Local harness only; no external provider was called.'
-            : record.status === 'APPROVED_PENDING' ? 'Approval is saved; dispatch has not been confirmed. Local harness only; no external provider was called.'
-              : 'Local sandbox record only. No external provider was called.' })]);
+            ? `The outcome is unknown. Reconcile this provider key before any retry or compensation. ${record.adapterId === 'orgward.loopback-sandbox.procurement-test/v1' ? 'Loopback test service only; no third-party provider or live transaction was used.' : 'In-process harness only; no external service/provider was called.'}`
+            : record.status === 'APPROVED_PENDING' ? `Approval is saved; dispatch has not been confirmed. ${record.adapterId === 'orgward.loopback-sandbox.procurement-test/v1' ? 'Loopback test service only; no third-party provider or live transaction was used.' : 'In-process harness only; no external service/provider was called.'}`
+              : record.effect?.externalServiceCalled ? 'A separate loopback sandbox service recorded this test effect and its durable receipt. No third-party provider or live commercial transaction was used.'
+                : 'Local sandbox record only. No external provider was called. The in-process harness made no external service call.' })]);
+        const providerEvidence = record.effect?.adapterResponse?.result?.providerEvidence;
+        if (providerEvidence) article.append(el('p', { text: `Loopback service receipt: ${providerEvidence.receiptId} · evidence ${providerEvidence.evidenceHash}` }));
         if (record.compensatesOperationId) article.append(el('p', { text: `Separate compensation record linked to ${record.compensatesOperationId}. Original result remains in history; this is not an atomic rollback.` }));
         if (record.status === 'APPROVED_PENDING') article.append(action(el, 'Dispatch approved local test effect', () => onCommand({
           kind: 'dispatch-sandbox-procurement-test', operationId: record.operationId, reason: 'Dispatch the already approved local sandbox request once by its stable provider key.',

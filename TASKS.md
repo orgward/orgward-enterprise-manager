@@ -8071,3 +8071,35 @@ changed JS files and `git diff --check` passed. No full check or Sol review.
 This is local harness evidence only, not an authentic provider transaction or
 compensation qualification; T-96 and PR-15 remain open, and no external
 provider was configured or called.
+
+PR-15 T-96 first-party loopback sandbox service (2026-10-05): the owner-approved
+operation can now dispatch through a separately running OrgWard test-only HTTP
+service rather than only the in-process harness. `node ops/local-sandbox-provider.mjs`
+starts it on IPv4 loopback with a separate durable JSON ledger; the service and app
+require the same server-side token, and the configured app adapter accepts only
+`http://127.0.0.1` and uses versioned effect/reconcile routes. An unauthenticated
+request is denied.
+The service persists one outcome and returns provider-service evidence bound to the
+stable key and request hash; same-key replay is idempotent and conflicting reuse
+is rejected. UI identifies the loopback service receipt while stating that no
+third-party provider or live commercial transaction was used. Setup is in
+`docs/product/LOCAL-SANDBOX-PROVIDER.md`.
+
+First adapter/harness run passed 6/6. First server/view run exposed one wording
+regression: the existing compensation receipt assertion expected “No external
+provider”; the local-harness wording was corrected. Final focused commands:
+`npm test -- tests/enterprise/sandbox-adapter.test.mjs tests/enterprise/loopback-sandbox-provider.test.mjs`
+passed 7/7 (0 failures, 0 skips; 0.53s; log
+`/tmp/orgward-tests-FqBJHs/node-test.tap.log`), covering valid contract, duplicate
+and conflicting keys, service restart/reconciliation, non-loopback rejection, and
+conservative unknown-effect handling on transport loss;
+`npm test -- tests/enterprise/server.test.mjs tests/enterprise/view.test.mjs
+--test-name-pattern='owner-approved sandbox API dispatches once|owner-approved sandbox procurement|sandbox procurement UI|accepted-then-timeout|two-step local sandbox'`
+passed 4/4 (0 failures, 0 skips; 5.76s; log
+`/tmp/orgward-tests-nSpzi1/node-test.tap.log`), including owner API approval,
+HTTP dispatch, persisted evidence, and replay. `node --check` passed on all
+changed JavaScript files and `git diff --check` passed. No full check ran. This
+proves a first-party, separately running loopback test-service effect; it does
+not prove a third-party vendor connector or live supplier fulfilment. No external
+network or commercial effect occurred. T-96 and PR-15 remain open; no task or gate
+status changed.

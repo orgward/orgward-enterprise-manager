@@ -41,6 +41,7 @@ import { ENTERPRISE_SOURCE_ACCEPTANCE_KINDS } from './src/enterprise/source-acce
 import { ENTERPRISE_GOVERNANCE_KINDS } from './src/enterprise/governance.mjs';
 import { ENTERPRISE_STEWARDSHIP_KINDS } from './src/enterprise/stewardship.mjs';
 import { createLocalSandboxTestAdapter } from './src/enterprise/sandbox-adapter-contract.mjs';
+import { createLoopbackSandboxHttpAdapter } from './src/enterprise/loopback-sandbox-http-adapter.mjs';
 import { createEnterpriseInterchangeBundle, createEnterpriseDesignPack, ENTERPRISE_INTERCHANGE_KINDS,
   previewEnterpriseDesignPack, previewEnterpriseInterchange } from './src/enterprise/interchange.mjs';
 import { previewEnterpriseSourceEvidence } from './src/enterprise/source-onboarding.mjs';
@@ -812,7 +813,10 @@ export function createApp({
   openAiAdminEndpoint = 'https://api.openai.com',
   readOnly = false,
 } = {}) {
-  const sandboxEffectAdapter = injectedSandboxEffectAdapter ?? createLocalSandboxTestAdapter();
+  const sandboxEffectAdapter = injectedSandboxEffectAdapter ?? (process.env.ORGWARD_LOCAL_SANDBOX_PROVIDER_URL
+    ? createLoopbackSandboxHttpAdapter({ baseUrl: process.env.ORGWARD_LOCAL_SANDBOX_PROVIDER_URL,
+      token: process.env.ORGWARD_LOCAL_SANDBOX_TOKEN })
+    : createLocalSandboxTestAdapter());
   const persistence = databaseUrl ? new PostgresPersistence({ databaseUrl, faults: persistenceFaults }) : null;
   const sessionStore = oidcSessionStore ?? (persistence ? new PostgresOidcSessionStore(persistence, { bootstrapPrincipals: oidcBootstrapPrincipals }) : null);
   const secretStore = persistence ? new PostgresSecretStore(persistence, {
@@ -1844,7 +1848,7 @@ export function createApp({
                 throw apiFailure(403, 'ENTERPRISE_MERGE_REVIEW_AUTHORITY_STALE', 'The saved reviewer no longer has the same human owner authority. Prepare a new candidate and obtain a current review.');
               }
             }
-            const changed = applyEnterpriseCommand(project, payload, actor, { sandboxEffectAdapter,
+            const changed = await applyEnterpriseCommand(project, payload, actor, { sandboxEffectAdapter,
               authzGeneration: request.identity.authzGeneration,
               membershipGeneration: reviewMembershipGeneration });
             project.version += 1; project.updatedAt = changed.recordedAt ?? changed.blueprint.createdAt; project.updatedBy = actor;

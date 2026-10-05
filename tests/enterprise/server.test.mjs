@@ -9,6 +9,8 @@ import { addConversationTurn, buildRelations, createProject, validateBlueprint }
 import { contentHash } from '../../src/platform/postgres.mjs';
 import { digest, persistedDigest } from '../../src/sdlc/contracts.mjs';
 import { createLocalSandboxTestAdapter } from '../../src/enterprise/sandbox-adapter-contract.mjs';
+import { createLocalSandboxProviderService } from '../../src/enterprise/local-sandbox-provider-service.mjs';
+import { createLoopbackSandboxHttpAdapter } from '../../src/enterprise/loopback-sandbox-http-adapter.mjs';
 import { startPostgres } from '../helpers/postgres.mjs';
 
 const tenantId = 'tenant-enterprise-test';
@@ -1089,6 +1091,56 @@ test('enterprise staffing simulations compare exact-source capacity, deny reader
   assert.ok(persisted.audit.some((entry) => entry.action === 'enterprise.simulate-staffing'));
   assert.equal(persisted.enterpriseSimulations.length, 1, 'the stale project-version conflict appended no result');
   assert.equal((persisted.processPlans ?? []).length, 0, 'the scenario creates no process plan or live work');
+});
+
+test('owner-approved sandbox API dispatches once through the separately persisted loopback test service', async (t) => {
+  const postgres = await startPostgres(); let root; let instance; let provider;
+  t.after(async () => { await closeApp(instance); await provider?.close(); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-sandbox-http-'));
+  const providerToken = 'loopback-provider-test-token-'.padEnd(64, 'x');
+  provider = await createLocalSandboxProviderService({ storePath: path.join(root, 'provider', 'state.json'), token: providerToken });
+  const sandboxEffectAdapter = createLoopbackSandboxHttpAdapter({ baseUrl: provider.url, token: providerToken });
+  instance = await startApp(postgres, root, { sandboxEffectAdapter });
+  for (const identity of identities.values()) await postgres.query(`insert into orgward.oidc_principals
+    (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+  [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  const project = await seedProject(postgres, 'Loopback sandbox provider API journey');
+  const interval = { start: '2026-10-01T00:00:00.000Z', end: '2026-10-02T00:00:00.000Z', timezone: 'UTC' };
+  const quantity = (value) => ({ value, unit: 'hours', source: 'Owner-reviewed local test declaration' });
+  let view = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'resource-operating-capacity' });
+  await postCommand(instance.base, 'owner', project.id, commandBody(view, 'loopback-sandbox-capacity', { kind: 'define-resource-plan',
+    objectId: 'resource-operating-capacity', reason: 'Define committed capacity for a loopback-only test effect.',
+    resourcePlan: { schemaVersion: '1.0', provider: 'Local test declaration', windows: [{ id: 'delivery-window', window: interval,
+      capacity: quantity(40), available: quantity(40), allocations: [{ id: 'sandbox-commitment', processId: 'process-deliver',
+        quantity: quantity(12), state: 'COMMITTED_REPORTED' }] }] } }));
+  view = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  await postCommand(instance.base, 'owner', project.id, commandBody(view, 'loopback-sandbox-intent', { kind: 'define-process-flow', objectId: 'process-deliver',
+    reason: 'Define a sandbox-only external-service test effect.', processFlow: { schemaVersion: '1.0', startStepId: 'sandbox-effect', steps: [
+      { id: 'sandbox-effect', kind: 'sandbox-procurement', title: 'Test service fulfilment', resourceId: 'resource-operating-capacity',
+        windowId: 'delivery-window', allocationId: 'sandbox-commitment', nextStepId: 'sandbox-end' },
+      { id: 'sandbox-end', kind: 'end', title: 'Sandbox test complete' },
+    ] } }));
+  view = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  const approved = await postCommand(instance.base, 'owner', project.id, commandBody(view, 'loopback-sandbox-approve', {
+    kind: 'run-sandbox-procurement-test', processId: 'process-deliver', stepId: 'sandbox-effect',
+    reason: 'Owner approves one loopback sandbox-service test effect.' }));
+  assert.equal(approved.data.sandboxTransaction.status, 'APPROVED_PENDING');
+  assert.equal(approved.data.sandboxTransaction.adapterId, sandboxEffectAdapter.id);
+  view = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
+  const operationId = approved.data.sandboxTransaction.operationId;
+  const dispatchBody = commandBody(view, 'loopback-sandbox-dispatch', { kind: 'dispatch-sandbox-procurement-test', operationId,
+    reason: 'Dispatch once to the configured loopback test service by stable key.' });
+  const result = await postCommand(instance.base, 'owner', project.id, dispatchBody);
+  const transaction = result.data.sandboxTransaction;
+  assert.equal(transaction.status, 'RECORDED_IN_SANDBOX');
+  assert.equal(transaction.effect.externalServiceCalled, true);
+  assert.equal(transaction.effect.externalProviderCalled, false);
+  assert.equal(transaction.effect.adapterResponse.result.providerEvidence.providerKey, transaction.providerKey);
+  assert.equal(transaction.effect.adapterResponse.result.providerEvidence.outcome, transaction.status);
+  const replay = await postCommand(instance.base, 'owner', project.id, dispatchBody);
+  assert.equal(replay.meta.replayed, true);
+  assert.equal(replay.data.sandboxTransaction.effect.adapterResponse.result.providerEvidence.receiptId,
+    transaction.effect.adapterResponse.result.providerEvidence.receiptId);
 });
 
 test('owner-approved sandbox procurement records one source-pinned test effect and replays after restart', async (t) => {

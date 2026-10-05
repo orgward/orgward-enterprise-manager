@@ -1525,6 +1525,16 @@ test('sandbox procurement UI makes owner approval and local-only evidence explic
   const history = renderEnterpriseProcess({ model: { ...modelValue, sandboxTransactions: [record] }, object: process, el, ui: branchUi, onCommand() {} });
   assert.match(history.textContent, /RECORDED_IN_SANDBOX · current source/);
   assert.match(history.textContent, /Local sandbox record only\. No external provider was called/);
+  const serviceReceipt = { serviceId: 'orgward.sandbox-provider.local/v1', receiptId: 'local-provider-receipt-test',
+    providerKey: record.providerKey, requestHash: 'd'.repeat(64), outcome: 'RECORDED_IN_SANDBOX',
+    recordedAt: '2026-10-05T12:01:00.000Z', evidenceHash: 'e'.repeat(64) };
+  const providerRecord = { ...record, adapterId: 'orgward.loopback-sandbox.procurement-test/v1',
+    effect: { externalProviderCalled: false, externalServiceCalled: true,
+      adapterResponse: { result: { providerEvidence: serviceReceipt } } } };
+  const providerHistory = renderEnterpriseProcess({ model: { ...modelValue, sandboxTransactions: [providerRecord] }, object: process, el, ui: branchUi, onCommand() {} });
+  assert.match(providerHistory.textContent, /separate loopback sandbox service recorded this test effect/);
+  assert.match(providerHistory.textContent, /local-provider-receipt-test/);
+  assert.match(providerHistory.textContent, /No third-party provider or live commercial transaction was used/);
 
   let dispatchCommand = null;
   const pendingRecord = { ...record, status: 'APPROVED_PENDING', effect: { result: 'NOT_DISPATCHED', externalProviderCalled: false } };
