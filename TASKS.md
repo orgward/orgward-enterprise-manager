@@ -7772,6 +7772,19 @@ view tests passed 5/5 (0 failures, 0 skips; TAP duration 0.23s; log
 one bounded T-90 increment; T-90 and PR-15 remain open. No full check or Sol
 review.
 
+PR-15 T-90 dependent context invalidation view (2026-10-05): when a saved
+project advances beyond a source-bound SDLC case's pinned blueprint, the case
+view now identifies accepted requirements and architecture baselines, saved
+evaluations, and approvals as stale dependencies while retaining their stored
+contents as historical evidence. This read projection does not rewrite or
+reauthorize the old records. Focused tests passed 8/8 (0 failures, 0 skips; TAP
+duration 0.26s; log `/tmp/orgward-tests-KAQokY/node-test.tap.log`):
+`npm test -- tests/sdlc/workspace.test.mjs`. `node --check` passed for
+`public/sdlc-view.mjs`, `public/sdlc.js`, and `tests/sdlc/workspace.test.mjs`;
+`git diff --check` passed. `npm run task:next` reports PR-15 first open. This is
+one bounded T-90 contribution; T-90 and PR-15 remain open. No full check or Sol
+review.
+
 PR-15 T-90 return from SDLC case to pinned design object (2026-10-05):
 source-bound change-case evidence now links to the exact saved project, blueprint
 version, and object used by the case. The link appears only when the saved pin

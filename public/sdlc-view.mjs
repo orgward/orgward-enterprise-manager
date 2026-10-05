@@ -156,7 +156,33 @@ export function caseUiModel(changeCase, meta = {}, currentProject = null) {
     const state = !changeCase.sourceBindingIntegrity?.valid ? 'INTEGRITY_FAILED'
       : isCurrent === false ? 'PINNED_OLDER_VERSION'
         : isCurrent === true ? 'CURRENT' : 'PROJECT_UNAVAILABLE';
-    return { ...changeCase.sourceBinding, state };
+    const staleArtifacts = [];
+    if (state === 'PINNED_OLDER_VERSION') {
+      const requirements = changeCase.artifacts?.requirements?.acceptedBaseline;
+      if (requirements?.sourceHash === changeCase.sourceBinding.sourceHash) {
+        staleArtifacts.push({ type: 'Accepted requirements baseline', referenceLabel: 'SHA-256', reference: requirements.contentHash });
+      }
+      const architecture = changeCase.artifacts?.architecture?.acceptedBaseline;
+      if (architecture?.sourceHash === changeCase.sourceBinding.sourceHash) {
+        staleArtifacts.push({ type: 'Accepted architecture baseline', referenceLabel: 'SHA-256', reference: architecture.draftHash });
+      }
+      const plan = changeCase.artifacts?.plan;
+      if (plan?.binding?.sourceHash === changeCase.sourceBinding.sourceHash) {
+        staleArtifacts.push({ type: 'Delivery plan', referenceLabel: 'SHA-256', reference: plan.binding.planHash ?? plan.binding.sourceHash });
+      }
+      for (const evaluation of changeCase.evaluations ?? []) {
+        if (evaluation?.id) staleArtifacts.push({ type: 'Evaluation', referenceLabel: 'ID', reference: evaluation.id });
+      }
+      for (const approval of changeCase.approvals ?? []) {
+        if (approval?.id) staleArtifacts.push({ type: 'Approval', referenceLabel: 'ID', reference: approval.id });
+      }
+    }
+    const invalidation = state === 'PINNED_OLDER_VERSION' ? {
+      status: staleArtifacts.length ? 'DEPENDENCIES_STALE' : 'SOURCE_STALE',
+      reason: 'The saved project advanced beyond this case’s pinned blueprint. Dependent accepted artifacts remain historical evidence and need review in a new case.',
+      staleArtifacts,
+    } : null;
+    return { ...changeCase.sourceBinding, state, invalidation };
   })() : null;
   return {
     sourceBinding,

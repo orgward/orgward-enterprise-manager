@@ -471,6 +471,12 @@ function renderContext(content) {
       el('p', { text: `Project ${binding.projectId} v${binding.projectVersion} · blueprint ${binding.blueprintId} v${binding.blueprintVersion} · schema v${binding.blueprintSchemaVersion}` }),
       el('p', { text: `Source SHA-256 ${binding.sourceHash} · binding integrity ${binding.bindingHash} · evidence ${context.sourceBindingEvidenceRef}` }),
       el('p', { text: binding.state === 'PINNED_OLDER_VERSION' ? 'Pinned version: this project has a newer saved design. The case still uses this original snapshot.' : binding.state === 'CURRENT' ? 'Pinned version: the case uses this exact current saved design snapshot.' : 'Pinned version: current project state is unavailable; the case retains this exact saved snapshot.' }),
+      ...(binding.invalidation ? [el('div', { className: 'source-invalidation' }, [
+        el('b', { text: binding.invalidation.status === 'DEPENDENCIES_STALE' ? 'Dependent artifacts are stale' : 'Pinned source is stale' }),
+        el('p', { text: binding.invalidation.reason }),
+        ...(binding.invalidation.staleArtifacts.length ? [el('ul', {}, binding.invalidation.staleArtifacts.map((artifact) => el('li', { text: `${artifact.type} · ${artifact.referenceLabel} ${artifact.reference}` })))] : []),
+        el('small', { text: 'Stored artifact contents remain available as historical evidence.' }),
+      ])] : []),
       ...(sourceRoute ? [el('a', { className: 'button ghost', text: 'Open exact pinned design object', attrs: { href: sourceRoute } })] : []),
       el('small', { text: 'Other context coverage is from the synthetic reference organization; it is not evidence from this project.' }),
     ]));

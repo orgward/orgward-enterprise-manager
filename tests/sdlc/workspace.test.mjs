@@ -41,10 +41,21 @@ test('case UI keeps the pinned source identity visible when the saved project ad
   } });
   changeCase.workspace = workspaceStatus(changeCase);
   changeCase.sourceBindingIntegrity = { valid: true };
+  changeCase.artifacts.requirements = { acceptedBaseline: { sourceHash: binding.sourceHash, contentHash: 'requirements-hash' } };
+  changeCase.artifacts.architecture = { acceptedBaseline: { sourceHash: binding.sourceHash, draftHash: 'architecture-hash' } };
+  changeCase.evaluations = [{ id: 'evaluation-id' }];
+  changeCase.approvals = [{ id: 'approval-id' }];
   const pinned = caseUiModel(changeCase, {}, { id: 'project-source', version: 5, blueprintVersions: [{ version: 3 }] }).sourceBinding;
   assert.equal(pinned.state, 'PINNED_OLDER_VERSION');
   assert.equal(pinned.snapshot.detail, 'Pinned detail.');
   assert.equal(pinned.sourceHash, binding.sourceHash);
+  assert.equal(pinned.invalidation.status, 'DEPENDENCIES_STALE');
+  assert.deepEqual(pinned.invalidation.staleArtifacts, [
+    { type: 'Accepted requirements baseline', referenceLabel: 'SHA-256', reference: 'requirements-hash' },
+    { type: 'Accepted architecture baseline', referenceLabel: 'SHA-256', reference: 'architecture-hash' },
+    { type: 'Evaluation', referenceLabel: 'ID', reference: 'evaluation-id' },
+    { type: 'Approval', referenceLabel: 'ID', reference: 'approval-id' },
+  ]);
   assert.equal(caseUiModel(changeCase).sourceBinding.state, 'PROJECT_UNAVAILABLE');
   changeCase.sourceBindingIntegrity = { valid: false };
   assert.equal(caseUiModel(changeCase, {}, { id: 'project-source', version: 5, blueprintVersions: [{ version: 3 }] }).sourceBinding.state, 'INTEGRITY_FAILED');
