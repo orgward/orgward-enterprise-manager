@@ -285,13 +285,22 @@ async function refreshSelectedRunFromOtherSessions() {
     || (currentRoute.searchParams.get('project') || null) !== (state.run.projectId || null)) return;
   const requestId = ++selectedRunRefreshRequestId;
   try {
-    const nextRun = await api(`/api/execution/runs/${encodeURIComponent(runId)}`);
+    const [nextRun, projectRead] = await Promise.all([
+      api(`/api/execution/runs/${encodeURIComponent(runId)}`),
+      state.run?.projectId ? api(`/api/v1/projects/${encodeURIComponent(state.run.projectId)}`).catch(() => null) : Promise.resolve(null),
+    ]);
     const route = new URL(window.location.href);
     if (!isCurrentSelectedRunRefresh({ requestId, currentRequestId: selectedRunRefreshRequestId,
       runId, currentRunId: state.run?.id, routeRunId: route.searchParams.get('run'),
       projectId: state.run?.projectId ?? null, currentProjectId: state.run?.projectId ?? null,
       routeProjectId: route.searchParams.get('project') || null })) return;
-    applySelectedRunSnapshot(nextRun, runId);
+    const wasArchived = state.runProject?.lifecycle?.status === 'archived';
+    const projectChanged = projectRead?.data?.id === state.run?.projectId
+      && (projectRead.data.lifecycle?.status === 'archived') !== wasArchived;
+    if (projectRead?.data?.id === state.run?.projectId) state.runProject = projectRead.data;
+    const currentRunVersion = state.run?.version;
+    const runChanged = applySelectedRunSnapshot(nextRun, runId);
+    if (projectChanged && !runChanged && nextRun.version === currentRunVersion && state.run?.id === runId) renderRun();
   } catch {
     // A transient read failure is retried on the next poll or visibility return.
   }
@@ -423,7 +432,7 @@ function showNew({ planTarget = null, preferredProcessId = null, preserveProcess
   deferredSelectedRun = null;
   if (selectedRunWaitMessage && executionAnnouncement.textContent === selectedRunWaitMessage) executionAnnouncement.textContent = '';
   selectedRunWaitMessage = '';
-  state.run = null; main.replaceChildren(document.querySelector('#new-run-template').content.cloneNode(true)); renderList();
+  state.run = null; state.runProject = null; main.replaceChildren(document.querySelector('#new-run-template').content.cloneNode(true)); renderList();
   const select = document.querySelector('#profile');
   const projectSelect = document.querySelector('#project');
   const planProjectSelect = document.querySelector('#plan-project');
@@ -2467,17 +2476,19 @@ async function load(id, { initiatingControl = null, event = null } = {}) {
 
 async function loadProposalApplication(run, project = null) {
   const proposal = run?.execution?.generatedProposal;
-  state.runProject = null;
+  state.runProject = project;
   state.proposalMembershipAccess = null;
-  if (!proposal || !run.projectId) return;
+  if (!run?.projectId) return;
   let savedProject = project;
   try {
     savedProject ??= (await api(`/api/v1/projects/${encodeURIComponent(run.projectId)}`)).data;
   } catch {
-    run.proposalApplication = deriveBlueprintProposalReviewState({ proposal, project: null });
+    state.runProject = null;
+    if (proposal) run.proposalApplication = deriveBlueprintProposalReviewState({ proposal, project: null });
     return;
   }
   state.runProject = savedProject;
+  if (!proposal) return;
   if (state.authenticated && state.currentPrincipal) {
     try {
       const members = (await api(`/api/v1/projects/${encodeURIComponent(run.projectId)}/members`)).data;
@@ -3160,11 +3171,13 @@ function renderRun() {
   if (run.execution?.repositoryCandidate) {
     panel.append(renderRepositoryCandidate({ ...run.execution.repositoryCandidate, runId: run.id }));
     if (run.execution.repositoryCandidate.source?.type === 'github-app') {
-      panel.append(renderProtectedRelease({ run, principal: state.currentPrincipal, el, api }));
+      panel.append(renderProtectedRelease({ run, principal: state.currentPrincipal, el, api,
+        readOnly: state.runProject?.lifecycle?.status === 'archived' }));
     }
   }
   if (run.projectId) panel.append(renderOutcomeInbox({ projectId: run.projectId, principal: state.currentPrincipal,
-    el, api, preferredSource: { kind: 'task', runId: run.id } }));
+    el, api, preferredSource: { kind: 'task', runId: run.id },
+    readOnly: state.runProject?.lifecycle?.status === 'archived' }));
   panel.append(section('Append-only activity', el('div', { className: 'run-events' }, run.events.slice().reverse().map((entry) => {
     const details = [el('b', { text: entry.type }), el('span', { text: `${new Date(entry.at).toLocaleString()} · ${entry.actor}` })];
     if (entry.type === 'ExecutionInstructionsAmended') {

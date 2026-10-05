@@ -24,6 +24,7 @@ import { isValidEnterpriseIntegrityAssessment, projectEnterpriseIntegrity } from
 import { projectPortfolioIntegritySummary } from '../../src/platform/postgres-stores.mjs';
 import { decodeStudioRoute, encodeStudioRoute } from '../../public/shared-interactions.mjs';
 import { renderOutcomeInbox } from '../../public/outcomes.mjs';
+import { renderProtectedRelease } from '../../public/protected-release.mjs';
 
 class NodeListFixture extends Array {
   constructor(entries) { super(...entries); this.at = undefined; }
@@ -588,6 +589,78 @@ test('outcome inbox focuses the requested incident or support category', async (
       assert.equal(other?.attrs.open, undefined, 'the unrelated category stays collapsed');
       assert.match(inbox.textContent, new RegExp(`Focused on the first active ${category} item`));
     }
+  } finally {
+    if (originalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = originalStorage;
+  }
+});
+
+test('archived outcome inbox retains issue evidence and history with every edit disabled', async () => {
+  const originalStorage = globalThis.localStorage;
+  globalThis.localStorage = storageFixture();
+  try {
+    const requests = [];
+    const outcome = { id: 'outcome-archived-support', version: 3, status: 'IN_PROGRESS', title: 'Archived support request',
+      category: 'support', ownerPrincipal: 'owner', source: { kind: 'manual', summary: 'Customer supplied the original context.' },
+      latestEvaluation: { technical: 'PASS', control: 'REVIEW', business: 'UNKNOWN', observationHash: 'observed-hash' },
+      observations: [{ id: 'observation-1', window: '2026-10-01', recordedAt: '2026-10-01T10:00:00Z', measures: [
+        { dimension: 'business', name: 'response time', actual: 10, target: 5, comparison: 'lte', unit: 'minutes', evidenceSummary: 'Ticket timeline.' },
+      ] }], proposals: [{ id: 'proposal-1', title: 'Follow up', status: 'PROPOSED', recommendation: 'Review queue ownership.',
+        rationale: 'Repeated delays.', observationHash: 'old-hash' }], events: [{ type: 'CustomerOutcomeObserved', actor: 'owner', at: '2026-10-01T10:00:00Z', reason: 'Record retained.' }] };
+    const api = async (route, options) => {
+      requests.push({ route, method: options?.method ?? 'GET' });
+      return { available: true, outcomes: [outcome], permissions: { write: true, review: true, assign: true, followUp: true },
+        sources: { members: [{ principal: 'owner', access: 'owner', displayName: 'Owner' }] } };
+    };
+    const outcomeEl = (tag, options, children) => { const node = el(tag, options, children); node.style = {}; return node; };
+    const inbox = renderOutcomeInbox({ projectId: 'project-archived', principal: 'owner', el: outcomeEl, api, readOnly: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.match(inbox.textContent, /available read-only/);
+    assert.match(inbox.textContent, /Customer supplied the original context/);
+    assert.match(inbox.textContent, /response time: 10 minutes/);
+    assert.match(inbox.textContent, /CustomerOutcomeObserved/);
+    assert.equal(inbox.querySelectorAll('form').some((form) => form.attrs['aria-label'] === 'Add outcome to inbox'), false);
+    assert.ok(inbox.querySelectorAll('form').length > 0);
+    assert.ok(inbox.querySelectorAll('form').every((form) => form.querySelectorAll('input,select,textarea,button').every((control) => control.disabled)));
+    assert.ok(inbox.querySelectorAll('button').some((button) => button.text === 'Download outcome JSON export' && !button.disabled),
+      'read-only evidence export remains available');
+    assert.deepEqual(requests.map((entry) => entry.method), ['GET']);
+  } finally {
+    if (originalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = originalStorage;
+  }
+});
+
+test('archived protected-release history remains visible while request, approval, execution, and retry controls are disabled', async () => {
+  const originalStorage = globalThis.localStorage;
+  globalThis.localStorage = storageFixture();
+  try {
+    const requests = [];
+    const run = { id: 'execution-run-00000000-0000-4000-8000-000000000001', projectId: 'project-archived',
+      status: 'SUCCEEDED', execution: { repositoryCandidate: { runId: 'execution-run-00000000-0000-4000-8000-000000000001',
+        source: { type: 'github-app' }, candidateEvidence: { hash: 'candidate-hash' }, treeDigest: 'tree-hash',
+        buildReceipt: { status: 'REPRODUCIBLE', runs: [{ outputManifestHash: 'manifest-hash' }] } } } };
+    const action = { id: 'release-action-00000000-0000-4000-8000-000000000001', version: 1, status: 'AWAITING_APPROVAL',
+      requestHash: 'request-hash', events: [{ type: 'ReleaseRequested', occurredAt: '2026-10-01T10:00:00Z' }], observations: [],
+      request: { kind: 'release', requestedBy: 'requester', expectedGeneration: 2,
+        environment: { configurationHash: 'configuration-hash' }, candidate: { runId: run.id, candidateEvidenceHash: 'candidate-hash',
+          candidateTreeDigest: 'tree-hash', outputManifestHash: 'manifest-hash', outputManifest: [] } } };
+    const api = async (route, options) => {
+      requests.push({ route, method: options?.method ?? 'GET' });
+      return { available: true, environments: [{ id: 'environment-1', label: 'Staging', riskClass: 'low', assetIds: ['asset-1'],
+        state: { generation: 2, pendingActionId: null, current: null, previous: null },
+        actions: [action], actionsAllowed: ['release', 'rollback'], permissions: { request: true, approve: true, execute: true } }] };
+    };
+    const releaseEl = (tag, options, children) => { const node = el(tag, options, children); node.style = {}; return node; };
+    const panel = renderProtectedRelease({ run, principal: 'owner', el: releaseEl, api, readOnly: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.match(panel.textContent, /release requests, approvals and evidence are read-only/);
+    assert.match(panel.textContent, /ReleaseRequested/);
+    const protectedButtons = Array.from(panel.querySelectorAll('button')).filter((button) => /Request release|Request rollback|Approve exact request|Execute approved action|Check saved outcome|Retry saved command/.test(button.text));
+    assert.equal(protectedButtons.length, 3);
+    assert.ok(protectedButtons.every((button) => button.disabled));
+    assert.equal(panel.querySelectorAll('textarea')[0].disabled, true);
+    assert.deepEqual(requests.map((entry) => entry.method), ['GET']);
   } finally {
     if (originalStorage === undefined) delete globalThis.localStorage;
     else globalThis.localStorage = originalStorage;

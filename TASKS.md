@@ -7668,3 +7668,17 @@ passed 2/2 (0 failures, 0 skips; 2.41s; TAP log
 `node --check` passed for the changed JavaScript files and `git diff --check`
 passed. No full check, Sol review, provider or external effect. PR-15 remains open
 and active.
+
+PR-15 archived execution evidence view (2026-10-05): when an execution run is
+linked to an archived workspace, its outcome inbox and protected-release panel
+retain issue, request and candidate history while hiding retries and disabling
+write controls. The run page refreshes lifecycle state alongside the selected run
+and keeps run refresh working if the project read temporarily fails. The first
+focused test run passed the outcome inbox case but failed the protected-release
+case because the test's custom NodeList fixture does not support `.filter()`;
+the assertion now converts it to an array. The corrected focused run passed 2/2
+(0 failures, 0 skips; TAP duration 284ms; log
+`/tmp/orgward-tests-NCbnDk/node-test.tap.log`):
+`npm test -- tests/enterprise/view.test.mjs --test-name-pattern='archived outcome inbox retains issue evidence and history with every edit disabled|archived protected-release history remains visible while request, approval, execution, and retry controls are disabled'`.
+`node --check` passed for the changed JavaScript files and `git diff --check`
+passed. No full check or Sol review; PR-15 remains open and active.

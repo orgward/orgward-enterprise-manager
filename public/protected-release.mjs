@@ -1,5 +1,5 @@
 // Protected release commands retain their exact payload until the server answers.
-export function renderProtectedRelease({ run, principal, el, api }) {
+export function renderProtectedRelease({ run, principal, el, api, readOnly = false }) {
   const root = el('section', { className: 'panel protected-release', attrs: { 'aria-label': 'Protected release and rollback' } });
   root.style.overflowWrap = 'anywhere';
   root.style.minWidth = '0';
@@ -53,7 +53,8 @@ export function renderProtectedRelease({ run, principal, el, api }) {
     try {
       const result = await api(`${base}/release-environments`);
       body.replaceChildren();
-      if (pending) body.append(paragraph('A command has an uncertain response. Recover its saved result before starting another action.'),
+      if (readOnly) body.append(paragraph('Archived workspace: release requests, approvals and evidence are read-only. Restore the workspace before making changes.'));
+      if (pending && !readOnly) body.append(paragraph('A command has an uncertain response. Recover its saved result before starting another action.'),
         button(`Retry saved command: ${pending.label}`, () => submit(pending.route, pending.payload, pending.label)));
       if (!result.available || !result.environments?.length) {
         body.append(paragraph('Protected release is unavailable. Ask a workspace operator to configure an environment, permitted assets, human authority and a release destination.'), button('Request release', () => {}, true));
@@ -63,7 +64,7 @@ export function renderProtectedRelease({ run, principal, el, api }) {
       body.append(paragraph(`Selected candidate ${candidate?.candidateEvidence?.hash ?? 'unavailable'} · tree ${candidate?.treeDigest ?? 'unavailable'} · build ${candidate?.buildReceipt?.status ?? 'unavailable'} · output manifest ${candidate?.buildReceipt?.runs?.[0]?.outputManifestHash ?? 'unavailable'}`));
       for (const environment of result.environments) {
         const state = environment.state;
-        const permissions = environment.permissions ?? {};
+        const permissions = readOnly ? {} : environment.permissions ?? {};
         const unresolved = (environment.actions ?? []).find((action) => action.id === state.pendingActionId);
         const unhealthy = unresolved?.status === 'UNHEALTHY' && unresolved.observations?.at(-1)?.health === 'unhealthy';
         const rollbackTarget = unhealthy ? state.current : state.previous;
@@ -74,6 +75,7 @@ export function renderProtectedRelease({ run, principal, el, api }) {
         else if (state.pendingActionId) panel.append(paragraph(`An outcome is unresolved for ${state.pendingActionId}. Check the saved outcome before requesting release or rollback.`));
         const form = el('form');
         const reason = el('textarea', { attrs: { required: 'required', maxlength: '500', rows: '3', 'aria-label': `Reason for release or rollback to ${environment.label}` } });
+        reason.disabled = readOnly;
         form.append(el('label', { text: 'Reason for this environment action' }, [reason]));
         for (const kind of ['release', 'rollback']) {
           const allowedKinds = environment.actionsAllowed ?? ['release', 'rollback'];
@@ -111,7 +113,7 @@ export function renderProtectedRelease({ run, principal, el, api }) {
       }
     } catch (error) {
       body.replaceChildren(paragraph(`${error.message} Environment state could not be loaded.`));
-      if (pending) body.append(button(`Retry saved command: ${pending.label}`, () => submit(pending.route, pending.payload, pending.label)));
+      if (pending && !readOnly) body.append(button(`Retry saved command: ${pending.label}`, () => submit(pending.route, pending.payload, pending.label)));
     }
   }
   root.append(el('h3', { text: 'Protected release and rollback' }), status,
