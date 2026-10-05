@@ -255,6 +255,15 @@ async function requireCurrentSourceBinding(changeCase, store, request) {
   return project;
 }
 
+function requireValidContextManifest(changeCase) {
+  const integrity = verifyContextManifest(changeCase);
+  if (integrity.valid === false) {
+    throw apiFailure(409, 'CONTEXT_MANIFEST_INTEGRITY_INVALID', 'The saved context manifest or its evidence references failed verification. Planning and case changes are blocked; create a new case from verified current context.', {
+      recoveryActions: [{ type: 'create_new_case', label: 'Create a new case from verified current context' }],
+    });
+  }
+}
+
 function projectView(project) {
   const { commandRecords: _commandRecords, memberships: _memberships, ...visible } = project;
   const blueprint = latestBlueprint(project);
@@ -3393,6 +3402,7 @@ export function createApp({
         if (!changeCase) return sendJson(response, 404, { error: 'Change case not found.' });
         normalizeChangeCase(changeCase); requireTenant(changeCase, requestTenant(request));
         if (requestActor(request) !== changeCase.accountableOwner) throw apiFailure(403, 'ACTION_FORBIDDEN', 'Only the accountable case owner may compile its software delivery draft.');
+        requireValidContextManifest(changeCase);
         requireVersion(changeCase, body.version);
         const project = await requireCurrentSourceBinding(changeCase, store, request);
         if (!project || project.id !== changeCase.projectId) throw apiFailure(409, 'SOURCE_BINDING_REQUIRED', 'A current saved-project source binding is required.');
@@ -3482,6 +3492,7 @@ export function createApp({
           }
           return sendJson(response, 200, { ...sdlcView(changeCase), command: { action, replayed: true, steps: 0 } });
         }
+        requireValidContextManifest(changeCase);
         await requireCurrentSourceBinding(changeCase, store, request);
         if (changeCase.status === 'STOPPED' && !priorCommand) {
           const error = new Error('Case is STOPPED; no further changes are allowed.');
@@ -3635,6 +3646,7 @@ export function createApp({
       }
     } catch (error) {
       if (pathname === '/auth/callback') return loginError(response, oidcLoginFlow ? new URL(oidcLoginFlow.redirectUri).protocol === 'https:' : false);
+      if (error.code === 'CONTEXT_MANIFEST_INTEGRITY_INVALID') return sendApiError(response, error, correlationId);
       if (pathname.startsWith('/api/v1/') || pathname.startsWith('/api/execution/process-task-')
         || pathname.startsWith('/api/execution/github-')
         || pathname.startsWith('/api/execution/deepseek-profiles')

@@ -7772,6 +7772,25 @@ view tests passed 5/5 (0 failures, 0 skips; TAP duration 0.23s; log
 one bounded T-90 increment; T-90 and PR-15 remain open. No full check or Sol
 review.
 
+PR-15 T-90 sealed-context planning guard (2026-10-05): SDLC case actions and
+software-plan compilation now block when a versioned context manifest or one of
+its evidence references fails integrity verification. The response names the
+specific integrity gap and offers creating a new case from verified current
+context; legacy unsealed context remains readable and compatible. A focused API
+test tampers with sealed coverage, verifies the action returns 409 with recovery
+guidance, and confirms the case version did not change. The first focused run
+failed because the new assertion assumed a structured API error while the route
+returned its legacy plain error format. A second run showed that plain format
+also hid the actionable recovery fields. The error path now serializes this
+integrity failure as a structured API error. Final focused run passed 16/16 (0
+failures, 0 skips; duration 1.95s; TAP log
+`/tmp/orgward-tests-1GQQD3/node-test.tap.log`):
+`npm test -- tests/sdlc/server.test.mjs`. `node --check` passed for `server.mjs`
+and `tests/sdlc/server.test.mjs`; `git diff --check` passed. `npm run task:next`
+reports PR-15 first open. Sentinel still has no authentic version source, so
+T-90 AC1 remains incomplete. This is one bounded T-90 contribution; T-90 and
+PR-15 remain open. No full check or Sol review.
+
 PR-15 T-90 sealed context coverage and evidence (2026-10-05): saved context
 manifests now hash the retrieval plan and coverage, intent guardrails, explicit
 unknown and excluded dependencies, source pins, and evidence-reference content

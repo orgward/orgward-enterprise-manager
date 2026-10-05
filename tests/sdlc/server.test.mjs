@@ -57,6 +57,33 @@ test('SDLC API persists and resumes a golden case across process restart', async
   assert.ok(changeCase.evidenceIntegrity.every((entry) => entry.valid));
 });
 
+test('SDLC actions block when a sealed context manifest no longer verifies', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'orgward-sdlc-context-integrity-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const app = await start(root);
+  t.after(async () => { if (app.server.listening) await close(app.server); });
+  let changeCase = await request(app.base, '/api/sdlc/cases', {
+    method: 'POST', body: JSON.stringify({ mode: 'golden' }),
+  }, 201);
+  changeCase = await request(app.base, `/api/sdlc/cases/${changeCase.id}/run`, {
+    method: 'POST', body: JSON.stringify({ version: changeCase.version, actor: 'orchestrator', idempotencyKey: 'context-pin-run' }),
+  });
+  assert.equal(changeCase.contextManifestIntegrity.valid, true);
+  const tampered = await app.sdlcStore.get(changeCase.id);
+  tampered.artifacts.context.coverage[0].rationale = 'Tampered coverage';
+  await app.sdlcStore.save(tampered);
+
+  const blocked = await request(app.base, `/api/sdlc/cases/${changeCase.id}/advance`, {
+    method: 'POST', body: JSON.stringify({ version: changeCase.version, actor: 'orchestrator', idempotencyKey: 'context-pin-advance' }),
+  }, 409);
+  assert.equal(blocked.error.code, 'CONTEXT_MANIFEST_INTEGRITY_INVALID');
+  assert.match(blocked.error.message, /planning and case changes are blocked/i);
+  assert.equal(blocked.error.recoveryActions[0].type, 'create_new_case');
+  const unchanged = await request(app.base, `/api/sdlc/cases/${changeCase.id}`);
+  assert.equal(unchanged.version, changeCase.version);
+  assert.equal(unchanged.contextManifestIntegrity.valid, false);
+});
+
 test('SDLC case pins a saved design source, rejects stale or unresolved selections, and retains provenance after project edits and restart', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'orgward-sdlc-source-pin-'));
   t.after(() => rm(root, { recursive: true, force: true }));
