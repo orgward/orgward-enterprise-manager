@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { addConversationTurn, applyBlueprintProposal, createProject, editBlueprintObject, editProcessTaskGraph, graphForBlueprint, latestBlueprint, planProcessTaskGraph, publishBlueprintInternally } from './src/model.mjs';
 import { ProjectStore } from './src/store.mjs';
 import { MUTATIONS, STAGES, digest } from './src/sdlc/contracts.mjs';
-import { PROOF_ACTION_ATTEMPT_LIMIT, acceptArchitectureDraft, acceptRequirementDraft, advanceCase, answerClarification, approveRelease, assessProofs, commandRequestHash, completeProofAction, createChangeCase, editArchitectureDraft, editRequirementDraft, normalizeChangeCase, openClarification, pinProjectSourceObject, reconcileClarification, recordObservation, recordProofResult, registerProofObligation, releaseApprovalCandidate, resumeProofAction, routeProofResult, runToCheckpoint, traceability, verifyAcceptedG6Plan, verifyEvidenceLedger, verifySourceBinding, workspaceStatus } from './src/sdlc/engine.mjs';
+import { PROOF_ACTION_ATTEMPT_LIMIT, acceptArchitectureDraft, acceptRequirementDraft, advanceCase, answerClarification, approveRelease, assessProofs, commandRequestHash, completeProofAction, createChangeCase, editArchitectureDraft, editRequirementDraft, normalizeChangeCase, openClarification, pinProjectSourceObject, reconcileClarification, recordObservation, recordProofResult, registerProofObligation, releaseApprovalCandidate, resumeProofAction, routeProofResult, runToCheckpoint, traceability, verifyAcceptedG6Plan, verifyContextManifest, verifyEvidenceLedger, verifySourceBinding, workspaceStatus } from './src/sdlc/engine.mjs';
 import { compileSoftwareDeliveryDraft, verifySoftwareDeliveryDraft } from './src/sdlc/software-plan-compiler.mjs';
 import { ChangeCaseStore } from './src/sdlc/store.mjs';
 import { EXECUTION_STATUSES } from './src/execution/contracts.mjs';
@@ -692,7 +692,7 @@ async function productGateStatus(statusFile) {
 
 function sdlcView(changeCase) {
   normalizeChangeCase(changeCase);
-  return { ...changeCase, sourceBindingIntegrity: changeCase.sourceBinding ? verifySourceBinding(changeCase.sourceBinding) : null, workspace: workspaceStatus(changeCase), traceability: traceability(changeCase), evidenceIntegrity: verifyEvidenceLedger(changeCase) };
+  return { ...changeCase, sourceBindingIntegrity: changeCase.sourceBinding ? verifySourceBinding(changeCase.sourceBinding) : null, workspace: workspaceStatus(changeCase), traceability: traceability(changeCase), evidenceIntegrity: verifyEvidenceLedger(changeCase), contextManifestIntegrity: changeCase.artifacts?.context ? verifyContextManifest(changeCase) : null };
 }
 
 function requireVersion(changeCase, suppliedVersion) {

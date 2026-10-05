@@ -101,12 +101,14 @@ test('SDLC case pins a saved design source, rejects stale or unresolved selectio
   assert.equal(changeCase.sourceBinding.sourceHash.length, 64);
   assert.equal(changeCase.sourceBinding.blueprintSchemaVersion, 1);
   assert.equal(changeCase.sourceBindingIntegrity.valid, true);
+  assert.equal(changeCase.contextManifestIntegrity, null, 'the context manifest is reported after context discovery runs');
   assert.equal(changeCase.sourceBinding.integrityContext.state, 'NOT_ASSESSED');
   changeCase = await request(app.base, `/api/sdlc/cases/${changeCase.id}/run`, { method: 'POST', body: JSON.stringify({ version: changeCase.version, actor: 'orchestrator', idempotencyKey: 'source-pin-run' }) });
   assert.ok(changeCase.artifacts.context.sourceBindingEvidenceRef);
   assert.ok(changeCase.artifacts.context.evidenceRefs.includes(changeCase.artifacts.context.sourceBindingEvidenceRef));
   assert.equal(changeCase.evidenceLedger.find((entry) => entry.id === changeCase.artifacts.context.sourceBindingEvidenceRef).authority, 'SAVED_PROJECT_DESIGN');
   assert.equal(changeCase.artifacts.context.integrityContext.state, 'NOT_ASSESSED');
+  assert.equal(changeCase.contextManifestIntegrity.valid, true);
   const requestedImpact = changeCase.artifacts.impact.impacts.find((entry) => entry.isRequestedSource);
   assert.equal(requestedImpact.objectRef, source.id);
   assert.equal(requestedImpact.sourceHash, changeCase.sourceBinding.sourceHash);
@@ -132,6 +134,7 @@ test('SDLC case pins a saved design source, rejects stale or unresolved selectio
   assert.equal(changeCase.sourceBindingIntegrity.valid, true);
   assert.equal(changeCase.artifacts.context.sourceBindingHash, originalPin.sourceHash);
   assert.deepEqual(changeCase.artifacts.context.integrityContext, originalPin.integrityContext);
+  assert.equal(changeCase.contextManifestIntegrity.valid, true);
   assert.ok(changeCase.artifacts.context.evidenceRefs.includes(changeCase.artifacts.context.sourceBindingEvidenceRef));
   assert.equal(changeCase.artifacts.impact.impacts.find((entry) => entry.isRequestedSource).sourceHash, originalPin.sourceHash);
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { MUTATIONS, STAGES, digest } from '../../src/sdlc/contracts.mjs';
-import { advanceCase, approveRelease, createChangeCase, recordObservation, runToCheckpoint, traceability, verifyEvidenceLedger } from '../../src/sdlc/engine.mjs';
+import { advanceCase, approveRelease, createChangeCase, recordObservation, runToCheckpoint, traceability, verifyContextManifest, verifyEvidenceLedger } from '../../src/sdlc/engine.mjs';
 
 test('golden case runs to protected approval, resumes, observes, and learns', () => {
   const changeCase = createChangeCase({ mode: 'golden' });
@@ -74,6 +74,35 @@ test('runtime and control findings propose an evidence-linked design correction 
   assert.deepEqual(changeCase.artifacts.release, savedRelease);
   assert.equal(changeCase.artifacts.learning.authoritativeModelMutated, false);
   assert.ok(changeCase.artifacts.outcome.followUpProposalRefs.includes(proposal.id));
+});
+
+test('context manifest seals coverage, unknowns, exclusions, guardrails and evidence references', () => {
+  const changeCase = createChangeCase({ mutation: 'missing_aml' });
+  const external = { id: 'external-unknown', type: 'external-document', name: 'Untrusted attachment',
+    detail: 'This attachment is excluded from authoritative context.', authority: 'UNTRUSTED',
+    freshness: 'CURRENT', classification: 'UNTRUSTED', source: 'external:untrusted-upload' };
+  external.contentHash = digest(external);
+  changeCase.enterpriseSnapshot.objects.push(external);
+  runToCheckpoint(changeCase, { actor: 'orchestrator', idempotencyKey: 'context-manifest-seal' });
+
+  const context = changeCase.artifacts.context;
+  assert.equal(context.manifestVersion, 1);
+  assert.equal(context.enterpriseContext.version, 1);
+  assert.equal(context.guardrails.intentRef, changeCase.intent.id);
+  assert.ok(context.guardrails.constraints.length);
+  assert.ok(context.unknownDependencies.some((entry) => entry.domain === 'regulation'));
+  assert.deepEqual(context.excludedDependencies, [{ objectRef: external.id, sourceId: external.source,
+    status: 'EXCLUDED', reason: 'UNTRUSTED_SOURCE_NOT_USED_FOR_AUTHORITATIVE_COVERAGE' }]);
+  assert.equal(context.evidenceManifest.length, context.evidenceRefs.length);
+  assert.equal(verifyContextManifest(changeCase).valid, true);
+
+  const originalRationale = context.coverage[0].rationale;
+  context.coverage[0].rationale = 'Changed after context was pinned.';
+  assert.equal(verifyContextManifest(changeCase).valid, false);
+  context.coverage[0].rationale = originalRationale;
+  assert.equal(verifyContextManifest(changeCase).valid, true);
+  changeCase.evidenceLedger[0].contentHash = '0'.repeat(64);
+  assert.equal(verifyContextManifest(changeCase).valid, false);
 });
 
 for (const [mutation, expectedGate] of Object.entries({

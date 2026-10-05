@@ -873,17 +873,51 @@ function contextDiscovery(changeCase) {
   });
   for (const entry of forged) findings.push(finding('PROVENANCE_HASH_INVALID', 'CRITICAL', `${entry.name} does not match its recorded source hash.`, entry.id, 'Reject the source and retrieve evidence from an authoritative adapter.'));
   for (const entry of untrusted) findings.push(finding('UNTRUSTED_CONTENT_ISOLATED', 'INFO', `${entry.name} was retained as data and excluded from authoritative coverage.`, entry.id, 'No action required unless an authorized owner promotes the source.', evidenceRefs));
-  changeCase.artifacts.context = {
-    plan, coverage, evidenceRefs,
+  const unknownDependencies = coverage.flatMap((entry) => entry.unknowns.map((description) => ({ domain: entry.domain, description })));
+  const excludedDependencies = untrusted.map((object) => ({ objectRef: object.id, sourceId: object.source,
+    status: 'EXCLUDED', reason: 'UNTRUSTED_SOURCE_NOT_USED_FOR_AUTHORITATIVE_COVERAGE' }));
+  const evidenceManifest = evidenceRefs.map((evidenceRef) => {
+    const record = changeCase.evidenceLedger.find((entry) => entry.id === evidenceRef);
+    return { evidenceRef, contentHash: record.contentHash, sourceId: record.sourceId, sourceType: record.sourceType,
+      objectRef: record.objectRef, authority: record.authority, freshness: record.freshness };
+  });
+  const manifest = {
+    manifestVersion: 1, plan, coverage, evidenceRefs, evidenceManifest,
+    guardrails: { intentRef: changeCase.intent.id, constraints: [...changeCase.intent.constraints], nonGoals: [...changeCase.intent.nonGoals] },
+    enterpriseContext: { version: changeCase.enterpriseSnapshot.version ?? null,
+      sourceKind: changeCase.enterpriseSnapshot.sourceKind ?? 'synthetic-reference-model',
+      sourceLabel: changeCase.enterpriseSnapshot.sourceLabel ?? 'Synthetic reference organization' },
+    unknownDependencies, excludedDependencies,
     ...(changeCase.sourceBinding ? { sourceBindingHash: changeCase.sourceBinding.sourceHash, sourceBindingIntegrityHash: changeCase.sourceBinding.bindingHash, sourceBindingEvidenceRef,
       ...(changeCase.sourceBinding.integrityContext ? { integrityContext: structuredClone(changeCase.sourceBinding.integrityContext), integrityAssessmentEvidenceRef } : {}) } : {}),
-    provenanceManifestHash: changeCase.sourceBinding
-      ? digest({ evidenceRefs, sourceBindingHash: changeCase.sourceBinding.sourceHash, sourceBindingIntegrityHash: changeCase.sourceBinding.bindingHash,
-        ...(changeCase.sourceBinding.integrityContext ? { integrityContext: changeCase.sourceBinding.integrityContext } : {}) })
-      : digest(evidenceRefs),
     sourceModel: 'synthetic-reference-model',
   };
+  changeCase.artifacts.context = { ...manifest, provenanceManifestHash: digest(manifest) };
   return findings.some((entry) => entry.severity === 'CRITICAL') ? fail('context-sufficiency', [plan.id], findings, 'FAILED', coverage.reduce((sum, entry) => sum + entry.score, 0) / coverage.length) : pass('context-sufficiency', [plan.id], 1, findings);
+}
+
+export function verifyContextManifest(changeCase) {
+  const context = changeCase?.artifacts?.context;
+  if (!context) return { valid: null, reason: 'Context discovery has not run.' };
+  if (context.manifestVersion !== 1) return { valid: null, legacy: true, reason: 'This saved context predates manifest integrity sealing.' };
+  if (!/^[a-f0-9]{64}$/.test(context.provenanceManifestHash ?? '')) return { valid: false, reason: 'The saved context manifest is missing its integrity hash.' };
+  if (!Array.isArray(context.evidenceRefs) || !Array.isArray(context.evidenceManifest)
+    || context.evidenceRefs.some((ref) => typeof ref !== 'string')
+    || new Set(context.evidenceRefs).size !== context.evidenceRefs.length) {
+    return { valid: false, reason: 'The saved context manifest has malformed evidence references.' };
+  }
+  const { provenanceManifestHash, ...manifest } = context;
+  const expectedEvidenceManifest = (context.evidenceRefs ?? []).map((evidenceRef) => {
+    const record = changeCase.evidenceLedger.find((entry) => entry.id === evidenceRef);
+    return record ? { evidenceRef, contentHash: record.contentHash, sourceId: record.sourceId, sourceType: record.sourceType,
+      objectRef: record.objectRef, authority: record.authority, freshness: record.freshness } : null;
+  });
+  const evidenceManifestValid = expectedEvidenceManifest.every(Boolean)
+    && digest(expectedEvidenceManifest) === digest(context.evidenceManifest ?? []);
+  const actualHash = digest(manifest);
+  return { valid: evidenceManifestValid && actualHash === provenanceManifestHash,
+    expectedHash: provenanceManifestHash, actualHash,
+    reason: evidenceManifestValid && actualHash === provenanceManifestHash ? null : 'The saved context manifest or one of its evidence references changed after pinning.' };
 }
 
 function impactAnalysis(changeCase) {

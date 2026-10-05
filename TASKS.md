@@ -7772,6 +7772,20 @@ view tests passed 5/5 (0 failures, 0 skips; TAP duration 0.23s; log
 one bounded T-90 increment; T-90 and PR-15 remain open. No full check or Sol
 review.
 
+PR-15 T-90 sealed context coverage and evidence (2026-10-05): saved context
+manifests now hash the retrieval plan and coverage, intent guardrails, explicit
+unknown and excluded dependencies, source pins, and evidence-reference content
+hashes. Case reads report whether the saved manifest still verifies; older
+unsealed context records are identified as legacy. Focused tests passed 36/36
+(0 failures, 0 skips; duration 1.81s; TAP log
+`/tmp/orgward-tests-i4cgeW/node-test.tap.log`):
+`npm test -- tests/sdlc/engine.test.mjs tests/sdlc/server.test.mjs`.
+`node --check` passed for `src/sdlc/engine.mjs`, `server.mjs`, and both focused
+test files; `git diff --check` passed. `npm run task:next` reports PR-15 first
+open. The current app still has no Sentinel-version source to pin, so this is
+one bounded T-90 contribution; T-90 and PR-15 remain open. No full check or Sol
+review.
+
 PR-15 T-90 runtime evidence correction proposals (2026-10-05): an unhealthy
 runtime observation or recorded control exception now creates a design-correction
 claim proposal bound to the observation hash, release ID, and outcome ID. The
