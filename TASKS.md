@@ -8232,3 +8232,27 @@ authority/identity/layout assertions without mutation, stale project and bluepri
 pin conflicts, direct field/neighbor calculation, exact source display and
 incomplete/unknown warnings. Syntax and diff checks passed. T-121, T-122, PR-17
 remain open; PR-15 remains the active cursor and no release gate changed.
+
+PR-17 T-122 branch map impact preview (2026-10-05): branch object edits now use
+the same read-only impact preview before the map form saves a new branch
+revision. The preview pins aggregate version, branch ID/revision and head
+snapshot hash, plus exact main blueprint ID/version/hash; it reports edited
+fields, directly affected records and the proposed next branch revision. Stale
+aggregate and branch-head requests conflict, and a successful preview leaves
+the draft revision and aggregate version unchanged. Branch validation runs on a
+scratch copy that retains blueprint history for existing branch-integrity
+checks. Downstream impact remains `UNKNOWN`; this does not add a
+publication-currentness or approval invalidation barrier.
+
+Focused command
+`npm test -- tests/enterprise/server.test.mjs tests/enterprise/view.test.mjs
+--test-name-pattern='interactive map edits use the shared semantic command
+boundary with denial, conflict, replay and restart|enterprise branches merge
+exact typed changes only after a current owner review|blueprint impact preview
+shows exact pins, direct changes and explicit unknown downstream areas'` passed
+3/3 (0 failures, 0 skips; 13.37s; log
+`/tmp/orgward-tests-1LdmMB/node-test.tap.log`). Coverage includes main and branch
+preview rendering, changed branch fields/affected record, stale aggregate and
+branch-revision conflicts, and no mutation before the eventual branch edit.
+Syntax and diff checks passed. T-122 and PR-17 remain open; PR-15 remains the
+active cursor and no release gate changed.

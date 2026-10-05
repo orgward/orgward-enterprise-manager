@@ -1900,7 +1900,7 @@ function renderBlueprintEditForm(node) {
   const branchReason = branchEditing ? editField(form, 'Reason for this draft revision', 'reason', '', { multiline: true, maxLength: 500 }) : null;
   const error = element('p', { className: 'field-error edit-error', attrs: { role: 'alert', 'aria-live': 'polite', hidden: '' } });
   const recovery = element('div', { className: 'edit-recovery' });
-  const save = element('button', { className: 'button primary', text: branchEditing ? 'Save new branch revision' : 'Preview impact', attrs: { type: 'submit' } });
+  const save = element('button', { className: 'button primary', text: 'Preview impact', attrs: { type: 'submit' } });
   const impactPanel = element('section', { className: 'blueprint-impact-preview', attrs: { hidden: '', 'aria-label': 'Proposed design impact preview', 'aria-live': 'polite' } });
   let previewedImpact = null;
   const latestVersion = element('button', { className: 'button ghost', text: 'Use current version', attrs: { type: 'button', hidden: '' } });
@@ -2001,10 +2001,10 @@ function renderBlueprintEditForm(node) {
     impactPanel.replaceChildren(...rendered.children);
     impactPanel.hidden = false;
   };
-  const previewImpact = async (pendingEdit) => {
+  const previewImpact = async (pendingEdit, requestedCommand = null) => {
     const projectId = state.project.id;
     const currentBlueprint = state.project.latestBlueprint;
-    const semanticPayload = { ...pendingEdit.payload, kind: 'edit-blueprint-object',
+    const semanticPayload = requestedCommand ?? { ...pendingEdit.payload, kind: 'edit-blueprint-object',
       blueprintId: pendingEdit.blueprintId ?? currentBlueprint.id,
       blueprintVersion: pendingEdit.blueprintVersion ?? currentBlueprint.version,
       reason: 'Edited the proposed design from the interactive map.' };
@@ -2014,7 +2014,7 @@ function renderBlueprintEditForm(node) {
       const result = await api(`/api/v1/projects/${projectId}/enterprise/impact-preview`, { method: 'POST',
         body: JSON.stringify({ expectedVersion: pendingEdit.expectedVersion, command: semanticPayload }) });
       if (state.project?.id !== projectId || state.requestedProjectId !== projectId) return;
-      previewedImpact = { commandId: pendingEdit.commandId, payload: pendingEdit.payload,
+      previewedImpact = { command: semanticPayload, payload: pendingEdit.payload,
         expectedVersion: pendingEdit.expectedVersion, blueprintId: semanticPayload.blueprintId,
         blueprintVersion: semanticPayload.blueprintVersion, previewHash: result.data.previewHash };
       showImpactPreview(result.data);
@@ -2091,8 +2091,22 @@ function renderBlueprintEditForm(node) {
     const payload = values();
     if (branchEditing) {
       if (!form.reportValidity()) return;
-      state.blueprintEditDraft = null;
-      saveEnterpriseCommand({ kind: 'edit-branch-object', edit: payload, reason: branchReason.value.trim() });
+      const branchPayload = { kind: 'edit-branch-object', edit: payload, reason: branchReason.value.trim() };
+      const semanticPayload = enterpriseBranchCommandPayload(state.enterpriseModel, branchPayload);
+      if (!semanticPayload) return;
+      const pendingEdit = { payload, expectedVersion: state.enterpriseModel.context.projectVersion,
+        blueprintId: semanticPayload.blueprintId, blueprintVersion: semanticPayload.blueprintVersion };
+      if (previewedImpact && previewedImpact.expectedVersion === pendingEdit.expectedVersion
+        && previewedImpact.blueprintId === pendingEdit.blueprintId
+        && previewedImpact.blueprintVersion === pendingEdit.blueprintVersion
+        && JSON.stringify(previewedImpact.payload) === JSON.stringify(payload)
+        && JSON.stringify(previewedImpact.command) === JSON.stringify(semanticPayload)) {
+        previewedImpact = null;
+        state.blueprintEditDraft = null;
+        saveEnterpriseCommand(branchPayload);
+        return;
+      }
+      previewImpact(pendingEdit, semanticPayload);
       return;
     }
     const existing = state.pendingBlueprintEdit?.projectId === state.project.id && state.pendingBlueprintEdit?.payload.objectId === node.id ? state.pendingBlueprintEdit : null;
@@ -2109,7 +2123,10 @@ function renderBlueprintEditForm(node) {
       && previewedImpact.expectedVersion === pendingEdit.expectedVersion
       && previewedImpact.blueprintId === pendingEdit.blueprintId
       && previewedImpact.blueprintVersion === pendingEdit.blueprintVersion
-      && JSON.stringify(previewedImpact.payload) === JSON.stringify(payload)) {
+      && JSON.stringify(previewedImpact.payload) === JSON.stringify(payload)
+      && JSON.stringify(previewedImpact.command) === JSON.stringify({ ...payload, kind: 'edit-blueprint-object',
+        blueprintId: pendingEdit.blueprintId, blueprintVersion: pendingEdit.blueprintVersion,
+        reason: 'Edited the proposed design from the interactive map.' })) {
       previewedImpact = null;
       submit(pendingEdit.commandId, pendingEdit.payload, pendingEdit.expectedVersion);
       return;

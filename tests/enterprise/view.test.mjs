@@ -115,6 +115,15 @@ test('blueprint impact preview shows exact pins, direct changes and explicit unk
   assert.match(preview.textContent, /Operations · role · directly connected · source v7/);
   assert.match(preview.textContent, /Approvals and queued, running, or completed work/);
   assert.match(preview.textContent, /does not authorize publication/);
+  const branchPreview = renderBlueprintImpactPreview({ status: 'INCOMPLETE',
+    source: { kind: 'BRANCH_DRAFT', blueprintId: 'blueprint-branch-head', blueprintVersion: 4,
+      projectVersion: 21, snapshotHash: 'b'.repeat(64), branchId: 'enterprise-branch-1', branchRevision: 6,
+      mainBlueprintId: 'blueprint-main', mainBlueprintVersion: 9, mainSnapshotHash: 'c'.repeat(64) },
+    proposedBlueprintVersion: 4, proposedBranchRevision: 7, changedFields: [], directlyAffectedObjects: [],
+    unknownAreas: [], limitation: 'Read only.' }, el);
+  assert.match(branchPreview.textContent, /branch enterprise-branch-1 revision 6/);
+  assert.match(branchPreview.textContent, /main blueprint blueprint-main v9 SHA-256 c{64}/);
+  assert.match(branchPreview.textContent, /Proposed branch revision 7/);
 });
 
 test('portfolio cards show saved workspace state and access and open the chosen project', () => {

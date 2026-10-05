@@ -2865,6 +2865,31 @@ test('enterprise branches merge exact typed changes only after a current owner r
       ownerRoleName: role.name, trigger: branchProcess.trigger, inputInformationIds: ['information-delivery-result'],
       outputInformationIds: branchProcess.outputs,
     }, reason: 'Change process name, reference array and details in the isolated draft.' });
+  const branchImpactPreview = await request(instance.base, 'editor', `/api/v1/projects/${project.id}/enterprise/impact-preview`, {
+    method: 'POST', body: { expectedVersion: draft.data.context.projectVersion, command: branchEditBody.payload },
+  });
+  assert.equal(branchImpactPreview.data.status, 'INCOMPLETE');
+  assert.equal(branchImpactPreview.data.source.kind, 'BRANCH_DRAFT');
+  assert.equal(branchImpactPreview.data.source.branchId, branchId);
+  assert.equal(branchImpactPreview.data.source.branchRevision, draft.data.branch.revision);
+  assert.equal(branchImpactPreview.data.source.blueprintId, draft.data.context.blueprintId);
+  assert.equal(branchImpactPreview.data.source.blueprintVersion, draft.data.context.blueprintVersion);
+  assert.equal(branchImpactPreview.data.proposedBranchRevision, draft.data.branch.revision + 1);
+  assert.ok(branchImpactPreview.data.changedFields.some((change) => change.field === 'name'));
+  assert.ok(branchImpactPreview.data.directlyAffectedObjects.some((entry) => entry.objectId === branchProcess.id && entry.edited));
+  const staleBranchPreview = await request(instance.base, 'editor', `/api/v1/projects/${project.id}/enterprise/impact-preview`, {
+    method: 'POST', body: { expectedVersion: draft.data.context.projectVersion + 1,
+      command: { ...branchEditBody.payload, branchRevision: draft.data.branch.revision + 1 } },
+  }, 409);
+  assert.equal(staleBranchPreview.error.code, 'VERSION_CONFLICT');
+  const staleBranchHeadPreview = await request(instance.base, 'editor', `/api/v1/projects/${project.id}/enterprise/impact-preview`, {
+    method: 'POST', body: { expectedVersion: draft.data.context.projectVersion,
+      command: { ...branchEditBody.payload, branchRevision: draft.data.branch.revision + 1 } },
+  }, 409);
+  assert.equal(staleBranchHeadPreview.error.code, 'ENTERPRISE_BRANCH_STALE');
+  const noBranchMutation = await readBranch('editor', branchId);
+  assert.equal(noBranchMutation.data.branch.revision, draft.data.branch.revision);
+  assert.equal(noBranchMutation.data.context.projectVersion, draft.data.context.projectVersion);
   const branchEdit = await postCommand(instance.base, 'editor', project.id, branchEditBody);
   assert.equal(branchEdit.data.branchRevision, 3);
   const branchEditReplay = await postCommand(instance.base, 'editor', project.id, branchEditBody);

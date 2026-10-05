@@ -10,10 +10,16 @@ export function renderBlueprintImpactPreview(preview, el) {
   }
   const unknownList = el('ul');
   for (const unknown of preview.unknownAreas ?? []) unknownList.append(el('li', { text: unknown }));
+  const branchPin = preview.source.kind === 'BRANCH_DRAFT'
+    ? ` · branch ${preview.source.branchId} revision ${preview.source.branchRevision} · main blueprint ${preview.source.mainBlueprintId} v${preview.source.mainBlueprintVersion} SHA-256 ${preview.source.mainSnapshotHash}`
+    : '';
+  const proposed = preview.proposedBranchRevision
+    ? `Proposed branch revision ${preview.proposedBranchRevision} · blueprint v${preview.proposedBlueprintVersion}.`
+    : `Proposed result would be blueprint v${preview.proposedBlueprintVersion}.`;
   return el('section', { className: 'blueprint-impact-preview', attrs: { 'aria-label': 'Proposed design impact preview', 'aria-live': 'polite' } }, [
     el('h4', { text: `Impact preview · ${preview.status}` }),
-    el('p', { text: `Source blueprint ${preview.source.blueprintId} v${preview.source.blueprintVersion} · workspace v${preview.source.projectVersion} · SHA-256 ${preview.source.snapshotHash}` }),
-    el('p', { text: `Direct blueprint relationships computed. Proposed result would be blueprint v${preview.proposedBlueprintVersion}.` }),
+    el('p', { text: `Source blueprint ${preview.source.blueprintId} v${preview.source.blueprintVersion} · workspace v${preview.source.projectVersion}${branchPin} · SHA-256 ${preview.source.snapshotHash}` }),
+    el('p', { text: `Direct blueprint relationships computed. ${proposed}` }),
     el('h5', { text: 'Changed fields' }), fieldList,
     el('h5', { text: 'Directly affected saved design records' }), affectedList,
     el('h5', { text: 'Not computed by this preview' }), unknownList,
