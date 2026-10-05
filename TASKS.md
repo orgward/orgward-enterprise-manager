@@ -7786,3 +7786,17 @@ Focused tests passed 3/3 (0 failures, 0 skips; TAP duration 0.24s; log
 `git diff --check` passed. `npm run task:next` reports PR-15 first open. This is
 one bounded T-90 increment; T-90 and PR-15 remain open. No full check or Sol
 review.
+
+PR-15 T-90 pinned design freshness on saved SDLC runs (2026-10-05): saved
+process-task details now distinguish a run bound to the current saved blueprint
+from one that remains bound to an older saved blueprint, preserving its original
+process/run source and showing the newer current version. The state is omitted
+when the exact pinned process source cannot be found. Focused repository-view
+tests passed 6/6 (0 failures, 0 skips; TAP duration 0.23s; log
+`/tmp/orgward-tests-4dcUnB/node-test.tap.log`):
+`npm test -- tests/execution/process-task-repository-view.test.mjs`.
+`node --check` passed for `public/process-task-repository-view.mjs`,
+`public/execution.js`, and `tests/execution/process-task-repository-view.test.mjs`;
+`git diff --check` passed. `npm run task:next` reports PR-15 first open. This is
+one bounded T-90 increment; T-90 and PR-15 remain open. No full check or Sol
+review.

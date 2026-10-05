@@ -29,7 +29,7 @@ import { captureExpandedSavedTaskResultKeys, captureFocusedSavedTaskResult, rest
 import { blockedProcessTaskRecoveryCopy, processTaskRecoveryAction, selectFreshProcessTaskInstance } from './process-task-recovery.mjs';
 import { processTaskAssignmentTransparency } from './process-task-assignment.mjs';
 import { processTaskGuidanceReview } from './process-task-guidance-review.mjs';
-import { processTaskPinnedDesignRoute, processTaskRepositoryReference } from './process-task-repository-view.mjs';
+import { processTaskDesignFreshness, processTaskPinnedDesignRoute, processTaskRepositoryReference } from './process-task-repository-view.mjs';
 import { processTaskPinnedIntegrityContext } from './process-task-integrity-context.mjs';
 import { processTaskSourceReview } from './process-task-source-review.mjs';
 import { deriveBlueprintProposalReviewState, HUMAN_PROPOSAL_RUBRIC, proposalApplyFailureDisposition, proposalDesignLink } from './proposal-review-state.mjs';
@@ -3160,6 +3160,14 @@ function renderRun() {
     const designRoute = processTaskPinnedDesignRoute(run, state.runProject);
     if (designRoute) processTaskDetails.push(el('a', { className: 'button ghost', text: `Open pinned design: ${ref.processName ?? 'process'} · blueprint v${ref.blueprintVersion}`,
       attrs: { href: designRoute } }));
+    const designFreshness = processTaskDesignFreshness(run, state.runProject);
+    if (designFreshness.kind === 'current') {
+      processTaskDetails.push(el('p', { className: 'muted', attrs: { role: 'status' },
+        text: `This run is pinned to the current saved design, blueprint v${designFreshness.blueprintVersion}.` }));
+    } else if (designFreshness.kind === 'historical') {
+      processTaskDetails.push(el('p', { className: 'muted', attrs: { role: 'status' },
+        text: `Historical design context · this run remains pinned to blueprint v${designFreshness.blueprintVersion}; the current saved design is v${designFreshness.currentBlueprintVersion}.` }));
+    }
     if (state.runPinnedIntegrity?.kind === 'assessment') {
       const context = state.runPinnedIntegrity;
       processTaskDetails.push(el('p', { className: 'muted', attrs: { role: 'status' },

@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { processTaskPinnedDesignRoute, processTaskRepositoryReference } from '../../public/process-task-repository-view.mjs';
+import { processTaskDesignFreshness, processTaskPinnedDesignRoute, processTaskRepositoryReference } from '../../public/process-task-repository-view.mjs';
 
 test('process task run links back to its exact pinned design and process', () => {
   const run = { projectId: 'project-11111111-1111-4111-8111-111111111111', processTaskRef: {
     processId: 'process-order-intake', blueprintId: 'blueprint-22222222-2222-4222-8222-222222222222', blueprintVersion: 7,
   } };
   const project = { id: run.projectId, blueprintVersions: [{ id: run.processTaskRef.blueprintId, version: 7,
-    areas: { capabilitiesProcesses: { items: [{ id: 'process-order-intake', type: 'process' }] } } }] };
+    areas: { capabilitiesProcesses: { items: [{ id: 'process-order-intake', type: 'process' }] } } }],
+  latestBlueprint: { id: run.processTaskRef.blueprintId, version: 7 } };
   assert.equal(processTaskPinnedDesignRoute(run, project), '/?project=project-11111111-1111-4111-8111-111111111111&view=map&selected=process-order-intake&blueprintVersion=7');
+  assert.deepEqual(processTaskDesignFreshness(run, project), { kind: 'current', blueprintVersion: 7 });
 });
 
 test('process task run omits pinned design navigation for invalid source identity', () => {
@@ -31,6 +33,19 @@ test('process task run omits pinned design navigation for invalid source identit
   assert.equal(processTaskPinnedDesignRoute({ projectId, processTaskRef: {
     processId: 'process-missing', blueprintId, blueprintVersion: 7,
   } }, project), null, 'a process absent from the pinned blueprint is not linked');
+});
+
+test('process task run marks an older exact source as historical without changing its pin', () => {
+  const run = { projectId: 'project-11111111-1111-4111-8111-111111111111', processTaskRef: {
+    processId: 'process-order-intake', blueprintId: 'blueprint-22222222-2222-4222-8222-222222222222', blueprintVersion: 7,
+  } };
+  const pinned = { id: run.processTaskRef.blueprintId, version: 7,
+    areas: { capabilitiesProcesses: { items: [{ id: 'process-order-intake', type: 'process' }] } } };
+  const project = { id: run.projectId, blueprintVersions: [pinned, { id: pinned.id, version: 8 }],
+    latestBlueprint: { id: pinned.id, version: 8 } };
+  assert.deepEqual(processTaskDesignFreshness(run, project), {
+    kind: 'historical', blueprintVersion: 7, currentBlueprintVersion: 8,
+  });
 });
 
 test('process task run view names the exact selected Git repository, ref, commit, and tree', () => {
