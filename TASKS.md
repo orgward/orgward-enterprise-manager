@@ -7731,3 +7731,16 @@ passed 2/2 (0 failures, 0 skips; TAP duration 0.34s; log
 `node --check` passed for `public/project-portfolio.mjs` and
 `tests/enterprise/view.test.mjs`; `git diff --check` passed. No full check or Sol
 review; PR-15 remains open and active.
+
+PR-15 membership-scoped portfolio inventory (2026-10-05): the portfolio can
+download a concise JSON inventory of the current member-visible active and
+archived workspace lists, including access, lifecycle, phase, blueprint version,
+saved time, available history count, active incident/support/change counts, and
+integrity summary. The export excludes tenant IDs, membership rosters, event
+bodies, and archive reasons. Focused tests passed 2/2 (0 failures, 0 skips; TAP
+duration 0.33s; log `/tmp/orgward-tests-XafBj2/node-test.tap.log`):
+`npm test -- tests/enterprise/view.test.mjs --test-name-pattern='portfolio inventory export captures a membership-scoped active and archived summary only|portfolio inventory action downloads the exact summary JSON bundle'`.
+`node --check` passed for `public/project-portfolio.mjs`, `public/app.js`, and
+`tests/enterprise/view.test.mjs`; `git diff --check` passed. `npm run task:next`
+reported PR-15 first open. No full check or Sol review; PR-15 remains open and
+active.

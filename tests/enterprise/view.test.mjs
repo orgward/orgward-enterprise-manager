@@ -15,7 +15,8 @@ import { enterpriseInterchangeCommandPayload, enterpriseInterchangeWritable, ren
 import { enterpriseIntegrityCommandPayload, enterpriseIntegrityExceptionPayload, renderEnterpriseIntegrity } from '../../public/enterprise-integrity.mjs';
 import { enterpriseGovernanceCommandPayload, renderEnterpriseGovernance } from '../../public/enterprise-governance.mjs';
 import { enterpriseStewardshipPayload, renderEnterpriseStewardship } from '../../public/enterprise-stewardship.mjs';
-import { downloadPortfolioDesign, portfolioDesignExportFilename, projectPortfolioFacts, readPortfolioImportFile, renderProjectPortfolio,
+import { downloadPortfolioDesign, downloadPortfolioInventory, portfolioDesignExportFilename, portfolioInventoryBundle,
+  portfolioInventoryFilename, projectPortfolioFacts, readPortfolioImportFile, renderProjectPortfolio,
   portfolioImportWorkspaceRoute, portfolioManageAccessRoute, verifyPortfolioDesignBundle } from '../../public/project-portfolio.mjs';
 import { createProjectAccessController, platformViewUrl, projectAccessIdFromSearch, projectAccessSelectionMessage,
   createProjectMemberActions, resolveProjectAccessSelection } from '../../public/platform-sharing.mjs';
@@ -168,6 +169,57 @@ test('portfolio owner access action opens management for the exact workspace', (
     assert.equal(card.querySelectorAll('a').some((link) => link.text === 'Manage workspace access'), false,
       `${id} cannot see an owner access-management action`);
   }
+});
+
+test('portfolio inventory export captures a membership-scoped active and archived summary only', () => {
+  const active = [{ id: 'project-active', tenantId: 'tenant-private', name: 'Active workspace', workspaceAccess: 'editor',
+    phase: 'design', blueprintVersion: 4, updatedAt: '2026-10-05T09:30:00.000Z', historyEventCount: 18,
+    openIncidentCount: 2, openSupportCount: 1, activeChangeCaseCount: 3, integrityStatus: 'REVIEW',
+    integritySourceCurrent: false, integrityFindingCount: 2, integrityBlueprintVersion: 3,
+    members: [{ principal: 'private-member' }], events: [{ detail: 'private event body' }] }];
+  const archived = [{ id: 'project-archived', tenantId: 'tenant-private', name: 'Archived workspace', workspaceAccess: 'owner',
+    lifecycle: { status: 'archived', reason: 'private archive reason' }, historyEventCount: 11 }];
+  const bundle = portfolioInventoryBundle(active, archived, { now: () => new Date('2026-10-05T10:00:00.000Z') });
+  assert.equal(bundle.kind, 'orgward-enterprise-portfolio-inventory');
+  assert.equal(bundle.schemaVersion, '1.0');
+  assert.equal(bundle.exportedAt, '2026-10-05T10:00:00.000Z');
+  assert.deepEqual(bundle.counts, { active: 1, archived: 1 });
+  assert.deepEqual(bundle.workspaces[0], { id: 'project-active', name: 'Active workspace', access: 'editor', lifecycle: 'active',
+    phase: 'design', blueprintVersion: 4, lastSavedAt: '2026-10-05T09:30:00.000Z', historyEventCount: 18,
+    activeOutcomes: { incidents: 2, support: 1 }, activeGovernedChanges: 3,
+    integrity: { status: 'REVIEW', sourceCurrent: false, findingCount: 2, blueprintVersion: 3, projectionIncomplete: false } });
+  assert.equal(bundle.workspaces[1].lifecycle, 'archived');
+  const json = JSON.stringify(bundle);
+  for (const privateValue of ['tenant-private', 'private-member', 'private event body', 'private archive reason']) {
+    assert.equal(json.includes(privateValue), false, `inventory omits ${privateValue}`);
+  }
+  assert.equal(portfolioInventoryFilename(bundle), 'orgward-portfolio-inventory-2026-10-05.json');
+});
+
+test('portfolio inventory action downloads the exact summary JSON bundle', async () => {
+  const active = [{ id: 'project-download', name: 'Download workspace', workspaceAccess: 'owner', blueprintVersion: 2 }];
+  let clickedAnchor = null;
+  let downloadedBlob = null;
+  const revoked = [];
+  const download = downloadPortfolioInventory(active, [], { el: (tag, options) => {
+    const anchor = el(tag, options); anchor.click = () => { clickedAnchor = anchor; }; return anchor;
+  }, createObjectURL: (blob) => { downloadedBlob = blob; return 'blob:portfolio-inventory'; },
+  revokeObjectURL: (url) => revoked.push(url), deferRevoke: (callback) => callback(),
+  now: () => new Date('2026-10-05T10:00:00.000Z') });
+  assert.equal(download.fileName, 'orgward-portfolio-inventory-2026-10-05.json');
+  assert.deepEqual(download.counts, { active: 1, archived: 0 });
+  assert.equal(clickedAnchor.attrs.download, download.fileName);
+  assert.equal(clickedAnchor.attrs.href, 'blob:portfolio-inventory');
+  assert.deepEqual(revoked, ['blob:portfolio-inventory']);
+  const savedBundle = JSON.parse(await downloadedBlob.text());
+  assert.equal(savedBundle.workspaces[0].id, 'project-download');
+
+  let exportInvoked = null;
+  const portfolio = renderProjectPortfolio(active, { el, onOpen() {}, onExportInventory: (button) => { exportInvoked = button.text; } });
+  const exportButton = portfolio.querySelectorAll('button').find((button) => button.text === 'Export portfolio inventory JSON');
+  assert.ok(exportButton);
+  exportButton.listeners.get('click')();
+  assert.equal(exportInvoked, 'Export portfolio inventory JSON');
 });
 
 test('portfolio starts a governed change from the exact writable workspace', () => {

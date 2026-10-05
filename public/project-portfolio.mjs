@@ -28,6 +28,60 @@ export function projectPortfolioFacts(project) {
   };
 }
 
+function portfolioInventoryWorkspace(project, listedLifecycle) {
+  const facts = projectPortfolioFacts(project);
+  const eventCount = project?.historyEventCount ?? project?.eventCount;
+  return {
+    id: project?.id,
+    name: facts.name,
+    access: project?.workspaceAccess ?? null,
+    lifecycle: project?.lifecycle?.status === 'archived' || listedLifecycle === 'archived' ? 'archived' : 'active',
+    phase: facts.phase,
+    blueprintVersion: Number.isSafeInteger(project?.blueprintVersion) ? project.blueprintVersion : null,
+    lastSavedAt: typeof project?.updatedAt === 'string' && Number.isFinite(Date.parse(project.updatedAt)) ? project.updatedAt : null,
+    historyEventCount: Number.isSafeInteger(eventCount) && eventCount >= 0 ? eventCount : null,
+    activeOutcomes: { incidents: facts.incidents, support: facts.support },
+    activeGovernedChanges: facts.changeCases,
+    integrity: {
+      status: facts.integrityStatus, sourceCurrent: facts.integritySourceCurrent,
+      findingCount: facts.integrityFindingCount, blueprintVersion: facts.integrityBlueprintVersion,
+      projectionIncomplete: facts.integrityProjectionIncomplete,
+    },
+  };
+}
+
+export function portfolioInventoryBundle(activeProjects, archivedProjects, { now = () => new Date() } = {}) {
+  const workspaces = [
+    ...(Array.isArray(activeProjects) ? activeProjects : []).map((project) => portfolioInventoryWorkspace(project, 'active')),
+    ...(Array.isArray(archivedProjects) ? archivedProjects : []).map((project) => portfolioInventoryWorkspace(project, 'archived')),
+  ].filter((project) => typeof project.id === 'string' && project.id);
+  return {
+    kind: 'orgward-enterprise-portfolio-inventory', schemaVersion: '1.0', exportedAt: now().toISOString(),
+    counts: { active: workspaces.filter((project) => project.lifecycle === 'active').length,
+      archived: workspaces.filter((project) => project.lifecycle === 'archived').length },
+    workspaces,
+  };
+}
+
+export function portfolioInventoryFilename(bundle) {
+  if (bundle?.kind !== 'orgward-enterprise-portfolio-inventory' || bundle.schemaVersion !== '1.0'
+    || typeof bundle.exportedAt !== 'string' || !Number.isFinite(Date.parse(bundle.exportedAt))
+    || !Array.isArray(bundle.workspaces)) throw new Error('The portfolio inventory export is invalid.');
+  return `orgward-portfolio-inventory-${bundle.exportedAt.slice(0, 10)}.json`;
+}
+
+export function downloadPortfolioInventory(activeProjects, archivedProjects, { el,
+  createObjectURL = (blob) => URL.createObjectURL(blob), revokeObjectURL = (url) => URL.revokeObjectURL(url),
+  deferRevoke = (callback) => setTimeout(callback, 1000), now } = {}) {
+  const bundle = portfolioInventoryBundle(activeProjects, archivedProjects, { now });
+  const fileName = portfolioInventoryFilename(bundle);
+  const url = createObjectURL(new Blob([`${JSON.stringify(bundle, null, 2)}\n`], { type: 'application/json' }));
+  const anchor = el('a', { attrs: { href: url, download: fileName } });
+  try { anchor.click(); }
+  finally { anchor.remove(); deferRevoke(() => revokeObjectURL(url)); }
+  return { fileName, counts: bundle.counts };
+}
+
 export function portfolioDesignExportFilename(bundle) {
   const source = bundle?.source;
   if (bundle?.kind !== 'orgward-enterprise-blueprint' || !source
@@ -101,7 +155,7 @@ export async function downloadPortfolioDesign(projectId, { api, el, createObject
 }
 
 export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImport,
-  filters: savedFilters = {}, onFiltersChange = () => {}, archivedProjects = [], onLifecycle = () => {} }) {
+  filters: savedFilters = {}, onFiltersChange = () => {}, archivedProjects = [], onLifecycle = () => {}, onExportInventory = () => {} }) {
   const section = el('section', { className: 'portfolio-list', attrs: { 'aria-labelledby': 'portfolio-heading' } });
   const headingContent = el('div', {}, [el('span', { className: 'eyebrow', text: 'Your portfolio' }),
     el('h2', { text: 'Workspaces' }),
@@ -135,6 +189,9 @@ export function renderProjectPortfolio(projects, { el, onOpen, onExport, onImpor
   const archivedView = el('button', { className: 'button ghost', text: 'Archived workspaces', attrs: { type: 'button', 'aria-pressed': 'false' } });
   views.append(activeView, archivedView);
   headingContent.append(views);
+  const exportInventory = el('button', { className: 'button ghost', text: 'Export portfolio inventory JSON', attrs: { type: 'button' } });
+  exportInventory.addEventListener('click', () => onExportInventory(exportInventory));
+  headingContent.append(exportInventory);
   section.append(heading);
   const list = el('div', { className: 'portfolio-cards', attrs: { role: 'list' } });
   const renderCards = () => {

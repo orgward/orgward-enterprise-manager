@@ -9,7 +9,7 @@ import { coverageAreaStateLabel, coverageForBlueprint } from './coverage-dashboa
 import { compareBlueprintObjectVersions } from './blueprint-comparison.mjs';
 import { renderOutcomeInbox } from './outcomes.mjs';
 import { enterpriseContextFailure, enterpriseContextReadOnly, enterpriseStateSummary, enterpriseSourceAligned, hasEnterpriseContext, enterpriseQuery, enterpriseRequestPath, persistEnterpriseCommand, restoreEnterpriseCommand, persistEnterpriseInterchangeDraft, restoreEnterpriseInterchangeDraft, submitEnterpriseCommand, renderEnterpriseContext, renderEnterpriseObject, renderEnterpriseObjectHeader, renderEnterpriseStewardshipPanel } from './enterprise.mjs';
-import { downloadPortfolioDesign, portfolioImportWorkspaceRoute, readPortfolioImportFile, renderProjectPortfolio } from './project-portfolio.mjs';
+import { downloadPortfolioDesign, downloadPortfolioInventory, portfolioImportWorkspaceRoute, readPortfolioImportFile, renderProjectPortfolio } from './project-portfolio.mjs';
 
 const state = {
   projects: [],
@@ -449,6 +449,16 @@ async function refreshProjects() {
   finally { state.portfolioRefreshPromise = null; }
 }
 
+function exportPortfolioInventory(button) {
+  if (button) button.disabled = true;
+  try {
+    const { fileName, counts } = downloadPortfolioInventory(state.projects, state.archivedProjects, { el: element });
+    notify(`Downloaded ${fileName} · ${counts.active} active and ${counts.archived} archived workspaces.`);
+  } catch (error) {
+    notify(`Portfolio inventory export failed: ${error.message}`);
+  } finally { if (button) button.disabled = false; }
+}
+
 function renderPortfolio() {
   const target = document.querySelector('#portfolio-list');
   if (!target) return;
@@ -457,6 +467,7 @@ function renderPortfolio() {
     el: element,
     filters: state.portfolioFilters,
     onFiltersChange: (filters) => { state.portfolioFilters = filters; },
+    onExportInventory: exportPortfolioInventory,
     onOpen: (id, { focusOutcomes = false, focusIntegrity = false, focusOutcomeCategory = null } = {}) => {
       if (!allowRouteChange()) return;
       state.draft = '';
