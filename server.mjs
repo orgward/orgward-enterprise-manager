@@ -707,6 +707,13 @@ async function productGateStatus(statusFile) {
 
 function sdlcView(changeCase) {
   normalizeChangeCase(changeCase);
+  const requirementArtifact = changeCase.artifacts?.requirements;
+  for (const requirement of requirementArtifact?.requirements ?? []) {
+    const currentRequirementHash = digest(Object.fromEntries(Object.entries(requirement).filter(([key]) => key !== 'processRunEvidenceLinks')));
+    requirement.processRunEvidenceLinks = (requirement.processRunEvidenceLinks ?? []).map((link) => ({ ...link,
+      applicability: link.draftRevision === requirementArtifact.draftRevision && link.requirementHash === currentRequirementHash
+        && link.traceHash === requirement.processTrace?.traceHash ? 'CURRENT' : 'STALE' }));
+  }
   return { ...changeCase, sourceBindingIntegrity: changeCase.sourceBinding ? verifySourceBinding(changeCase.sourceBinding) : null, workspace: workspaceStatus(changeCase), traceability: traceability(changeCase), evidenceIntegrity: verifyEvidenceLedger(changeCase), contextManifestIntegrity: changeCase.artifacts?.context ? verifyContextManifest(changeCase) : null };
 }
 
@@ -3625,6 +3632,30 @@ export function createApp({
         if (!result) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
         if (!verifySoftwareDeliveryDraft(changeCase, result.plan)) throw apiFailure(409, 'SOFTWARE_PLAN_INTEGRITY_INVALID', 'The compiled delivery draft failed integrity verification.');
         return sendJson(response, result.replayed ? 200 : 201, { plan: result.plan, replayed: result.replayed });
+      }
+
+      const processRunEvidenceMatch = pathname.match(/^\/api\/sdlc\/cases\/(change-case-[0-9a-f-]{36})\/process-run-evidence$/);
+      if (request.method === 'POST' && processRunEvidenceMatch) {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified human identity is required to link persisted runtime evidence.');
+        requirePrincipalStoreMethod(sdlcStore, 'linkPersistedProcessRun');
+        const body = requireJsonObject(await readJson(request));
+        rejectAuthorityClaims(body);
+        const allowed = new Set(['version', 'draftRevision', 'requirementId', 'runId', 'idempotencyKey']);
+        const unknown = Object.keys(body).filter((key) => !allowed.has(key));
+        if (unknown.length) throw apiFailure(400, 'INVALID_PROCESS_RUN_EVIDENCE_LINK', 'Only a run selector and expected case/draft versions are accepted; status, outputs, hashes and provenance are server-derived.');
+        if (!Number.isSafeInteger(body.version) || body.version < 1 || !Number.isSafeInteger(body.draftRevision) || body.draftRevision < 1
+          || !/^REQ-PROC-[a-f0-9]{12}$/.test(body.requirementId ?? '')
+          || !/^execution-run-[0-9a-f-]{36}$/i.test(body.runId ?? '')
+          || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{7,119}$/.test(body.idempotencyKey ?? '')) {
+          throw apiFailure(400, 'INVALID_PROCESS_RUN_EVIDENCE_LINK', 'Choose a valid requirement, persisted run, command ID, and current versions.');
+        }
+        const result = await sdlcStore.linkPersistedProcessRun({ id: processRunEvidenceMatch[1],
+          tenantId: requestTenant(request), principal: requestActor(request), authzGeneration: request.identity.authzGeneration,
+          runId: body.runId, requirementId: body.requirementId, expectedVersion: body.version,
+          expectedDraftRevision: body.draftRevision, commandId: body.idempotencyKey });
+        if (!result) throw apiFailure(404, 'CHANGE_CASE_NOT_FOUND', 'Change case not found.');
+        return sendJson(response, result.replayed ? 200 : 201, { ...sdlcView(result.changeCase), processRunEvidenceLink: result.link,
+          command: { action: 'link-process-run-evidence', replayed: result.replayed } });
       }
 
       const sdlcActionMatch = pathname.match(/^\/api\/sdlc\/cases\/(change-case-[0-9a-f-]{36})\/(advance|run|approve|observe|clarify|answer-clarification|reconcile-clarification|register-proof|record-proof|assess-proofs|route-proof|resume-proof-action|complete-proof-action|edit-requirements|accept-requirements|edit-architecture|accept-architecture)$/);

@@ -46,6 +46,18 @@ export function savedProjectPinSummary(context) {
   return `Project ${pin.projectId} v${pin.projectVersion} · blueprint ${pin.blueprintId} v${pin.blueprintVersion} · schema v${pin.blueprintSchemaVersion} · object ${pin.sourceObjectId} (${pin.sourceObjectType}) · source SHA-256 ${pin.sourceHash} · binding SHA-256 ${pin.bindingHash} · ${snapshot}`;
 }
 
+export function processRunEvidencePresentation(link) {
+  if (!link?.run?.id || !link?.plan?.taskId || !link?.instance?.id) return null;
+  return {
+    heading: `${link.run.id} · runtime ${link.run.status} · verification ${link.verificationStatus}`,
+    identity: `Task ${link.plan.taskId} · plan ${link.plan.id} r${link.plan.revision} · instance ${link.instance.id}`,
+    hashes: `Run aggregate SHA-256 ${link.run.aggregateHash} · plan SHA-256 ${link.plan.snapshotHash} · task SHA-256 ${link.plan.taskHash}`,
+    applicability: link.applicability === 'CURRENT'
+      ? 'Applies to this exact requirement draft.'
+      : 'STALE: the requirement draft changed after this link was created.',
+  };
+}
+
 function clarificationModel(entry, currentRevision) {
   const isCurrent = entry.intentRevision === currentRevision;
   const control = isCurrent && entry.status === 'OPEN' ? 'ANSWER'

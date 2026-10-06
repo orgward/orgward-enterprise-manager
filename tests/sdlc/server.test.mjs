@@ -8,7 +8,7 @@ import { addConversationTurn, createProject, editBlueprintObject, latestBlueprin
 import { digest } from '../../src/sdlc/contracts.mjs';
 import { evaluateProcessVerificationContract } from '../../src/sdlc/engine.mjs';
 import { applyEnterpriseIntegrityCommand } from '../../src/enterprise/integrity.mjs';
-import { caseUiModel, eligibleActorBindings } from '../../public/sdlc-view.mjs';
+import { caseUiModel, eligibleActorBindings, processRunEvidencePresentation } from '../../public/sdlc-view.mjs';
 
 async function start(root) {
   const app = createApp({ dataDirectory: path.join(root, 'blueprints'), sdlcDirectory: path.join(root, 'sdlc') });
@@ -698,6 +698,35 @@ test('SDLC API enforces optimistic concurrency, authority, isolation, and immuta
   assert.deepEqual(listingB.cases.map((entry) => entry.tenantId), ['tenant-b']);
   await request(app.base, `/api/sdlc/cases/${second.id}`, { headers: tenantA }, 404);
   assert.equal((await request(app.base, `/api/sdlc/cases/${second.id}`, { headers: tenantB })).tenantId, 'tenant-b');
+});
+
+test('process-run evidence links require verified human identity and never accept caller provenance', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'orgward-sdlc-run-link-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const app = await start(root); t.after(() => close(app.server));
+  const created = await request(app.base, '/api/sdlc/cases', { method: 'POST', body: JSON.stringify({ mode: 'golden' }) }, 201);
+  await request(app.base, `/api/sdlc/cases/${created.id}/process-run-evidence`, { method: 'POST', body: JSON.stringify({
+    version: created.version, draftRevision: 1, requirementId: 'REQ-PROC-000000000000',
+    runId: `execution-run-${'1'.repeat(8)}-${'1'.repeat(4)}-${'1'.repeat(4)}-${'1'.repeat(4)}-${'1'.repeat(12)}`,
+    idempotencyKey: 'unauthenticated-run-link', status: 'SUCCEEDED', outputHash: 'forged',
+  }) }, 401);
+  const unchanged = await request(app.base, `/api/sdlc/cases/${created.id}`);
+  assert.equal(unchanged.version, created.version);
+  assert.equal(unchanged.events.length, created.events.length);
+});
+
+test('process-run evidence presentation shows exact runtime identity, hashes, and stale applicability', () => {
+  const presentation = processRunEvidencePresentation({
+    run: { id: 'execution-run-00000000-0000-4000-8000-000000000001', status: 'SUCCEEDED', aggregateHash: 'a'.repeat(64) },
+    plan: { id: 'process-plan-00000000-0000-4000-8000-000000000002', revision: 3, taskId: 'task-process-learn', taskHash: 'b'.repeat(64) },
+    instance: { id: '00000000-0000-4000-8000-000000000003' },
+    verificationStatus: 'NOT_EXECUTED', applicability: 'STALE',
+  });
+  assert.match(presentation.heading, /SUCCEEDED · verification NOT_EXECUTED/);
+  assert.match(presentation.identity, /task-process-learn.*process-plan-.*r3.*instance 00000000/);
+  assert.match(presentation.hashes, new RegExp(`Run aggregate SHA-256 ${'a'.repeat(64)} · plan SHA-256`));
+  assert.match(presentation.hashes, new RegExp(`task SHA-256 ${'b'.repeat(64)}`));
+  assert.equal(presentation.applicability, 'STALE: the requirement draft changed after this link was created.');
 });
 
 test('authenticated SDLC routes fail closed when principal-scoped store methods are unavailable', async (t) => {

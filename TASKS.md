@@ -8619,3 +8619,23 @@ traces, typed decision output, denial/stale-source/restart paths and the existin
 information-source flow. This does not establish runtime execution or full T-91
 acceptance. T-91 and PR-15 remain open; no task checkbox/cursor, backlog
 acceptance state or production gate changed.
+
+PR-15 T-91 persisted process-run provenance link (2026-10-06): Sol reviewed and
+approved the bounded link slice. An authenticated human command resolves the
+persisted run, canonical task instance, saved plan and exact selected process
+server-side, then binds their identities and hashes to the requirement ID,
+draft revision/hash, trace/contract hashes, project and blueprint source pins.
+The immutable link, audit event and idempotency result append atomically; exact
+replay adds no duplicate, audit failure rolls back, restart preserves the link,
+and invalid source-binding/context-manifest seals reject without mutation. The
+rendered SDLC view shows run/task/instance IDs, source and content hashes, runtime
+status separately from verification status, and marks links stale after draft
+changes. A link always remains UNVERIFIED / NOT_EXECUTED until trusted typed
+output artifacts can be independently resolved; no output verification or PASS
+is claimed. Sol approved after review with no remaining material findings.
+
+Focused evidence: `tests/sdlc/server.test.mjs` passed 3/3
+(`/tmp/orgward-tests-4rnQlB/node-test.tap.log`); the persisted process-run
+integration in `tests/persistence.test.mjs` passed 1/1
+(`/tmp/orgward-tests-DDSLtr/node-test.tap.log`). T-91 and PR-15 remain open;
+no task checkbox/cursor, backlog acceptance state or production gate changed.

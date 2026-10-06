@@ -10,7 +10,7 @@ import {
   verifyAggregateRow,
   verifyCommandRow,
 } from './postgres.mjs';
-import { pinProjectSourceObject, releaseApprovalCandidate, sourceBindingSelection, verifyAcceptedG6Plan, verifySourceBinding } from '../sdlc/engine.mjs';
+import { pinProjectSourceObject, releaseApprovalCandidate, sourceBindingSelection, verifyAcceptedG6Plan, verifyContextManifest, verifySourceBinding } from '../sdlc/engine.mjs';
 import { digest } from '../sdlc/contracts.mjs';
 import { latestBlueprint } from '../model.mjs';
 import { SOFTWARE_PLAN_COMPILER_VERSION, verifySoftwareDeliveryDraft } from '../sdlc/software-plan-compiler.mjs';
@@ -2371,6 +2371,140 @@ export function projectPortfolioIntegritySummary(project) {
 
 export class PostgresChangeCaseStore extends PostgresDocumentStore {
   constructor(persistence) { super(persistence, 'change_case'); }
+  async linkPersistedProcessRun({ id: caseId, tenantId, principal, authzGeneration, runId, requirementId, expectedVersion, expectedDraftRevision, commandId }) {
+    if (!principal || !/^execution-run-[0-9a-f-]{36}$/i.test(runId ?? '')
+      || !Number.isSafeInteger(expectedVersion) || !Number.isSafeInteger(expectedDraftRevision)
+      || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{7,119}$/.test(commandId ?? '')) throw projectAccessDenied();
+    const operation = 'sdlc.process-run-evidence-link';
+    const requestHash = contentHash({ caseId, runId, requirementId, expectedVersion, expectedDraftRevision, principal });
+    return this.persistence.transaction(async (client) => {
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${tenantId}:${operation}:${commandId}`]);
+      await lockIdentityRows(client, tenantId, [principal]);
+      await requirePrincipalAuthority(client, { tenantId, principal, roles: ['workspace-write'], authzGeneration, actorType: 'human' });
+      const hintRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2`, [tenantId, caseId]);
+      if (!hintRow.rowCount) return null;
+      const hint = verifyAggregateRow(hintRow.rows[0]);
+      if (!hint.projectId) throw projectAccessDenied();
+      await lockProjectAccess(client, { tenantId, projectId: hint.projectId, principal, minimum: 'editor' });
+      const caseRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 for update`, [tenantId, caseId]);
+      if (!caseRow.rowCount) return null;
+      const current = verifyAggregateRow(caseRow.rows[0]);
+      if (current.projectId !== hint.projectId) throw conflict('The case project scope changed during the command.', current.version, 'PROJECT_SCOPE_CONFLICT');
+      const prior = current.idempotency?.[commandId];
+      if (prior) {
+        if (prior.action !== 'link-process-run-evidence' || prior.requestHash !== requestHash) throw conflict('This command ID was already used with different input.', current.version, 'IDEMPOTENCY_CONFLICT');
+        const link = current.artifacts?.requirements?.processRunEvidenceLinks?.find((entry) => entry.id === prior.linkId);
+        if (!link) throw persistenceIntegrity('A process-run evidence replay has no retained link.');
+        return { changeCase: current, link, replayed: true };
+      }
+      if (current.version !== expectedVersion) throw conflict('The case changed before the process run could be linked.', current.version);
+      if (!current.sourceBinding || current.tenantId !== tenantId || !current.projectId) throw projectAccessDenied();
+      const sourceBindingIntegrity = verifySourceBinding(current.sourceBinding);
+      if (sourceBindingIntegrity.valid !== true) throw persistenceIntegrity('The saved source binding is invalid; process-run provenance cannot be attached.');
+      const requirements = current.artifacts?.requirements;
+      if (!requirements || requirements.acceptedBaseline || current.currentStage !== 'S4'
+        || requirements.draftRevision !== expectedDraftRevision) throw conflict('The requirement draft changed or is no longer open.', current.version, 'REQUIREMENT_DRAFT_STALE');
+      const contextIntegrity = verifyContextManifest(current);
+      if (!current.artifacts?.context || contextIntegrity.valid !== true) throw persistenceIntegrity('The saved context manifest is missing or invalid; process-run provenance cannot be attached.');
+      const requirement = requirements.requirements.find((entry) => entry.id === requirementId && entry.processTrace && entry.verificationContract);
+      if (!requirement || current.processRequirementTrace?.traceHash !== requirement.processTrace.traceHash) throw persistenceIntegrity('The process requirement trace is not the retained case source.');
+      const trace = requirement.processTrace;
+      const { traceHash, ...traceCore } = trace;
+      const { contractHash, ...contractCore } = requirement.verificationContract;
+      if (digest(traceCore) !== traceHash || digest(contractCore) !== contractHash
+        || current.sourceBinding.bindingHash !== trace.source.bindingHash
+        || current.sourceBinding.projectId !== current.projectId || current.sourceBinding.objectId !== trace.process.id
+        || current.sourceBinding.sourceHash !== trace.source.sourceHash) throw persistenceIntegrity('The requirement trace, contract, or saved source binding failed integrity verification.');
+      const projectRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2 for share`, [tenantId, current.projectId]);
+      if (!projectRow.rowCount) throw projectAccessDenied();
+      const project = verifyAggregateRow(projectRow.rows[0]);
+      const blueprint = (project.blueprintVersions ?? []).find((entry) => entry.id === trace.source.blueprintId && entry.version === trace.source.blueprintVersion);
+      if (!blueprint || contentHash(blueprint) !== trace.source.blueprintSnapshotHash) throw conflict('The pinned source blueprint is unavailable or changed.', current.version, 'PROCESS_SOURCE_STALE');
+      const sourceProcess = Object.values(blueprint.areas ?? {}).flatMap((area) => area.items ?? []).find((entry) => entry.id === trace.process.id && entry.type === 'process');
+      if (!sourceProcess || contentHash(sourceProcess) !== trace.source.processSnapshotHash) throw conflict('The selected process snapshot does not match the requirement trace.', current.version, 'PROCESS_SOURCE_STALE');
+      const runRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2 for share`, [tenantId, runId]);
+      if (!runRow.rowCount) throw conflict('The selected persisted process run is unavailable in this project.', current.version, 'PROCESS_RUN_NOT_FOUND');
+      const run = verifyAggregateRow(runRow.rows[0]);
+      const ref = run.processTaskRef;
+      if (run.projectId !== current.projectId || ref?.blueprintId !== trace.source.blueprintId
+        || Number(ref?.blueprintVersion) !== trace.source.blueprintVersion
+        || !ref?.processId || !ref?.processPlanId || !ref?.planInstanceId || !ref?.taskId) throw conflict('The run does not match the exact selected project and blueprint.', current.version, 'PROCESS_RUN_SOURCE_MISMATCH');
+      const runEvents = run.events ?? [];
+      const validRunEvents = runEvents.every((event) => {
+        const { contentHash: hash, ...core } = event ?? {};
+        return /^[a-f0-9]{64}$/.test(hash ?? '') && contentHash(core) === hash;
+      });
+      const requestedEvents = runEvents.filter((event) => event.type === 'ExecutionRequested');
+      const requestedRef = requestedEvents[0]?.data?.processTaskRef;
+      const expectedRequestedRef = { processPlanId: ref.processPlanId, revision: ref.revision, planInstanceId: ref.planInstanceId,
+        taskId: ref.taskId, blueprintId: ref.blueprintId, blueprintVersion: ref.blueprintVersion,
+        ...(ref.flowBinding ? { flowBinding: ref.flowBinding } : {}), ...(ref.delegation ? { delegation: ref.delegation } : {}),
+        ...(ref.repository ? { repository: ref.repository } : {}) };
+      if (!validRunEvents || requestedEvents.length !== 1 || contentHash(requestedRef ?? null) !== contentHash(expectedRequestedRef)) {
+        throw persistenceIntegrity('The persisted run request event does not authenticate its process-task reference.');
+      }
+      const runEventAudit = await client.query(`select count(*)::int as count from orgward.audit_log
+        where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2 and event_hash = any($3::text[])`,
+      [tenantId, run.id, runEvents.map((event) => contentHash(event))]);
+      if (Number(runEventAudit.rows[0]?.count) !== runEvents.length) throw persistenceIntegrity('A persisted run event is missing its durable audit record.');
+      const plan = await resolveRuntimeProcessPlan(client, { tenantId, projectId: current.projectId, project, planId: ref.processPlanId, revision: Number(ref.revision) });
+      if (!plan || plan.source?.blueprintId !== trace.source.blueprintId || Number(plan.source?.blueprintVersion) !== trace.source.blueprintVersion
+        || plan.source?.processId !== ref.processId) throw persistenceIntegrity('The persisted run plan does not resolve to the run’s pinned root process.');
+      const planHash = plan.snapshotHash ?? contentHash(plan);
+      if (!/^[a-f0-9]{64}$/.test(planHash)) throw persistenceIntegrity('The persisted run plan has no stable content hash.');
+      const task = plan.tasks?.find((entry) => entry.id === ref.taskId);
+      if (!task || task.sourceProcessId !== trace.process.id || !Array.isArray(task.outputs)
+        || contentHash(task.outputs.map((entry) => ({ id: entry.objectId ?? entry.id, type: entry.type })).sort((a,b) => a.id.localeCompare(b.id)))
+          !== contentHash(trace.outcome.outputRefs.map(({ id, type }) => ({ id, type })).sort((a,b) => a.id.localeCompare(b.id)))) {
+        throw conflict('The run task does not declare the exact outputs in this requirement trace.', current.version, 'PROCESS_RUN_OUTPUT_MISMATCH');
+      }
+      const runtimeResult = await client.query(`select * from orgward.process_task_instances where tenant_id=$1 and project_id=$2 and plan_instance_id=$3 and task_id=$4 for share`, [tenantId, current.projectId, ref.planInstanceId, ref.taskId]);
+      if (!runtimeResult.rowCount) throw persistenceIntegrity('The linked run has no canonical persisted process-task instance.');
+      const runtime = runtimeResult.rows[0];
+      assertLinkedWorkloadRuntime(runtime, run);
+      if (runtime.execution_run_id !== run.id || runtime.process_id !== ref.processId) throw persistenceIntegrity('The canonical task instance does not match the run and its pinned root process.');
+      const runtimeEvents = runtime.events ?? [];
+      if (!runtimeEvents.length || !runtimeEvents.every((event) => {
+        const { contentHash: hash, ...core } = event ?? {};
+        return /^[a-f0-9]{64}$/.test(hash ?? '') && contentHash(core) === hash;
+      })) throw persistenceIntegrity('The canonical process-task instance event history failed integrity verification.');
+      const runtimeEventAudit = await client.query(`select count(*)::int as count from orgward.audit_log
+        where tenant_id=$1 and aggregate_kind='process_task_instance' and aggregate_id=$2 and event_hash = any($3::text[])`,
+      [tenantId, `${runtime.plan_instance_id}:${runtime.task_id}`, runtimeEvents.map((event) => contentHash(event))]);
+      if (Number(runtimeEventAudit.rows[0]?.count) !== runtimeEvents.length) throw persistenceIntegrity('A process-task instance event is missing its durable audit record.');
+      const linkCore = { schemaVersion: 1, id: `process-run-link-${randomUUID()}`, status: 'UNVERIFIED', verificationStatus: 'NOT_EXECUTED',
+        reason: 'The persisted run and task are pinned, but trusted typed output artifacts are not available for verification.',
+        tenantId, projectId: current.projectId, caseId, requirementId: requirement.id, draftRevision: requirements.draftRevision,
+        requirementHash: contentHash(Object.fromEntries(Object.entries(requirement).filter(([key]) => key !== 'processRunEvidenceLinks'))),
+        traceHash: trace.traceHash, contractHash: requirement.verificationContract.contractHash,
+        source: { projectId: project.id, projectVersion: trace.source.projectVersion, blueprintId: trace.source.blueprintId,
+          blueprintVersion: trace.source.blueprintVersion, blueprintSnapshotHash: trace.source.blueprintSnapshotHash,
+          processId: trace.process.id, processSnapshotHash: trace.source.processSnapshotHash, bindingHash: trace.source.bindingHash },
+        plan: { id: plan.id, revision: Number(plan.revision), snapshotHash: planHash, rootProcessId: plan.source.processId,
+          taskId: task.id, taskHash: contentHash(task), selectedProcessId: task.sourceProcessId },
+        outputs: trace.outcome.outputRefs.map(({ id, type, snapshotHash }) => ({ id, type, snapshotHash })),
+        instance: { id: ref.planInstanceId, taskId: ref.taskId, version: Number(runtime.version), status: runtime.status,
+          runtimeHash: contentHash({ ...runtime, started_at: runtime.started_at?.toISOString?.() ?? runtime.started_at,
+            completed_at: runtime.completed_at?.toISOString?.() ?? runtime.completed_at, created_at: runtime.created_at?.toISOString?.() ?? runtime.created_at,
+            updated_at: runtime.updated_at?.toISOString?.() ?? runtime.updated_at }), eventHashes: runtimeEvents.map((event) => contentHash(event)) },
+        run: { id: run.id, version: run.version, status: run.status, aggregateHash: contentHash(run), eventHashes: runEvents.map((event) => contentHash(event)) }, actor: principal, linkedAt: new Date().toISOString() };
+      const link = { ...linkCore, linkHash: contentHash(linkCore) };
+      requirement.processRunEvidenceLinks ??= [];
+      requirement.processRunEvidenceLinks.push(link);
+      requirements.processRunEvidenceLinks ??= [];
+      requirements.processRunEvidenceLinks.push(link);
+      current.version += 1; current.updatedAt = link.linkedAt;
+      current.idempotency ??= {};
+      current.idempotency[commandId] = { action: 'link-process-run-evidence', requestHash, linkId: link.id, version: current.version, at: link.linkedAt };
+      const event = { id: `event-${randomUUID()}`, type: 'ProcessRunEvidenceLinked', schemaVersion: 1, tenantId,
+        actor: principal, correlationId: current.correlationId, causationId: commandId, timestamp: link.linkedAt,
+        data: { linkId: link.id, linkHash: link.linkHash, requirementId: requirement.id, runId, verificationStatus: 'NOT_EXECUTED' },
+        contentHash: contentHash({ type: 'ProcessRunEvidenceLinked', tenantId, data: { linkId: link.id, linkHash: link.linkHash, requirementId: requirement.id, runId, verificationStatus: 'NOT_EXECUTED' } }) };
+      current.events.push(event);
+      await this.saveInTransaction(client, current, { expectedVersion, principal, requiredPrincipalRoles: ['workspace-write'], authzGeneration });
+      return { changeCase: current, link, replayed: false };
+    });
+  }
   async saveForPrincipal(changeCase, {
     expectedVersion = null, principal, commandAuthority = null,
     approvalAuthority = null, effectAuthority = null,

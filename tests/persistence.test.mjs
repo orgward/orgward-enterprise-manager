@@ -6967,6 +6967,99 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   });
   assert.equal(openAiSuccessfulRequest.status, 'AWAITING_APPROVAL');
   assert.equal(openAiSuccessfulRequest.profile.credential.version, 3);
+  const linkProject = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
+  const linkBlueprint = linkProject.latestBlueprint;
+  const linkProcess = Object.values(linkBlueprint.areas).flatMap((area) => area.items)
+    .find((entry) => entry.id === 'process-learn' && entry.type === 'process');
+  assert.ok(linkProcess, 'the selected source process is retained in the saved blueprint');
+  let linkCase = await request(app.base, '/api/sdlc/cases', { ...as('alice'), method: 'POST', body: JSON.stringify({
+    mode: 'golden', projectId: project.id, sourceObjectId: linkProcess.id,
+    expectedProjectVersion: linkProject.version, expectedBlueprintId: linkBlueprint.id,
+    expectedBlueprintVersion: linkBlueprint.version,
+  }) }, 201);
+  linkCase = await request(app.base, `/api/sdlc/cases/${linkCase.id}/run`, { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ version: linkCase.version, idempotencyKey: 't91-process-run-link-advance' }) });
+  assert.equal(linkCase.currentStage, 'S4');
+  const linkRequirement = linkCase.artifacts.requirements.requirements.find((entry) => entry.processTrace?.process.id === linkProcess.id);
+  assert.ok(linkRequirement, 'the case contains a process-specific requirement trace');
+  const linkRequest = { version: linkCase.version, draftRevision: linkCase.artifacts.requirements.draftRevision,
+    requirementId: linkRequirement.id, runId: openAiSuccessfulRequest.id, idempotencyKey: 't91-process-run-link-once' };
+  const originalLinkCaseState = await app.sdlcStore.get(linkCase.id, 'tenant-a');
+  const writeResealedCaseState = async (state) => app.persistence.query(`update orgward.aggregates
+    set state=$2::jsonb,state_hash=$3 where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`,
+  [linkCase.id, JSON.stringify(state), contentHash(state)]);
+  const invalidBindingState = structuredClone(originalLinkCaseState);
+  invalidBindingState.sourceBinding.bindingSchemaVersion = 99;
+  await app.persistence.query(`update orgward.aggregates set state=$2::jsonb,state_hash=$3
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`,
+  [linkCase.id, JSON.stringify(invalidBindingState), contentHash(invalidBindingState)]);
+  await request(app.base, `/api/sdlc/cases/${linkCase.id}/process-run-evidence`, { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ ...linkRequest, idempotencyKey: 't91-process-run-link-invalid-binding' }) }, 503);
+  assert.equal((await app.sdlcStore.get(linkCase.id, 'tenant-a')).version, linkCase.version);
+  await writeResealedCaseState(originalLinkCaseState);
+  const invalidManifestState = structuredClone(originalLinkCaseState);
+  invalidManifestState.artifacts.context.provenanceManifestHash = '0'.repeat(64);
+  await app.persistence.query(`update orgward.aggregates set state=$2::jsonb,state_hash=$3
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`,
+  [linkCase.id, JSON.stringify(invalidManifestState), contentHash(invalidManifestState)]);
+  await request(app.base, `/api/sdlc/cases/${linkCase.id}/process-run-evidence`, { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ ...linkRequest, idempotencyKey: 't91-process-run-link-invalid-manifest' }) }, 503);
+  assert.equal((await app.sdlcStore.get(linkCase.id, 'tenant-a')).version, linkCase.version);
+  await writeResealedCaseState(originalLinkCaseState);
+  await request(app.base, `/api/sdlc/cases/${linkCase.id}/process-run-evidence`, { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ ...linkRequest, status: 'SUCCEEDED', outputHash: 'caller-constructed' }) }, 400);
+  await request(app.base, `/api/sdlc/cases/${linkCase.id}/process-run-evidence`, { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ ...linkRequest, runId: `execution-run-${randomUUID()}`, idempotencyKey: 't91-process-run-link-missing' }) }, 409);
+  const untouchedCase = await request(app.base, `/api/sdlc/cases/${linkCase.id}`, as('alice'));
+  assert.equal(untouchedCase.version, linkCase.version, 'invalid and missing runtime evidence leave the case unchanged');
+  assert.equal(untouchedCase.events.length, linkCase.events.length);
+  await app.persistence.query(`create function orgward.reject_t91_process_run_link() returns trigger language plpgsql as $$
+    begin
+      if new.aggregate_kind='change_case' and new.event_type='ProcessRunEvidenceLinked' then
+        raise exception 'fixture rejects T-91 link audit';
+      end if;
+      return new;
+    end
+  $$`);
+  await app.persistence.query(`create trigger reject_t91_process_run_link before insert on orgward.audit_log
+    for each row execute function orgward.reject_t91_process_run_link()`);
+  const forcedRollback = await fetch(`${app.base}/api/sdlc/cases/${linkCase.id}/process-run-evidence`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify(linkRequest),
+  });
+  assert.equal(forcedRollback.status, 500, await forcedRollback.clone().text());
+  await app.persistence.query('drop trigger reject_t91_process_run_link on orgward.audit_log');
+  await app.persistence.query('drop function orgward.reject_t91_process_run_link()');
+  const rolledBackCase = await request(app.base, `/api/sdlc/cases/${linkCase.id}`, as('alice'));
+  assert.equal(rolledBackCase.version, linkCase.version, 'an audit failure rolls back the aggregate link and version');
+  assert.equal(rolledBackCase.events.length, linkCase.events.length);
+  const linkedCase = await request(app.base, `/api/sdlc/cases/${linkCase.id}/process-run-evidence`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify(linkRequest),
+  }, 201);
+  const runLink = linkedCase.processRunEvidenceLink;
+  assert.equal(runLink.verificationStatus, 'NOT_EXECUTED');
+  assert.equal(runLink.status, 'UNVERIFIED');
+  assert.equal(runLink.source.processId, linkProcess.id);
+  assert.equal(runLink.plan.rootProcessId, 'process-review');
+  assert.equal(runLink.plan.selectedProcessId, linkProcess.id);
+  assert.deepEqual(runLink.outputs, linkRequirement.processTrace.outcome.outputRefs.map(({ id, type, snapshotHash }) => ({ id, type, snapshotHash })));
+  assert.equal(linkedCase.currentStage, 'S4', 'linking runtime provenance does not advance a gate');
+  const firstLinkAudit = await app.persistence.query(`select count(*)::int as count from orgward.audit_log
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1 and event_type='ProcessRunEvidenceLinked'`, [linkCase.id]);
+  assert.equal(firstLinkAudit.rows[0].count, 1);
+  const replayedLink = await request(app.base, `/api/sdlc/cases/${linkCase.id}/process-run-evidence`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify(linkRequest),
+  });
+  assert.equal(replayedLink.command.replayed, true);
+  assert.equal(replayedLink.artifacts.requirements.processRunEvidenceLinks.length, 1);
+  assert.equal(replayedLink.events.filter((event) => event.type === 'ProcessRunEvidenceLinked').length, 1);
+  const editedAfterLink = await request(app.base, `/api/sdlc/cases/${linkCase.id}/edit-requirements`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: replayedLink.version,
+      expectedDraftRevision: replayedLink.artifacts.requirements.draftRevision, requirementId: linkRequirement.id,
+      changes: { statement: 'A revised process-specific statement remains a draft.' }, idempotencyKey: 't91-process-run-link-stale-draft' }),
+  });
+  assert.equal(editedAfterLink.artifacts.requirements.requirements.find((entry) => entry.id === linkRequirement.id)
+    .processRunEvidenceLinks[0].applicability, 'STALE');
+  const linkedCaseId = linkCase.id;
   const sourceReviewBeforeRestart = processTaskSourceReview(openAiSuccessfulRequest);
   assert.equal(sourceReviewBeforeRestart.kind, 'snapshot');
   assert.equal(sourceReviewBeforeRestart.blueprintId, openAiSuccessfulRequest.processTaskRef.blueprintId);
@@ -7172,6 +7265,13 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     openAiValidationEndpoint: `${providerOrigin}/v1/models`, localRepositories: [localRepositoryBinding, gitRepositoryBinding],
     githubVerifierProfile: fixedGithubVerifierProfile,
   });
+  const linkedCaseAfterRestart = await request(app.base, `/api/sdlc/cases/${linkedCaseId}`, as('alice'));
+  const retainedRunLink = linkedCaseAfterRestart.artifacts.requirements.processRunEvidenceLinks[0];
+  assert.equal(retainedRunLink.verificationStatus, 'NOT_EXECUTED');
+  assert.equal(retainedRunLink.run.id, openAiSuccessfulRequest.id);
+  assert.equal(retainedRunLink.source.processId, linkProcess.id);
+  assert.equal(linkedCaseAfterRestart.artifacts.requirements.requirements.find((entry) => entry.id === linkRequirement.id)
+    .processRunEvidenceLinks[0].applicability, 'STALE');
   assert.equal((await request(app.base, '/api/execution/local-repositories?projectId=' + encodeURIComponent(project.id), as('alice')))
     .repositories.find((repository) => repository.id === 'git-reference').commitOid, movedGitCommit,
   'the repository inventory observes the current branch after restart');

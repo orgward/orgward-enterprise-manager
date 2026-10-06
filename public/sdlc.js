@@ -1,4 +1,4 @@
-import { caseUiModel, createSourceSelectionGuard, eligibleActorBindings, savedProjectPinSummary, sentinelAssessmentChoices, sourceBindingDesignRoute } from './sdlc-view.mjs';
+import { caseUiModel, createSourceSelectionGuard, eligibleActorBindings, processRunEvidencePresentation, savedProjectPinSummary, sentinelAssessmentChoices, sourceBindingDesignRoute } from './sdlc-view.mjs';
 import { encodeExecutionRoute, encodeStudioRoute } from './shared-interactions.mjs';
 import { clearPendingSoftwareStart, createSoftwareStartFlightGuard, pendingSoftwareStartKey } from './software-runtime-start.mjs';
 import { openInitialCase, sourceObjectPreview } from './sdlc-routing.mjs';
@@ -581,6 +581,35 @@ function renderRequirements(content) {
         el('p', { text: `Risk: ${trace.risk.status}${trace.risk.refs.length ? ` · ${trace.risk.refs.map((entry) => `${entry.id} (${entry.snapshotHash})`).join(', ')}` : ''} · outcome: ${trace.outcome.type} · metrics: ${trace.outcome.metricRefs.map((entry) => entry.id).join(', ') || 'UNKNOWN'}` }),
         el('p', { text: `Verification: ${contract.type} · ${contract.evidenceKind} · ${contract.status}. ${contract.reason} Simulation results and caller-supplied records do not count as verified execution.` }),
       ]));
+      const links = requirement.processRunEvidenceLinks ?? [];
+      card.append(section('Persisted process runs', [
+        el('p', { text: 'Linked runtime records preserve exact task and source identity. A link is provenance only; it does not verify outputs, approve this draft, or authorize effects.' }),
+        ...(links.length ? links.map((link) => {
+          const view = processRunEvidencePresentation(link);
+          return view ? el('article', { className: 'checkpoint-callout' }, [
+            el('strong', { text: view.heading }), el('p', { text: view.identity }), el('p', { text: view.hashes }),
+            el('p', { text: `${link.reason} ${view.applicability}` }),
+          ]) : empty('A linked process run has incomplete displayable identity.');
+        }) : [empty('No persisted process run is linked to this draft.')]),
+      ]));
+      if (!baseline && state.authenticated) {
+        const form = el('form', { className: 'requirement-edit-form' }, [
+          el('label', {}, [el('span', { text: 'Persisted execution run ID' }), el('input', { attrs: { name: 'runId', required: '', placeholder: 'execution-run-…' } })]),
+          el('button', { className: 'button secondary', text: 'Link run provenance', attrs: { type: 'submit' } }),
+        ]);
+        form.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          try {
+            const current = state.changeCase;
+            state.changeCase = await api(`/api/sdlc/cases/${current.id}/process-run-evidence`, { method: 'POST', body: JSON.stringify({
+              version: current.version, draftRevision: current.artifacts.requirements.draftRevision, requirementId: requirement.id,
+              runId: form.elements.runId.value.trim(), idempotencyKey: uid('process-run-evidence'),
+            }) });
+            await refreshCases(); renderCase(); notify('Run provenance linked. Verification remains NOT EXECUTED.');
+          } catch (error) { notify(error.message); await loadCase(state.changeCase.id); }
+        });
+        card.append(form);
+      }
     }
     if (!baseline) {
       const disclosure = el('details', { className: 'requirement-edit-disclosure' });
