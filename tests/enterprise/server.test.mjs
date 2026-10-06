@@ -1104,6 +1104,40 @@ test('enterprise process definitions and simulations stay typed, bounded, source
     kind: 'define-process-flow', objectId: 'process-deliver', processFlow: flow, reason: 'Save bounded delivery and exception paths.' });
   const flowResult = await postCommand(instance.base, 'editor', project.id, flowCommand);
   assert.equal(flowResult.data.affectedObjectId, 'process-deliver');
+  const impactView = await currentView(instance.base, 'editor', project.id, { selectedId: 'decision-priority' });
+  const revisedTable = structuredClone(decisionTable);
+  revisedTable.defaultOutcome = 'REVIEW';
+  const tablePreviewCommand = commandBody(impactView, 'process-decision-table-impact-preview', {
+    kind: 'define-decision-table', objectId: 'decision-priority', decisionTable: revisedTable,
+    reason: 'Preview the effect of a changed fallback outcome.' });
+  const impactPreviewRoute = `/api/v1/projects/${project.id}/enterprise/impact-preview`;
+  const tablePreview = await request(instance.base, 'editor', impactPreviewRoute, { method: 'POST', body: {
+    expectedVersion: impactView.data.context.projectVersion, command: tablePreviewCommand.payload,
+  } });
+  assert.equal(tablePreview.data.status, 'INCOMPLETE');
+  assert.deepEqual(tablePreview.data.source, {
+    projectId: project.id, projectVersion: impactView.data.context.projectVersion,
+    blueprintId: impactView.data.context.blueprintId, blueprintVersion: impactView.data.context.blueprintVersion,
+    snapshotHash: impactView.data.context.snapshotHash, kind: 'MAIN_DESIGN',
+  });
+  assert.ok(tablePreview.data.changedFields.some((change) => change.field === 'decisionTable.defaultOutcome'
+    && change.before === null && change.after === 'REVIEW'));
+  assert.ok(tablePreview.data.directlyReferencingProcessFlows.some((entry) => entry.processId === 'process-deliver'
+    && entry.afterDecisionStepIds.includes('gate')));
+  assert.equal(tablePreview.data.coverage.operationalAndDownstreamImpact, 'UNKNOWN');
+  const staleTablePreview = await request(instance.base, 'editor', impactPreviewRoute, { method: 'POST', body: {
+    expectedVersion: impactView.data.context.projectVersion + 1, command: tablePreviewCommand.payload,
+  } }, 409);
+  assert.equal(staleTablePreview.error.code, 'VERSION_CONFLICT');
+  const staleTableBlueprintPreview = await request(instance.base, 'editor', impactPreviewRoute, { method: 'POST', body: {
+    expectedVersion: impactView.data.context.projectVersion,
+    command: { ...tablePreviewCommand.payload, blueprintVersion: impactView.data.context.blueprintVersion + 1 },
+  } }, 409);
+  assert.equal(staleTableBlueprintPreview.error.code, 'ENTERPRISE_BLUEPRINT_STALE');
+  const afterTablePreview = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  assert.equal(afterTablePreview.data.version, impactView.data.context.projectVersion, 'preview does not advance the project aggregate');
+  assert.deepEqual(items(afterTablePreview.data.latestBlueprint).find((entry) => entry.id === 'decision-priority').decisionTable,
+    decisionTable, 'preview does not persist the proposed table');
   const invalidReferenceView = await currentView(instance.base, 'owner', project.id);
   const badFlow = structuredClone(flow);
   badFlow.steps[0].roleId = 'decision-priority';

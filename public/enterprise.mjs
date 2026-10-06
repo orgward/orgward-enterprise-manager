@@ -1,4 +1,4 @@
-import { ENTERPRISE_PROCESS_COMMANDS, renderEnterpriseProcess } from './enterprise-process.mjs';
+import { ENTERPRISE_PROCESS_COMMANDS, enterpriseProcessCommandPayload, renderEnterpriseProcess } from './enterprise-process.mjs';
 import { ENTERPRISE_BRANCH_COMMANDS, enterpriseBranchWritable, renderEnterpriseBranches } from './enterprise-branches.mjs';
 import { ENTERPRISE_ECONOMIC_COMMANDS, renderEnterpriseEconomics } from './enterprise-economics.mjs';
 import { ENTERPRISE_REFINEMENT_COMMANDS, renderEnterpriseRefinement } from './enterprise-refinement.mjs';
@@ -346,7 +346,17 @@ export function renderEnterpriseObject({ projectId = null, model, object, pendin
   const scopes = model.scopes ?? [];
   const states = enterpriseObjectStates(model, object);
   root.append(renderEnterpriseStates({ states, el }));
-  const processPanel = renderEnterpriseProcess({ model, object, pending, loading, simulation, draft: pending?.envelope?.payload ?? processDraft, el, ui: { field, form }, onCommand, onInspectDraft, selectedSimulationId, onSimulationSelection, onInspectSimulation });
+  const onPreviewProcessImpact = async (payload) => {
+    const command = enterpriseProcessCommandPayload(model, payload);
+    if (!command || !projectId || !api) throw new Error('Impact preview is unavailable for this saved design context.');
+    const response = await api(`/api/v1/projects/${encodeURIComponent(projectId)}/enterprise/impact-preview`, {
+      method: 'POST', body: JSON.stringify({ expectedVersion: model.context.projectVersion, command }),
+    });
+    const preview = response.data ?? response;
+    if (preview.source?.projectId !== projectId) throw new Error('Impact preview belongs to another project. Reload and try again.');
+    return preview;
+  };
+  const processPanel = renderEnterpriseProcess({ model, object, pending, loading, simulation, draft: pending?.envelope?.payload ?? processDraft, el, ui: { field, form }, onCommand, onPreviewCommand: onPreviewProcessImpact, onInspectDraft, selectedSimulationId, onSimulationSelection, onInspectSimulation });
   if (processPanel) root.append(processPanel);
   const economicPanel = renderEnterpriseEconomics({ model, object, pending, loading, evaluation: model.economics?.evaluation,
     draft: pending?.envelope?.payload ?? economicDraft, selectedEvaluationId: economicEvaluationId, el, ui: { field, form }, onCommand,

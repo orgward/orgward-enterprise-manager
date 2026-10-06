@@ -8,6 +8,10 @@ export function renderBlueprintImpactPreview(preview, el) {
   for (const affected of preview.directlyAffectedObjects ?? []) {
     affectedList.append(el('li', { text: `${affected.name} · ${affected.type}${affected.edited ? ' · edited' : ' · directly connected'} · source v${affected.source.blueprintVersion}` }));
   }
+  const processFlows = el('ul');
+  for (const flow of preview.directlyReferencingProcessFlows ?? []) {
+    processFlows.append(el('li', { text: `${flow.name} (${flow.processId}) · decision steps: ${(flow.afterDecisionStepIds ?? flow.beforeDecisionStepIds).join(', ')} · process snapshot SHA-256 ${flow.afterProcessSnapshotHash ?? flow.beforeProcessSnapshotHash}` }));
+  }
   const unknownList = el('ul');
   for (const unknown of preview.unknownAreas ?? []) unknownList.append(el('li', { text: unknown }));
   const branchPin = preview.source.kind === 'BRANCH_DRAFT'
@@ -22,6 +26,7 @@ export function renderBlueprintImpactPreview(preview, el) {
     el('p', { text: `Direct blueprint relationships computed. ${proposed}` }),
     el('h5', { text: 'Changed fields' }), fieldList,
     el('h5', { text: 'Directly affected saved design records' }), affectedList,
+    ...(preview.directlyReferencingProcessFlows ? [el('h5', { text: 'Process flows referencing this decision' }), processFlows] : []),
     el('h5', { text: 'Not computed by this preview' }), unknownList,
     el('p', { className: 'edit-help', text: preview.limitation }),
   ]);

@@ -1,4 +1,5 @@
 import { enterpriseBranchWritable } from './enterprise-branches.mjs';
+import { renderBlueprintImpactPreview } from './blueprint-impact-preview.mjs';
 
 export const ENTERPRISE_PROCESS_COMMANDS = ['define-process-flow', 'define-decision-table', 'simulate-process', 'simulate-staffing',
   'run-sandbox-procurement-test', 'dispatch-sandbox-procurement-test', 'reconcile-sandbox-procurement-test', 'compensate-sandbox-procurement-test'];
@@ -206,7 +207,7 @@ function flowEditor({ model, object, el, ui, onCommand, disabled, reasonValue = 
     }, disabled);
 }
 
-function decisionEditor({ model, object, el, ui, onCommand, disabled, reasonValue = '' }) {
+function decisionEditor({ model, object, el, ui, onCommand, onPreviewCommand, disabled, reasonValue = '' }) {
   const { field, form } = ui; const information = allObjects(model).filter((entry) => entry.type === 'information');
   const saved = object.decisionTable; const inputs = []; const rules = []; const conditions = [];
   const inputList = el('div', { className: 'enterprise-editor-rows', attrs: { 'data-enterprise-decision-inputs': '' } });
@@ -243,15 +244,64 @@ function decisionEditor({ model, object, el, ui, onCommand, disabled, reasonValu
   for (const rule of saved?.rules ?? []) addRule(rule);
   const defaultOutcome = field('defaultOutcome', 'Default outcome when no rule matches (optional)', { required: false, value: saved?.defaultOutcome ?? '', maximum: 60 });
   const reason = field('reason', 'Reason for this decision table', { multiline: true, maximum: 500, value: reasonValue });
-  return form('define-decision-table', 'Save typed decision table', [el('p', { text: 'Rules use typed saved information records. All conditions in a rule must match. Each rule needs at least one condition; UNIQUE treats overlapping matches as a conflict. Enforcement mode is versioned with this saved table.' }), policy.node, decisionMode.node, inputList,
+  let previewKey = null;
+  let previewPanel = null;
+  let previewRequestId = 0;
+  let previewPending = false;
+  const submitButton = () => [...editor.querySelectorAll('button')]
+    .find((button) => (button.getAttribute?.('type') ?? button.attrs?.type) === 'submit');
+  const editor = form('define-decision-table', 'Preview decision-table impact', [el('p', { text: 'Rules use typed saved information records. All conditions in a rule must match. Each rule needs at least one condition; UNIQUE treats overlapping matches as a conflict. Enforcement mode is versioned with this saved table.' }), policy.node, decisionMode.node, inputList,
     action(el, 'Add information input', () => { if (inputs.length < 12) addInput(); }, disabled), ruleList, action(el, 'Add rule', () => { if (rules.length < 20) addRule(); }, disabled), defaultOutcome.node, reason.node], () => {
       if (!inputs.length || !rules.length || rules.some((rule) => !rule.conditions.length)) throw new Error('Declare at least one input, one rule and one condition per rule.');
       const types = new Map(inputs.map((input) => [input.information.control.value, input.type.control.value]));
-      onCommand({ kind: 'define-decision-table', objectId: object.id, decisionTable: { schemaVersion: '1.0', hitPolicy: policy.control.value,
+      const payload = { kind: 'define-decision-table', objectId: object.id, decisionTable: { schemaVersion: '1.0', hitPolicy: policy.control.value,
         decisionMode: decisionMode.control.value,
         inputs: inputs.map((input) => ({ informationId: input.information.control.value, valueType: input.type.control.value })),
-        rules: rules.map((rule) => ({ id: rule.id, outcome: rule.outcome.control.value.trim(), conditions: rule.conditions.map((condition) => ({ informationId: condition.information.control.value, operator: condition.operator.control.value, value: enterpriseTypedValue(types.get(condition.information.control.value), condition.value.control.value, condition.operator.control.value === 'in') })) })), defaultOutcome: defaultOutcome.control.value.trim() || null }, reason: reason.control.value.trim() });
+        rules: rules.map((rule) => ({ id: rule.id, outcome: rule.outcome.control.value.trim(), conditions: rule.conditions.map((condition) => ({ informationId: condition.information.control.value, operator: condition.operator.control.value, value: enterpriseTypedValue(types.get(condition.information.control.value), condition.value.control.value, condition.operator.control.value === 'in') })) })), defaultOutcome: defaultOutcome.control.value.trim() || null }, reason: reason.control.value.trim() };
+      const key = JSON.stringify(payload);
+      const save = () => onCommand(payload);
+      if (previewKey === key) { save(); return; }
+      if (previewPending) return;
+      if (previewPanel) previewPanel.remove(); previewPanel = null; previewKey = null;
+      const button = submitButton();
+      const error = editor.querySelectorAll('[role]')[0];
+      const requestId = ++previewRequestId;
+      previewPending = true;
+      button.disabled = true;
+      void Promise.resolve(onPreviewCommand?.(payload)).then((preview) => {
+        if (requestId !== previewRequestId) return;
+        const source = preview?.source; const context = model.context;
+        if (preview?.status !== 'INCOMPLETE' || source?.projectVersion !== context.projectVersion
+          || source?.blueprintId !== context.blueprintId || source?.blueprintVersion !== context.blueprintVersion
+          || source?.snapshotHash !== context.snapshotHash
+          || (context.branchId ? (source?.kind !== 'BRANCH_DRAFT' || source.branchId !== context.branchId || source.branchRevision !== context.branchRevision)
+            : source?.kind !== 'MAIN_DESIGN')) {
+          throw new Error('The exact current design could not be verified for this preview. Reload and try again.');
+        }
+        previewKey = key;
+        previewPanel = renderBlueprintImpactPreview(preview, el);
+        editor.append(previewPanel);
+        button.textContent = 'Save typed decision table';
+      }).catch((failure) => {
+        if (requestId !== previewRequestId) return;
+        error.textContent = failure?.message ?? 'Impact preview failed.'; error.hidden = false;
+      }).finally(() => {
+        if (requestId !== previewRequestId) return;
+        previewPending = false;
+        button.disabled = Boolean(disabled);
+      });
     }, disabled);
+  const invalidate = () => {
+    previewRequestId += 1;
+    previewPending = false;
+    if (previewPanel) previewPanel.remove(); previewPanel = null; previewKey = null;
+    const button = submitButton();
+    if (button) { button.textContent = 'Preview decision-table impact'; button.disabled = Boolean(disabled); }
+    const error = editor.querySelectorAll('[role]')[0];
+    if (error) { error.hidden = true; error.textContent = ''; }
+  };
+  editor.addEventListener('input', invalidate); editor.addEventListener('change', invalidate);
+  return editor;
 }
 
 export function renderEnterpriseSimulation({ simulation, model, el }) {
@@ -384,7 +434,7 @@ function simulationEditor({ model, object, el, ui, onCommand, disabled, scenario
     }, disabled || !object.processFlow);
 }
 
-export function renderEnterpriseProcess({ model, object, pending = null, loading = false, simulation = null, draft = null, selectedSimulationId = null, el, ui, onCommand, onInspectDraft, onSimulationSelection, onInspectSimulation }) {
+export function renderEnterpriseProcess({ model, object, pending = null, loading = false, simulation = null, draft = null, selectedSimulationId = null, el, ui, onCommand, onPreviewCommand, onInspectDraft, onSimulationSelection, onInspectSimulation }) {
   if (!['process', 'decision'].includes(object.type)) return null;
   const root = el('section', { attrs: { 'data-enterprise-process-model': object.id, 'aria-label': object.type === 'process' ? 'Typed process authoring and simulation' : 'Typed decision table authoring' } });
   const disabled = loading || Boolean(pending) || !enterpriseProcessWritable(model);
@@ -395,7 +445,7 @@ export function renderEnterpriseProcess({ model, object, pending = null, loading
     root.append(earlier);
   }
   const edited = retained?.kind === 'define-process-flow' ? { ...object, processFlow: retained.processFlow } : retained?.kind === 'define-decision-table' ? { ...object, decisionTable: retained.decisionTable } : object;
-  if (object.type === 'decision') root.append(el('details', { attrs: retained?.kind === 'define-decision-table' ? { open: '' } : {} }, [el('summary', { text: 'Author a typed decision table' }), decisionEditor({ model, object: edited, el, ui, onCommand, disabled, reasonValue: retained?.kind === 'define-decision-table' ? retained.reason : '' })]));
+  if (object.type === 'decision') root.append(el('details', { attrs: retained?.kind === 'define-decision-table' ? { open: '' } : {} }, [el('summary', { text: 'Author a typed decision table' }), decisionEditor({ model, object: edited, el, ui, onCommand, onPreviewCommand, disabled, reasonValue: retained?.kind === 'define-decision-table' ? retained.reason : '' })]));
   else {
     root.append(el('details', { attrs: retained?.kind === 'define-process-flow' ? { open: '' } : {} }, [el('summary', { text: 'Author a typed process flow' }), flowEditor({ model, object: edited, el, ui, onCommand, disabled, reasonValue: retained?.kind === 'define-process-flow' ? retained.reason : '' })]));
     if (!object.processFlow) root.append(el('p', { text: 'Save a typed process flow before simulating it. Existing simple planning graphs remain available in Execution.' }));

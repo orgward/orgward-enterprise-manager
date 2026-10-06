@@ -8314,6 +8314,28 @@ or external effect was used. Browser screenshots:
 certification. T-122 and PR-17 remain open; PR-15 remains the active cursor and
 no release gate changed.
 
+PR-17 T-122 typed decision-table impact preview (2026-10-06): decision-table
+edits now use the shared read-only impact preview before save. The response
+reports field-level table changes and directly referencing process flows,
+bound to the exact current project version and blueprint ID/version/hash. Stale
+project and blueprint pins conflict; preview leaves the saved table and
+aggregate unchanged. Results remain `INCOMPLETE`, with downstream coverage
+`UNKNOWN`. The editor saves only after a matching preview; only the submit
+control is relabeled/disabled, edits invalidate the preview, and late responses
+for edited tables are suppressed.
+
+Focused server/view run passed 3/3 (0 failures, 0 skips; log
+`/tmp/orgward-tests-K0Baak/node-test.tap.log`), covering exact pins, stale
+conflicts, no mutation, changed fields, referencing flow and preview display.
+The final submit-control regression passed 1/1 (log
+`/tmp/orgward-tests-U0LmUA/node-test.tap.log`); the final pending-response
+invalidation regression passed 1/1 (log
+`/tmp/orgward-tests-sOjFbp/node-test.tap.log`). Earlier focused failures were
+limited to corrected test-fixture omissions. Syntax and diff checks passed; no
+full check was run because the parent task remains open. Parent review approved
+with no remaining findings. T-122 and PR-17 remain open; `npm run task:next`
+still identifies PR-15 as first open, and no release-gate status changed.
+
 PR-17 T-121 saved-blueprint chat edit increment (2026-10-06): conversation now
 offers a recognizable, transient edit mode for one exact replacement of a
 current main-design customer name or detail. It pins the project/version,

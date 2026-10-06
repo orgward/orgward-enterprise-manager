@@ -118,6 +118,16 @@ test('blueprint impact preview shows exact pins, direct changes and explicit unk
   assert.match(preview.textContent, /Operations · role · directly connected · source v7/);
   assert.match(preview.textContent, /Approvals and queued, running, or completed work/);
   assert.match(preview.textContent, /does not authorize publication/);
+  const decisionPreview = renderBlueprintImpactPreview({ status: 'INCOMPLETE', source: { kind: 'MAIN_DESIGN', blueprintId: 'blueprint-source', blueprintVersion: 7,
+    projectVersion: 19, snapshotHash: 'a'.repeat(64) },
+    proposedBlueprintVersion: 8, changedFields: [{ field: 'decisionTable.rules[0].outcome', before: 'APPROVE', after: 'REVIEW' }],
+    directlyAffectedObjects: [], directlyReferencingProcessFlows: [{ processId: 'process-deliver', name: 'Deliver service',
+      beforeDecisionStepIds: ['gate'], afterDecisionStepIds: ['gate'], beforeProcessSnapshotHash: 'd'.repeat(64), afterProcessSnapshotHash: 'e'.repeat(64) }],
+    unknownAreas: ['Approvals and queued work'], limitation: 'Direct design relationships only.' }, el);
+  assert.match(decisionPreview.textContent, /decisionTable\.rules\[0\]\.outcome: "APPROVE" → "REVIEW"/);
+  assert.match(decisionPreview.textContent, /Process flows referencing this decision/);
+  assert.match(decisionPreview.textContent, /Deliver service \(process-deliver\) · decision steps: gate/);
+  assert.match(decisionPreview.textContent, /Approvals and queued work/);
   const branchPreview = renderBlueprintImpactPreview({ status: 'INCOMPLETE',
     source: { kind: 'BRANCH_DRAFT', blueprintId: 'blueprint-branch-head', blueprintVersion: 4,
       projectVersion: 21, snapshotHash: 'b'.repeat(64), branchId: 'enterprise-branch-1', branchRevision: 6,
@@ -1216,7 +1226,7 @@ const branchUi = {
   },
   form(kind, label, controls, submit, disabled) {
     const node = el('form', { attrs: { 'data-enterprise-action': kind, 'aria-label': label } }, controls);
-    const save = el('button', { text: label }); node.append(save);
+    const save = el('button', { text: label, attrs: { type: 'submit' } }); const error = el('p', { attrs: { role: 'alert' } }); error.hidden = true; node.append(save, error);
     if (disabled) for (const control of node.querySelectorAll('input,select,textarea,button')) control.disabled = true;
     node.addEventListener('submit', submit);
     return node;
@@ -1763,6 +1773,84 @@ test('enterprise process authoring binds current and branch snapshots and requir
   assert.equal(enterpriseTypedValue('boolean', 'false'), false);
   assert.deepEqual(enterpriseTypedValue('number', '1\n2', true), [1, 2]);
   assert.throws(() => enterpriseTypedValue('number', 'NaN'), /finite number/);
+});
+
+test('decision-table authoring previews exact impact before saving and invalidates the preview on edits', async () => {
+  const decision = { id: 'decision-review', type: 'decision', name: 'Review request', detail: 'Route requests.', decisionTable: {
+    schemaVersion: '1.0', hitPolicy: 'FIRST_MATCH', decisionMode: 'ADVISORY', defaultOutcome: null,
+    inputs: [{ informationId: 'information-signal', valueType: 'string' }],
+    rules: [{ id: 'rule-review', outcome: 'REVIEW', conditions: [{ informationId: 'information-signal', operator: 'eq', value: 'ready' }] }],
+  } };
+  const blueprint = { id: 'blueprint-main', areas: { governanceRiskControls: { items: [decision,
+    { id: 'information-signal', type: 'information', name: 'Request signal' }] } } };
+  const model = { permissions: { processWrite: true }, context: { projectVersion: 3, blueprintId: blueprint.id,
+    blueprintVersion: 7, snapshotHash: 'a'.repeat(64), isCurrent: true }, blueprint };
+  let saved = null; let previewCalls = 0;
+  const root = renderEnterpriseProcess({ model, object: decision, el, ui: branchUi, onCommand: (command) => { saved = command; },
+    onPreviewCommand: async (payload) => { previewCalls += 1; assert.equal(payload.kind, 'define-decision-table'); return {
+      status: 'INCOMPLETE', source: { kind: 'MAIN_DESIGN', projectVersion: 3, blueprintId: blueprint.id, blueprintVersion: 7, snapshotHash: 'a'.repeat(64) },
+      proposedBlueprintVersion: 8, changedFields: [{ field: 'decisionTable.rules[0].outcome', before: 'REVIEW', after: 'APPROVE' }],
+      directlyAffectedObjects: [], directlyReferencingProcessFlows: [], unknownAreas: ['Downstream impact UNKNOWN'],
+      limitation: 'This does not authorize publication.',
+    }; } });
+  const form = root.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === 'define-decision-table');
+  const submitButton = form.querySelectorAll('button').find((button) => button.text === 'Preview decision-table impact');
+  const auxiliaryButton = form.querySelectorAll('button').find((button) => button.text === 'Add information input');
+  assert.ok(submitButton); assert.ok(auxiliaryButton);
+  const submit = () => form.listeners.get('submit')?.({ preventDefault() {} });
+  submit();
+  assert.equal(submitButton.disabled, true, 'only the submit control is disabled while preview is pending');
+  assert.equal(auxiliaryButton.text, 'Add information input');
+  assert.equal(auxiliaryButton.disabled, false);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(saved, null, 'the first submit previews without saving');
+  assert.equal(previewCalls, 1);
+  assert.match(form.textContent, /Impact preview · INCOMPLETE/);
+  assert.match(form.textContent, /Downstream impact UNKNOWN/);
+  assert.equal(submitButton.text, 'Save typed decision table');
+  assert.equal(submitButton.disabled, false);
+  assert.equal(auxiliaryButton.text, 'Add information input');
+  assert.equal(auxiliaryButton.disabled, false);
+  submit();
+  assert.equal(saved.kind, 'define-decision-table', 'a second submit saves the unchanged previewed table');
+  form.listeners.get('input')?.({});
+  assert.doesNotMatch(form.textContent, /Impact preview · INCOMPLETE/);
+
+  let missingPreviewSaved = false;
+  const missingPreviewRoot = renderEnterpriseProcess({ model, object: decision, el, ui: branchUi,
+    onCommand: () => { missingPreviewSaved = true; }, onPreviewCommand: async () => undefined });
+  const missingPreviewForm = missingPreviewRoot.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === 'define-decision-table');
+  missingPreviewForm.listeners.get('submit')?.({ preventDefault() {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(missingPreviewSaved, false, 'missing preview cannot fall through to save');
+  assert.equal(missingPreviewForm.querySelectorAll('button').find((button) => button.text === 'Preview decision-table impact')?.disabled, false);
+  assert.match(missingPreviewForm.textContent, /exact current design could not be verified/);
+
+  const requests = []; let editedSave = null;
+  const pendingRoot = renderEnterpriseProcess({ model, object: decision, el, ui: branchUi,
+    onCommand: (command) => { editedSave = command; }, onPreviewCommand: (payload) => new Promise((resolve) => requests.push({ payload, resolve })) });
+  const pendingForm = pendingRoot.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === 'define-decision-table');
+  const pendingSubmit = () => pendingForm.listeners.get('submit')?.({ preventDefault() {} });
+  const previewResult = () => ({ status: 'INCOMPLETE', source: { kind: 'MAIN_DESIGN', projectVersion: 3, blueprintId: blueprint.id,
+    blueprintVersion: 7, snapshotHash: 'a'.repeat(64) }, proposedBlueprintVersion: 8, changedFields: [],
+    directlyAffectedObjects: [], directlyReferencingProcessFlows: [], unknownAreas: ['Downstream impact UNKNOWN'], limitation: 'Preview only.' });
+  pendingSubmit();
+  assert.equal(requests.length, 1);
+  const fallback = pendingForm.querySelectorAll('label').find((label) => label.text.includes('Default outcome when no rule matches'))?.children[0];
+  fallback.value = 'APPROVE';
+  pendingForm.listeners.get('input')?.({});
+  requests[0].resolve(previewResult());
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.doesNotMatch(pendingForm.textContent, /Impact preview · INCOMPLETE/);
+  assert.equal(editedSave, null, 'the response for the old table cannot enable a save');
+  pendingSubmit();
+  assert.equal(requests.length, 2, 'the edited table requests a fresh preview');
+  assert.equal(requests[1].payload.decisionTable.defaultOutcome, 'APPROVE');
+  requests[1].resolve(previewResult());
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(pendingForm.textContent, /Impact preview · INCOMPLETE/);
+  pendingSubmit();
+  assert.equal(editedSave.decisionTable.defaultOutcome, 'APPROVE');
 });
 
 test('enterprise staffing UI submits source-bound assumptions and renders accessible worker comparisons', () => {
