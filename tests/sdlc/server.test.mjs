@@ -750,6 +750,29 @@ test('human output evidence presentation separates reported values from executio
   assert.equal(unavailable.outputs[0], 'information-prioritised-need: UNAVAILABLE');
 });
 
+test('repository check receipts remain a separate evidence category', () => {
+  const presentation = processRunEvidencePresentation({
+    run: { id: 'execution-run-00000000-0000-4000-8000-000000000001', status: 'SUCCEEDED', aggregateHash: 'a'.repeat(64) },
+    plan: { id: 'plan-repository', revision: 3, taskId: 'task-process-learn', snapshotHash: 'b'.repeat(64), taskHash: 'c'.repeat(64) },
+    instance: { id: '00000000-0000-4000-8000-000000000003', status: 'SUCCEEDED' },
+    verificationStatus: 'NOT_EXECUTED', applicability: 'CURRENT', repositoryCheckEvidenceStatus: 'AVAILABLE',
+    repositoryCheckEvidence: [{ id: 'unit-check', version: '1', status: 'PASSED', repositoryId: 'github-123',
+      sourceSnapshotId: 'snapshot-abc', commandHash: 'd'.repeat(64),
+      planHash: 'e'.repeat(64), sourceTreeDigest: 'f'.repeat(64), candidateTreeDigest: '1'.repeat(64),
+      candidateEvidenceHash: '2'.repeat(64), outputHash: '3'.repeat(64) }],
+  });
+  assert.match(presentation.repositoryChecks[0], /^unit-check v1: PASSED · repository github-123 · source snapshot snapshot-abc · command SHA-256/);
+  assert.match(presentation.repositoryChecks[0], /candidate evidence SHA-256/);
+  assert.equal(presentation.repositoryCheckStatus, 'AVAILABLE');
+  const pending = processRunEvidencePresentation({
+    run: { id: 'execution-run-00000000-0000-4000-8000-000000000001', status: 'AWAITING_APPROVAL', aggregateHash: 'a'.repeat(64) },
+    plan: { id: 'plan-repository', revision: 3, taskId: 'task-process-learn', snapshotHash: 'b'.repeat(64), taskHash: 'c'.repeat(64) },
+    instance: { id: '00000000-0000-4000-8000-000000000003', status: 'AWAITING_APPROVAL' },
+    verificationStatus: 'NOT_EXECUTED', applicability: 'CURRENT', repositoryCheckEvidenceStatus: 'PENDING',
+  });
+  assert.equal(pending.repositoryCheckStatus, 'PENDING');
+});
+
 test('authenticated SDLC routes fail closed when principal-scoped store methods are unavailable', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'orgward-sdlc-scope-contract-'));
   t.after(() => rm(root, { recursive: true, force: true }));

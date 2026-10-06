@@ -8984,7 +8984,10 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     }),
   }, 201);
   assert.equal(completedHuman.status, 'SUCCEEDED');
-  assert.deepEqual(completedHuman.outcome, { result: 'succeeded' });
+  assert.equal(completedHuman.outcome.result, 'succeeded');
+  assert.ok(completedHuman.outcome.outputRecords.length > 0);
+  assert.ok(completedHuman.outcome.outputRecords.every((record) => record.status === 'UNAVAILABLE'),
+    'legacy completion without typed values keeps each declared output explicitly unavailable');
   assert.deepEqual(completedHuman.evidence, ['Safety review recorded by assigned founder.']);
   assert.equal(completedHuman.events.at(-1).type, 'HumanTaskCompleted');
   const completionReplay = await request(app.base, '/api/execution/process-task-instances/complete', {
@@ -9909,6 +9912,25 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     'GitHub request views omit the provider credential reference');
   assert.equal(JSON.stringify(githubRequest).includes(openAiFixtureSecret), false);
   assert.equal(Object.hasOwn(githubRequest, 'repositorySnapshot'), false);
+  const pendingEvidenceProject = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
+  const pendingEvidenceCase = await request(app.base, '/api/sdlc/cases', { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ mode: 'golden', projectId: project.id, sourceObjectId: 'process-learn',
+      expectedProjectVersion: pendingEvidenceProject.version, expectedBlueprintId: pendingEvidenceProject.latestBlueprint.id,
+      expectedBlueprintVersion: pendingEvidenceProject.latestBlueprint.version }) }, 201);
+  const pendingEvidenceReady = await request(app.base, `/api/sdlc/cases/${pendingEvidenceCase.id}/run`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: pendingEvidenceCase.version,
+      idempotencyKey: 't91-repository-check-pending-advance' }) });
+  const pendingEvidenceRequirement = pendingEvidenceReady.artifacts.requirements.requirements
+    .find((entry) => entry.processTrace?.process.id === 'process-learn');
+  const pendingEvidenceLink = await request(app.base, `/api/sdlc/cases/${pendingEvidenceCase.id}/process-run-evidence`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: pendingEvidenceReady.version,
+      draftRevision: pendingEvidenceReady.artifacts.requirements.draftRevision,
+      requirementId: pendingEvidenceRequirement.id, runId: githubRequest.id,
+      idempotencyKey: 't91-repository-check-pending-link' }) }, 201);
+  assert.equal(pendingEvidenceLink.processRunEvidenceLink.repositoryCheckEvidenceStatus, 'PENDING');
+  assert.deepEqual(pendingEvidenceLink.processRunEvidenceLink.repositoryCheckEvidence, []);
+  assert.equal(pendingEvidenceLink.processRunEvidenceLink.status, 'UNVERIFIED');
+  assert.equal(pendingEvidenceLink.processRunEvidenceLink.verificationStatus, 'NOT_EXECUTED');
   const githubApproval = await request(app.base, `/api/execution/runs/${githubRequest.id}/approve`, {
     ...as('bob'), method: 'POST', body: JSON.stringify({ version: githubRequest.version }),
   });
@@ -10006,6 +10028,62 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   const githubTerminalEvent = githubCandidate.events.at(-1);
   assert.equal(githubTerminalEvent.data.evidenceHash, githubCandidateReceipt.hash);
   assert.equal(githubTerminalEvent.data.candidateEvidenceHash, githubCandidateReceipt.hash);
+  const repositoryEvidenceProject = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
+  const repositoryEvidenceBlueprint = repositoryEvidenceProject.latestBlueprint;
+  const repositoryEvidenceCase = await request(app.base, '/api/sdlc/cases', { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ mode: 'golden', projectId: project.id, sourceObjectId: 'process-learn',
+      expectedProjectVersion: repositoryEvidenceProject.version, expectedBlueprintId: repositoryEvidenceBlueprint.id,
+      expectedBlueprintVersion: repositoryEvidenceBlueprint.version }) }, 201);
+  let repositoryEvidenceReady = await request(app.base, `/api/sdlc/cases/${repositoryEvidenceCase.id}/run`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: repositoryEvidenceCase.version,
+      idempotencyKey: 't91-repository-check-link-advance' }) });
+  const repositoryEvidenceRequirement = repositoryEvidenceReady.artifacts.requirements.requirements
+    .find((entry) => entry.processTrace?.process.id === 'process-learn');
+  assert.ok(repositoryEvidenceRequirement);
+  const repositoryEvidenceLink = await request(app.base, `/api/sdlc/cases/${repositoryEvidenceCase.id}/process-run-evidence`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: repositoryEvidenceReady.version,
+      draftRevision: repositoryEvidenceReady.artifacts.requirements.draftRevision,
+      requirementId: repositoryEvidenceRequirement.id, runId: githubRequest.id,
+      idempotencyKey: 't91-repository-check-link-once' }) }, 201);
+  const repositoryChecks = repositoryEvidenceLink.processRunEvidenceLink.repositoryCheckEvidence;
+  assert.equal(repositoryChecks.length, 2);
+  assert.ok(repositoryChecks.every((receipt) => receipt.category === 'REPOSITORY_CHECK'
+    && receipt.status === 'PASSED' && receipt.candidateEvidenceHash === githubCandidateReceipt.hash));
+  assert.equal(repositoryEvidenceLink.processRunEvidenceLink.verificationStatus, 'NOT_EXECUTED',
+    'passing repository checks remain distinct evidence and do not evaluate process behavior');
+  const persistedGithubRun = structuredClone((await app.persistence.query(`select state from orgward.aggregates
+    where tenant_id='tenant-a' and aggregate_kind='execution_run' and aggregate_id=$1`, [githubRequest.id])).rows[0].state);
+  const alteredGithubRun = structuredClone(persistedGithubRun);
+  alteredGithubRun.execution.repositoryCandidate.checkReceipts[0].commandHash = '0'.repeat(64);
+  await app.persistence.query(`update orgward.aggregates set state=$2::jsonb,state_hash=$3
+    where tenant_id='tenant-a' and aggregate_kind='execution_run' and aggregate_id=$1`,
+  [githubRequest.id, JSON.stringify(alteredGithubRun), contentHash(alteredGithubRun)]);
+  const mismatchedRepositoryLink = await fetch(`${app.base}/api/sdlc/cases/${repositoryEvidenceCase.id}/process-run-evidence`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: repositoryEvidenceLink.version,
+      draftRevision: repositoryEvidenceLink.artifacts.requirements.draftRevision,
+      requirementId: repositoryEvidenceRequirement.id, runId: githubRequest.id,
+      idempotencyKey: 't91-repository-check-link-mismatch' }) });
+  assert.equal(mismatchedRepositoryLink.status, 503,
+    'a check receipt whose command pin differs from the persisted plan is rejected');
+  assert.equal((await request(app.base, `/api/sdlc/cases/${repositoryEvidenceCase.id}`, as('alice'))).version,
+    repositoryEvidenceLink.version, 'mismatched repository evidence leaves the case unchanged');
+  const alteredSourceMetadataRun = structuredClone(persistedGithubRun);
+  alteredSourceMetadataRun.execution.repositoryCandidate.source.commitOid = 'f'.repeat(40);
+  await app.persistence.query(`update orgward.aggregates set state=$2::jsonb,state_hash=$3
+    where tenant_id='tenant-a' and aggregate_kind='execution_run' and aggregate_id=$1`,
+  [githubRequest.id, JSON.stringify(alteredSourceMetadataRun), contentHash(alteredSourceMetadataRun)]);
+  const mismatchedSourceMetadataLink = await fetch(`${app.base}/api/sdlc/cases/${repositoryEvidenceCase.id}/process-run-evidence`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: repositoryEvidenceLink.version,
+      draftRevision: repositoryEvidenceLink.artifacts.requirements.draftRevision,
+      requirementId: repositoryEvidenceRequirement.id, runId: githubRequest.id,
+      idempotencyKey: 't91-repository-check-link-source-metadata-mismatch' }) });
+  assert.equal(mismatchedSourceMetadataLink.status, 503,
+    'a candidate commit metadata mutation is rejected even when the aggregate state is resealed');
+  assert.equal((await request(app.base, `/api/sdlc/cases/${repositoryEvidenceCase.id}`, as('alice'))).version,
+    repositoryEvidenceLink.version, 'source metadata mismatch leaves the linked case unchanged');
+  await app.persistence.query(`update orgward.aggregates set state=$2::jsonb,state_hash=$3
+    where tenant_id='tenant-a' and aggregate_kind='execution_run' and aggregate_id=$1`,
+  [githubRequest.id, JSON.stringify(persistedGithubRun), contentHash(persistedGithubRun)]);
   assert.equal(githubCandidate.execution.stdout, 'Applied bounded updates to 1 selected file.');
   assert.equal(providerRequest.body.model, 'gpt-fixture');
   assert.equal(providerRequest.body.store, false);
@@ -10094,6 +10172,10 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   'repeat verification leaves the original candidate receipt unchanged');
   assert.deepEqual(githubCandidateAfterRepeat.events.at(-1), githubTerminalEvent,
     'repeat observations leave the original terminal event byte-for-byte unchanged');
+  const repositoryEvidenceAfterRestart = await request(app.base,
+    `/api/sdlc/cases/${repositoryEvidenceCase.id}`, as('alice'));
+  assert.deepEqual(repositoryEvidenceAfterRestart.artifacts.requirements.processRunEvidenceLinks[0].repositoryCheckEvidence,
+    repositoryChecks, 'validated repository-check evidence survives restart with its exact pins');
   const buildArtifactAfterRestart = await fetch(`${app.base}/api/execution/runs/${githubRequest.id}/artifact?path=${encodeURIComponent('builds/build-2/dist/app.js')}`, as('alice'));
   assert.equal(buildArtifactAfterRestart.status, 200);
   assert.equal(Buffer.from(await buildArtifactAfterRestart.arrayBuffer()).toString(), 'stable bundle\n',

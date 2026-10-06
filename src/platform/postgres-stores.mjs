@@ -792,6 +792,66 @@ function assertLinkedWorkloadRuntime(runtime, run) {
   return runtime;
 }
 
+function verifiedRepositoryCheckEvidence(run, ref, trace) {
+  const candidate = run.execution?.repositoryCandidate;
+  const selection = run.githubPatchSelection;
+  const evidence = candidate?.candidateEvidence;
+  if (!candidate?.checkPlan || !Array.isArray(candidate.checkReceipts) || !selection?.checkPlan
+    || !Array.isArray(selection.checkPlan.requiredChecks) || !evidence
+    || evidence.version !== 'github-candidate-evidence-v1' || evidence.hash !== run.execution?.evidenceHash
+    || candidate.checkPlan.planHash !== selection.checkPlan.planHash
+    || contentHash(candidate.checkPlan) !== contentHash(selection.checkPlan)) return null;
+  const pinned = ref.repository;
+  const expectedPinned = { id: `github-${selection.sourceSnapshot?.repositoryId}`, kind: 'github-app',
+    snapshotId: selection.sourceSnapshot?.snapshotId, treeDigest: selection.repositoryTreeDigest,
+    source: { type: 'github-app', ...selection.sourceSnapshot }, selectedFiles: selection.selectedFiles,
+    verification: selection.verifier, checkPlan: selection.checkPlan,
+    ...(Object.hasOwn(selection, 'buildPlan') ? { buildPlan: selection.buildPlan } : {}) };
+  if (!selection.sourceSnapshot || !Array.isArray(selection.selectedFiles) || !selection.verifier
+    || contentHash(pinned) !== contentHash(expectedPinned)
+    || candidate.repositoryId !== pinned.id || candidate.snapshotId !== pinned.snapshotId
+    || contentHash(candidate.source ?? null) !== contentHash(pinned.source)
+    || candidate.sourceTreeDigest !== pinned.treeDigest
+    || candidate.treeDigest !== candidate.checkReceipts[0]?.candidateTreeDigest
+    || candidate.checkReceipts.length !== selection.checkPlan.requiredChecks.length) return null;
+  const checks = candidate.checkReceipts.map(({ stdout, stderr, ...receipt }) => receipt);
+  const checksValid = checks.every((receipt, index) => {
+    const check = selection.checkPlan.requiredChecks[index];
+    return check && receipt.checkId === check.id && receipt.checkVersion === check.version
+      && receipt.commandHash === check.commandHash && receipt.planHash === selection.checkPlan.planHash
+      && receipt.candidateTreeDigest === candidate.treeDigest
+      && (receipt.status !== 'PASSED' || (receipt.candidateTreeDigestAfter === candidate.treeDigest
+        && receipt.executionStatus === 'COMPLETED' && receipt.exitCode === 0));
+  });
+  if (!checksValid) return null;
+  const diffMetadata = (candidate.changes ?? []).map(({ path, change, beforeMode, afterMode, beforeHash, afterHash }) => ({
+    path, change, beforeMode, afterMode, beforeHash, afterHash,
+  }));
+  const verification = candidate.verification;
+  const verifierReceipt = verification ? { id: verification.id, version: verification.version,
+    profileHash: selection.verifier.profileHash, commandHash: verification.commandHash,
+    treeDigest: verification.treeDigest, status: verification.status, exitCode: verification.exitCode,
+    outputHash: verification.outputHash, stdoutTruncated: verification.stdoutTruncated,
+    stderrTruncated: verification.stderrTruncated } : null;
+  const receiptHash = contentHash({ version: 'github-candidate-evidence-v1', sourceSnapshot: pinned.source,
+    sourceTreeDigest: candidate.sourceTreeDigest,
+    selectedFileHashes: selection.selectedFiles.map(({ path, mode, size, contentHash: hash }) => ({ path, mode, size, contentHash: hash })),
+    candidateTreeDigest: candidate.treeDigest, diffMetadata, verifierReceipt,
+    checkPlan: selection.checkPlan, checkReceipts: checks,
+    ...(Object.hasOwn(candidate, 'buildReceipt') ? { buildPlan: candidate.buildPlan, buildReceipt: candidate.buildReceipt } : {}) });
+  const terminalEvents = (run.events ?? []).filter((event) => ['ExecutionSucceeded', 'ExecutionFailed'].includes(event.type));
+  if (receiptHash !== evidence.hash || terminalEvents.length !== 1
+    || terminalEvents[0].data?.candidateEvidenceHash !== evidence.hash
+    || terminalEvents[0].data?.evidenceHash !== evidence.hash
+    || trace.source.projectId !== run.projectId) return null;
+  return checks.map((receipt) => ({ category: 'REPOSITORY_CHECK', id: receipt.checkId,
+    version: receipt.checkVersion, status: receipt.status, commandHash: receipt.commandHash,
+    planHash: receipt.planHash, repositoryId: candidate.repositoryId, sourceSnapshotId: candidate.snapshotId,
+    sourceCommitOid: pinned.source.commitOid ?? null, sourceTreeDigest: candidate.sourceTreeDigest,
+    candidateTreeDigest: candidate.treeDigest, candidateEvidenceHash: evidence.hash,
+    outputHash: receipt.outputHash }));
+}
+
 async function syncProcessTaskRuntimeFromRun(client, run, { commandId = null } = {}) {
   const ref = run.processTaskRef;
   if (!ref) return;
@@ -2629,8 +2689,22 @@ export class PostgresChangeCaseStore extends PostgresDocumentStore {
       [tenantId, `${runtime.plan_instance_id}:${runtime.task_id}`, runtimeEvents.map((event) => contentHash(event))]);
       if (Number(runtimeEventAudit.rows[0]?.count) !== runtimeEvents.length) throw persistenceIntegrity('A process-task instance event is missing its durable audit record.');
       let outputEvidence;
+      let repositoryCheckEvidence = [];
+      let repositoryCheckEvidenceStatus = 'NOT_APPLICABLE';
       if (run) {
         outputEvidence = trace.outcome.outputRefs.map(({ id, type, snapshotHash }) => ({ id, type, snapshotHash, status: 'UNAVAILABLE' }));
+        const candidate = run.execution?.repositoryCandidate;
+        const configuredChecks = Boolean(run.githubPatchSelection?.checkPlan);
+        const activeRun = ['AWAITING_APPROVAL', 'APPROVED', 'RUNNING', 'PAUSED'].includes(run.status);
+        const hasRepositoryChecks = Boolean(candidate?.checkPlan || candidate?.checkReceipts
+          || (configuredChecks && candidate && ['SUCCEEDED', 'FAILED'].includes(run.status)));
+        repositoryCheckEvidence = verifiedRepositoryCheckEvidence(run, ref, trace) ?? [];
+        if (hasRepositoryChecks && !repositoryCheckEvidence.length) {
+          throw persistenceIntegrity('The persisted repository-check evidence does not match its exact run, task, plan, or candidate pins.');
+        }
+        repositoryCheckEvidenceStatus = repositoryCheckEvidence.length ? 'AVAILABLE'
+          : configuredChecks && activeRun ? 'PENDING'
+            : configuredChecks ? 'NOT_PRODUCED' : 'NOT_CONFIGURED';
       } else {
         verifyPersistedOutputRecords(runtime);
         const completedEvents = runtimeEvents.filter((event) => event.type === 'HumanTaskCompleted'
@@ -2705,6 +2779,8 @@ export class PostgresChangeCaseStore extends PostgresDocumentStore {
           taskId: task.id, taskHash: contentHash(task), selectedProcessId: task.sourceProcessId },
         outputs: trace.outcome.outputRefs.map(({ id, type, snapshotHash }) => ({ id, type, snapshotHash })),
         outputEvidence,
+        repositoryCheckEvidence,
+        repositoryCheckEvidenceStatus,
         instance: { id: ref.planInstanceId, taskId: ref.taskId, version: Number(runtime.version), status: runtime.status,
           runtimeHash: contentHash({ ...runtime, started_at: runtime.started_at?.toISOString?.() ?? runtime.started_at,
             completed_at: runtime.completed_at?.toISOString?.() ?? runtime.completed_at, created_at: runtime.created_at?.toISOString?.() ?? runtime.created_at,

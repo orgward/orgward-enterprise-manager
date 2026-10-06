@@ -56,6 +56,9 @@ export function processRunEvidencePresentation(link) {
     outputs: (link.outputEvidence ?? []).map((output) => output.status === 'HUMAN_REPORTED'
       ? `${output.id}: HUMAN_REPORTED · self-reported value ${JSON.stringify(output.value)}${output.recordHash ? ` · record SHA-256 ${output.recordHash}` : ''}${output.reporterPrincipal ? ` · reported by ${output.reporterPrincipal}` : ''}`
       : `${output.id}: UNAVAILABLE${output.recordHash ? ` · record SHA-256 ${output.recordHash}` : ''}`),
+    repositoryChecks: (link.repositoryCheckEvidence ?? []).map((receipt) =>
+      `${receipt.id} v${receipt.version}: ${receipt.status} · repository ${receipt.repositoryId} · source snapshot ${receipt.sourceSnapshotId}${receipt.sourceCommitOid ? ` · commit ${receipt.sourceCommitOid}` : ''} · command SHA-256 ${receipt.commandHash} · check plan SHA-256 ${receipt.planHash} · source tree SHA-256 ${receipt.sourceTreeDigest} · candidate tree SHA-256 ${receipt.candidateTreeDigest} · candidate evidence SHA-256 ${receipt.candidateEvidenceHash} · output SHA-256 ${receipt.outputHash}`),
+    repositoryCheckStatus: link.repositoryCheckEvidenceStatus ?? 'UNKNOWN',
     applicability: link.applicability === 'CURRENT'
       ? 'Applies to this exact requirement draft.'
       : 'STALE: the requirement draft changed after this link was created.',

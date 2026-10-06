@@ -8688,3 +8688,27 @@ UNVERIFIED / NOT_EXECUTED, and no behavior truth or PASS is claimed. Focused
 PostgreSQL persistence and SDLC presentation tests passed 2/2, 0 failures or
 skips (`/tmp/orgward-tests-aCJTxS/node-test.tap.log`). T-91 and PR-15 remain
 open; task, backlog and production-gate statuses are unchanged.
+
+T-91/PR-15 repository-check evidence (2026-10-06): Sol approved with no findings.
+The persisted SDLC run link now exposes repository-check receipts only after
+server-side validation against the exact run/task/plan, pinned repository source,
+candidate tree, recomputed candidate evidence hash and terminal event. Candidate
+source metadata must match the full pinned source; resealed commit-metadata tamper
+is rejected without mutating the case. A configured check plan with no receipts on
+an active run is linked as PENDING with no fabricated receipt; corrupt claimed
+receipts are rejected. The card identifies repository/snapshot/commit and receipt
+hashes and states that checks do not evaluate process business behavior. Even
+passing checks leave the link UNVERIFIED / NOT_EXECUTED; no behavior truth or PASS
+is claimed. The SDLC presentation test passed 1/1, 0 failures/skips
+(`/tmp/orgward-tests-oOhhoO/node-test.tap.log`; run log
+`/tmp/orgward-repository-check-pending-ui-final-20261006.log`). The focused
+PostgreSQL test reported 0/1 complete test cases passed because a later runtime
+privacy assertion failed after the new pending, receipt, tamper/no-mutation and
+restart assertions passed (`/tmp/orgward-tests-e9IupB/node-test.tap.log`; run log
+`/tmp/orgward-repository-check-pg-pending-20261006.log`). The same later privacy
+failure reproduced at committed parent 150a95d in an isolated worktree after
+adapting only the stale typed-output expectation to assert explicit UNAVAILABLE
+records (`/tmp/orgward-tests-fZ7Nbe/node-test.tap.log`; run log
+`/tmp/orgward-repository-check-parent-baseline-20261006.log`). T-91 and PR-15
+remain open; no task checkbox/cursor, backlog acceptance state or production gate
+changed.

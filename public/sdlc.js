@@ -589,7 +589,9 @@ function renderRequirements(content) {
           return view ? el('article', { className: 'checkpoint-callout' }, [
             el('strong', { text: view.heading }), el('p', { text: view.identity }), el('p', { text: view.hashes }),
             el('p', { text: `${link.reason} ${view.applicability}` }),
+            el('p', { text: `Repository-check evidence state: ${view.repositoryCheckStatus}. Checks are separate repository evidence and do not verify process business behavior; verification remains ${link.verificationStatus}.` }),
             ...(view.outputs ?? []).map((output) => el('p', { text: output })),
+            ...(view.repositoryChecks ?? []).map((receipt) => el('p', { text: `Repository-check receipt · ${receipt}` })),
           ]) : empty('A linked process run has incomplete displayable identity.');
         }) : [empty('No persisted process run is linked to this draft.')]),
       ]));
