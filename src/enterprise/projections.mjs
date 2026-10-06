@@ -11,7 +11,7 @@ import { projectEnterpriseSentinel } from './sentinel.mjs';
 import { projectEnterpriseGovernance } from './governance.mjs';
 import { projectEnterpriseStewardship } from './stewardship.mjs';
 import { projectEnterpriseSourceAttestationPushStatus, projectEnterpriseSourceReconciliationCurrentness } from './source-attestation.mjs';
-import { verifyEnterpriseConceptSchemas } from './concept-schemas.mjs';
+import { verifyEnterpriseConceptRecords, verifyEnterpriseConceptSchemas } from './concept-schemas.mjs';
 
 export function normalizeEnterpriseQuery(input = {}) {
   const accepted = ['lensId', 'scopeId', 'blueprintVersion', 'selectedId', 'proposalId', 'effectiveAt', 'recordedAt', 'branchId', 'branchRevision', 'simulationId', 'economicEvaluationId'];
@@ -173,6 +173,7 @@ export function projectEnterprise(project, query = {}, authority = {}) {
     context.recordedAt ?? new Date().toISOString());
   const sourceProfilesRecorded = (sourceProjectionProject.sourceAttestationProfiles ?? []).filter((entry) => savedBy(entry.recordedAt));
   const conceptSchemas = verifyEnterpriseConceptSchemas(project);
+  const conceptRecords = verifyEnterpriseConceptRecords(project, conceptSchemas);
   return { context: { projectVersion: project.version, blueprintId: blueprint?.id ?? null, blueprintVersion: blueprint?.version ?? null,
     isCurrent, lensId: context.lensId, scopeId: context.scopeId, branch: context.branchId ?? 'main', proposalId: proposal?.id ?? null,
     branchId: context.branchId, branchRevision: branchContext.revision,
@@ -190,6 +191,7 @@ export function projectEnterprise(project, query = {}, authority = {}) {
       parentUnitId: object.parentUnitId ?? null, jurisdiction: object.jurisdiction ?? null, ownerRoleId: object.owner ?? null })),
     versions: recorded.map(({ id, version, createdAt }) => ({ id, version, createdAt })),
     conceptSchemas: conceptSchemas.filter((entry) => savedBy(entry.createdAt)),
+    conceptRecords: conceptRecords.filter((entry) => savedBy(entry.createdAt)),
     sourceAcceptanceReceipts: (project.sourceAcceptanceReceipts ?? []).filter((entry) => savedBy(entry.receivedAt)).map((entry) => structuredClone(entry)),
     sourceReconciliationReports: (project.sourceReconciliationReports ?? []).filter((entry) => savedBy(entry.receivedAt)).map((entry) => structuredClone(entry)),
     sourceAttestationCorrectionReceipts: (project.sourceAttestationCorrectionReceipts ?? []).filter((entry) => savedBy(entry.createdAt)).map((entry) => structuredClone(entry)),

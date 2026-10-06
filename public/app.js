@@ -14,6 +14,7 @@ import { renderChatBlueprintEdit } from './chat-blueprint-edit.mjs';
 import { renderOutcomeInbox } from './outcomes.mjs';
 import { enterpriseContextFailure, enterpriseContextReadOnly, enterpriseStateSummary, enterpriseSourceAligned, hasEnterpriseContext, enterpriseQuery, enterpriseRequestPath, persistEnterpriseCommand, restoreEnterpriseCommand, persistEnterpriseInterchangeDraft, restoreEnterpriseInterchangeDraft, submitEnterpriseCommand, renderEnterpriseContext, renderEnterpriseObject, renderEnterpriseObjectHeader, renderEnterpriseStewardshipPanel } from './enterprise.mjs';
 import { downloadPortfolioDesign, downloadPortfolioInventory, portfolioImportWorkspaceRoute, readPortfolioImportFile, renderProjectPortfolio } from './project-portfolio.mjs';
+import { conceptRecordSuccessMessage } from './enterprise-concepts.mjs';
 
 const state = {
   projects: [],
@@ -315,7 +316,7 @@ async function saveEnterpriseCommand(payload = null, { commandId = null } = {}) 
         || (ENTERPRISE_SENTINEL_COMMANDS.includes(payload.kind) && !model.permissions?.integrityRun)
         || (payload.kind === 'accept-integrity-exception' && !model.permissions?.integrityException)
         || (payload.kind === 'configure-source-attestation-profile' && !model.permissions?.sourceAttestationAdmin)
-        || (payload.kind === 'define-concept-schema' && !model.permissions?.scopeAdmin)
+        || (['define-concept-schema', 'create-concept-record'].includes(payload.kind) && !model.permissions?.scopeAdmin)
         || (ENTERPRISE_SOURCE_ATTESTATION_COMMANDS.includes(payload.kind) && !model.context?.isCurrent)
         || ((['create-scope', 'rename-scope', 'set-validity', 'propose-future-design'].includes(payload.kind)
           || (payload.kind === 'record-state' && payload.dimension === 'review')) && !model.permissions.scopeAdmin)) return;
@@ -351,7 +352,8 @@ async function saveEnterpriseCommand(payload = null, { commandId = null } = {}) 
       && saved.envelope.payload.kind !== 'compare-source-evidence') retainEnterpriseInterchangeDraft(null);
     if (saved.envelope.payload.kind === 'run-integrity-checks') state.enterpriseIntegrityDraft = null;
     if (result.data.simulation) state.enterpriseSimulation = result.data.simulation;
-    state.enterpriseStatus = result.data.conceptSchema ? `Registered ${result.data.conceptSchema.namespace}/${result.data.conceptSchema.conceptId} version ${result.data.conceptSchema.version} with hash ${result.data.conceptSchema.schemaHash}. This is a declarative project schema only; it does not create actions, migrate records, or grant permissions.`
+    state.enterpriseStatus = result.data.conceptRecord ? conceptRecordSuccessMessage(result.data.conceptRecord)
+      : result.data.conceptSchema ? `Registered ${result.data.conceptSchema.namespace}/${result.data.conceptSchema.conceptId} version ${result.data.conceptSchema.version} with hash ${result.data.conceptSchema.schemaHash}. This is a declarative project schema only; it does not create actions, migrate records, or grant permissions.`
       : result.data.sourceAttestationReport ? `Recorded collector-attested evidence: ${result.data.sourceAttestationReport.counts.CURRENT} current, ${result.data.sourceAttestationReport.counts.PROPOSED} proposed, ${result.data.sourceAttestationReport.counts.STALE} stale, ${result.data.sourceAttestationReport.counts.CONTRADICTED} contradicted, ${result.data.sourceAttestationReport.counts.MISSING} missing, ${result.data.sourceAttestationReport.counts.UNVERIFIABLE} unverifiable. Third-party source truth/acquisition are not independently verified. The accepted design and evaluations were unchanged.`
       : result.data.sourceAttestationProfile ? `Saved source attestation profile ${result.data.sourceAttestationProfile.id} version ${result.data.sourceAttestationProfile.version}; collector trust and freshness policy are owner controlled.`
       : result.data.sourceReconciliationReport ? `Recorded an uploaded claim comparison: ${result.data.sourceReconciliationReport.counts.MATCHED} matched, ${result.data.sourceReconciliationReport.counts.DRIFTED} changed in upload, ${result.data.sourceReconciliationReport.counts.MISSING} absent from upload, ${result.data.sourceReconciliationReport.counts.UNVERIFIABLE} unverifiable. Source unverified; freshness unknown. The accepted design was unchanged.`

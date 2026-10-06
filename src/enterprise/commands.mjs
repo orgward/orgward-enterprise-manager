@@ -14,7 +14,8 @@ import { applyEnterpriseSourceAttestationCommand, ENTERPRISE_SOURCE_ATTESTATION_
 import { applyEnterpriseGovernanceCommand, ENTERPRISE_GOVERNANCE_KINDS, normalizeEnterpriseGovernanceCommand } from './governance.mjs';
 import { applyEnterpriseStewardshipCommand, ENTERPRISE_STEWARDSHIP_KINDS, normalizeEnterpriseStewardshipCommand } from './stewardship.mjs';
 import { applyEnterpriseSentinelCommand, ENTERPRISE_SENTINEL_KINDS, normalizeEnterpriseSentinelCommand } from './sentinel.mjs';
-import { applyEnterpriseConceptSchema, ENTERPRISE_CONCEPT_SCHEMA_KINDS, normalizeEnterpriseConceptSchemaCommand } from './concept-schemas.mjs';
+import { applyEnterpriseConceptRecord, applyEnterpriseConceptSchema, ENTERPRISE_CONCEPT_RECORD_KINDS, ENTERPRISE_CONCEPT_SCHEMA_KINDS,
+  normalizeEnterpriseConceptRecordCommand, normalizeEnterpriseConceptSchemaCommand } from './concept-schemas.mjs';
 
 const base = ['kind', 'blueprintId', 'blueprintVersion', 'reason'];
 const BLUEPRINT_EDIT_FIELDS = ['objectId', 'name', 'detail', 'ownerRoleName', 'trigger', 'capabilityId',
@@ -34,6 +35,7 @@ export function normalizeEnterpriseCommand(input) {
   if (input && ENTERPRISE_STEWARDSHIP_KINDS.has(input.kind)) return normalizeEnterpriseStewardshipCommand(input);
   if (input && ENTERPRISE_SENTINEL_KINDS.has(input.kind)) return normalizeEnterpriseSentinelCommand(input);
   if (input && ENTERPRISE_CONCEPT_SCHEMA_KINDS.has(input.kind)) return normalizeEnterpriseConceptSchemaCommand(input);
+  if (input && ENTERPRISE_CONCEPT_RECORD_KINDS.has(input.kind)) return normalizeEnterpriseConceptRecordCommand(input);
   if (input && ENTERPRISE_GOVERNANCE_KINDS.has(input.kind)) return normalizeEnterpriseGovernanceCommand(input);
   if (input && ENTERPRISE_INTEGRITY_KINDS.has(input.kind)) return normalizeEnterpriseIntegrityCommand(input);
   if (input && ENTERPRISE_SOURCE_ATTESTATION_KINDS.has(input.kind)) return normalizeEnterpriseSourceAttestationCommand(input);
@@ -106,6 +108,7 @@ export function normalizeEnterpriseCommand(input) {
 }
 export function applyEnterpriseCommand(project, command, actor, options = {}) {
   if (ENTERPRISE_CONCEPT_SCHEMA_KINDS.has(command.kind)) return applyEnterpriseConceptSchema(project, command, actor, options.tenantId);
+  if (ENTERPRISE_CONCEPT_RECORD_KINDS.has(command.kind)) return applyEnterpriseConceptRecord(project, command, actor, options.tenantId);
   if (ENTERPRISE_STEWARDSHIP_KINDS.has(command.kind)) return applyEnterpriseStewardshipCommand(project, command, actor);
   if (ENTERPRISE_SENTINEL_KINDS.has(command.kind)) return applyEnterpriseSentinelCommand(project, command, actor, options.receivedAt ? new Date(options.receivedAt) : new Date());
   if (command.kind === 'edit-blueprint-object') {

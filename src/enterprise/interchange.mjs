@@ -33,7 +33,7 @@ const rawEditableKeys = new Set(['id', 'type', 'name', 'detail', 'owner', 'goals
   'proposedToolStatements', 'proposedEscalationRules', 'authority', 'by', 'scope', 'assignedRoles', 'evidence', 'goal',
   'decisionIds', 'reads', 'consumerLoop', 'control']);
 
-export function createEnterpriseInterchangeBundle(projectId, blueprint, conceptSchemas = null) {
+export function createEnterpriseInterchangeBundle(projectId, blueprint, conceptSchemas = null, conceptRecords = null) {
   if (!blueprint) fail('BLUEPRINT_NOT_FOUND', 'Save an initial proposed design before exporting it.', 409);
   const source = { projectId, blueprintId: blueprint.id, blueprintVersion: blueprint.version, snapshotHash: digest(blueprint) };
   const records = blueprintObjects(blueprint).map((object) => {
@@ -44,9 +44,11 @@ export function createEnterpriseInterchangeBundle(projectId, blueprint, conceptS
     baseline: structuredClone(blueprint), records, recordsCount: records.length,
     ...(conceptSchemas?.length ? { projectPrivateConceptSchemas: structuredClone(conceptSchemas),
       projectPrivateConceptSchemasHash: digest(conceptSchemas) } : {}),
+    ...(conceptRecords?.length ? { projectPrivateConceptRecords: structuredClone(conceptRecords),
+      projectPrivateConceptRecordsHash: digest(conceptRecords) } : {}),
     meaning: 'PROPOSED_DESIGN_EDITABLE_FIELDS_ONLY' };
-  if (conceptSchemas?.length && jsonSize(bundle) > ENTERPRISE_INTERCHANGE_LIMITS.bundleBytes) {
-    fail('ENTERPRISE_EXPORT_TOO_LARGE', 'The lossless design and project-private schema bundle exceeds 1 MB; reduce its scope before export.');
+  if ((conceptSchemas?.length || conceptRecords?.length) && jsonSize(bundle) > ENTERPRISE_INTERCHANGE_LIMITS.bundleBytes) {
+    fail('ENTERPRISE_EXPORT_TOO_LARGE', 'The lossless design and project-private schema/record bundle exceeds 1 MB; reduce its scope before export.');
   }
   return bundle;
 }
@@ -338,6 +340,13 @@ export function previewEnterpriseInterchange(project, bundle) {
       fail('ENTERPRISE_IMPORT_EXTENSION_UNVERIFIED', 'The project-private concept schemas are not intact. Keep the source project or use a supported schema migration path.', 409);
     }
   }
+  if (Object.hasOwn(bundle, 'projectPrivateConceptRecords') || Object.hasOwn(bundle, 'projectPrivateConceptRecordsHash')) {
+    if (!Array.isArray(bundle.projectPrivateConceptRecords) || bundle.projectPrivateConceptRecords.length > 5_000
+      || typeof bundle.projectPrivateConceptRecordsHash !== 'string'
+      || digest(bundle.projectPrivateConceptRecords) !== bundle.projectPrivateConceptRecordsHash) {
+      fail('ENTERPRISE_IMPORT_EXTENSION_UNVERIFIED', 'The project-private concept records are not intact. Keep the source project or use a supported record/schema migration path.', 409);
+    }
+  }
   const source = bundle.source; const baseline = bundle.baseline;
   if (!canonicalBaselineAreas(baseline)) {
     fail('INVALID_ENTERPRISE_BUNDLE_BASELINE', 'The source baseline must contain each canonical enterprise area and well-formed, uniquely identified records.', 400);
@@ -436,14 +445,19 @@ export function previewEnterpriseInterchange(project, bundle) {
   }
   const core = { source: structuredClone(source), currentSource, recordCount: rows.length,
     recognizedFields: rows.reduce((sum, row) => sum + row.recognizedFields.length, 0),
-    unknownFields: [...bundleUnknownFields.map((field) => ({ recordId: null, field })),
+      unknownFields: [...bundleUnknownFields.map((field) => ({ recordId: null, field })),
       ...rows.flatMap((row) => row.unknownFields.map((field) => ({ recordId: row.id, field })))],
     lossyFields: rows.flatMap((row) => row.lossFields.map((field) => ({ recordId: row.id, field }))),
     collisions: rows.flatMap((row) => row.collisions.map((collision) => ({ recordId: row.id, ...collision }))),
     validationErrors: rows.flatMap((row) => row.validationErrors.map((error) => ({ recordId: row.id, ...error }))),
     readyRecordIds: rows.filter((row) => row.status === 'READY').map((row) => row.id),
-    rows, ...(Object.hasOwn(bundle, 'projectPrivateConceptSchemas') ? { unsupportedExtensions: [{ field: 'projectPrivateConceptSchemas',
-      reason: 'Project-private concept schemas are preserved in export but this design import path cannot merge them.' }] } : {}),
+    rows, ...(Object.hasOwn(bundle, 'projectPrivateConceptSchemas') || Object.hasOwn(bundle, 'projectPrivateConceptRecords')
+      ? { unsupportedExtensions: [
+        ...(Object.hasOwn(bundle, 'projectPrivateConceptSchemas') ? [{ field: 'projectPrivateConceptSchemas',
+          reason: 'Project-private concept schemas are preserved in export but this design import path cannot merge them.' }] : []),
+        ...(Object.hasOwn(bundle, 'projectPrivateConceptRecords') ? [{ field: 'projectPrivateConceptRecords',
+          reason: 'Project-private concept records are preserved in export but this design import path cannot merge or migrate them.' }] : []),
+      ] } : {}),
     meaning: 'PROPOSED_DESIGN_ONLY' };
   return { ...core, previewHash: digest(core), currentSource };
 }

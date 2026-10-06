@@ -16,7 +16,7 @@ import { enterpriseIntegrityCommandPayload, enterpriseIntegrityExceptionPayload,
 import { enterpriseGovernanceCommandPayload, renderEnterpriseGovernance } from '../../public/enterprise-governance.mjs';
 import { enterpriseStewardshipPayload, renderEnterpriseStewardship } from '../../public/enterprise-stewardship.mjs';
 import { enterpriseSentinelCommandPayload, renderEnterpriseSentinel } from '../../public/enterprise-sentinel.mjs';
-import { renderEnterpriseConceptSchemas } from '../../public/enterprise-concepts.mjs';
+import { conceptRecordSuccessMessage, renderEnterpriseConceptSchemas } from '../../public/enterprise-concepts.mjs';
 import { downloadPortfolioDesign, downloadPortfolioInventory, portfolioDesignExportFilename, portfolioInventoryBundle,
   portfolioInventoryFilename, projectPortfolioFacts, readPortfolioImportFile, renderProjectPortfolio,
   portfolioImportWorkspaceRoute, portfolioManageAccessRoute, verifyPortfolioDesignBundle } from '../../public/project-portfolio.mjs';
@@ -2178,14 +2178,40 @@ test('an unavailable requested enterprise context stays explicit and offers an i
 test('concept schema panel shows project-private scope, exact immutable pins, supported limits and owner-only definition form', () => {
   const schema = { formatVersion: 1, projectId: 'project-one', tenantId: 'tenant-one', namespace: 'customer.quality', conceptId: 'inspection',
     version: 1, predecessorHash: null, schemaHash: 'a'.repeat(64), createdBy: 'owner', createdAt: '2026-10-06T00:00:00.000Z',
-    fields: [{ id: 'sample', label: 'Sample', type: 'text', required: true, cardinality: 'ONE' }], predicates: [] };
-  const model = { conceptSchemas: [schema], context: { isCurrent: true }, permissions: { scopeAdmin: true } };
+    fields: [
+      { id: 'sample', label: 'Sample', type: 'text', required: true, cardinality: 'ONE' },
+      { id: 'count', label: 'Count', type: 'number', required: false, cardinality: 'ONE' },
+      { id: 'reviewed', label: 'Reviewed', type: 'boolean', required: false, cardinality: 'ONE' },
+      { id: 'decision', label: 'Decision', type: 'enum', required: true, cardinality: 'ONE', enumValues: ['PASS', 'FAIL'] },
+      { id: 'temperature', label: 'Temperature', type: 'quantity', required: true, cardinality: 'ONE', units: ['C', 'F'] },
+      { id: 'source', label: 'Source', type: 'reference', required: true, cardinality: 'ONE',
+        referenceTarget: { namespace: 'customer.quality', conceptId: 'source', version: 1, schemaHash: 'c'.repeat(64) } },
+      { id: 'comment', label: 'Comment', type: 'text', required: false, cardinality: 'ONE' },
+      { id: 'notes', label: 'Notes', type: 'text', required: false, cardinality: 'MANY', minItems: 0, maxItems: 3 },
+    ], predicates: [] };
+  const alternate = { ...schema, conceptId: 'alternate', schemaHash: 'd'.repeat(64), fields: [
+    { id: 'enabled', label: 'Enabled', type: 'boolean', required: false, cardinality: 'ONE' },
+  ] };
+  const targetSchema = { ...schema, conceptId: 'source', schemaHash: 'c'.repeat(64), fields: [
+    { id: 'name', label: 'Source name', type: 'text', required: true, cardinality: 'ONE' },
+  ] };
+  const targetRecord = { id: 'concept-record-00000000-0000-4000-8000-000000000002', namespace: targetSchema.namespace,
+    conceptId: targetSchema.conceptId, schemaVersion: targetSchema.version, schemaHash: targetSchema.schemaHash,
+    values: { name: 'supplier-1' }, epistemicStatus: 'HUMAN_REPORTED', verificationStatus: 'UNVERIFIED',
+    recordHash: 'e'.repeat(64), createdBy: 'owner', createdAt: '2026-10-06T00:00:00.000Z' };
+  const model = { conceptSchemas: [schema, alternate, targetSchema], conceptRecords: [{ id: 'concept-record-00000000-0000-4000-8000-000000000001',
+    namespace: 'customer.quality', conceptId: 'inspection', schemaVersion: 1, schemaHash: 'a'.repeat(64),
+    values: { sample: 'batch-7' }, epistemicStatus: 'HUMAN_REPORTED', verificationStatus: 'UNVERIFIED',
+    recordHash: 'b'.repeat(64), createdBy: 'owner', createdAt: '2026-10-06T00:00:00.000Z' }, targetRecord],
+  context: { isCurrent: true, blueprintId: 'blueprint-00000000-0000-4000-8000-000000000001', blueprintVersion: 1 }, permissions: { scopeAdmin: true } };
   let submitted;
   const panel = renderEnterpriseConceptSchemas({ model, el, onCommand: (payload) => { submitted = payload; } });
   assert.match(panel.textContent, /Project-private · declarative only/);
   assert.match(panel.textContent, /do not add actions, run code, migrate existing objects, or grant permissions/);
   assert.match(panel.textContent, /text, number, boolean, enum, quantity with explicit units, and reference to an exact registered schema/);
   assert.match(panel.textContent, /schema hash a{64}/);
+  assert.match(panel.textContent, /HUMAN_REPORTED · UNVERIFIED/);
+  assert.match(panel.textContent, /Record hash b{64}/);
   const form = panel.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === 'define-concept-schema');
   assert.ok(form);
   const control = (name) => form.querySelectorAll('input,textarea').find((entry) => entry.attrs.name === name);
@@ -2198,6 +2224,56 @@ test('concept schema panel shows project-private scope, exact immutable pins, su
   assert.deepEqual(submitted, { kind: 'define-concept-schema', definition: { formatVersion: 1, namespace: 'customer.quality',
     conceptId: 'inspection', fields: [{ id: 'batch', label: 'Batch', type: 'text', required: true, cardinality: 'ONE' }], predicates: [] },
   reason: 'Define the inspection shape.' });
+
+  const recordForm = panel.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === 'create-concept-record');
+  assert.ok(recordForm);
+  const schemaSelect = recordForm.querySelectorAll('select').find((entry) => entry.attrs.name === 'schemaHash');
+  schemaSelect.value = schema.schemaHash;
+  schemaSelect.listeners.get('change')({});
+  const fieldControl = (id, tag = null) => recordForm.querySelectorAll('[data-concept-field]')
+    .find((entry) => entry.attrs['data-concept-field'] === id && (!tag || entry.tagName === tag));
+  assert.equal(fieldControl('sample').attrs.type, 'text');
+  assert.equal(fieldControl('count').attrs.type, 'number');
+  assert.equal(fieldControl('reviewed').tagName, 'select');
+  assert.equal(fieldControl('decision').tagName, 'select');
+  assert.equal(fieldControl('temperature').attrs.type, 'number');
+  assert.match(recordForm.textContent, /JSON array, at most 3 items/);
+  fieldControl('sample').value = 'batch-7';
+  fieldControl('count').value = '3';
+  fieldControl('reviewed').value = 'false';
+  fieldControl('decision').value = 'PASS';
+  fieldControl('temperature').value = '20.5';
+  recordForm.querySelectorAll('[data-concept-field-unit]').find((entry) => entry.attrs['data-concept-field-unit'] === 'temperature').value = 'C';
+  const reference = fieldControl('source', 'select');
+  assert.ok(reference.children.some((option) => option.attrs.value === targetRecord.id), 'reference choices are filtered to the exact target schema pin');
+  reference.value = targetRecord.id;
+  fieldControl('comment').value = '   ';
+  recordForm.querySelectorAll('textarea').find((entry) => entry.attrs['data-concept-field'] === 'notes').value = '["first", "second"]';
+  recordForm.querySelectorAll('input').find((entry) => entry.attrs.name === 'reason').value = 'Report this inspection.';
+  recordForm.listeners.get('submit')({ preventDefault() {} });
+  assert.deepEqual(submitted, { kind: 'create-concept-record', blueprintId: model.context.blueprintId,
+    blueprintVersion: model.context.blueprintVersion, namespace: schema.namespace, conceptId: schema.conceptId,
+    schemaVersion: schema.version, schemaHash: schema.schemaHash,
+    values: { sample: 'batch-7', count: 3, reviewed: false, decision: 'PASS', temperature: { value: 20.5, unit: 'C' },
+      source: { recordId: targetRecord.id }, notes: ['first', 'second'] }, reason: 'Report this inspection.' });
+
+  fieldControl('comment').value = '  preserved nonblank text  ';
+  recordForm.listeners.get('submit')({ preventDefault() {} });
+  assert.equal(submitted.values.comment, '  preserved nonblank text  ', 'nonblank optional text is preserved without trimming');
+
+  assert.equal(conceptRecordSuccessMessage({ namespace: 'customer.quality', conceptId: 'inspection',
+    id: 'concept-record-example' }), 'Created customer.quality/inspection record concept-record-example. HUMAN_REPORTED / UNVERIFIED; its values have not been independently verified.');
+
+  schemaSelect.value = alternate.schemaHash;
+  schemaSelect.listeners.get('change')({});
+  assert.deepEqual(Array.from(recordForm.querySelectorAll('[data-concept-field]'), (entry) => entry.attrs['data-concept-field']), ['enabled'],
+    'changing schema replaces the form controls with the selected exact version');
+  recordForm.querySelectorAll('input').find((entry) => entry.attrs.name === 'reason').value = 'Report an alternate record.';
+  recordForm.listeners.get('submit')({ preventDefault() {} });
+  assert.deepEqual(submitted, { kind: 'create-concept-record', blueprintId: model.context.blueprintId,
+    blueprintVersion: model.context.blueprintVersion, namespace: alternate.namespace, conceptId: alternate.conceptId,
+    schemaVersion: alternate.version, schemaHash: alternate.schemaHash, values: {}, reason: 'Report an alternate record.' },
+  'unfilled optional fields are omitted when a different schema is selected');
 
   const editor = renderEnterpriseConceptSchemas({ model: { ...model, permissions: { scopeAdmin: false } }, el, onCommand() {} });
   assert.equal(editor.querySelectorAll('form').length, 0, 'non-owner view cannot expose schema registration');

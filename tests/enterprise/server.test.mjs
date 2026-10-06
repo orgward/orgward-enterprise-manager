@@ -2412,6 +2412,8 @@ test('customer concept schemas are owner-defined, project-private, hash-chained,
     { id: 'sample', label: 'Sample reference', type: 'text', required: true, cardinality: 'ONE' },
     { id: 'temperature', label: 'Temperature', type: 'quantity', required: true, cardinality: 'ONE', units: ['C'] },
     { id: 'decision', label: 'Decision', type: 'enum', required: true, cardinality: 'ONE', enumValues: ['PASS', 'FAIL'] },
+    { id: 'count', label: 'Sample count', type: 'number', required: false, cardinality: 'ONE' },
+    { id: 'reviewed', label: 'Reviewed', type: 'boolean', required: false, cardinality: 'ONE' },
   ], predicates: [{ id: 'temperature-high', fieldId: 'temperature', operator: 'gt', value: { value: 80, unit: 'C' } }] };
   const initialView = await currentView(instance.base, 'owner', project.id);
   const command = commandBody(initialView, 'concept-schema-inspection-v1', { kind: 'define-concept-schema', definition,
@@ -2427,6 +2429,73 @@ test('customer concept schemas are owner-defined, project-private, hash-chained,
   assert.equal(created.event.data.conceptSchemaHash, schemaV1.schemaHash);
   assert.equal(created.data.projectVersion, initialView.data.context.projectVersion + 1);
   assert.equal(created.data.blueprintVersion, initialView.data.context.blueprintVersion, 'schema registration does not mutate blueprint');
+
+  const recordView = await currentView(instance.base, 'owner', project.id);
+  const recordPayload = (schema, values) => ({ kind: 'create-concept-record', namespace: schema.namespace,
+    conceptId: schema.conceptId, schemaVersion: schema.version, schemaHash: schema.schemaHash, values,
+    reason: 'Report a project-specific inspection.' });
+  const recordValues = { sample: 'batch-7', temperature: { value: 81, unit: 'C' }, decision: 'PASS', count: 3, reviewed: true };
+  const recordCommand = commandBody(recordView, 'concept-record-inspection-1', recordPayload(schemaV1, recordValues));
+  const recordDenied = await postCommand(instance.base, 'editor', project.id, { ...recordCommand, commandId: 'concept-record-editor-denied' }, 403);
+  assert.equal(recordDenied.error.code, 'ACTION_FORBIDDEN');
+  const recordCreated = await postCommand(instance.base, 'owner', project.id, recordCommand);
+  const conceptRecord = recordCreated.data.conceptRecord;
+  assert.equal(recordCreated.event.type, 'EnterpriseConceptRecordCreated');
+  assert.equal(recordCreated.event.data.conceptRecordHash, conceptRecord.recordHash);
+  assert.equal(conceptRecord.schemaHash, schemaV1.schemaHash);
+  assert.equal(conceptRecord.schemaVersion, schemaV1.version);
+  assert.equal(conceptRecord.epistemicStatus, 'HUMAN_REPORTED');
+  assert.equal(conceptRecord.verificationStatus, 'UNVERIFIED');
+  assert.equal(conceptRecord.createdBy, identities.get('owner').principal);
+  assert.match(conceptRecord.recordHash, /^[a-f0-9]{64}$/);
+  assert.deepEqual(conceptRecord.values, recordValues);
+  const recordReplay = await postCommand(instance.base, 'owner', project.id, recordCommand);
+  assert.equal(recordReplay.meta.replayed, true);
+  assert.deepEqual(recordReplay.data, recordCreated.data);
+  const changedRecordReplay = await postCommand(instance.base, 'owner', project.id, { ...recordCommand,
+    payload: { ...recordCommand.payload, values: { ...recordValues, decision: 'FAIL' } } }, 409);
+  assert.equal(changedRecordReplay.error.code, 'IDEMPOTENCY_CONFLICT');
+  const staleRecord = await postCommand(instance.base, 'owner', project.id, { ...recordCommand, commandId: 'concept-record-stale-project' }, 409);
+  assert.equal(staleRecord.error.code, 'VERSION_CONFLICT');
+
+  const currentRecordView = await currentView(instance.base, 'owner', project.id);
+  for (const [suffix, values, code] of [
+    ['enum', { ...recordValues, decision: 'MAYBE' }, 'INVALID_CONCEPT_RECORD'],
+    ['quantity', { ...recordValues, temperature: { value: 81, unit: 'F' } }, 'INVALID_CONCEPT_RECORD'],
+    ['missing', { sample: 'batch-8', temperature: { value: 79, unit: 'C' } }, 'CONCEPT_RECORD_REQUIRED_FIELD'],
+    ['type', { ...recordValues, sample: 7 }, 'INVALID_CONCEPT_RECORD'],
+    ['whitespace-text', { ...recordValues, sample: ' \t ' }, 'INVALID_CONCEPT_RECORD'],
+    ['number-type', { ...recordValues, count: '3' }, 'INVALID_CONCEPT_RECORD'],
+    ['boolean-type', { ...recordValues, reviewed: 'true' }, 'INVALID_CONCEPT_RECORD'],
+    ['one-cardinality', { ...recordValues, sample: ['batch-8'] }, 'INVALID_CONCEPT_RECORD'],
+  ]) {
+    const invalid = await postCommand(instance.base, 'owner', project.id,
+      commandBody(currentRecordView, `concept-record-invalid-${suffix}`, recordPayload(schemaV1, values)), 400);
+    assert.equal(invalid.error.code, code);
+  }
+  const staleSchema = await postCommand(instance.base, 'owner', project.id,
+    commandBody(currentRecordView, 'concept-record-stale-schema', recordPayload({ ...schemaV1, schemaHash: 'a'.repeat(64) }, recordValues)), 409);
+  assert.equal(staleSchema.error.code, 'CONCEPT_SCHEMA_STALE');
+
+  const referenceDefinition = { formatVersion: 1, namespace: 'customer.quality', conceptId: 'inspection-link', fields: [
+    { id: 'inspection', label: 'Inspection', type: 'reference', required: true, cardinality: 'ONE',
+      referenceTarget: { namespace: schemaV1.namespace, conceptId: schemaV1.conceptId, version: schemaV1.version, schemaHash: schemaV1.schemaHash } },
+  ], predicates: [] };
+  const beforeReferenceSchema = await currentView(instance.base, 'owner', project.id);
+  const referenceSchema = await postCommand(instance.base, 'owner', project.id, commandBody(beforeReferenceSchema,
+    'concept-schema-inspection-link', { kind: 'define-concept-schema', definition: referenceDefinition,
+      reason: 'Pin the exact inspection schema for linked records.' }));
+  const linkSchema = referenceSchema.data.conceptSchema;
+  const linkedValues = { inspection: { recordId: conceptRecord.id } };
+  const wrongReference = await postCommand(instance.base, 'owner', project.id, commandBody(
+    await currentView(instance.base, 'owner', project.id), 'concept-record-reference-missing',
+    recordPayload(linkSchema, { inspection: { recordId: `concept-record-00000000-0000-4000-8000-000000000099` } })), 409);
+  assert.equal(wrongReference.error.code, 'CONCEPT_RECORD_REFERENCE_NOT_FOUND');
+  const linkedRecord = await postCommand(instance.base, 'owner', project.id, commandBody(
+    await currentView(instance.base, 'owner', project.id), 'concept-record-inspection-link-1', recordPayload(linkSchema, linkedValues)));
+  assert.equal(linkedRecord.data.conceptRecord.values.inspection.recordId, conceptRecord.id);
+  assert.equal(linkedRecord.data.conceptRecord.verificationStatus, 'UNVERIFIED');
+
   const replay = await postCommand(instance.base, 'owner', project.id, command);
   assert.equal(replay.meta.replayed, true);
   assert.deepEqual(replay.data, created.data);
@@ -2434,15 +2503,17 @@ test('customer concept schemas are owner-defined, project-private, hash-chained,
     payload: { ...command.payload, reason: 'Change the content behind a retained command ID.' } }, 409);
   assert.equal(changedReplay.error.code, 'IDEMPOTENCY_CONFLICT');
   const projectData = await postgres.query(`select state from orgward.aggregates where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2`, [tenantId, project.id]);
-  assert.equal(projectData.rows[0].state.enterpriseConceptSchemas.length, 1, 'idempotent replay appends one schema version');
-  assert.equal(projectData.rows[0].state.audit.filter((entry) => entry.action === 'enterprise.define-concept-schema').length, 1);
-  assert.equal(projectData.rows[0].state.events.filter((entry) => entry.type === 'EnterpriseConceptSchemaDefined').length, 1);
+  assert.equal(projectData.rows[0].state.enterpriseConceptRecords.length, 2, 'record replay creates no second record');
+  assert.equal(projectData.rows[0].state.audit.filter((entry) => entry.action === 'enterprise.define-concept-schema').length, 2);
+  assert.equal(projectData.rows[0].state.audit.filter((entry) => entry.action === 'enterprise.create-concept-record').length, 2);
+  assert.equal(projectData.rows[0].state.events.filter((entry) => entry.type === 'EnterpriseConceptSchemaDefined').length, 2);
+  assert.equal(projectData.rows[0].state.events.filter((entry) => entry.type === 'EnterpriseConceptRecordCreated').length, 2);
 
   const stale = await postCommand(instance.base, 'owner', project.id, { ...command, commandId: 'concept-schema-stale',
     payload: { ...command.payload, reason: 'Stale concurrent schema write.' } }, 409);
   assert.equal(stale.error.code, 'VERSION_CONFLICT');
   const afterConflict = await currentView(instance.base, 'owner', project.id);
-  assert.equal(afterConflict.data.conceptSchemas.length, 1);
+  assert.equal(afterConflict.data.conceptSchemas.length, 2);
   const schemaV2Definition = { ...definition, fields: [...definition.fields,
     { id: 'notes', label: 'Notes', type: 'text', required: false, cardinality: 'MANY', minItems: 0, maxItems: 4 }] };
   const successorCommand = commandBody(afterConflict, 'concept-schema-inspection-v2', { kind: 'define-concept-schema',
@@ -2451,20 +2522,40 @@ test('customer concept schemas are owner-defined, project-private, hash-chained,
   assert.equal(successor.data.conceptSchema.version, 2);
   assert.equal(successor.data.conceptSchema.predecessorHash, schemaV1.schemaHash);
   assert.equal(successor.data.conceptSchema.fields.some((field) => field.id === 'notes'), true);
-  assert.deepEqual(schemaV1.fields.map((field) => field.id), ['sample', 'temperature', 'decision'], 'prior versions remain immutable');
+  assert.deepEqual(schemaV1.fields.map((field) => field.id), ['sample', 'temperature', 'decision', 'count', 'reviewed'], 'prior versions remain immutable');
+  const tooManyNotes = await postCommand(instance.base, 'owner', project.id, commandBody(
+    await currentView(instance.base, 'owner', project.id), 'concept-record-many-too-many', recordPayload(successor.data.conceptSchema,
+      { ...recordValues, notes: ['1', '2', '3', '4', '5'] })), 400);
+  assert.equal(tooManyNotes.error.code, 'INVALID_CONCEPT_RECORD');
+  const blankManyNote = await postCommand(instance.base, 'owner', project.id, commandBody(
+    await currentView(instance.base, 'owner', project.id), 'concept-record-many-blank-text', recordPayload(successor.data.conceptSchema,
+      { ...recordValues, notes: ['line one', '  '] })), 400);
+  assert.equal(blankManyNote.error.code, 'INVALID_CONCEPT_RECORD');
+  const manyRecord = await postCommand(instance.base, 'owner', project.id, commandBody(
+    await currentView(instance.base, 'owner', project.id), 'concept-record-many-valid', recordPayload(successor.data.conceptSchema,
+      { ...recordValues, notes: ['line one', 'line two'] })));
+  assert.deepEqual(manyRecord.data.conceptRecord.values.notes, ['line one', 'line two']);
 
   const separateProjectView = await currentView(instance.base, 'owner', otherProject.id);
   assert.deepEqual(separateProjectView.data.conceptSchemas, [], 'schemas are private to the project aggregate');
+  assert.deepEqual(separateProjectView.data.conceptRecords, [], 'records are private to the project aggregate');
+  const crossProjectRecord = await postCommand(instance.base, 'owner', otherProject.id, commandBody(separateProjectView,
+    'concept-record-cross-project', recordPayload(schemaV1, recordValues)), 409);
+  assert.equal(crossProjectRecord.error.code, 'CONCEPT_SCHEMA_STALE');
   const inaccessible = await currentView(instance.base, 'foreign', project.id, {}, 404);
   assert.equal(inaccessible.error.code, 'PROJECT_NOT_FOUND');
 
   const exported = await request(instance.base, 'owner', `/api/v1/projects/${project.id}/enterprise/export`);
-  assert.deepEqual(exported.data.projectPrivateConceptSchemas.map((schema) => schema.schemaHash), [schemaV1.schemaHash, successor.data.conceptSchema.schemaHash]);
+  assert.deepEqual(exported.data.projectPrivateConceptSchemas.map((schema) => schema.schemaHash), [schemaV1.schemaHash, linkSchema.schemaHash, successor.data.conceptSchema.schemaHash]);
   assert.equal(exported.data.projectPrivateConceptSchemasHash, digest(exported.data.projectPrivateConceptSchemas));
+  assert.deepEqual(exported.data.projectPrivateConceptRecords.map((record) => record.recordHash),
+    [conceptRecord.recordHash, linkedRecord.data.conceptRecord.recordHash, manyRecord.data.conceptRecord.recordHash]);
+  assert.equal(exported.data.projectPrivateConceptRecordsHash, digest(exported.data.projectPrivateConceptRecords));
   const preview = await request(instance.base, 'owner', `/api/v1/projects/${project.id}/enterprise/import-preview`, {
     method: 'POST', body: { bundle: exported.data },
   });
   assert.ok(preview.data.unsupportedExtensions.some((entry) => entry.field === 'projectPrivateConceptSchemas'));
+  assert.ok(preview.data.unsupportedExtensions.some((entry) => entry.field === 'projectPrivateConceptRecords'));
   assert.ok(preview.data.unknownFields.some((entry) => entry.field === 'projectPrivateConceptSchemas'));
   const importAttempt = await postCommand(instance.base, 'owner', project.id, { schemaVersion: '1.0', commandId: 'concept-schema-import-rejected',
     expectedVersion: preview.data.currentSource.projectVersion, payload: { kind: 'bulk-edit-objects', blueprintId: preview.data.currentSource.blueprintId,
@@ -2475,7 +2566,13 @@ test('customer concept schemas are owner-defined, project-private, hash-chained,
   await closeApp(instance);
   instance = await startApp(postgres, root);
   const restarted = await currentView(instance.base, 'owner', project.id);
-  assert.deepEqual(restarted.data.conceptSchemas.map((schema) => [schema.version, schema.schemaHash]), [[1, schemaV1.schemaHash], [2, successor.data.conceptSchema.schemaHash]]);
+  assert.deepEqual(restarted.data.conceptSchemas.map((schema) => [schema.conceptId, schema.version, schema.schemaHash]), [
+    ['inspection', 1, schemaV1.schemaHash], ['inspection-link', 1, linkSchema.schemaHash], ['inspection', 2, successor.data.conceptSchema.schemaHash],
+  ]);
+  assert.deepEqual(restarted.data.conceptRecords.map((record) => [record.id, record.recordHash]), [
+    [conceptRecord.id, conceptRecord.recordHash], [linkedRecord.data.conceptRecord.id, linkedRecord.data.conceptRecord.recordHash],
+    [manyRecord.data.conceptRecord.id, manyRecord.data.conceptRecord.recordHash],
+  ]);
 });
 
 test('portfolio import round trip previews, applies one reviewed record and persists the saved change after restart', async (t) => {

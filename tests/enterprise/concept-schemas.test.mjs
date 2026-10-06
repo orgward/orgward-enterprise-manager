@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyEnterpriseConceptSchema, normalizeConceptSchemaDefinition, verifyEnterpriseConceptSchemas } from '../../src/enterprise/concept-schemas.mjs';
+import { applyEnterpriseConceptRecord, applyEnterpriseConceptSchema, normalizeConceptSchemaDefinition,
+  verifyEnterpriseConceptSchemas } from '../../src/enterprise/concept-schemas.mjs';
 
 const project = (id = 'project-one', tenantId = 'tenant-one') => ({ id, tenantId, enterpriseConceptSchemas: [] });
 const inspection = {
@@ -55,6 +56,25 @@ test('concept schema registry capacity checks complete persisted records before 
     blueprintVersion: 1, definition: inspection, reason: 'bounded capacity test' }, 'owner-'.padEnd(400_000, 'x'), target.tenantId),
   { code: 'CONCEPT_SCHEMA_REGISTRY_FULL' });
   assert.deepEqual(target, before, 'capacity rejection leaves the registry and audit byte-for-byte unchanged');
+});
+
+test('concept records reject blank required text and blank entries in MANY text values', () => {
+  const target = project();
+  target.blueprintVersions = [{ id: 'blueprint-00000000-0000-4000-8000-000000000001', version: 1 }];
+  const schema = normalizeConceptSchemaDefinition({ formatVersion: 1, namespace: 'customer.quality', conceptId: 'notes', fields: [
+    { id: 'title', label: 'Title', type: 'text', required: true, cardinality: 'ONE' },
+    { id: 'notes', label: 'Notes', type: 'text', required: false, cardinality: 'MANY', minItems: 0, maxItems: 3 },
+  ], predicates: [] }, target, target.tenantId);
+  target.enterpriseConceptSchemas.push({ ...schema, createdAt: '2026-10-06T00:00:00.000Z', createdBy: 'owner' });
+  const baseCommand = { kind: 'create-concept-record', blueprintId: target.blueprintVersions[0].id, blueprintVersion: 1,
+    namespace: schema.namespace, conceptId: schema.conceptId, schemaVersion: schema.version, schemaHash: schema.schemaHash,
+    reason: 'Whitespace validation.' };
+  assert.throws(() => applyEnterpriseConceptRecord(target, { ...baseCommand, values: { title: '  ' } }, 'owner', target.tenantId),
+    { code: 'INVALID_CONCEPT_RECORD' });
+  assert.throws(() => applyEnterpriseConceptRecord(target, { ...baseCommand, values: { title: 'Valid', notes: ['ok', '\t'] } }, 'owner', target.tenantId),
+    { code: 'INVALID_CONCEPT_RECORD' });
+  assert.deepEqual(target.enterpriseConceptRecords ?? [], [], 'invalid values append no record');
+  assert.deepEqual(target.audit ?? [], [], 'invalid values append no audit effect');
 });
 
 test('concept schema references pin an exact prior schema version and unchanged successor declarations are rejected', () => {

@@ -1,11 +1,16 @@
+import { randomUUID } from 'node:crypto';
 import { digest } from '../sdlc/contracts.mjs';
 import { enterpriseFailure, enterpriseText } from './types.mjs';
 
 export const ENTERPRISE_CONCEPT_SCHEMA_KINDS = new Set(['define-concept-schema']);
+export const ENTERPRISE_CONCEPT_RECORD_KINDS = new Set(['create-concept-record']);
 const MAX_FIELDS = 32;
 const MAX_PREDICATES = 32;
 const MAX_JSON_BYTES = 32_768;
 const MAX_REGISTRY_BYTES = 400_000;
+const MAX_CONCEPT_RECORDS = 5_000;
+const MAX_CONCEPT_RECORD_BYTES = 32_768;
+const MAX_CONCEPT_RECORDS_BYTES = 2_000_000;
 const SAFE = /^[a-z][a-z0-9_-]{0,63}$/;
 const NAMESPACE = /^customer\.[a-z][a-z0-9]*(?:[.-][a-z0-9]+){0,5}$/;
 const TYPES = new Set(['text', 'number', 'boolean', 'enum', 'quantity', 'reference']);
@@ -206,4 +211,153 @@ export function applyEnterpriseConceptSchema(project, command, actor, tenantId) 
   project.audit.push({ at: persistedRecord.createdAt, action: 'enterprise.define-concept-schema', actor,
     detail: `${record.namespace}/${record.conceptId} version ${record.version} · ${command.reason}` });
   return { blueprint, conceptSchema: structuredClone(persistedRecord), recordedAt: persistedRecord.createdAt };
+}
+
+export function normalizeEnterpriseConceptRecordCommand(input) {
+  if (!plain(input) || input.kind !== 'create-concept-record'
+    || !/^blueprint-[0-9a-f-]{36}$/.test(input.blueprintId ?? '')
+    || !Number.isSafeInteger(input.blueprintVersion) || input.blueprintVersion < 1
+    || typeof input.namespace !== 'string' || !NAMESPACE.test(input.namespace)
+    || typeof input.conceptId !== 'string' || !SAFE.test(input.conceptId)
+    || !Number.isSafeInteger(input.schemaVersion) || input.schemaVersion < 1
+    || !hashValue(input.schemaHash) || !plain(input.values)
+    || Object.keys(input).some((key) => !['kind', 'blueprintId', 'blueprintVersion', 'namespace', 'conceptId', 'schemaVersion', 'schemaHash', 'values', 'reason'].includes(key))) {
+    fail('INVALID_CONCEPT_RECORD_COMMAND', 'Pin a registered concept schema and provide a record values object for the current saved design.');
+  }
+  return { kind: input.kind, blueprintId: input.blueprintId, blueprintVersion: input.blueprintVersion,
+    namespace: input.namespace, conceptId: input.conceptId, schemaVersion: input.schemaVersion,
+    schemaHash: input.schemaHash, values: structuredClone(input.values), reason: enterpriseText(input.reason, 'Record reason', 500) };
+}
+
+function normalizeConceptRecordValues(values, schema, availableRecords) {
+  exactKeys(values, schema.fields.map((field) => field.id), 'INVALID_CONCEPT_RECORD');
+  const normalized = {};
+  const normalizeScalar = (value, field) => {
+    if (field.type === 'text') {
+      if (typeof value !== 'string' || !value.trim() || value.length > 2_000) {
+        fail('INVALID_CONCEPT_RECORD', `${field.label} must be non-blank text of at most 2,000 characters.`);
+      }
+      return value;
+    }
+    if (field.type === 'number') {
+      if (typeof value !== 'number' || !Number.isFinite(value)) fail('INVALID_CONCEPT_RECORD', `${field.label} must be a finite number.`);
+      return value;
+    }
+    if (field.type === 'boolean') {
+      if (typeof value !== 'boolean') fail('INVALID_CONCEPT_RECORD', `${field.label} must be true or false.`);
+      return value;
+    }
+    if (field.type === 'enum') {
+      if (typeof value !== 'string' || !field.enumValues.includes(value)) fail('INVALID_CONCEPT_RECORD', `${field.label} must use a declared enum value.`);
+      return value;
+    }
+    if (field.type === 'quantity') {
+      exactKeys(value, ['value', 'unit'], 'INVALID_CONCEPT_RECORD');
+      if (typeof value.value !== 'number' || !Number.isFinite(value.value) || !field.units.includes(value.unit)) {
+        fail('INVALID_CONCEPT_RECORD', `${field.label} must use a finite value and a declared unit.`);
+      }
+      return { value: value.value, unit: value.unit };
+    }
+    exactKeys(value, ['recordId'], 'INVALID_CONCEPT_RECORD');
+    if (!/^concept-record-[0-9a-f-]{36}$/.test(value.recordId ?? '')) fail('INVALID_CONCEPT_RECORD', `${field.label} must reference a saved project concept record.`);
+    const referenced = availableRecords.find((record) => record.id === value.recordId
+      && record.namespace === field.referenceTarget.namespace && record.conceptId === field.referenceTarget.conceptId
+      && record.schemaVersion === field.referenceTarget.version && record.schemaHash === field.referenceTarget.schemaHash);
+    if (!referenced) fail('CONCEPT_RECORD_REFERENCE_NOT_FOUND', `${field.label} must reference a record in this project using the exact registered schema version and hash.`, 409);
+    return { recordId: referenced.id };
+  };
+  for (const field of schema.fields) {
+    const supplied = Object.hasOwn(values, field.id);
+    if (!supplied) {
+      if (field.required) fail('CONCEPT_RECORD_REQUIRED_FIELD', `${field.label} is required.`);
+      continue;
+    }
+    const value = values[field.id];
+    if (field.cardinality === 'MANY') {
+      if (!Array.isArray(value) || value.length < field.minItems || value.length > field.maxItems) {
+        fail('INVALID_CONCEPT_RECORD', `${field.label} needs ${field.minItems}–${field.maxItems} values.`);
+      }
+      normalized[field.id] = value.map((entry) => normalizeScalar(entry, field));
+    } else {
+      if (Array.isArray(value) || value === null) fail('INVALID_CONCEPT_RECORD', `${field.label} accepts exactly one value.`);
+      normalized[field.id] = normalizeScalar(value, field);
+    }
+  }
+  return normalized;
+}
+
+function recordHashCore(record) {
+  const { recordHash: _recordHash, ...core } = record;
+  return core;
+}
+
+export function verifyEnterpriseConceptRecords(project, schemas = verifyEnterpriseConceptSchemas(project)) {
+  const records = project.enterpriseConceptRecords ?? [];
+  if (!Array.isArray(records) || records.length > MAX_CONCEPT_RECORDS || byteLength(records) > MAX_CONCEPT_RECORDS_BYTES) {
+    fail('CONCEPT_RECORD_INTEGRITY', 'The project concept-record collection exceeds its storage limits.', 409);
+  }
+  const seen = new Set(); const checked = [];
+  for (const record of records) {
+    if (!plain(record) || !/^concept-record-[0-9a-f-]{36}$/.test(record.id ?? '') || seen.has(record.id)
+      || record.projectId !== project.id || record.tenantId !== project.tenantId || record.formatVersion !== 1
+      || typeof record.namespace !== 'string' || typeof record.conceptId !== 'string'
+      || !Number.isSafeInteger(record.schemaVersion) || !hashValue(record.schemaHash)
+      || record.epistemicStatus !== 'HUMAN_REPORTED' || record.verificationStatus !== 'UNVERIFIED'
+      || typeof record.createdBy !== 'string' || !record.createdBy || !Number.isFinite(Date.parse(record.createdAt ?? ''))
+      || typeof record.reason !== 'string' || record.reason.length > 500 || !plain(record.values) || !hashValue(record.recordHash)) {
+      fail('CONCEPT_RECORD_INTEGRITY', 'A saved concept record has invalid identity, provenance or verification status.', 409);
+    }
+    exactKeys(record, ['formatVersion', 'id', 'projectId', 'tenantId', 'namespace', 'conceptId', 'schemaVersion', 'schemaHash',
+      'values', 'epistemicStatus', 'verificationStatus', 'createdAt', 'createdBy', 'reason', 'recordHash'], 'CONCEPT_RECORD_INTEGRITY');
+    const schema = schemas.find((entry) => entry.namespace === record.namespace && entry.conceptId === record.conceptId
+      && entry.version === record.schemaVersion && entry.schemaHash === record.schemaHash);
+    if (!schema) fail('CONCEPT_RECORD_INTEGRITY', 'A saved concept record does not pin a retained project schema version.', 409);
+    const normalizedValues = normalizeConceptRecordValues(record.values, schema, checked);
+    if (digest(normalizedValues) !== digest(record.values) || byteLength(record) > MAX_CONCEPT_RECORD_BYTES
+      || digest(recordHashCore(record)) !== record.recordHash) {
+      fail('CONCEPT_RECORD_INTEGRITY', 'A saved concept record value or hash does not match its declared schema.', 409);
+    }
+    const recordAuditDetail = `${record.id} · ${record.namespace}/${record.conceptId}@${record.schemaVersion} · ${record.reason}`;
+    const eventMatches = (project.events ?? []).filter((event) => event.type === 'EnterpriseConceptRecordCreated'
+      && event.data?.conceptRecordId === record.id);
+    const auditMatches = (project.audit ?? []).filter((entry) => entry.action === 'enterprise.create-concept-record'
+      && entry.actor === record.createdBy && entry.at === record.createdAt && entry.detail === recordAuditDetail);
+    if (eventMatches.length !== 1 || auditMatches.length !== 1
+      || eventMatches[0].tenantId !== project.tenantId || eventMatches[0].workspaceId !== project.id
+      || eventMatches[0].actor !== record.createdBy || eventMatches[0].occurredAt !== record.createdAt
+      || eventMatches[0].data.conceptRecordHash !== record.recordHash
+      || eventMatches[0].data.conceptRecordSchemaHash !== record.schemaHash) {
+      fail('CONCEPT_RECORD_INTEGRITY', 'A saved concept record is missing its matching creation event or audit record.', 409);
+    }
+    seen.add(record.id); checked.push(record);
+  }
+  return checked.map((record) => structuredClone(record));
+}
+
+export function applyEnterpriseConceptRecord(project, command, actor, tenantId) {
+  const blueprint = project.blueprintVersions?.at(-1);
+  if (!blueprint || blueprint.id !== command.blueprintId || blueprint.version !== command.blueprintVersion) {
+    fail('ENTERPRISE_BLUEPRINT_STALE', 'Reload the current saved design before creating a concept record.', 409);
+  }
+  const schemas = verifyEnterpriseConceptSchemas(project);
+  const records = verifyEnterpriseConceptRecords(project, schemas);
+  const schema = schemas.find((entry) => entry.namespace === command.namespace && entry.conceptId === command.conceptId
+    && entry.version === command.schemaVersion && entry.schemaHash === command.schemaHash);
+  if (!schema) fail('CONCEPT_SCHEMA_STALE', 'Reload the current project and select an exact registered concept schema version.', 409);
+  if (records.length >= MAX_CONCEPT_RECORDS) fail('CONCEPT_RECORD_LIMIT', 'This project has reached the 5,000 concept-record limit.', 409);
+  const values = normalizeConceptRecordValues(command.values, schema, records);
+  const at = new Date().toISOString();
+  const core = { formatVersion: 1, id: `concept-record-${randomUUID()}`, projectId: project.id, tenantId,
+    namespace: schema.namespace, conceptId: schema.conceptId, schemaVersion: schema.version, schemaHash: schema.schemaHash,
+    values, epistemicStatus: 'HUMAN_REPORTED', verificationStatus: 'UNVERIFIED', createdAt: at, createdBy: actor,
+    reason: command.reason };
+  const record = { ...core, recordHash: digest(core) };
+  if (byteLength(record) > MAX_CONCEPT_RECORD_BYTES || byteLength([...records, record]) > MAX_CONCEPT_RECORDS_BYTES) {
+    fail('CONCEPT_RECORD_LIMIT', 'This project has reached its 2 MB concept-record storage limit.', 409);
+  }
+  project.enterpriseConceptRecords = [...records, record];
+  project.audit ??= [];
+  project.audit.push({ at, action: 'enterprise.create-concept-record', actor,
+    detail: `${record.id} · ${schema.namespace}/${schema.conceptId}@${schema.version} · ${command.reason}` });
+  return { blueprint, conceptRecord: structuredClone(record), recordedAt: at };
 }

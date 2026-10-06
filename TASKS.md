@@ -8779,3 +8779,42 @@ capacity findings. Focused concept-schema tests passed 5/5 in 0.26s
 --check` passed. This does not complete T-55, T-125 or PR-17. PR-17 remains open,
 PR-15 remains first open by `npm run task:next`; task checkboxes, cursor and
 production gates are unchanged.
+
+PR-17 T-125 project concept-record creation (2026-10-06): owners can create
+immutable project-aggregate records against an exact registered schema version
+and hash. The server validates required values, scalar types, ONE/MANY
+cardinality, enum/unit declarations and exact references to existing records
+in the same project; record ID, time, actor and content hash are server-derived.
+Creation, matching audit/event and idempotency receipt share the existing
+transaction boundary. Projections verify the retained schema, values, record
+hash, creation event and audit before displaying records as HUMAN_REPORTED /
+UNVERIFIED. The owner UI selects a schema pin, submits typed values, and shows
+record provenance. Project export retains records with a canonical extension
+hash; import preview explicitly marks the extension unsupported and application
+is blocked pending a supported merge/migration path. No edit, delete, migration,
+truth verification or operational claim is added.
+
+The typed owner form uses schema-derived controls for ONE values and exact-pin
+reference selection; MANY fields retain an explicitly labelled bounded JSON
+array input, and switching the schema refreshes both fields and submitted hash.
+Optional whitespace-only text is omitted while nonblank text retains its exact
+spacing. The success banner identifies the created record as HUMAN_REPORTED /
+UNVERIFIED and says its values were not independently verified. The initial
+focused form test passed 1/1, 0 failures in 0.34s
+(`/tmp/orgward-concept-record-ui-SDdFoP.log`; TAP:
+`/tmp/orgward-tests-INgCSh/node-test.tap.log`); the final UX follow-up passed
+1/1 in 0.36s (`/tmp/orgward-concept-record-final-ux-abmGor.log`; TAP:
+`/tmp/orgward-tests-yvl1EE/node-test.tap.log`). The final concept-schema/server/view
+selection passed 8/8, 0 failed/skipped in 3.35s
+(`/tmp/orgward-concept-record-validation-KbZlJF.log`; TAP:
+`/tmp/orgward-tests-FDfaBd/node-test.tap.log`), including direct and API
+regressions rejecting whitespace-only required text and blank text in MANY
+lists. Coverage includes owner denial, invalid/missing values, all supported
+types, cardinality boundaries, exact local reference success/failure, stale
+project/schema conflict, replay/conflict, project isolation, export/import
+blocking, UI capture/status display, and restart readback. Syntax checks and
+`git diff --check` passed. This is a bounded T-125 increment, not T-125 or PR-17
+completion.
+PR-17 remains open and PR-15 remains first open by `npm run task:next`; task
+checkboxes, cursor and production gates are unchanged. No full check was run
+while the parent PR remains open.

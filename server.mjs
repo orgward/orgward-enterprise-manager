@@ -35,7 +35,8 @@ import { applyEnterpriseCommand, normalizeEnterpriseCommand } from './src/enterp
 import { normalizeEnterpriseQuery, projectEnterprise } from './src/enterprise/projections.mjs';
 import { ENTERPRISE_BRANCH_KINDS, enterpriseMergeApproval } from './src/enterprise/branches.mjs';
 import { ENTERPRISE_PROCESS_KINDS } from './src/enterprise/process-commands.mjs';
-import { ENTERPRISE_CONCEPT_SCHEMA_KINDS, verifyEnterpriseConceptSchemas } from './src/enterprise/concept-schemas.mjs';
+import { ENTERPRISE_CONCEPT_RECORD_KINDS, ENTERPRISE_CONCEPT_SCHEMA_KINDS, verifyEnterpriseConceptRecords,
+  verifyEnterpriseConceptSchemas } from './src/enterprise/concept-schemas.mjs';
 import { ENTERPRISE_ECONOMIC_KINDS } from './src/enterprise/economics-commands.mjs';
 import { ENTERPRISE_REFINEMENT_KINDS } from './src/enterprise/refinement-commands.mjs';
 import { ENTERPRISE_INTEGRITY_KINDS } from './src/enterprise/integrity.mjs';
@@ -1811,7 +1812,9 @@ export function createApp({
           principal: requestActor(request), anyPrincipalRoleGroups: [['workspace-read', 'workspace-write', 'tenant-admin']],
           authzGeneration: request.identity.authzGeneration,
           operation(project) {
-            sendApi(response, 200, createEnterpriseInterchangeBundle(project.id, latestBlueprint(project), verifyEnterpriseConceptSchemas(project)), { correlationId });
+            const schemas = verifyEnterpriseConceptSchemas(project);
+            const records = verifyEnterpriseConceptRecords(project, schemas);
+            sendApi(response, 200, createEnterpriseInterchangeBundle(project.id, latestBlueprint(project), schemas, records), { correlationId });
             return project;
           } });
         if (!found) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
@@ -1937,14 +1940,14 @@ export function createApp({
           || payload.kind === 'repair-source-claim-mapping'
           || payload.kind === 'recompute-source-reconciliation-report'
           || payload.kind === 'propose-attested-source-correction'
-          || ENTERPRISE_CONCEPT_SCHEMA_KINDS.has(payload.kind)
+          || ENTERPRISE_CONCEPT_SCHEMA_KINDS.has(payload.kind) || ENTERPRISE_CONCEPT_RECORD_KINDS.has(payload.kind)
           || (payload.kind === 'edit-branch-scope' && ['create-scope', 'rename-scope'].includes(payload.change.kind));
         if ((administrative || payload.kind === 'record-state' || ENTERPRISE_BRANCH_KINDS.has(payload.kind)
           || ENTERPRISE_PROCESS_KINDS.has(payload.kind) || ENTERPRISE_ECONOMIC_KINDS.has(payload.kind)
           || ENTERPRISE_REFINEMENT_KINDS.has(payload.kind) || ENTERPRISE_INTERCHANGE_KINDS.has(payload.kind)
           || ENTERPRISE_INTEGRITY_KINDS.has(payload.kind) || ENTERPRISE_SENTINEL_KINDS.has(payload.kind) || ENTERPRISE_SOURCE_ACCEPTANCE_KINDS.has(payload.kind)
           || ENTERPRISE_SOURCE_ATTESTATION_KINDS.has(payload.kind)
-          || ENTERPRISE_CONCEPT_SCHEMA_KINDS.has(payload.kind)
+          || ENTERPRISE_CONCEPT_SCHEMA_KINDS.has(payload.kind) || ENTERPRISE_CONCEPT_RECORD_KINDS.has(payload.kind)
           || ENTERPRISE_GOVERNANCE_KINDS.has(payload.kind) || ENTERPRISE_STEWARDSHIP_KINDS.has(payload.kind)) && request.identity.actorType !== 'human') {
           throw apiFailure(403, 'ENTERPRISE_HUMAN_OWNER_REQUIRED', 'A current human project member must report state, refine records or import proposed design; a human project owner must review design or define scopes, validity and future proposals.');
         }
@@ -1997,6 +2000,7 @@ export function createApp({
               : ENTERPRISE_GOVERNANCE_KINDS.has(payload.kind) ? 'EnterpriseGovernanceChanged'
               : ENTERPRISE_STEWARDSHIP_KINDS.has(payload.kind) ? 'EnterpriseStewardshipChanged'
               : ENTERPRISE_CONCEPT_SCHEMA_KINDS.has(payload.kind) ? 'EnterpriseConceptSchemaDefined'
+              : ENTERPRISE_CONCEPT_RECORD_KINDS.has(payload.kind) ? 'EnterpriseConceptRecordCreated'
               : ['record-state', 'set-validity', 'propose-future-design'].includes(payload.kind)
               || ENTERPRISE_BRANCH_KINDS.has(payload.kind) || ENTERPRISE_PROCESS_KINDS.has(payload.kind)
               || ENTERPRISE_ECONOMIC_KINDS.has(payload.kind) || ENTERPRISE_REFINEMENT_KINDS.has(payload.kind)
@@ -2028,6 +2032,9 @@ export function createApp({
                 conceptSchemaHash: changed.conceptSchema?.schemaHash ?? null,
                 conceptSchemaVersion: changed.conceptSchema?.version ?? null,
                 conceptSchemaId: changed.conceptSchema ? `${changed.conceptSchema.namespace}/${changed.conceptSchema.conceptId}` : null,
+                conceptRecordId: changed.conceptRecord?.id ?? null,
+                conceptRecordHash: changed.conceptRecord?.recordHash ?? null,
+                conceptRecordSchemaHash: changed.conceptRecord?.schemaHash ?? null,
                 sandboxTransactionId: changed.sandboxTransaction?.operationId ?? null,
                 sandboxOperationKey: changed.sandboxTransaction?.operationKey ?? null,
                 sandboxEvidenceHash: changed.sandboxTransaction?.evidenceHash ?? null,
@@ -2073,6 +2080,7 @@ export function createApp({
           ...(receipt.sourceAttestationCorrectionReceiptIds ? { sourceAttestationCorrectionReceipts:
             structuredClone(result.project.sourceAttestationCorrectionReceipts?.filter((entry) => receipt.sourceAttestationCorrectionReceiptIds.includes(entry.id)) ?? []) } : {}),
           ...(receipt.conceptSchemaHash ? { conceptSchema: structuredClone(result.project.enterpriseConceptSchemas?.find((entry) => entry.schemaHash === receipt.conceptSchemaHash) ?? null) } : {}),
+          ...(receipt.conceptRecordId ? { conceptRecord: structuredClone(result.project.enterpriseConceptRecords?.find((entry) => entry.id === receipt.conceptRecordId) ?? null) } : {}),
           ...(simulation ? { simulation } : {}), ...(economicEvaluation ? { economicEvaluation } : {}),
           ...(integrityAssessment ? { integrityAssessment } : {}), ...(sentinelAssessment ? { sentinelAssessment } : {}), ...(integrityException ? { integrityException } : {}),
           ...(receipt.governanceCaseId ? { governanceCaseId: receipt.governanceCaseId,
