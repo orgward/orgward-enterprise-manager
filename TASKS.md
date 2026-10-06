@@ -8818,3 +8818,28 @@ completion.
 PR-17 remains open and PR-15 remains first open by `npm run task:next`; task
 checkboxes, cursor and production gates are unchanged. No full check was run
 while the parent PR remains open.
+
+T-125 predicate evaluation follow-up (2026-10-06): new concept records pin
+`predicateEvaluationVersion: 1` inside the record hash. Creation enforces every
+declared predicate using exact typed scalar comparisons; MANY values require a
+nonempty list and every item must pass. `exists` requires a supplied scalar or
+nonempty list. Quantity comparisons require exact predicate units and perform
+no conversion. Readback re-evaluates only marked records; historical records
+without the marker keep the original hash recipe and remain readable with
+`PREDICATES_NOT_EVALUATED` shown when their pinned schema declares predicates.
+Present malformed/unsupported markers and marker deletion fail integrity
+verification. Predicate failures leave record, audit and event collections
+unchanged. All-predicates-satisfied display remains separate from
+HUMAN_REPORTED / UNVERIFIED and makes no claim that reported values are true.
+
+Focused concept-schema/server/view run passed 5/5, 0 failed/skipped; TAP
+duration 2.17s, wrapper elapsed 3.37s
+(`/tmp/orgward-predicate-evaluator-8nbzLW.log`; TAP:
+`/tmp/orgward-tests-Nb1pSt/node-test.tap.log`). Coverage includes eq/neq/in and
+numeric comparisons, exists, missing/empty values, all-items MANY behavior,
+exact quantity-unit mismatch, legacy hash/readback compatibility, removed/null/
+unsupported marker rejection, API no-mutation on predicate failures, and UI
+status distinction. Syntax checks and `git diff --check` passed. No full check
+was run while the parent PR remains open. This bounded increment does not
+complete T-125 or PR-17; PR-15 remains first open by the active task order.
+Task checkboxes, cursor and production gates are unchanged.

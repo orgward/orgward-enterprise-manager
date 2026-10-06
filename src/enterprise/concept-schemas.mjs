@@ -114,6 +114,44 @@ function normalizedPredicate(predicate, fieldsById) {
   return { id: predicate.id, fieldId: field.id, operator: predicate.operator, value };
 }
 
+export function validateConceptRecordPredicates(values, schema) {
+  const fails = (predicate, message) => fail('CONCEPT_RECORD_CONSTRAINT_FAILED', `Predicate ${predicate.id}: ${message}`);
+  const compareScalar = (actual, predicate, field) => {
+    if (field.type === 'quantity') {
+      if (predicate.operator === 'in') {
+        const exactUnitEntries = predicate.value.filter((entry) => entry.unit === actual.unit);
+        if (!exactUnitEntries.length) fails(predicate, `quantity unit ${actual.unit} does not match any exact predicate unit (${[...new Set(predicate.value.map((entry) => entry.unit))].join(', ')}); conversions are not applied.`);
+        return exactUnitEntries.some((entry) => digest(actual) === digest(entry));
+      }
+      if (actual.unit !== predicate.value.unit) fails(predicate, `quantity unit ${actual.unit} does not match required unit ${predicate.value.unit}; conversions are not applied.`);
+    }
+    if (predicate.operator === 'eq') return digest(actual) === digest(predicate.value);
+    if (predicate.operator === 'neq') return digest(actual) !== digest(predicate.value);
+    if (predicate.operator === 'in') return predicate.value.some((entry) => digest(actual) === digest(entry));
+    const left = field.type === 'quantity' ? actual.value : actual;
+    const right = field.type === 'quantity' ? predicate.value.value : predicate.value;
+    if (predicate.operator === 'gt') return left > right;
+    if (predicate.operator === 'gte') return left >= right;
+    if (predicate.operator === 'lt') return left < right;
+    return left <= right;
+  };
+  for (const predicate of schema.predicates) {
+    const field = schema.fields.find((entry) => entry.id === predicate.fieldId);
+    const supplied = Object.hasOwn(values, predicate.fieldId);
+    const actual = supplied ? values[predicate.fieldId] : undefined;
+    const many = field.cardinality === 'MANY';
+    if (predicate.operator === 'exists') {
+      if (!supplied || actual === undefined || actual === null || (many && actual.length === 0)) fails(predicate, `field ${field.id} must be supplied${many ? ' with at least one item' : ''}.`);
+      continue;
+    }
+    if (!supplied || actual === undefined || actual === null || (many && actual.length === 0)) fails(predicate, `field ${field.id} must have a value to compare.`);
+    const valuesToCheck = many ? actual : [actual];
+    for (const value of valuesToCheck) {
+      if (!compareScalar(value, predicate, field)) fails(predicate, `reported ${field.label} value does not satisfy ${predicate.operator}.`);
+    }
+  }
+}
+
 export function normalizeConceptSchemaDefinition(input, project, tenantId) {
   exactKeys(input, ['formatVersion', 'namespace', 'conceptId', 'fields', 'predicates'], 'INVALID_CONCEPT_SCHEMA');
   if (input.formatVersion !== 1 || !NAMESPACE.test(input.namespace ?? '')
@@ -304,11 +342,12 @@ export function verifyEnterpriseConceptRecords(project, schemas = verifyEnterpri
       || !Number.isSafeInteger(record.schemaVersion) || !hashValue(record.schemaHash)
       || record.epistemicStatus !== 'HUMAN_REPORTED' || record.verificationStatus !== 'UNVERIFIED'
       || typeof record.createdBy !== 'string' || !record.createdBy || !Number.isFinite(Date.parse(record.createdAt ?? ''))
-      || typeof record.reason !== 'string' || record.reason.length > 500 || !plain(record.values) || !hashValue(record.recordHash)) {
+      || typeof record.reason !== 'string' || record.reason.length > 500 || !plain(record.values) || !hashValue(record.recordHash)
+      || (Object.hasOwn(record, 'predicateEvaluationVersion') && record.predicateEvaluationVersion !== 1)) {
       fail('CONCEPT_RECORD_INTEGRITY', 'A saved concept record has invalid identity, provenance or verification status.', 409);
     }
     exactKeys(record, ['formatVersion', 'id', 'projectId', 'tenantId', 'namespace', 'conceptId', 'schemaVersion', 'schemaHash',
-      'values', 'epistemicStatus', 'verificationStatus', 'createdAt', 'createdBy', 'reason', 'recordHash'], 'CONCEPT_RECORD_INTEGRITY');
+      'values', 'epistemicStatus', 'verificationStatus', 'createdAt', 'createdBy', 'reason', 'recordHash', 'predicateEvaluationVersion'], 'CONCEPT_RECORD_INTEGRITY');
     const schema = schemas.find((entry) => entry.namespace === record.namespace && entry.conceptId === record.conceptId
       && entry.version === record.schemaVersion && entry.schemaHash === record.schemaHash);
     if (!schema) fail('CONCEPT_RECORD_INTEGRITY', 'A saved concept record does not pin a retained project schema version.', 409);
@@ -316,6 +355,14 @@ export function verifyEnterpriseConceptRecords(project, schemas = verifyEnterpri
     if (digest(normalizedValues) !== digest(record.values) || byteLength(record) > MAX_CONCEPT_RECORD_BYTES
       || digest(recordHashCore(record)) !== record.recordHash) {
       fail('CONCEPT_RECORD_INTEGRITY', 'A saved concept record value or hash does not match its declared schema.', 409);
+    }
+    if (record.predicateEvaluationVersion === 1) {
+      try { validateConceptRecordPredicates(normalizedValues, schema); } catch (error) {
+        if (error.code === 'CONCEPT_RECORD_CONSTRAINT_FAILED') {
+          fail('CONCEPT_RECORD_INTEGRITY', 'A saved, predicate-evaluated record no longer satisfies its retained schema constraints.', 409);
+        }
+        throw error;
+      }
     }
     const recordAuditDetail = `${record.id} · ${record.namespace}/${record.conceptId}@${record.schemaVersion} · ${record.reason}`;
     const eventMatches = (project.events ?? []).filter((event) => event.type === 'EnterpriseConceptRecordCreated'
@@ -346,10 +393,11 @@ export function applyEnterpriseConceptRecord(project, command, actor, tenantId) 
   if (!schema) fail('CONCEPT_SCHEMA_STALE', 'Reload the current project and select an exact registered concept schema version.', 409);
   if (records.length >= MAX_CONCEPT_RECORDS) fail('CONCEPT_RECORD_LIMIT', 'This project has reached the 5,000 concept-record limit.', 409);
   const values = normalizeConceptRecordValues(command.values, schema, records);
+  validateConceptRecordPredicates(values, schema);
   const at = new Date().toISOString();
   const core = { formatVersion: 1, id: `concept-record-${randomUUID()}`, projectId: project.id, tenantId,
     namespace: schema.namespace, conceptId: schema.conceptId, schemaVersion: schema.version, schemaHash: schema.schemaHash,
-    values, epistemicStatus: 'HUMAN_REPORTED', verificationStatus: 'UNVERIFIED', createdAt: at, createdBy: actor,
+    values, predicateEvaluationVersion: 1, epistemicStatus: 'HUMAN_REPORTED', verificationStatus: 'UNVERIFIED', createdAt: at, createdBy: actor,
     reason: command.reason };
   const record = { ...core, recordHash: digest(core) };
   if (byteLength(record) > MAX_CONCEPT_RECORD_BYTES || byteLength([...records, record]) > MAX_CONCEPT_RECORDS_BYTES) {

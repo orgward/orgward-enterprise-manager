@@ -2410,11 +2410,17 @@ test('customer concept schemas are owner-defined, project-private, hash-chained,
   const otherProject = await seedProject(postgres, 'Independent schema namespace fixture');
   const definition = { formatVersion: 1, namespace: 'customer.quality', conceptId: 'inspection', fields: [
     { id: 'sample', label: 'Sample reference', type: 'text', required: true, cardinality: 'ONE' },
-    { id: 'temperature', label: 'Temperature', type: 'quantity', required: true, cardinality: 'ONE', units: ['C'] },
+    { id: 'temperature', label: 'Temperature', type: 'quantity', required: true, cardinality: 'ONE', units: ['C', 'F'] },
     { id: 'decision', label: 'Decision', type: 'enum', required: true, cardinality: 'ONE', enumValues: ['PASS', 'FAIL'] },
     { id: 'count', label: 'Sample count', type: 'number', required: false, cardinality: 'ONE' },
     { id: 'reviewed', label: 'Reviewed', type: 'boolean', required: false, cardinality: 'ONE' },
-  ], predicates: [{ id: 'temperature-high', fieldId: 'temperature', operator: 'gt', value: { value: 80, unit: 'C' } }] };
+  ], predicates: [
+    { id: 'temperature-high', fieldId: 'temperature', operator: 'gt', value: { value: 80, unit: 'C' } },
+    { id: 'sample-not-blocked', fieldId: 'sample', operator: 'neq', value: 'blocked' },
+    { id: 'decision-pass', fieldId: 'decision', operator: 'eq', value: 'PASS' },
+    { id: 'count-allowed', fieldId: 'count', operator: 'in', value: [3, 4] },
+    { id: 'reviewed-exists', fieldId: 'reviewed', operator: 'exists' },
+  ] };
   const initialView = await currentView(instance.base, 'owner', project.id);
   const command = commandBody(initialView, 'concept-schema-inspection-v1', { kind: 'define-concept-schema', definition,
     reason: 'Describe inspection records for this project.' });
@@ -2446,6 +2452,10 @@ test('customer concept schemas are owner-defined, project-private, hash-chained,
   assert.equal(conceptRecord.schemaVersion, schemaV1.version);
   assert.equal(conceptRecord.epistemicStatus, 'HUMAN_REPORTED');
   assert.equal(conceptRecord.verificationStatus, 'UNVERIFIED');
+  assert.equal(conceptRecord.predicateEvaluationVersion, 1);
+  const evaluatedRecordView = await currentView(instance.base, 'owner', project.id);
+  assert.equal(evaluatedRecordView.data.conceptRecords.find((entry) => entry.id === conceptRecord.id).predicateEvaluationStatus,
+    'ALL_DECLARED_PREDICATES_SATISFIED');
   assert.equal(conceptRecord.createdBy, identities.get('owner').principal);
   assert.match(conceptRecord.recordHash, /^[a-f0-9]{64}$/);
   assert.deepEqual(conceptRecord.values, recordValues);
@@ -2461,7 +2471,12 @@ test('customer concept schemas are owner-defined, project-private, hash-chained,
   const currentRecordView = await currentView(instance.base, 'owner', project.id);
   for (const [suffix, values, code] of [
     ['enum', { ...recordValues, decision: 'MAYBE' }, 'INVALID_CONCEPT_RECORD'],
-    ['quantity', { ...recordValues, temperature: { value: 81, unit: 'F' } }, 'INVALID_CONCEPT_RECORD'],
+    ['quantity-unit', { ...recordValues, temperature: { value: 81, unit: 'F' } }, 'CONCEPT_RECORD_CONSTRAINT_FAILED'],
+    ['quantity-low', { ...recordValues, temperature: { value: 79, unit: 'C' } }, 'CONCEPT_RECORD_CONSTRAINT_FAILED'],
+    ['neq', { ...recordValues, sample: 'blocked' }, 'CONCEPT_RECORD_CONSTRAINT_FAILED'],
+    ['eq', { ...recordValues, decision: 'FAIL' }, 'CONCEPT_RECORD_CONSTRAINT_FAILED'],
+    ['in', { ...recordValues, count: 5 }, 'CONCEPT_RECORD_CONSTRAINT_FAILED'],
+    ['exists-missing', Object.fromEntries(Object.entries(recordValues).filter(([key]) => key !== 'reviewed')), 'CONCEPT_RECORD_CONSTRAINT_FAILED'],
     ['missing', { sample: 'batch-8', temperature: { value: 79, unit: 'C' } }, 'CONCEPT_RECORD_REQUIRED_FIELD'],
     ['type', { ...recordValues, sample: 7 }, 'INVALID_CONCEPT_RECORD'],
     ['whitespace-text', { ...recordValues, sample: ' \t ' }, 'INVALID_CONCEPT_RECORD'],
@@ -2473,6 +2488,12 @@ test('customer concept schemas are owner-defined, project-private, hash-chained,
       commandBody(currentRecordView, `concept-record-invalid-${suffix}`, recordPayload(schemaV1, values)), 400);
     assert.equal(invalid.error.code, code);
   }
+  const afterConstraintFailures = await postgres.query(`select state from orgward.aggregates where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2`, [tenantId, project.id]);
+  assert.equal(afterConstraintFailures.rows[0].state.enterpriseConceptRecords.length, 1, 'failed predicates append no records');
+  assert.equal(afterConstraintFailures.rows[0].state.audit.filter((entry) => entry.action === 'enterprise.create-concept-record').length, 1,
+    'failed predicates append no audit effects');
+  assert.equal(afterConstraintFailures.rows[0].state.events.filter((event) => event.type === 'EnterpriseConceptRecordCreated').length, 1,
+    'failed predicates append no creation event');
   const staleSchema = await postCommand(instance.base, 'owner', project.id,
     commandBody(currentRecordView, 'concept-record-stale-schema', recordPayload({ ...schemaV1, schemaHash: 'a'.repeat(64) }, recordValues)), 409);
   assert.equal(staleSchema.error.code, 'CONCEPT_SCHEMA_STALE');

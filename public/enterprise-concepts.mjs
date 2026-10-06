@@ -7,6 +7,7 @@ export function renderEnterpriseConceptSchemas({ model, loading = false, pending
     el('header', { className: 'panel-head' }, [el('h4', { text: 'Customer concept schemas' }), el('span', { text: 'Project-private · declarative only' })]),
     el('p', { text: 'Register versioned concept shapes for this project. These declarations do not add actions, run code, migrate existing objects, or grant permissions.' }),
     el('p', { text: 'Supported fields: text, number, boolean, enum, quantity with explicit units, and reference to an exact registered schema. ONE/MANY cardinality and bounded predicates only; no scripts or arbitrary expressions.' }),
+    el('p', { text: 'All declared predicates block record save unless they pass. For MANY fields, every item must pass and empty lists fail. Quantity comparisons require the exact predicate unit; no unit conversion is applied.' }),
   ]);
   const schemas = model.conceptSchemas ?? [];
   const records = model.conceptRecords ?? [];
@@ -19,7 +20,7 @@ export function renderEnterpriseConceptSchemas({ model, loading = false, pending
   ]));
   for (const record of records) root.append(el('article', { attrs: { 'data-concept-record': record.id } }, [
     el('h5', { text: `${record.namespace}/${record.conceptId} · ${record.id}` }),
-    el('p', { text: `${record.epistemicStatus} · ${record.verificationStatus} · schema ${record.schemaVersion} · ${record.schemaHash}` }),
+    el('p', { text: `${record.epistemicStatus} · ${record.verificationStatus} · ${record.predicateEvaluationStatus ?? 'PREDICATE_STATUS_UNAVAILABLE'} · schema ${record.schemaVersion} · ${record.schemaHash}` }),
     el('p', { text: `Record hash ${record.recordHash} · reported by ${record.createdBy} at ${record.createdAt}` }),
     el('pre', { text: JSON.stringify(record.values, null, 2) }),
   ]));

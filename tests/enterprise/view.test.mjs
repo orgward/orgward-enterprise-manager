@@ -2202,7 +2202,7 @@ test('concept schema panel shows project-private scope, exact immutable pins, su
   const model = { conceptSchemas: [schema, alternate, targetSchema], conceptRecords: [{ id: 'concept-record-00000000-0000-4000-8000-000000000001',
     namespace: 'customer.quality', conceptId: 'inspection', schemaVersion: 1, schemaHash: 'a'.repeat(64),
     values: { sample: 'batch-7' }, epistemicStatus: 'HUMAN_REPORTED', verificationStatus: 'UNVERIFIED',
-    recordHash: 'b'.repeat(64), createdBy: 'owner', createdAt: '2026-10-06T00:00:00.000Z' }, targetRecord],
+    predicateEvaluationStatus: 'PREDICATES_NOT_EVALUATED', recordHash: 'b'.repeat(64), createdBy: 'owner', createdAt: '2026-10-06T00:00:00.000Z' }, targetRecord],
   context: { isCurrent: true, blueprintId: 'blueprint-00000000-0000-4000-8000-000000000001', blueprintVersion: 1 }, permissions: { scopeAdmin: true } };
   let submitted;
   const panel = renderEnterpriseConceptSchemas({ model, el, onCommand: (payload) => { submitted = payload; } });
@@ -2211,6 +2211,7 @@ test('concept schema panel shows project-private scope, exact immutable pins, su
   assert.match(panel.textContent, /text, number, boolean, enum, quantity with explicit units, and reference to an exact registered schema/);
   assert.match(panel.textContent, /schema hash a{64}/);
   assert.match(panel.textContent, /HUMAN_REPORTED · UNVERIFIED/);
+  assert.match(panel.textContent, /PREDICATES_NOT_EVALUATED/);
   assert.match(panel.textContent, /Record hash b{64}/);
   const form = panel.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === 'define-concept-schema');
   assert.ok(form);
