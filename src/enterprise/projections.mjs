@@ -191,12 +191,13 @@ export function projectEnterprise(project, query = {}, authority = {}) {
       parentUnitId: object.parentUnitId ?? null, jurisdiction: object.jurisdiction ?? null, ownerRoleId: object.owner ?? null })),
     versions: recorded.map(({ id, version, createdAt }) => ({ id, version, createdAt })),
     conceptSchemas: conceptSchemas.filter((entry) => savedBy(entry.createdAt)),
-    conceptRecords: conceptRecords.filter((entry) => savedBy(entry.createdAt)).map((entry) => {
+    conceptRecords: conceptRecords.filter((entry) => savedBy(entry.createdAt)).map((entry, _index, visibleRecords) => {
       const schema = conceptSchemas.find((candidate) => candidate.schemaHash === entry.schemaHash);
       const predicateEvaluationStatus = schema?.predicates.length
         ? entry.predicateEvaluationVersion === 1 ? 'ALL_DECLARED_PREDICATES_SATISFIED' : 'PREDICATES_NOT_EVALUATED'
         : 'NO_PREDICATES_DECLARED';
-      return { ...entry, predicateEvaluationStatus };
+      const supersededBy = visibleRecords.find((candidate) => candidate.supersedesRecordId === entry.id)?.id ?? null;
+      return { ...entry, predicateEvaluationStatus, supersededBy };
     }),
     sourceAcceptanceReceipts: (project.sourceAcceptanceReceipts ?? []).filter((entry) => savedBy(entry.receivedAt)).map((entry) => structuredClone(entry)),
     sourceReconciliationReports: (project.sourceReconciliationReports ?? []).filter((entry) => savedBy(entry.receivedAt)).map((entry) => structuredClone(entry)),

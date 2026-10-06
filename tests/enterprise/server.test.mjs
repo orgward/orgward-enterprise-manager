@@ -2557,12 +2557,56 @@ test('customer concept schemas are owner-defined, project-private, hash-chained,
       { ...recordValues, notes: ['line one', 'line two'] })));
   assert.deepEqual(manyRecord.data.conceptRecord.values.notes, ['line one', 'line two']);
 
+  const beforeCorrection = await currentView(instance.base, 'owner', project.id);
+  const correctionCommand = commandBody(beforeCorrection, 'concept-record-inspection-correction-1', {
+    ...recordPayload(schemaV1, { ...recordValues, sample: 'batch-7-corrected' }), supersedesRecordId: conceptRecord.id });
+  const corrected = await postCommand(instance.base, 'owner', project.id, correctionCommand);
+  const correctionRecord = corrected.data.conceptRecord;
+  assert.equal(correctionRecord.supersedesRecordId, conceptRecord.id);
+  assert.equal(corrected.event.data.supersedesRecordId, conceptRecord.id);
+  assert.equal(correctionRecord.epistemicStatus, 'HUMAN_REPORTED');
+  assert.equal(correctionRecord.verificationStatus, 'UNVERIFIED');
+  const correctionView = await currentView(instance.base, 'owner', project.id);
+  assert.equal(correctionView.data.conceptRecords.find((entry) => entry.id === conceptRecord.id).supersededBy, correctionRecord.id);
+  assert.equal(correctionView.data.conceptRecords.find((entry) => entry.id === correctionRecord.id).supersededBy, null);
+  const reportTimeView = await currentView(instance.base, 'owner', project.id, { recordedAt: conceptRecord.createdAt });
+  assert.equal(reportTimeView.data.conceptRecords.some((entry) => entry.id === correctionRecord.id), false,
+    'a report-time view does not include later corrections');
+  assert.equal(reportTimeView.data.conceptRecords.find((entry) => entry.id === conceptRecord.id).supersededBy, null,
+    'a later correction does not alter historical supersession status');
+  const correctionReplay = await postCommand(instance.base, 'owner', project.id, correctionCommand);
+  assert.equal(correctionReplay.meta.replayed, true);
+  assert.deepEqual(correctionReplay.data, corrected.data);
+  const changedCorrectionReplay = await postCommand(instance.base, 'owner', project.id, { ...correctionCommand,
+    payload: { ...correctionCommand.payload, values: { ...correctionCommand.payload.values, sample: 'changed replay' } } }, 409);
+  assert.equal(changedCorrectionReplay.error.code, 'IDEMPOTENCY_CONFLICT');
+  const wrongPinCorrection = await postCommand(instance.base, 'owner', project.id, commandBody(correctionView,
+    'concept-record-correction-wrong-pin', { ...recordPayload(linkSchema, linkedValues), supersedesRecordId: conceptRecord.id }), 409);
+  assert.equal(wrongPinCorrection.error.code, 'CONCEPT_RECORD_CORRECTION_TARGET_INVALID');
+  const duplicateCorrection = await postCommand(instance.base, 'owner', project.id, commandBody(correctionView,
+    'concept-record-correction-branch', { ...recordPayload(schemaV1, recordValues), supersedesRecordId: conceptRecord.id }), 409);
+  assert.equal(duplicateCorrection.error.code, 'CONCEPT_RECORD_ALREADY_SUPERSEDED');
+  const afterCorrection = await postgres.query(`select state from orgward.aggregates where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2`, [tenantId, project.id]);
+  assert.equal(afterCorrection.rows[0].state.enterpriseConceptRecords.length, 4, 'correction and later records append exactly once');
+  assert.equal(afterCorrection.rows[0].state.audit.filter((entry) => entry.action === 'enterprise.create-concept-record').length, 4);
+  assert.equal(afterCorrection.rows[0].state.events.filter((entry) => entry.type === 'EnterpriseConceptRecordCreated').length, 4);
+
   const separateProjectView = await currentView(instance.base, 'owner', otherProject.id);
   assert.deepEqual(separateProjectView.data.conceptSchemas, [], 'schemas are private to the project aggregate');
   assert.deepEqual(separateProjectView.data.conceptRecords, [], 'records are private to the project aggregate');
   const crossProjectRecord = await postCommand(instance.base, 'owner', otherProject.id, commandBody(separateProjectView,
     'concept-record-cross-project', recordPayload(schemaV1, recordValues)), 409);
   assert.equal(crossProjectRecord.error.code, 'CONCEPT_SCHEMA_STALE');
+  const foreignSchema = await postCommand(instance.base, 'owner', otherProject.id, commandBody(separateProjectView,
+    'concept-schema-cross-project-source', { kind: 'define-concept-schema', definition,
+      reason: 'Create a separate project schema fixture.' }));
+  const foreignRecord = await postCommand(instance.base, 'owner', otherProject.id, commandBody(
+    await currentView(instance.base, 'owner', otherProject.id), 'concept-record-cross-project-source',
+    recordPayload(foreignSchema.data.conceptSchema, recordValues)));
+  const foreignCorrection = await postCommand(instance.base, 'owner', project.id, commandBody(
+    await currentView(instance.base, 'owner', project.id), 'concept-record-correction-foreign',
+    { ...recordPayload(schemaV1, recordValues), supersedesRecordId: foreignRecord.data.conceptRecord.id }), 409);
+  assert.equal(foreignCorrection.error.code, 'CONCEPT_RECORD_CORRECTION_TARGET_INVALID');
   const inaccessible = await currentView(instance.base, 'foreign', project.id, {}, 404);
   assert.equal(inaccessible.error.code, 'PROJECT_NOT_FOUND');
 
@@ -2570,7 +2614,8 @@ test('customer concept schemas are owner-defined, project-private, hash-chained,
   assert.deepEqual(exported.data.projectPrivateConceptSchemas.map((schema) => schema.schemaHash), [schemaV1.schemaHash, linkSchema.schemaHash, successor.data.conceptSchema.schemaHash]);
   assert.equal(exported.data.projectPrivateConceptSchemasHash, digest(exported.data.projectPrivateConceptSchemas));
   assert.deepEqual(exported.data.projectPrivateConceptRecords.map((record) => record.recordHash),
-    [conceptRecord.recordHash, linkedRecord.data.conceptRecord.recordHash, manyRecord.data.conceptRecord.recordHash]);
+    [conceptRecord.recordHash, linkedRecord.data.conceptRecord.recordHash, manyRecord.data.conceptRecord.recordHash, correctionRecord.recordHash]);
+  assert.equal(exported.data.projectPrivateConceptRecords.find((record) => record.id === correctionRecord.id).supersedesRecordId, conceptRecord.id);
   assert.equal(exported.data.projectPrivateConceptRecordsHash, digest(exported.data.projectPrivateConceptRecords));
   const preview = await request(instance.base, 'owner', `/api/v1/projects/${project.id}/enterprise/import-preview`, {
     method: 'POST', body: { bundle: exported.data },
@@ -2592,8 +2637,9 @@ test('customer concept schemas are owner-defined, project-private, hash-chained,
   ]);
   assert.deepEqual(restarted.data.conceptRecords.map((record) => [record.id, record.recordHash]), [
     [conceptRecord.id, conceptRecord.recordHash], [linkedRecord.data.conceptRecord.id, linkedRecord.data.conceptRecord.recordHash],
-    [manyRecord.data.conceptRecord.id, manyRecord.data.conceptRecord.recordHash],
+    [manyRecord.data.conceptRecord.id, manyRecord.data.conceptRecord.recordHash], [correctionRecord.id, correctionRecord.recordHash],
   ]);
+  assert.equal(restarted.data.conceptRecords.find((record) => record.id === conceptRecord.id).supersededBy, correctionRecord.id);
 });
 
 test('portfolio import round trip previews, applies one reviewed record and persists the saved change after restart', async (t) => {

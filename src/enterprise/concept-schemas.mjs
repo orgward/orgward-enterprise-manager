@@ -258,13 +258,15 @@ export function normalizeEnterpriseConceptRecordCommand(input) {
     || typeof input.namespace !== 'string' || !NAMESPACE.test(input.namespace)
     || typeof input.conceptId !== 'string' || !SAFE.test(input.conceptId)
     || !Number.isSafeInteger(input.schemaVersion) || input.schemaVersion < 1
+    || (Object.hasOwn(input, 'supersedesRecordId') && !/^concept-record-[0-9a-f-]{36}$/.test(input.supersedesRecordId ?? ''))
     || !hashValue(input.schemaHash) || !plain(input.values)
-    || Object.keys(input).some((key) => !['kind', 'blueprintId', 'blueprintVersion', 'namespace', 'conceptId', 'schemaVersion', 'schemaHash', 'values', 'reason'].includes(key))) {
+    || Object.keys(input).some((key) => !['kind', 'blueprintId', 'blueprintVersion', 'namespace', 'conceptId', 'schemaVersion', 'schemaHash', 'values', 'reason', 'supersedesRecordId'].includes(key))) {
     fail('INVALID_CONCEPT_RECORD_COMMAND', 'Pin a registered concept schema and provide a record values object for the current saved design.');
   }
   return { kind: input.kind, blueprintId: input.blueprintId, blueprintVersion: input.blueprintVersion,
     namespace: input.namespace, conceptId: input.conceptId, schemaVersion: input.schemaVersion,
-    schemaHash: input.schemaHash, values: structuredClone(input.values), reason: enterpriseText(input.reason, 'Record reason', 500) };
+    schemaHash: input.schemaHash, values: structuredClone(input.values), reason: enterpriseText(input.reason, 'Record reason', 500),
+    ...(Object.hasOwn(input, 'supersedesRecordId') ? { supersedesRecordId: input.supersedesRecordId } : {}) };
 }
 
 function normalizeConceptRecordValues(values, schema, availableRecords) {
@@ -334,12 +336,13 @@ export function verifyEnterpriseConceptRecords(project, schemas = verifyEnterpri
   if (!Array.isArray(records) || records.length > MAX_CONCEPT_RECORDS || byteLength(records) > MAX_CONCEPT_RECORDS_BYTES) {
     fail('CONCEPT_RECORD_INTEGRITY', 'The project concept-record collection exceeds its storage limits.', 409);
   }
-  const seen = new Set(); const checked = [];
+  const seen = new Set(); const checked = []; const superseded = new Set();
   for (const record of records) {
     if (!plain(record) || !/^concept-record-[0-9a-f-]{36}$/.test(record.id ?? '') || seen.has(record.id)
       || record.projectId !== project.id || record.tenantId !== project.tenantId || record.formatVersion !== 1
       || typeof record.namespace !== 'string' || typeof record.conceptId !== 'string'
       || !Number.isSafeInteger(record.schemaVersion) || !hashValue(record.schemaHash)
+      || (Object.hasOwn(record, 'supersedesRecordId') && !/^concept-record-[0-9a-f-]{36}$/.test(record.supersedesRecordId ?? ''))
       || record.epistemicStatus !== 'HUMAN_REPORTED' || record.verificationStatus !== 'UNVERIFIED'
       || typeof record.createdBy !== 'string' || !record.createdBy || !Number.isFinite(Date.parse(record.createdAt ?? ''))
       || typeof record.reason !== 'string' || record.reason.length > 500 || !plain(record.values) || !hashValue(record.recordHash)
@@ -347,7 +350,15 @@ export function verifyEnterpriseConceptRecords(project, schemas = verifyEnterpri
       fail('CONCEPT_RECORD_INTEGRITY', 'A saved concept record has invalid identity, provenance or verification status.', 409);
     }
     exactKeys(record, ['formatVersion', 'id', 'projectId', 'tenantId', 'namespace', 'conceptId', 'schemaVersion', 'schemaHash',
-      'values', 'epistemicStatus', 'verificationStatus', 'createdAt', 'createdBy', 'reason', 'recordHash', 'predicateEvaluationVersion'], 'CONCEPT_RECORD_INTEGRITY');
+      'values', 'epistemicStatus', 'verificationStatus', 'createdAt', 'createdBy', 'reason', 'recordHash', 'predicateEvaluationVersion', 'supersedesRecordId'], 'CONCEPT_RECORD_INTEGRITY');
+    if (Object.hasOwn(record, 'supersedesRecordId')) {
+      const target = checked.find((entry) => entry.id === record.supersedesRecordId);
+      if (!target || target.projectId !== project.id || target.schemaHash !== record.schemaHash
+        || target.schemaVersion !== record.schemaVersion || superseded.has(target.id)) {
+        fail('CONCEPT_RECORD_INTEGRITY', 'A correction must point to one earlier, unsuperseded record under the same exact schema pin.', 409);
+      }
+      superseded.add(target.id);
+    }
     const schema = schemas.find((entry) => entry.namespace === record.namespace && entry.conceptId === record.conceptId
       && entry.version === record.schemaVersion && entry.schemaHash === record.schemaHash);
     if (!schema) fail('CONCEPT_RECORD_INTEGRITY', 'A saved concept record does not pin a retained project schema version.', 409);
@@ -373,7 +384,9 @@ export function verifyEnterpriseConceptRecords(project, schemas = verifyEnterpri
       || eventMatches[0].tenantId !== project.tenantId || eventMatches[0].workspaceId !== project.id
       || eventMatches[0].actor !== record.createdBy || eventMatches[0].occurredAt !== record.createdAt
       || eventMatches[0].data.conceptRecordHash !== record.recordHash
-      || eventMatches[0].data.conceptRecordSchemaHash !== record.schemaHash) {
+      || eventMatches[0].data.conceptRecordSchemaHash !== record.schemaHash
+      || Object.hasOwn(eventMatches[0].data, 'supersedesRecordId') !== Object.hasOwn(record, 'supersedesRecordId')
+      || (Object.hasOwn(record, 'supersedesRecordId') && eventMatches[0].data.supersedesRecordId !== record.supersedesRecordId)) {
       fail('CONCEPT_RECORD_INTEGRITY', 'A saved concept record is missing its matching creation event or audit record.', 409);
     }
     seen.add(record.id); checked.push(record);
@@ -391,12 +404,22 @@ export function applyEnterpriseConceptRecord(project, command, actor, tenantId) 
   const schema = schemas.find((entry) => entry.namespace === command.namespace && entry.conceptId === command.conceptId
     && entry.version === command.schemaVersion && entry.schemaHash === command.schemaHash);
   if (!schema) fail('CONCEPT_SCHEMA_STALE', 'Reload the current project and select an exact registered concept schema version.', 409);
+  if (Object.hasOwn(command, 'supersedesRecordId')) {
+    const target = records.find((entry) => entry.id === command.supersedesRecordId);
+    if (!target || target.schemaHash !== schema.schemaHash || target.schemaVersion !== schema.version) {
+      fail('CONCEPT_RECORD_CORRECTION_TARGET_INVALID', 'Choose an existing record under this exact schema version in the current project.', 409);
+    }
+    if (records.some((entry) => entry.supersedesRecordId === target.id)) {
+      fail('CONCEPT_RECORD_ALREADY_SUPERSEDED', 'This record has already been corrected. Choose the latest unsuperseded record.', 409);
+    }
+  }
   if (records.length >= MAX_CONCEPT_RECORDS) fail('CONCEPT_RECORD_LIMIT', 'This project has reached the 5,000 concept-record limit.', 409);
   const values = normalizeConceptRecordValues(command.values, schema, records);
   validateConceptRecordPredicates(values, schema);
   const at = new Date().toISOString();
   const core = { formatVersion: 1, id: `concept-record-${randomUUID()}`, projectId: project.id, tenantId,
     namespace: schema.namespace, conceptId: schema.conceptId, schemaVersion: schema.version, schemaHash: schema.schemaHash,
+    ...(Object.hasOwn(command, 'supersedesRecordId') ? { supersedesRecordId: command.supersedesRecordId } : {}),
     values, predicateEvaluationVersion: 1, epistemicStatus: 'HUMAN_REPORTED', verificationStatus: 'UNVERIFIED', createdAt: at, createdBy: actor,
     reason: command.reason };
   const record = { ...core, recordHash: digest(core) };

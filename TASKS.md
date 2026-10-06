@@ -8843,3 +8843,29 @@ status distinction. Syntax checks and `git diff --check` passed. No full check
 was run while the parent PR remains open. This bounded increment does not
 complete T-125 or PR-17; PR-15 remains first open by the active task order.
 Task checkboxes, cursor and production gates are unchanged.
+
+T-125 immutable concept-record correction follow-up (2026-10-06): an owner can
+create a new record with optional `supersedesRecordId`; prior values remain
+unchanged. The pointer is covered by the new record hash and matching creation
+event. Validation/readback require an earlier record in the same project under
+the exact schema version/hash, and allow only one successor per record. A null
+or malformed pointer, removal that disagrees with its retained event, reordered
+target, or event-mismatched pointer fails integrity checks; historical records
+without correction pointers retain their existing representation.
+The projection derives `supersededBy` from records visible at the selected
+recorded-time cutoff, preserving historical report-time status. The owner UI
+offers only unsuperseded records under the selected exact schema, and labels
+both records HUMAN_REPORTED / UNVERIFIED; it says correction does not establish
+truth. Export carries the correction link; the existing unsupported-import
+block remains in force.
+
+Focused concept-schema/server/view tests passed 4/4, 0 failed/skipped; TAP
+duration 2.34s, wrapper elapsed 3.58s
+(`/tmp/orgward-concept-correction-zP6cys.log`; TAP:
+`/tmp/orgward-tests-VU27Og/node-test.tap.log`). Coverage includes successful
+correction and event pin, exact schema/project target denials, duplicate
+correction denial, replay/conflict, malformed/removed pointer and record-order
+readback checks, report-time cutoff, export, restart and owner UI selector/status
+display. Syntax and `git diff --check` passed. No full check was run while the
+parent PR remains open. This does not complete T-125 or PR-17; PR-15 remains
+first open. Task checkboxes, cursor and production gates are unchanged.

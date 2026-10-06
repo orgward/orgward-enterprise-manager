@@ -8,6 +8,7 @@ export function renderEnterpriseConceptSchemas({ model, loading = false, pending
     el('p', { text: 'Register versioned concept shapes for this project. These declarations do not add actions, run code, migrate existing objects, or grant permissions.' }),
     el('p', { text: 'Supported fields: text, number, boolean, enum, quantity with explicit units, and reference to an exact registered schema. ONE/MANY cardinality and bounded predicates only; no scripts or arbitrary expressions.' }),
     el('p', { text: 'All declared predicates block record save unless they pass. For MANY fields, every item must pass and empty lists fail. Quantity comparisons require the exact predicate unit; no unit conversion is applied.' }),
+    el('p', { text: 'A correction creates a new immutable report record; it does not verify whether either report is true.' }),
   ]);
   const schemas = model.conceptSchemas ?? [];
   const records = model.conceptRecords ?? [];
@@ -21,6 +22,7 @@ export function renderEnterpriseConceptSchemas({ model, loading = false, pending
   for (const record of records) root.append(el('article', { attrs: { 'data-concept-record': record.id } }, [
     el('h5', { text: `${record.namespace}/${record.conceptId} · ${record.id}` }),
     el('p', { text: `${record.epistemicStatus} · ${record.verificationStatus} · ${record.predicateEvaluationStatus ?? 'PREDICATE_STATUS_UNAVAILABLE'} · schema ${record.schemaVersion} · ${record.schemaHash}` }),
+    el('p', { text: `${record.supersedesRecordId ? `Corrects ${record.supersedesRecordId}` : 'Original report'} · ${record.supersededBy ? `superseded by ${record.supersededBy}` : record.supersedesRecordId ? 'current correction' : 'not superseded'} · HUMAN_REPORTED / UNVERIFIED` }),
     el('p', { text: `Record hash ${record.recordHash} · reported by ${record.createdBy} at ${record.createdAt}` }),
     el('pre', { text: JSON.stringify(record.values, null, 2) }),
   ]));
@@ -64,12 +66,19 @@ export function renderEnterpriseConceptSchemas({ model, loading = false, pending
     for (const schema of schemas) select.append(el('option', { text: `${schema.namespace}/${schema.conceptId}@${schema.version} · ${schema.schemaHash}`,
       attrs: { value: schema.schemaHash } }));
     const fieldsContainer = el('div', { attrs: { 'data-concept-record-fields': '' } });
+    const supersedesSelect = el('select', { attrs: { name: 'supersedesRecordId', 'aria-label': 'Optional report to correct' } });
+    supersedesSelect.append(el('option', { text: 'Create without correcting an earlier report', attrs: { value: '' } }));
     let controlBindings = [];
     const renderValueFields = () => {
       const schema = schemas.find((entry) => entry.schemaHash === select.value);
       controlBindings = [];
       fieldsContainer.replaceChildren();
+      supersedesSelect.replaceChildren(el('option', { text: 'Create without correcting an earlier report', attrs: { value: '' } }));
       if (!schema) return;
+      for (const record of records.filter((entry) => entry.schemaHash === schema.schemaHash && entry.schemaVersion === schema.version && !entry.supersededBy)) {
+        supersedesSelect.append(el('option', { text: `${record.id} · ${record.epistemicStatus} / ${record.verificationStatus}`,
+          attrs: { value: record.id } }));
+      }
       for (const field of schema.fields) {
         const label = `${field.label} (${field.type}, ${field.cardinality}${field.required ? ', required' : ', optional'})`;
         const binding = { field, controls: [] };
@@ -136,6 +145,7 @@ export function renderEnterpriseConceptSchemas({ model, loading = false, pending
     const recordForm = el('form', { className: 'enterprise-form', attrs: { 'aria-label': 'Create project concept record', 'data-enterprise-action': 'create-concept-record' } }, [
       el('label', { text: 'Registered schema version' }, [select]),
       el('p', { text: 'Native controls follow the selected schema. MANY values use a bounded JSON array; references can select only existing records with the exact pinned schema.' }),
+      el('label', { text: 'Correct an earlier report (optional)' }, [supersedesSelect]),
       fieldsContainer,
       el('label', { text: 'Reason for reporting this record' }, [reasonInput]),
     ]);
@@ -193,7 +203,7 @@ export function renderEnterpriseConceptSchemas({ model, loading = false, pending
         }
         onCommand({ kind: 'create-concept-record', blueprintId: model.context.blueprintId, blueprintVersion: model.context.blueprintVersion,
           namespace: schema.namespace, conceptId: schema.conceptId, schemaVersion: schema.version, schemaHash: schema.schemaHash,
-          values: parsedValues, reason: reasonInput.value.trim() });
+          values: parsedValues, reason: reasonInput.value.trim(), ...(supersedesSelect.value ? { supersedesRecordId: supersedesSelect.value } : {}) });
       } catch (failure) { recordError.textContent = failure.message; recordError.hidden = false; }
     });
     root.append(recordForm);

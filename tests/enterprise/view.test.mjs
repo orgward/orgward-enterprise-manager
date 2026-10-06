@@ -2202,7 +2202,16 @@ test('concept schema panel shows project-private scope, exact immutable pins, su
   const model = { conceptSchemas: [schema, alternate, targetSchema], conceptRecords: [{ id: 'concept-record-00000000-0000-4000-8000-000000000001',
     namespace: 'customer.quality', conceptId: 'inspection', schemaVersion: 1, schemaHash: 'a'.repeat(64),
     values: { sample: 'batch-7' }, epistemicStatus: 'HUMAN_REPORTED', verificationStatus: 'UNVERIFIED',
-    predicateEvaluationStatus: 'PREDICATES_NOT_EVALUATED', recordHash: 'b'.repeat(64), createdBy: 'owner', createdAt: '2026-10-06T00:00:00.000Z' }, targetRecord],
+    predicateEvaluationStatus: 'PREDICATES_NOT_EVALUATED', supersededBy: 'concept-record-00000000-0000-4000-8000-000000000003',
+    recordHash: 'b'.repeat(64), createdBy: 'owner', createdAt: '2026-10-06T00:00:00.000Z' },
+    { id: 'concept-record-00000000-0000-4000-8000-000000000003', namespace: 'customer.quality', conceptId: 'inspection',
+      schemaVersion: 1, schemaHash: 'a'.repeat(64), supersedesRecordId: 'concept-record-00000000-0000-4000-8000-000000000001',
+      supersededBy: null, values: { sample: 'batch-7-corrected' }, epistemicStatus: 'HUMAN_REPORTED', verificationStatus: 'UNVERIFIED',
+      predicateEvaluationStatus: 'PREDICATES_NOT_EVALUATED', recordHash: 'f'.repeat(64), createdBy: 'owner', createdAt: '2026-10-06T00:01:00.000Z' },
+    { id: 'concept-record-00000000-0000-4000-8000-000000000004', namespace: 'customer.quality', conceptId: 'inspection',
+      schemaVersion: 1, schemaHash: 'a'.repeat(64), supersededBy: null, values: { sample: 'batch-8' },
+      epistemicStatus: 'HUMAN_REPORTED', verificationStatus: 'UNVERIFIED', predicateEvaluationStatus: 'PREDICATES_NOT_EVALUATED',
+      recordHash: '1'.repeat(64), createdBy: 'owner', createdAt: '2026-10-06T00:02:00.000Z' }, targetRecord],
   context: { isCurrent: true, blueprintId: 'blueprint-00000000-0000-4000-8000-000000000001', blueprintVersion: 1 }, permissions: { scopeAdmin: true } };
   let submitted;
   const panel = renderEnterpriseConceptSchemas({ model, el, onCommand: (payload) => { submitted = payload; } });
@@ -2212,6 +2221,9 @@ test('concept schema panel shows project-private scope, exact immutable pins, su
   assert.match(panel.textContent, /schema hash a{64}/);
   assert.match(panel.textContent, /HUMAN_REPORTED · UNVERIFIED/);
   assert.match(panel.textContent, /PREDICATES_NOT_EVALUATED/);
+  assert.match(panel.textContent, /Original report · superseded by concept-record-00000000-0000-4000-8000-000000000003/);
+  assert.match(panel.textContent, /Corrects concept-record-00000000-0000-4000-8000-000000000001 · current correction/);
+  assert.match(panel.textContent, /does not verify whether either report is true/);
   assert.match(panel.textContent, /Record hash b{64}/);
   const form = panel.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === 'define-concept-schema');
   assert.ok(form);
@@ -2258,6 +2270,14 @@ test('concept schema panel shows project-private scope, exact immutable pins, su
     values: { sample: 'batch-7', count: 3, reviewed: false, decision: 'PASS', temperature: { value: 20.5, unit: 'C' },
       source: { recordId: targetRecord.id }, notes: ['first', 'second'] }, reason: 'Report this inspection.' });
 
+  const correctionSelect = recordForm.querySelectorAll('select').find((entry) => entry.attrs.name === 'supersedesRecordId');
+  assert.ok(correctionSelect.children.some((option) => option.attrs.value === 'concept-record-00000000-0000-4000-8000-000000000004'));
+  assert.equal(correctionSelect.children.some((option) => option.attrs.value === 'concept-record-00000000-0000-4000-8000-000000000001'), false,
+    'a record already corrected cannot be selected for another branch');
+  correctionSelect.value = 'concept-record-00000000-0000-4000-8000-000000000004';
+  recordForm.listeners.get('submit')({ preventDefault() {} });
+  assert.equal(submitted.supersedesRecordId, 'concept-record-00000000-0000-4000-8000-000000000004');
+
   fieldControl('comment').value = '  preserved nonblank text  ';
   recordForm.listeners.get('submit')({ preventDefault() {} });
   assert.equal(submitted.values.comment, '  preserved nonblank text  ', 'nonblank optional text is preserved without trimming');
@@ -2267,6 +2287,7 @@ test('concept schema panel shows project-private scope, exact immutable pins, su
 
   schemaSelect.value = alternate.schemaHash;
   schemaSelect.listeners.get('change')({});
+  assert.deepEqual(correctionSelect.children.map((option) => option.attrs.value), [''], 'schema changes clear incompatible correction targets');
   assert.deepEqual(Array.from(recordForm.querySelectorAll('[data-concept-field]'), (entry) => entry.attrs['data-concept-field']), ['enabled'],
     'changing schema replaces the form controls with the selected exact version');
   recordForm.querySelectorAll('input').find((entry) => entry.attrs.name === 'reason').value = 'Report an alternate record.';

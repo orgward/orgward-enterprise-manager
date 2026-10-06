@@ -159,6 +159,36 @@ test('predicate evaluation marker preserves legacy hashes and rejects removed, n
   }
 });
 
+test('concept record corrections require an earlier exact-pin target and reject malformed pointers on readback', () => {
+  const target = project();
+  target.blueprintVersions = [{ id: 'blueprint-00000000-0000-4000-8000-000000000001', version: 1 }];
+  const schema = normalizeConceptSchemaDefinition({ ...inspection, predicates: [] }, target, target.tenantId);
+  target.enterpriseConceptSchemas = [{ ...schema, createdAt: '2026-10-06T00:00:00.000Z', createdBy: 'owner' }];
+  const command = { kind: 'create-concept-record', blueprintId: target.blueprintVersions[0].id, blueprintVersion: 1,
+    namespace: schema.namespace, conceptId: schema.conceptId, schemaVersion: schema.version, schemaHash: schema.schemaHash,
+    values: { sample: 'batch-1', temperature: { value: 82, unit: 'C' }, decision: 'PASS' }, reason: 'Correction integrity test.' };
+  const appendEvent = (record) => target.events.push({ type: 'EnterpriseConceptRecordCreated', tenantId: target.tenantId,
+    workspaceId: target.id, actor: record.createdBy, occurredAt: record.createdAt,
+    data: { conceptRecordId: record.id, conceptRecordHash: record.recordHash, conceptRecordSchemaHash: record.schemaHash,
+      ...(Object.hasOwn(record, 'supersedesRecordId') ? { supersedesRecordId: record.supersedesRecordId } : {}) } });
+  target.events = [];
+  const first = applyEnterpriseConceptRecord(target, command, 'owner', target.tenantId).conceptRecord;
+  appendEvent(first);
+  const corrected = applyEnterpriseConceptRecord(target, { ...command, values: { ...command.values, sample: 'batch-1-fixed' },
+    supersedesRecordId: first.id }, 'owner', target.tenantId).conceptRecord;
+  appendEvent(corrected);
+  assert.equal(verifyEnterpriseConceptRecords(target).length, 2);
+  const nullPointer = structuredClone(target);
+  nullPointer.enterpriseConceptRecords[1].supersedesRecordId = null;
+  assert.throws(() => verifyEnterpriseConceptRecords(nullPointer), { code: 'CONCEPT_RECORD_INTEGRITY' });
+  const removedPointer = structuredClone(target);
+  delete removedPointer.enterpriseConceptRecords[1].supersedesRecordId;
+  assert.throws(() => verifyEnterpriseConceptRecords(removedPointer), { code: 'CONCEPT_RECORD_INTEGRITY' });
+  const reversed = structuredClone(target);
+  reversed.enterpriseConceptRecords.reverse();
+  assert.throws(() => verifyEnterpriseConceptRecords(reversed), { code: 'CONCEPT_RECORD_INTEGRITY' });
+});
+
 test('concept schema references pin an exact prior schema version and unchanged successor declarations are rejected', () => {
   const target = project();
   const first = normalizeConceptSchemaDefinition(inspection, target, target.tenantId);

@@ -2035,6 +2035,8 @@ export function createApp({
                 conceptRecordId: changed.conceptRecord?.id ?? null,
                 conceptRecordHash: changed.conceptRecord?.recordHash ?? null,
                 conceptRecordSchemaHash: changed.conceptRecord?.schemaHash ?? null,
+                ...(changed.conceptRecord && Object.hasOwn(changed.conceptRecord, 'supersedesRecordId')
+                  ? { supersedesRecordId: changed.conceptRecord.supersedesRecordId } : {}),
                 sandboxTransactionId: changed.sandboxTransaction?.operationId ?? null,
                 sandboxOperationKey: changed.sandboxTransaction?.operationKey ?? null,
                 sandboxEvidenceHash: changed.sandboxTransaction?.evidenceHash ?? null,
