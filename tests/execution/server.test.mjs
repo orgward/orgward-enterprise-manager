@@ -182,6 +182,10 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   const humanOutputHelperSource = await humanOutputHelper.text();
   assert.match(executionSource, /renderHumanTaskOutputApplication\(\{ project, plan, task, runtime, output \}\)/,
     'the served process task row renders owner output review from its selected durable runtime');
+  assert.match(executionSource, /Declared task outputs \(human reported; not independently verified\)[\s\S]*?expectedVersion: runtime\.version/,
+    'human completion captures declared outputs while sending the current runtime version and labeling values unverified');
+  assert.match(executionSource, /runtime\?\.outcome\?\.outputSchemaVersion === 1[\s\S]*?record\.referenceHash[\s\S]*?record\.recordHash/,
+    'the process task row displays persisted output values, explicit status, and source hashes');
   assert.match(executionSource, /proposalDesignLink\(project, \{ status: 'applied',[\s\S]*?objectId: disposition\.outputObjectId \}\)/,
     'the saved owner output link is derived from the validated applied event object');
   assert.match(executionSource, /Saved output reference: plan \$\{disposition\.planId\} revision \$\{disposition\.revision\}, task \$\{disposition\.taskId\}, instance \$\{disposition\.planInstanceId\}, event \$\{disposition\.eventId\}\.[\s\S]*?does not open a historical snapshot/,

@@ -3170,7 +3170,7 @@ export function createApp({
         });
         const action = humanTaskActionMatch[1];
         const allowed = new Set(['projectId', 'planId', 'revision', 'planInstanceId', 'taskId',
-          ...(action === 'complete' ? ['result', 'evidence', 'decisionChoice'] : []),
+          ...(action === 'complete' ? ['result', 'evidence', 'decisionChoice', 'outputs', 'expectedVersion'] : []),
           ...(action === 'escalate' ? ['reason', 'evidence'] : []),
           ...(action === 'resolve' ? ['disposition', 'reason', 'evidence', 'targetPrincipal', 'expectedVersion'] : []),
         ]);
@@ -3199,8 +3199,12 @@ export function createApp({
           return sendJson(response, result.replayed ? 200 : 201, { ...result.runtime, meta: { replayed: result.replayed } });
         }
         if (action === 'complete') {
-          const { result: taskResult, evidence, decisionChoice } = body.payload;
-          const completed = await executionService.completeHumanProcessTask({ ...command, result: taskResult, evidence, decisionChoice });
+          const { result: taskResult, evidence, decisionChoice, outputs, expectedVersion } = body.payload;
+          if ((outputs !== undefined || expectedVersion !== undefined)
+            && (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1)) {
+            throw apiFailure(400, 'INVALID_PROCESS_TASK_VERSION', 'Completion requires the current task version. Refresh the task and try again.');
+          }
+          const completed = await executionService.completeHumanProcessTask({ ...command, result: taskResult, evidence, decisionChoice, outputs, expectedVersion });
           if (!completed) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'The project or authorized membership was not found.');
           return sendJson(response, completed.replayed ? 200 : 201, { ...completed.runtime, meta: { replayed: completed.replayed } });
         }

@@ -8639,3 +8639,21 @@ Focused evidence: `tests/sdlc/server.test.mjs` passed 3/3
 integration in `tests/persistence.test.mjs` passed 1/1
 (`/tmp/orgward-tests-DDSLtr/node-test.tap.log`). T-91 and PR-15 remain open;
 no task checkbox/cursor, backlog acceptance state or production gate changed.
+
+PR-15 T-91 typed human-task outputs (2026-10-06): Sol approved the bounded
+human completion slice. Versioned output records are derived server-side from
+the exact saved task and retained blueprint output references, with bounded
+count, encoded size, nesting and text. Each output is explicitly
+`HUMAN_REPORTED` or `UNAVAILABLE`; reporter and assigned actor are separate
+provenance fields. Output-bearing commands require the expected runtime
+version. Outcome, event, audit and idempotency result persist atomically, and
+exact replay adds no second event or audit effect. Legacy completions that omit
+outputs retain the pre-change request-hash recipe. The execution UI captures
+declared values and displays their source hashes and unverified status.
+
+Focused tests passed 2/2, 0 failed/skipped (`tests/persistence.test.mjs` and
+`tests/execution/server.test.mjs`; `/tmp/orgward-tests-cJJiYu/node-test.tap.log`).
+Values are human-reported, not truth-verified; this creates no verification PASS.
+The T-91 SDLC consumer is not yet linked to these output records. T-91 and PR-15
+remain open; no task checkbox/cursor, backlog acceptance state or production
+gate changed.

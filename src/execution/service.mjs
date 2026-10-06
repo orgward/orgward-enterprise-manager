@@ -1498,14 +1498,16 @@ export class ExecutionService {
         statusCode: 503, code: 'PROCESS_TASK_RUNTIME_UNAVAILABLE', retryable: false,
       });
     }
-    return this.store.completeHumanProcessTask({
-      ...input,
-      requestHash: digest({
-        projectId: input.projectId, planId: input.planId, revision: input.revision,
-        planInstanceId: input.planInstanceId, taskId: input.taskId, principal: input.principal,
-        result: input.result, evidence: input.evidence, ...(input.decisionChoice !== undefined ? { decisionChoice: input.decisionChoice } : {}),
-      }),
-    });
+    const request = {
+      projectId: input.projectId, planId: input.planId, revision: input.revision,
+      planInstanceId: input.planInstanceId, taskId: input.taskId, principal: input.principal,
+      result: input.result, evidence: input.evidence,
+      ...(input.decisionChoice !== undefined ? { decisionChoice: input.decisionChoice } : {}),
+      ...(input.outputs !== undefined ? { outputs: Array.isArray(input.outputs) ? [...input.outputs].sort((left, right) =>
+        String(left?.outputId ?? '').localeCompare(String(right?.outputId ?? ''))) : input.outputs } : {}),
+      ...(input.expectedVersion !== undefined ? { expectedVersion: input.expectedVersion } : {}),
+    };
+    return this.store.completeHumanProcessTask({ ...input, requestHash: digest(request) });
   }
   async escalateHumanProcessTask(input) {
     if (typeof this.store.escalateHumanProcessTask !== 'function') {

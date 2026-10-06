@@ -1096,6 +1096,24 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
           })));
           item.append(history);
         }
+        if (runtime?.outcome?.outputSchemaVersion === 1 && Array.isArray(runtime.outcome.outputRecords)) {
+          const outputRefs = new Map((task.outputs ?? []).map((entry) => [entry.objectId, entry]));
+          const reported = el('details', { className: 'human-task-reported-output-history' }, [
+            el('summary', { text: `Declared output records (${runtime.outcome.outputRecords.length})` }),
+            el('p', { className: 'muted', text: 'Values are human reported and integrity pinned. They are not independently verified and do not establish semantic truth.' }),
+          ]);
+          reported.append(el('ul', {}, runtime.outcome.outputRecords.map((record) => {
+            const ref = outputRefs.get(record.outputId);
+            const valueText = record.status === 'HUMAN_REPORTED' ? JSON.stringify(record.value) : 'Unavailable: no value was reported.';
+            return el('li', {}, [
+              el('strong', { text: `${ref?.label ?? record.outputId} · ${record.outputType} · ${record.status.replaceAll('_', ' ')}` }),
+              el('p', { text: valueText }),
+              el('p', { className: 'muted', text: `Reported by ${record.reporterPrincipal}; assigned actor ${record.assignedPrincipal}. Source ${record.projectId} / ${record.planId} r${record.revision} / ${record.taskId}; blueprint ${record.blueprintId} v${record.blueprintVersion}.` }),
+              el('p', { className: 'muted', text: `Reference hash ${record.referenceHash} · record hash ${record.recordHash}` }),
+            ]);
+          })));
+          item.append(reported);
+        }
         if (runtime?.status === 'SUCCEEDED') {
           for (const output of task.outputs.filter((entry) => entry.type === 'information')) {
             const outputControl = renderHumanTaskOutputApplication({ project, plan, task, runtime, output });
@@ -1119,7 +1137,7 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
           item.append(el('p', { className: 'muted', text: 'Process instance pause is pending or complete; no new human task work can start.' }));
         } else if (runtime?.status === 'IN_PROGRESS' && runtime.assignedToCurrentPrincipal) {
           item.append(
-            renderHumanTaskCompletion({ project, plan, task, selectedInstance }),
+            renderHumanTaskCompletion({ project, plan, task, runtime, selectedInstance }),
             renderHumanTaskEscalation({ project, plan, task, selectedInstance }),
           );
         } else if (runtime?.status === 'IN_PROGRESS') {
@@ -1578,7 +1596,7 @@ function renderAbandonUnverifiedForm({ project, instanceId, control }) {
   return form;
 }
 
-function renderHumanTaskCompletion({ project, plan, task, selectedInstance }) {
+function renderHumanTaskCompletion({ project, plan, task, runtime, selectedInstance }) {
   const form = el('form', { className: 'execution-form human-task-completion', attrs: { 'aria-label': `Complete assigned human task ${task.title}` } });
   form.append(el('p', { className: 'muted', text: 'A succeeded human checkpoint requires at least one brief evidence note; a failed outcome may include evidence optionally.' }));
   const result = el('select', { attrs: { name: 'result', required: 'required', 'aria-label': `Outcome for ${task.title}` } }, [
@@ -1587,6 +1605,12 @@ function renderHumanTaskCompletion({ project, plan, task, selectedInstance }) {
   ]);
   const evidence = el('textarea', { attrs: { name: 'evidence', maxlength: '20099', rows: '4', 'aria-label': `Evidence notes for ${task.title}` } });
   const evidenceLabel = el('label', { text: 'Evidence notes, one per line (required)' }, evidence);
+  const outputInputs = (task.outputs ?? []).slice(0, 20).map((output) => {
+    const value = el('textarea', { attrs: { name: `output-${output.objectId}`, rows: '2', maxlength: '4096',
+      'aria-label': `Reported value for ${output.label}`, placeholder: output.type === 'decision'
+        ? '{"outcome":"...","observations":[],"reason":"..."}' : 'Enter a human-reported value' } });
+    return { output, value, field: el('label', { text: `${output.label} · ${output.type} · optional, reported by assigned human` }, value) };
+  });
   const updateEvidenceRequirement = () => {
     const required = result.value === 'succeeded';
     evidence.required = required;
@@ -1596,10 +1620,23 @@ function renderHumanTaskCompletion({ project, plan, task, selectedInstance }) {
   updateEvidenceRequirement();
   evidence.addEventListener('input', () => evidence.setCustomValidity(''));
   result.addEventListener('change', updateEvidenceRequirement);
+  const updateOutputAvailability = () => {
+    for (const entry of outputInputs) {
+      entry.value.disabled = result.value !== 'succeeded';
+      if (entry.value.disabled) entry.value.value = '';
+    }
+  };
+  updateOutputAvailability();
+  result.addEventListener('change', updateOutputAvailability);
   const submit = el('button', { className: 'button primary', text: 'Complete human task', attrs: { type: 'submit' } });
   const status = el('p', { className: 'muted human-task-command-status', attrs: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' } });
   const decision = renderManualFlowDecisionChoice({ project, plan, task, el });
-  form.append(el('label', { text: 'Work outcome' }, result), ...(decision ? [decision.node] : []), evidenceLabel, status, submit);
+  form.append(el('label', { text: 'Work outcome' }, result), ...(decision ? [decision.node] : []), evidenceLabel);
+  if (outputInputs.length) form.append(el('fieldset', { className: 'human-task-reported-outputs' }, [
+    el('legend', { text: 'Declared task outputs (human reported; not independently verified)' }),
+    ...outputInputs.map(({ field }) => field),
+  ]));
+  form.append(status, submit);
   if (decision) {
     const syncChoice = () => decision.setRequired(result.value === 'succeeded');
     result.addEventListener('change', syncChoice); syncChoice();
@@ -1607,7 +1644,12 @@ function renderHumanTaskCompletion({ project, plan, task, selectedInstance }) {
   const pending = state.pendingHumanTaskCommands.get(humanTaskCommandKey('complete', plan, task, selectedInstance));
   if (pending) {
     result.value = pending.payload.result; evidence.value = pending.payload.evidence.join('\n');
+    updateOutputAvailability();
     decision?.restore(pending.payload.decisionChoice);
+    for (const entry of outputInputs) {
+      const saved = pending.payload.outputs?.find((candidate) => candidate.outputId === entry.output.objectId);
+      if (saved) { entry.value.disabled = false; entry.value.value = entry.output.type === 'decision' ? JSON.stringify(saved.value) : String(saved.value); }
+    }
     for (const control of form.elements) if (control !== submit) control.disabled = true;
     submit.textContent = 'Retry saved completion';
     status.textContent = 'The exact saved completion is pending. Retry preserves its work outcome, decision choice, observed inputs and evidence.';
@@ -1628,7 +1670,21 @@ function renderHumanTaskCompletion({ project, plan, task, selectedInstance }) {
     let decisionChoice;
     try { decisionChoice = result.value === 'succeeded' ? decision?.read() : undefined; }
     catch (error) { status.textContent = error.message; return; }
-    void completeHumanTask({ project, plan, task, selectedInstance, result: result.value, evidence: evidenceEntries, decisionChoice, form, status, button: submit });
+    let outputs;
+    try {
+      outputs = outputInputs.flatMap(({ output, value }) => {
+        const text = value.value.trim();
+        if (!text) return [];
+        if (output.type === 'decision') {
+          let parsed;
+          try { parsed = JSON.parse(text); } catch { throw new Error(`Enter ${output.label} as a JSON decision record.`); }
+          return [{ outputId: output.objectId, value: parsed }];
+        }
+        return [{ outputId: output.objectId, value: text }];
+      });
+    } catch (error) { status.textContent = error.message; return; }
+    void completeHumanTask({ project, plan, task, selectedInstance, result: result.value, evidence: evidenceEntries,
+      decisionChoice, outputs, expectedVersion: runtime.version, form, status, button: submit });
   });
   return form;
 }
@@ -1936,7 +1992,7 @@ async function startHumanTask({ project, plan, task, selectedInstance, button, s
   }
 }
 
-async function completeHumanTask({ project, plan, task, selectedInstance, result, evidence, decisionChoice, form, status, button }) {
+async function completeHumanTask({ project, plan, task, selectedInstance, result, evidence, decisionChoice, outputs, expectedVersion, form, status, button }) {
   const key = humanTaskCommandKey('complete', plan, task, selectedInstance);
   const priorFocus = document.activeElement;
   let saved = false;
@@ -1944,7 +2000,8 @@ async function completeHumanTask({ project, plan, task, selectedInstance, result
     const submission = await submitHumanTaskCommand({
       action: 'complete', key, pendingCommands: state.pendingHumanTaskCommands,
       payload: { projectId: project.id, planId: plan.id, revision: plan.revision,
-        planInstanceId: selectedInstance, taskId: task.id, result, evidence, ...(decisionChoice ? { decisionChoice } : {}) },
+        planInstanceId: selectedInstance, taskId: task.id, result, evidence,
+        outputs: outputs ?? [], expectedVersion, ...(decisionChoice ? { decisionChoice } : {}) },
       form, button, status,
       send: (pending) => api('/api/execution/process-task-instances/complete', {
         method: 'POST', body: JSON.stringify({ schemaVersion: '1.0', commandId: pending.commandId, payload: pending.payload }),

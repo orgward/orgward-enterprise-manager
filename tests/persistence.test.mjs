@@ -6302,17 +6302,145 @@ test('owner-authored human task information output is pinned, versioned, audited
   }, 409);
   assert.equal(incompleteCheckpoint.error.code, 'HUMAN_TASK_CHECKPOINT_UNVERIFIED');
   const evidence = 'A contextual note that must not become the output detail.';
-  const completed = await request(app.base, '/api/execution/process-task-instances/complete', {
-    ...as('bob'), method: 'POST', body: command('human-output-complete', {
-      ...refs, result: 'succeeded', evidence: [evidence],
+  const reportedValue = 'Customer callback confirms the outage window and repair urgency.';
+  const missingExpectedVersion = await request(app.base, '/api/execution/process-task-instances/complete', {
+    ...as('bob'), method: 'POST', body: command('human-output-version-required', {
+      ...refs, result: 'succeeded', evidence: [evidence], outputs: [],
     }),
+  }, 400);
+  assert.equal(missingExpectedVersion.error.code, 'INVALID_PROCESS_TASK_VERSION');
+  const unauthorizedReporter = await request(app.base, '/api/execution/process-task-instances/complete', {
+    ...as('alice'), method: 'POST', body: command('human-output-unassigned-reporter', {
+      ...refs, result: 'succeeded', evidence: [evidence], expectedVersion: started.version,
+      outputs: [{ outputId: output.objectId, value: 'owner cannot report for the assignee' }],
+    }),
+  }, 403);
+  assert.equal(unauthorizedReporter.error.code, 'ACTION_FORBIDDEN');
+  const crossTenantReporter = await request(app.base, '/api/execution/process-task-instances/complete', {
+    ...as('bob@tenant-b-reader'), method: 'POST', body: command('human-output-cross-tenant-reporter', {
+      ...refs, result: 'succeeded', evidence: [evidence], expectedVersion: started.version,
+      outputs: [{ outputId: output.objectId, value: 'cross-tenant report' }],
+    }),
+  }, 403);
+  assert.equal(crossTenantReporter.error.code, 'ACTION_FORBIDDEN');
+  const invalidOutput = await request(app.base, '/api/execution/process-task-instances/complete', {
+    ...as('bob'), method: 'POST', body: command('human-output-unknown-reference', {
+      ...refs, result: 'succeeded', evidence: [evidence], expectedVersion: started.version,
+      outputs: [{ outputId: 'information-not-declared', value: 'forged reference' }],
+    }),
+  }, 409);
+  assert.equal(invalidOutput.error.code, 'INVALID_HUMAN_TASK_OUTPUTS');
+  const duplicateOutput = await request(app.base, '/api/execution/process-task-instances/complete', {
+    ...as('bob'), method: 'POST', body: command('human-output-duplicate-reference', {
+      ...refs, result: 'succeeded', evidence: [evidence], expectedVersion: started.version,
+      outputs: [{ outputId: output.objectId, value: 'first' }, { outputId: output.objectId, value: 'second' }],
+    }),
+  }, 409);
+  assert.equal(duplicateOutput.error.code, 'INVALID_HUMAN_TASK_OUTPUTS');
+  for (const [caseName, outputs] of [
+    ['client-type-and-reference-overrides', [{ outputId: output.objectId, outputType: 'decision', referenceHash: '0'.repeat(64), value: 'value' }]],
+    ['too-many-output-values', Array.from({ length: 21 }, () => ({ outputId: 'unknown', value: 'value' }))],
+    ['deeply-nested-output', [{ outputId: output.objectId, value: { a: { b: { c: { d: { e: 'too deep' } } } } } }]],
+    ['oversized-text-output', [{ outputId: output.objectId, value: 'x'.repeat(1001) }]],
+  ]) {
+    const rejected = await request(app.base, '/api/execution/process-task-instances/complete', {
+      ...as('bob'), method: 'POST', body: command(`human-output-${caseName}`, {
+        ...refs, result: 'succeeded', evidence: [evidence], expectedVersion: started.version, outputs,
+      }),
+    }, 409);
+    assert.equal(rejected.error.code, 'INVALID_HUMAN_TASK_OUTPUTS', caseName);
+  }
+  const oversizedOutput = await request(app.base, '/api/execution/process-task-instances/complete', {
+    ...as('bob'), method: 'POST', body: command('human-output-oversized-value', {
+      ...refs, result: 'succeeded', evidence: [evidence], expectedVersion: started.version,
+      outputs: [{ outputId: output.objectId, value: 'x'.repeat(17_000) }],
+    }),
+  }, 409);
+  assert.equal(oversizedOutput.error.code, 'INVALID_HUMAN_TASK_OUTPUTS');
+  const staleCompletionVersion = await request(app.base, '/api/execution/process-task-instances/complete', {
+    ...as('bob'), method: 'POST', body: command('human-output-stale-runtime-version', {
+      ...refs, result: 'succeeded', evidence: [evidence], expectedVersion: started.version + 1,
+      outputs: [{ outputId: output.objectId, value: reportedValue }],
+    }),
+  }, 409);
+  assert.equal(staleCompletionVersion.error.code, 'PROCESS_TASK_VERSION_CONFLICT');
+  const completionPayload = { ...refs, result: 'succeeded', evidence: [evidence], expectedVersion: started.version,
+    outputs: [{ outputId: output.objectId, value: reportedValue }] };
+  const completed = await request(app.base, '/api/execution/process-task-instances/complete', {
+    ...as('bob'), method: 'POST', body: command('human-output-complete', completionPayload),
   }, 201);
+  assert.equal(completed.outcome.outputSchemaVersion, 1);
+  assert.equal(completed.outcome.outputRecords.length, 1);
+  assert.equal(completed.outcome.outputRecords[0].status, 'HUMAN_REPORTED');
+  assert.equal(completed.outcome.outputRecords[0].value, reportedValue);
+  assert.equal(completed.outcome.outputRecords[0].reporterPrincipal, principal('bob'));
+  assert.equal(completed.outcome.outputRecords[0].assignedPrincipal, principal('bob'));
+  assert.equal(completed.outcome.outputRecords[0].sourceRuntimeVersion, started.version);
+  assert.equal(completed.outcome.outputRecords[0].taskHash, contentHash(task));
+  assert.match(completed.outcome.outputRecords[0].referenceHash, /^[a-f0-9]{64}$/);
+  assert.match(completed.outcome.outputRecords[0].recordHash, /^[a-f0-9]{64}$/);
+  assert.deepEqual(completed.events.at(-1).data.outputRecords, completed.outcome.outputRecords);
+  assert.equal(completed.outcome.outputRecords[0].status, 'HUMAN_REPORTED',
+    'a durable completion records the reporter but makes no independent verification claim');
+  const completionReplay = await request(app.base, '/api/execution/process-task-instances/complete', {
+    ...as('bob'), method: 'POST', body: command('human-output-complete', completionPayload),
+  }, 200);
+  assert.equal(completionReplay.meta.replayed, true);
+  assert.equal(completionReplay.outcome.outputRecords.length, 1);
+  const changedOutputReplay = await request(app.base, '/api/execution/process-task-instances/complete', {
+    ...as('bob'), method: 'POST', body: command('human-output-complete', {
+      ...completionPayload, outputs: [{ outputId: output.objectId, value: 'changed after completion' }],
+    }),
+  }, 409);
+  assert.equal(changedOutputReplay.error.code, 'IDEMPOTENCY_CONFLICT');
+  const unavailableStart = await request(app.base, '/api/execution/process-task-instances/start', {
+    ...as('bob'), method: 'POST', body: command('human-output-unavailable-start', startPayload),
+  }, 201);
+  const unavailableRefs = { ...startPayload, planInstanceId: unavailableStart.planInstanceId };
+  const legacyStart = await request(app.base, '/api/execution/process-task-instances/start', {
+    ...as('bob'), method: 'POST', body: command('human-output-legacy-start', startPayload),
+  }, 201);
+  const legacyRefs = { ...startPayload, planInstanceId: legacyStart.planInstanceId };
+  const legacyCommandId = 'human-output-legacy-completion';
+  const legacyPayload = { ...legacyRefs, result: 'failed', evidence: [] };
+  const legacyCompletion = await request(app.base, '/api/execution/process-task-instances/complete', {
+    ...as('bob'), method: 'POST', body: command(legacyCommandId, legacyPayload),
+  }, 201);
+  const legacyRequestHash = digest({
+    projectId: project.id, planId: savedPlan.id, revision: savedPlan.revision,
+    planInstanceId: legacyStart.planInstanceId, taskId: task.id, principal: principal('bob'),
+    result: 'failed', evidence: [],
+  });
+  await app.persistence.query(`update orgward.command_results set payload_hash=$3
+    where tenant_id='tenant-a' and operation='execution.process-task.human-complete' and command_id=$1
+      and aggregate_id=$2`, [legacyCommandId, `${legacyStart.planInstanceId}:${task.id}`, legacyRequestHash]);
+  const legacyEventCountBeforeReplay = legacyCompletion.events.filter((event) => event.type === 'HumanTaskCompleted').length;
+  const legacyAuditCountBeforeReplay = (await app.persistence.query(`select count(*)::int count from orgward.audit_log
+    where tenant_id='tenant-a' and aggregate_kind='process_task_instance' and aggregate_id=$1
+      and event_type='HumanTaskCompleted' and event->>'id'=$2`,
+  [`${legacyStart.planInstanceId}:${task.id}`, legacyCompletion.events.at(-1).id])).rows[0].count;
+  assert.equal(legacyAuditCountBeforeReplay, 1);
+  const legacyReplay = await request(app.base, '/api/execution/process-task-instances/complete', {
+    ...as('bob'), method: 'POST', body: command(legacyCommandId, legacyPayload),
+  }, 200);
+  assert.equal(legacyReplay.meta.replayed, true);
+  assert.equal(legacyReplay.events.filter((event) => event.type === 'HumanTaskCompleted').length, legacyEventCountBeforeReplay);
+  assert.equal((await app.persistence.query(`select count(*)::int count from orgward.audit_log
+    where tenant_id='tenant-a' and aggregate_kind='process_task_instance' and aggregate_id=$1
+      and event_type='HumanTaskCompleted' and event->>'id'=$2`,
+  [`${legacyStart.planInstanceId}:${task.id}`, legacyCompletion.events.at(-1).id])).rows[0].count, 1,
+  'a historical pre-output request hash replays without another event or audit effect');
   const completionEventHashRow = await app.persistence.query(`select entry->>'contentHash' as hash
     from orgward.process_task_instances r cross join lateral jsonb_array_elements(r.events) entry
     where r.tenant_id='tenant-a' and r.project_id=$1 and r.plan_instance_id=$2 and r.task_id=$3
       and entry->>'id'=$4`, [project.id, started.planInstanceId, task.id, completed.events.at(-1).id]);
   const completionEventHash = completionEventHashRow.rows[0]?.hash;
   assert.match(completionEventHash ?? '', /^[a-f0-9]{64}$/);
+  const completionAuditCount = await app.persistence.query(`select count(*)::int count from orgward.audit_log
+    where tenant_id='tenant-a' and aggregate_kind='process_task_instance' and aggregate_id=$1
+      and event_type='HumanTaskCompleted' and event->>'id'=$2`,
+  [`${started.planInstanceId}:${task.id}`, completed.events.at(-1).id]);
+  assert.equal(completionAuditCount.rows[0].count, 1, 'the typed output completion and exact replay have one durable audit effect');
   const runtimeRows = (await request(app.base,
     `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances;
   const ownerRuntime = runtimeRows.find((runtime) => runtime.taskId === task.id && runtime.planInstanceId === started.planInstanceId);
@@ -6361,9 +6489,41 @@ test('owner-authored human task information output is pinned, versioned, audited
     `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances
     .find((runtime) => runtime.taskId === task.id && runtime.planInstanceId === started.planInstanceId);
   assert.deepEqual(runtimeAfterApply.events, ownerRuntime.events, 'task result and event history remain immutable');
+  assert.deepEqual(runtimeAfterApply.outcome.outputRecords, completed.outcome.outputRecords,
+    'later owner-authored blueprint application cannot overwrite the human-reported runtime output');
   const replay = await request(app.base, outputRoute, { ...as('alice'), method: 'POST', body: commandBody }, 200);
   assert.equal(replay.meta.replayed, true);
   assert.equal(replay.data.events.filter((event) => event.type === 'HumanTaskOutputApplied').length, 1);
+
+  await app.persistence.query(`create function orgward.reject_human_task_output_audit() returns trigger language plpgsql as $$
+    begin
+      if new.aggregate_kind='process_task_instance' and new.event_type='HumanTaskCompleted' then
+        raise exception 'fixture rejects typed output completion audit';
+      end if;
+      return new;
+    end
+  $$`);
+  await app.persistence.query(`create trigger reject_human_task_output_audit before insert on orgward.audit_log
+    for each row execute function orgward.reject_human_task_output_audit()`);
+  const unavailablePayload = { ...unavailableRefs, result: 'failed', evidence: ['The declared output was not produced.'],
+    expectedVersion: unavailableStart.version, outputs: [] };
+  const rejectedOutputCompletion = await fetch(`${app.base}/api/execution/process-task-instances/complete`, {
+    ...as('bob'), method: 'POST', body: command('human-output-unavailable-complete', unavailablePayload),
+  });
+  assert.equal(rejectedOutputCompletion.status, 500, await rejectedOutputCompletion.clone().text());
+  await app.persistence.query('drop trigger reject_human_task_output_audit on orgward.audit_log');
+  await app.persistence.query('drop function orgward.reject_human_task_output_audit()');
+  const afterOutputRollback = (await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('bob'))).instances
+    .find((runtime) => runtime.planInstanceId === unavailableStart.planInstanceId && runtime.taskId === task.id);
+  assert.equal(afterOutputRollback.status, 'IN_PROGRESS');
+  assert.equal(afterOutputRollback.version, unavailableStart.version,
+    'an audit failure rolls back output records, completion status and runtime version');
+  const unavailableCompletion = await request(app.base, '/api/execution/process-task-instances/complete', {
+    ...as('bob'), method: 'POST', body: command('human-output-unavailable-complete', unavailablePayload),
+  }, 201);
+  assert.ok(unavailableCompletion.outcome.outputRecords.length > 0);
+  assert.ok(unavailableCompletion.outcome.outputRecords.every((record) => record.status === 'UNAVAILABLE'));
 
   await close(app);
   app = await start(postgres.databaseUrl, { oidcAuthenticator });
@@ -6378,6 +6538,42 @@ test('owner-authored human task information output is pinned, versioned, audited
   assert.equal(humanTaskOutputApplicationState({ project: restored, plan: restoredPlan, task: restoredTask,
     runtime: restoredRuntime, output: restoredTaskOutput }).kind, 'applied',
   'the exact source-linked output version still projects as applied after PostgreSQL restart');
+  assert.deepEqual(restoredRuntime.outcome.outputRecords, completed.outcome.outputRecords,
+    'the versioned, source-pinned human-reported output survives restart unchanged');
+  const restoredUnavailableRuntime = (await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances
+    .find((candidate) => candidate.planInstanceId === unavailableStart.planInstanceId && candidate.taskId === task.id);
+  assert.deepEqual(restoredUnavailableRuntime.outcome.outputRecords, unavailableCompletion.outcome.outputRecords,
+    'an incomplete output set remains explicitly unavailable after restart');
+  const originalRuntimeIntegrityState = (await app.persistence.query(`select outcome,events from orgward.process_task_instances
+    where tenant_id='tenant-a' and project_id=$1 and plan_instance_id=$2 and task_id=$3`,
+  [project.id, started.planInstanceId, task.id])).rows[0];
+  await app.persistence.query('alter table orgward.process_task_instances disable trigger process_task_instance_history_immutable');
+  await app.persistence.query(`update orgward.process_task_instances set outcome=jsonb_set(outcome,
+    '{outputRecords,0,recordHash}', to_jsonb($4::text), false)
+    where tenant_id='tenant-a' and project_id=$1 and plan_instance_id=$2 and task_id=$3`,
+  [project.id, started.planInstanceId, task.id, '0'.repeat(64)]);
+  await app.persistence.query('alter table orgward.process_task_instances enable trigger process_task_instance_history_immutable');
+  const tamperedOutputView = await fetch(`${app.base}/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'));
+  assert.equal(tamperedOutputView.status, 503, 'tampered typed output is rejected by the runtime projection');
+  await app.persistence.query('alter table orgward.process_task_instances disable trigger process_task_instance_history_immutable');
+  await app.persistence.query(`update orgward.process_task_instances set outcome=$4::jsonb
+    where tenant_id='tenant-a' and project_id=$1 and plan_instance_id=$2 and task_id=$3`,
+  [project.id, started.planInstanceId, task.id, JSON.stringify(originalRuntimeIntegrityState.outcome)]);
+  await app.persistence.query(`update orgward.process_task_instances set events=(
+    select jsonb_agg(case when event->>'id'=$4 then jsonb_set(event, '{data,outputRecords,0,recordHash}', to_jsonb($5::text), false)
+      else event end order by ordinal)
+    from jsonb_array_elements(events) with ordinality as item(event,ordinal))
+    where tenant_id='tenant-a' and project_id=$1 and plan_instance_id=$2 and task_id=$3`,
+  [project.id, started.planInstanceId, task.id, completed.events.at(-1).id, 'f'.repeat(64)]);
+  await app.persistence.query('alter table orgward.process_task_instances enable trigger process_task_instance_history_immutable');
+  const tamperedEventView = await fetch(`${app.base}/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'));
+  assert.equal(tamperedEventView.status, 503, 'tampered completion event output is rejected by the runtime projection');
+  await app.persistence.query('alter table orgward.process_task_instances disable trigger process_task_instance_history_immutable');
+  await app.persistence.query(`update orgward.process_task_instances set events=$4::jsonb
+    where tenant_id='tenant-a' and project_id=$1 and plan_instance_id=$2 and task_id=$3`,
+  [project.id, started.planInstanceId, task.id, JSON.stringify(originalRuntimeIntegrityState.events)]);
+  await app.persistence.query('alter table orgward.process_task_instances enable trigger process_task_instance_history_immutable');
   const event = restored.events.find((candidate) => candidate.type === 'HumanTaskOutputApplied'
     && candidate.data?.planInstanceId === started.planInstanceId && candidate.data?.outputObjectId === output.objectId);
   assert.ok(event, 'the output application event remains linked to its human task after restart');

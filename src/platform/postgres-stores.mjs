@@ -313,7 +313,38 @@ export async function requirePrincipalAuthority(client, {
   }
 }
 
+function verifyPersistedOutputRecords(row) {
+  const outcome = row.outcome ?? {};
+  if (outcome.outputSchemaVersion === undefined) return;
+  if (outcome.outputSchemaVersion !== 1 || !Array.isArray(outcome.outputRecords)) {
+    throw persistenceIntegrity('The persisted human task output schema is unsupported or malformed.');
+  }
+  for (const record of outcome.outputRecords) {
+    if (!record || record.schemaVersion !== 1 || record.tenantId !== row.tenant_id
+      || record.projectId !== row.project_id || record.planId !== row.process_plan_id
+      || Number(record.revision) !== Number(row.plan_revision) || record.planInstanceId !== row.plan_instance_id
+      || record.taskId !== row.task_id || !['HUMAN_REPORTED', 'UNAVAILABLE'].includes(record.status)) {
+      throw persistenceIntegrity('A persisted human task output has mismatched source provenance.');
+    }
+    const { recordHash, ...core } = record;
+    if (!recordHash || recordHash !== contentHash(core)
+      || (record.status === 'UNAVAILABLE' && Object.hasOwn(record, 'value'))
+      || (record.status === 'HUMAN_REPORTED' && !Object.hasOwn(record, 'value'))) {
+      throw persistenceIntegrity('A persisted human task output record failed its content hash.');
+    }
+  }
+  const events = (row.events ?? []).filter((event) => event.type === 'HumanTaskCompleted'
+    && event.data?.taskId === row.task_id && event.data?.planInstanceId === row.plan_instance_id);
+  if (events.length !== 1 || events[0].data.outputSchemaVersion !== 1
+    || contentHash(events[0].data.outputRecords ?? null) !== contentHash(outcome.outputRecords)) {
+    throw persistenceIntegrity('The human task output records do not match their completion event.');
+  }
+  const { contentHash: eventHash, ...eventCore } = events[0];
+  if (!eventHash || eventHash !== contentHash(eventCore)) throw persistenceIntegrity('The human task completion event failed its content hash.');
+}
+
 function processTaskRuntimeView(row, principal = null) {
+  verifyPersistedOutputRecords(row);
   const events = Array.isArray(row.events) ? row.events.map((entry) => ({
     id: entry.id, type: entry.type, at: entry.at,
     actor: entry.type === 'HumanTaskEscalationResolved' ? 'project owner'
@@ -388,6 +419,101 @@ function validateHumanTaskNotes(evidence, { required = false } = {}) {
     throw conflict('Provide up to 20 short evidence notes; at least one is required for a succeeded or reassigned resolution.', null, 'INVALID_HUMAN_TASK_OUTCOME');
   }
   return evidence.map((entry) => entry.trim());
+}
+
+function validateReportedOutputValue(value, depth = 0) {
+  if (depth > 4) throw conflict('A reported output is nested too deeply.', null, 'INVALID_HUMAN_TASK_OUTPUTS');
+  if (value === null || typeof value === 'boolean') return;
+  if (typeof value === 'number' && Number.isFinite(value)) return;
+  if (typeof value === 'string' && value.length <= 1000) return;
+  if (Array.isArray(value)) {
+    if (value.length > 32) throw conflict('A reported output has too many list entries.', null, 'INVALID_HUMAN_TASK_OUTPUTS');
+    value.forEach((entry) => validateReportedOutputValue(entry, depth + 1));
+    return;
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value);
+    if (entries.length > 32 || entries.some(([key]) => !key || key.length > 80)) {
+      throw conflict('A reported output object is too large.', null, 'INVALID_HUMAN_TASK_OUTPUTS');
+    }
+    entries.forEach(([, entry]) => validateReportedOutputValue(entry, depth + 1));
+    return;
+  }
+  throw conflict('A reported output must contain bounded JSON values.', null, 'INVALID_HUMAN_TASK_OUTPUTS');
+}
+
+async function normalizeHumanTaskOutputRecords(client, { tenantId, projectId, plan, task, runtime, principal, outputs, result }) {
+  if (!Array.isArray(outputs ?? []) || (outputs ?? []).length > 20) {
+    throw conflict('Provide at most 20 declared task outputs.', null, 'INVALID_HUMAN_TASK_OUTPUTS');
+  }
+  const supplied = outputs ?? [];
+  if (supplied.length && result !== 'succeeded') {
+    throw conflict('Outputs can only be reported for a succeeded human task.', null, 'INVALID_HUMAN_TASK_OUTPUTS');
+  }
+  const encoded = canonicalJson(supplied);
+  if (Buffer.byteLength(encoded, 'utf8') > 16_384) {
+    throw conflict('Reported task outputs exceed the 16 KB limit.', null, 'INVALID_HUMAN_TASK_OUTPUTS');
+  }
+  const projectRow = await client.query(`select * from orgward.aggregates
+    where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2 for share`, [tenantId, projectId]);
+  if (!projectRow.rowCount) throw persistenceIntegrity('The pinned task project is unavailable.');
+  const project = verifyAggregateRow(projectRow.rows[0]);
+  const blueprint = project.blueprintVersions?.find((entry) => entry.id === plan.source?.blueprintId
+    && Number(entry.version) === Number(plan.source?.blueprintVersion));
+  if (!blueprint || blueprint.id !== runtime.blueprint_id || Number(blueprint.version) !== Number(runtime.blueprint_version)) {
+    throw persistenceIntegrity('The task output blueprint snapshot is unavailable or mismatched.');
+  }
+  const blueprintObjects = new Map(Object.values(blueprint.areas ?? {}).flatMap((area) => area.items ?? []).map((object) => [object.id, object]));
+  if ((task.outputs ?? []).length > 20) throw conflict('This task exceeds the supported typed-output count.', null, 'UNSUPPORTED_HUMAN_TASK_OUTPUTS');
+  const declared = new Map((task.outputs ?? []).map((ref) => [ref.objectId ?? ref.id, ref]));
+  if (declared.size !== (task.outputs ?? []).length || [...declared].some(([id, ref]) => {
+    const object = blueprintObjects.get(id);
+    return !object || object.type !== ref.type || !['information', 'decision'].includes(object.type);
+  })) throw persistenceIntegrity('A declared process output does not match its pinned blueprint reference.');
+  const submitted = new Map();
+  for (const entry of supplied) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)
+      || Object.keys(entry).some((key) => !['outputId', 'value'].includes(key))
+      || typeof entry.outputId !== 'string' || !declared.has(entry.outputId) || !Object.hasOwn(entry, 'value')
+      || submitted.has(entry.outputId)) {
+      throw conflict('Each output must uniquely identify a declared saved output and contain only its value.', null, 'INVALID_HUMAN_TASK_OUTPUTS');
+    }
+    validateReportedOutputValue(entry.value);
+    if (declared.get(entry.outputId).type === 'decision') {
+      const value = entry.value;
+      if (!value || typeof value !== 'object' || Array.isArray(value)
+        || Object.keys(value).some((key) => !['outcome', 'observations', 'reason'].includes(key))
+        || typeof value.outcome !== 'string' || !value.outcome.trim() || value.outcome.length > 120
+        || typeof value.reason !== 'string' || !value.reason.trim() || value.reason.length > 1000
+        || !Array.isArray(value.observations) || value.observations.length > 20
+        || value.observations.some((observation) => !observation || typeof observation !== 'object'
+          || Array.isArray(observation) || Object.keys(observation).some((key) => !['informationId', 'value'].includes(key))
+          || typeof observation.informationId !== 'string' || !Object.hasOwn(observation, 'value'))) {
+        throw conflict('A decision output must report an outcome, observations, and reason.', null, 'INVALID_HUMAN_TASK_OUTPUTS');
+      }
+    }
+    submitted.set(entry.outputId, entry.value);
+  }
+  const records = (task.outputs ?? []).map((ref) => {
+    const outputId = ref.objectId ?? ref.id;
+    const object = blueprintObjects.get(outputId);
+    const core = {
+      schemaVersion: 1, tenantId, outputId, outputType: ref.type,
+      referenceHash: contentHash({ id: outputId, type: ref.type, definition: object }),
+      status: submitted.has(outputId) ? 'HUMAN_REPORTED' : 'UNAVAILABLE',
+      projectId, planId: plan.id, revision: Number(plan.revision), planInstanceId: runtime.plan_instance_id,
+      taskId: task.id, sourceProcessId: task.sourceProcessId,
+      planHash: contentHash(plan), taskHash: contentHash(task), sourceRuntimeVersion: Number(runtime.version),
+      blueprintId: blueprint.id, blueprintVersion: Number(blueprint.version), blueprintHash: contentHash(blueprint),
+      reporterPrincipal: principal, assignedPrincipal: effectiveHumanAssignee(runtime).principal,
+      ...(submitted.has(outputId) ? { value: submitted.get(outputId) } : {}),
+    };
+    return { ...core, recordHash: contentHash(core) };
+  });
+  if (Buffer.byteLength(canonicalJson(records), 'utf8') > 32_768) {
+    throw conflict('The normalized task output records exceed the 32 KB persistence limit.', null, 'INVALID_HUMAN_TASK_OUTPUTS');
+  }
+  return records;
 }
 
 function validateHumanTaskReason(reason) {
@@ -4882,11 +5008,15 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
 
   async completeHumanProcessTask({
     tenantId, projectId, planId, revision, planInstanceId, taskId,
-    principal, authzGeneration, commandId, requestHash, result, evidence, decisionChoice,
+    principal, authzGeneration, commandId, requestHash, result, evidence, decisionChoice, outputs, expectedVersion,
   }) {
     if (!tenantId || !projectId || !planId || !planInstanceId || !taskId || !principal) throw projectAccessDenied();
     if (!['succeeded', 'failed'].includes(result)) {
       throw conflict('Choose a succeeded or failed outcome and provide up to 20 short evidence notes.', null, 'INVALID_HUMAN_TASK_OUTCOME');
+    }
+    if ((outputs !== undefined || expectedVersion !== undefined)
+      && (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1)) {
+      throw conflict('Completion requires the current task version.', null, 'PROCESS_TASK_VERSION_REQUIRED');
     }
     const safeEvidence = validateHumanTaskNotes(evidence, { required: result === 'succeeded' });
     const operation = 'execution.process-task.human-complete';
@@ -4937,9 +5067,17 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         throw conflict('An escalated human task requires project owner resolution before it can be completed.', Number(runtime.version), 'PROCESS_TASK_ESCALATION_ACTIVE');
       }
       if (runtime.status !== 'IN_PROGRESS') throw conflict('Only an in-progress human task can be completed.', Number(runtime.version), 'PROCESS_TASK_STATE_CONFLICT');
-      const taskOutcome = { result, ...(savedChoice ? { decisionChoice: savedChoice } : {}) };
+      if (expectedVersion !== undefined && Number(runtime.version) !== expectedVersion) {
+        throw conflict('The human task changed before completion. Refresh it and try again.', Number(runtime.version), 'PROCESS_TASK_VERSION_CONFLICT');
+      }
+      const outputRecords = await normalizeHumanTaskOutputRecords(client, {
+        tenantId, projectId, plan: completedPlan, task: completedTask, runtime, principal, outputs, result,
+      });
+      const taskOutcome = { result, outputSchemaVersion: 1, outputRecords,
+        ...(savedChoice ? { decisionChoice: savedChoice } : {}) };
       const event = processTaskRuntimeEvent('HumanTaskCompleted', principal, {
-        taskId, processPlanId: planId, revision, planInstanceId, result, evidence: safeEvidence, ...(savedChoice ? { decisionChoice: savedChoice } : {}),
+        taskId, processPlanId: planId, revision, planInstanceId, expectedVersion, result, evidence: safeEvidence,
+        outputSchemaVersion: 1, outputRecords, ...(savedChoice ? { decisionChoice: savedChoice } : {}),
         ...(completedPlan.kind === 'manual_process_flow_plan' ? { snapshotHash: completedPlan.snapshotHash, flowHash: completedPlan.flow.definitionHash } : {}),
       });
       const status = result === 'succeeded' ? 'SUCCEEDED' : 'FAILED';
