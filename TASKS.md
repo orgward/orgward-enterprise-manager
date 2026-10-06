@@ -8661,7 +8661,7 @@ gate changed.
 PR-15 T-91 human-output SDLC consumption (2026-10-06): Sol approved the
 follow-up link slice with no remaining findings. The authenticated SDLC action
 resolves the human task runtime, successful completion event, matching audit
-record and idempotency result, then verifies the persisted typed output records
+record and idempotency result, then integrity-checks persisted typed output records
 against the exact task, plan revision, pinned blueprint references, selected
 process and reporter/assignee identities. The immutable requirement link pins
 record/reference hashes and completion provenance. Workload links remain
@@ -8679,3 +8679,12 @@ readback, child-process/root distinction and wrong-selected-process rejection
 presentation selection previously passed 3/3
 (`/tmp/orgward-tests-Dw0dom/node-test.tap.log`). T-91 and PR-15 remain open; no
 task checkbox/cursor, backlog acceptance state or production gate changed.
+
+T-91/PR-15 readback follow-up (2026-10-06): Sol approved the UI readback with
+no findings. The immutable server-derived link now carries the value from the
+integrity-checked HUMAN_REPORTED record so the SDLC evidence card can display it as
+self-reported; UNAVAILABLE is displayed without a value. Both remain explicitly
+UNVERIFIED / NOT_EXECUTED, and no behavior truth or PASS is claimed. Focused
+PostgreSQL persistence and SDLC presentation tests passed 2/2, 0 failures or
+skips (`/tmp/orgward-tests-aCJTxS/node-test.tap.log`). T-91 and PR-15 remain
+open; task, backlog and production-gate statuses are unchanged.

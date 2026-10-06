@@ -2688,7 +2688,8 @@ export class PostgresChangeCaseStore extends PostgresDocumentStore {
             referenceHash: record.referenceHash, reporterPrincipal: record.reporterPrincipal,
             assignedPrincipal: record.assignedPrincipal, completionEventId: completionEvent.id,
             completionEventHash: contentHash(completionEvent), completionCommandId: completionAudit.rows[0].command_id,
-            sourceRuntimeVersion: record.sourceRuntimeVersion };
+            sourceRuntimeVersion: record.sourceRuntimeVersion,
+            ...(record.status === 'HUMAN_REPORTED' ? { value: structuredClone(record.value) } : {}) };
         });
       }
       const linkCore = { schemaVersion: 1, id: `process-run-link-${randomUUID()}`, status: 'UNVERIFIED', verificationStatus: 'NOT_EXECUTED',

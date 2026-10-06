@@ -53,7 +53,9 @@ export function processRunEvidencePresentation(link) {
     heading: `${human ? 'Human task completion' : link.run.id} · runtime ${link.instance.status ?? link.run?.status} · verification ${link.verificationStatus}`,
     identity: `Task ${link.plan.taskId} · plan ${link.plan.id} r${link.plan.revision} · instance ${link.instance.id}`,
     hashes: `${human ? `Completion event SHA-256 ${link.runtimeSource.completionEventHash}` : `Run aggregate SHA-256 ${link.run.aggregateHash}`} · plan SHA-256 ${link.plan.snapshotHash} · task SHA-256 ${link.plan.taskHash}`,
-    outputs: (link.outputEvidence ?? []).map((output) => `${output.id}: ${output.status}${output.recordHash ? ` · record SHA-256 ${output.recordHash}` : ''}${output.reporterPrincipal ? ` · reported by ${output.reporterPrincipal}` : ''}`),
+    outputs: (link.outputEvidence ?? []).map((output) => output.status === 'HUMAN_REPORTED'
+      ? `${output.id}: HUMAN_REPORTED · self-reported value ${JSON.stringify(output.value)}${output.recordHash ? ` · record SHA-256 ${output.recordHash}` : ''}${output.reporterPrincipal ? ` · reported by ${output.reporterPrincipal}` : ''}`
+      : `${output.id}: UNAVAILABLE${output.recordHash ? ` · record SHA-256 ${output.recordHash}` : ''}`),
     applicability: link.applicability === 'CURRENT'
       ? 'Applies to this exact requirement draft.'
       : 'STALE: the requirement draft changed after this link was created.',

@@ -6431,6 +6431,8 @@ test('owner-authored human task information output is pinned, versioned, audited
   assert.equal(humanLink.runtimeSource.kind, 'human-task-completion');
   assert.equal(humanLink.outputEvidence[0].status, 'HUMAN_REPORTED');
   assert.equal(humanLink.outputEvidence[0].recordHash, completed.outcome.outputRecords[0].recordHash);
+  assert.equal(humanLink.outputEvidence[0].value, reportedValue,
+    'the trace link carries the server-resolved output value for readback');
   assert.equal(humanLink.outputEvidence[0].reporterPrincipal, principal('bob'));
   assert.equal(humanLink.outputEvidence[0].assignedPrincipal, principal('bob'));
   const humanLinkReplay = await request(app.base, `/api/sdlc/cases/${traceCase.id}/process-run-evidence`, {
@@ -6482,6 +6484,8 @@ test('owner-authored human task information output is pinned, versioned, audited
   const humanLinkAfterRestart = await request(app.base, `/api/sdlc/cases/${traceCase.id}`, as('alice'));
   const persistedHumanLink = humanLinkAfterRestart.artifacts.requirements.processRunEvidenceLinks[0];
   assert.equal(persistedHumanLink.outputEvidence[0].recordHash, completed.outcome.outputRecords[0].recordHash);
+  assert.equal(persistedHumanLink.outputEvidence[0].value, reportedValue,
+    'the self-reported value survives persisted link readback after restart');
   assert.equal(persistedHumanLink.verificationStatus, 'NOT_EXECUTED');
   assert.equal(humanLinkAfterRestart.artifacts.requirements.processRunEvidenceLinks[1].outputEvidence[0].status, 'UNAVAILABLE');
   const humanRuntimeAfterRestart = (await request(app.base,
