@@ -1,12 +1,8 @@
 const activeStatuses = new Set(['IN_PROGRESS', 'ESCALATED']);
 
 export function assignedHumanWorkItems(plans, runtimes, projectId) {
-  const latest = new Map();
-  for (const plan of plans.filter((entry) => entry.source?.projectId === projectId)) {
-    const prior = latest.get(plan.id);
-    if (!prior || (plan.revision ?? 1) > (prior.revision ?? 1)) latest.set(plan.id, plan);
-  }
-  const planByRevision = new Map([...latest.values()].map((plan) => [`${plan.id}\n${plan.revision ?? 1}`, plan]));
+  const planByRevision = new Map(plans.filter((entry) => entry.source?.projectId === projectId)
+    .map((plan) => [`${plan.id}\n${plan.revision ?? 1}`, plan]));
   const items = [];
   for (const runtime of runtimes) {
     if (runtime.projectId !== projectId || runtime.actorType !== 'human'

@@ -8899,3 +8899,16 @@ actor enum and plan-card selection with an earlier queue element. Syntax and
 `git diff --check` passed. The initial 2/2 test fixture used a non-contract actor
 enum; the regression now uses the runtime's actual `human` value. PR-17 and its
 task statuses remain open and unchanged.
+
+T-126 retained-revision queue follow-up (2026-10-06): the assigned-work list now
+resolves active tasks against every retained plan revision in the selected
+project, rather than filtering to only the latest revision. Selecting an older
+task keeps its exact plan revision and runtime instance selected and uses that
+revision's task-row identity, allowing the existing historical plan card to
+open the assigned work. Focused queue tests passed 3/3, 0 failures/skips
+(`/tmp/orgward-my-work-retained-revisions-final-mNT54x.log`; TAP:
+`/tmp/orgward-tests-zdfsU6/node-test.tap.log`). The test covers an active task
+on revision 1 alongside current revision 2 and exact selection of its retained
+instance. Syntax and `git diff --check` passed. This does not complete T-126 or
+PR-17; PR-15 remains first open and task checkboxes, cursor and production
+gates are unchanged. No full check was run while PR-17 remains open.
