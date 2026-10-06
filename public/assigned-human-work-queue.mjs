@@ -11,11 +11,16 @@ export function assignedHumanWorkItems(plans, runtimes, projectId) {
     const task = plan?.tasks?.find((entry) => entry.id === runtime.taskId);
     if (!plan || !task) continue;
     items.push({ projectId, planId: plan.id, revision: plan.revision ?? 1, planInstanceId: runtime.planInstanceId,
+      sourceProcessId: task.sourceProcessId ?? plan.source.processId ?? null,
       taskId: task.id, taskTitle: task.title, processName: plan.source.processName, status: runtime.status,
       outputs: (task.outputs ?? []).map((output) => output.label), updatedAt: runtime.updatedAt ?? runtime.createdAt ?? null });
   }
   return items.sort((left, right) => String(right.updatedAt ?? '').localeCompare(String(left.updatedAt ?? ''))
     || left.processName.localeCompare(right.processName) || left.taskTitle.localeCompare(right.taskTitle));
+}
+
+export function assignedHumanWorkItemsForProcess(items, processId) {
+  return processId ? items.filter((item) => item.sourceProcessId === processId) : items;
 }
 
 export function findHistoricalProcessPlanCard(container) {
@@ -34,12 +39,12 @@ export function openAssignedHumanWorkItem({ item, selectedInstances, render, fin
   row?.focus?.({ preventScroll: true });
 }
 
-export function renderAssignedHumanWorkQueue({ items, el, onOpen }) {
+export function renderAssignedHumanWorkQueue({ items, el, onOpen, emptyMessage = 'No active human tasks are assigned to you in this project.' }) {
   const section = el('section', { className: 'run-section assigned-human-work-queue', attrs: {
     'aria-label': 'My assigned work', 'data-assigned-human-work': '',
   } }, [el('h3', { text: 'My assigned work' })]);
   if (!items.length) {
-    section.append(el('p', { className: 'muted', text: 'No active human tasks are assigned to you in this project.' }));
+    section.append(el('p', { className: 'muted', text: emptyMessage }));
     return section;
   }
   section.append(el('p', { className: 'muted', text: 'Only active human tasks assigned to your current signed-in identity are listed.' }));

@@ -65,6 +65,13 @@ export function encodeExecutionRoute(projectId = null, planTarget = null, runId 
   return `/execution.html${url.search}`;
 }
 
+export function encodeMyWorkRoute(projectId = null, processId = null) {
+  const target = SAFE_ID.test(processId ?? '') ? { projectId, processId } : null;
+  const url = new URL(encodeExecutionRoute(projectId, target), 'http://orgward.local');
+  url.searchParams.set('view', 'my-work');
+  return `${url.pathname}${url.search}`;
+}
+
 export function executionRunRouteTarget(value, runs = []) {
   const url = new URL(value, 'http://orgward.local');
   const requested = url.searchParams.has('run');

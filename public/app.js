@@ -5,7 +5,7 @@ import { ENTERPRISE_INTERCHANGE_COMMANDS, ENTERPRISE_SOURCE_ATTESTATION_COMMANDS
 import { ENTERPRISE_BRANCH_COMMANDS, enterpriseBranchWritable, enterpriseBranchCommandPayload, enterpriseCommandResultRoute } from './enterprise-branches.mjs';
 import { ENTERPRISE_SENTINEL_COMMANDS } from './enterprise-sentinel.mjs';
 import { connectedNodeIds, filterGraph, focusFirstMapResult, focusSelectedMapControl, graphAccessibilityAttributes, mapControlPressed, searchGraph, shouldStartMapPan, toggleType, zoomTransform } from './map-state.js';
-import { apiErrorFrom, decodeStudioRoute, encodeExecutionRoute, encodeStudioRoute, fieldErrorsFor, founderConversationAnnouncement } from './shared-interactions.mjs';
+import { apiErrorFrom, decodeStudioRoute, encodeExecutionRoute, encodeMyWorkRoute, encodeStudioRoute, fieldErrorsFor, founderConversationAnnouncement } from './shared-interactions.mjs';
 import { coverageAreaStateLabel, coverageForBlueprint } from './coverage-dashboard.mjs';
 import { compareBlueprintObjectVersions } from './blueprint-comparison.mjs';
 import { renderBlueprintImpactPreview } from './blueprint-impact-preview.mjs';
@@ -2561,8 +2561,14 @@ function renderDetail() {
       branchId: evaluation.source.branchId, branchRevision: evaluation.source.branchRevision,
       proposalId: evaluation.source.proposalId, recordedAt: null, economicEvaluationId: evaluation.id }, { selectedId: evaluation.economicsId }),
     onInspectSimulation: (simulation) => changeEnterpriseContext({ ...state.enterpriseQuery, blueprintVersion: simulation.source.branchId || simulation.source.proposalId ? null : simulation.source.blueprintVersion, branchId: simulation.source.branchId, branchRevision: simulation.source.branchRevision, proposalId: simulation.source.proposalId, recordedAt: null, simulationId: simulation.id }, { selectedId: simulation.source.processId }) }));
-  const savedProcess = !enterpriseReadOnly() && node.type === 'process' ? blueprintItem(state.project.latestBlueprint, node.id) : null;
+  const savedProcess = node.type === 'process' ? blueprintItem(state.project.latestBlueprint, node.id) : null;
   if (savedProcess?.type === 'process') {
+    const myWorkLink = element('a', { className: 'button', text: `My assigned work for ${savedProcess.name}`,
+      attrs: { href: encodeMyWorkRoute(state.project.id, savedProcess.id) } });
+    myWorkLink.addEventListener('click', (event) => {
+      if (!allowRouteChange()) event.preventDefault();
+    });
+    content.push(myWorkLink);
     const planLink = element('a', {
       className: 'button', text: 'Plan this process in Execution',
       attrs: { href: encodeExecutionRoute(state.project.id, { projectId: state.project.id, processId: savedProcess.id }) },

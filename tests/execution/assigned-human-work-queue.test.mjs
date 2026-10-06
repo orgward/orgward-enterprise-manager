@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { assignedHumanWorkItems, assignedHumanWorkRowId, findHistoricalProcessPlanCard, openAssignedHumanWorkItem,
+import { assignedHumanWorkItems, assignedHumanWorkItemsForProcess, assignedHumanWorkRowId, findHistoricalProcessPlanCard, openAssignedHumanWorkItem,
   renderAssignedHumanWorkQueue } from '../../public/assigned-human-work-queue.mjs';
 
 function el(tag, options = {}, children = []) {
@@ -68,6 +68,9 @@ test('My assigned work queue offers an exact-task navigation action and a clear 
   assert.equal(historicalRowId, 'assigned-human-work-plan-one-1-old-instance-inspect');
   const empty = renderAssignedHumanWorkQueue({ items: [], el, onOpen() {} });
   assert.match(empty.children[1].text, /No active human tasks are assigned/);
+  const emptyProcess = renderAssignedHumanWorkQueue({ items: [], el, onOpen() {},
+    emptyMessage: 'No active human tasks are assigned to you for this saved process.' });
+  assert.equal(emptyProcess.children[1].text, 'No active human tasks are assigned to you for this saved process.');
 });
 
 test('opening one of multiple assigned tasks in the same instance targets only its task row', () => {
@@ -79,4 +82,17 @@ test('opening one of multiple assigned tasks in the same instance targets only i
   openAssignedHumanWorkItem({ item: selected, selectedInstances, render() {}, findRow: (id) => { focusedRow = id; return { id }; } });
   assert.equal(selectedInstances.get('plan-one\n2'), 'instance-one');
   assert.equal(focusedRow, 'assigned-human-work-plan-one-2-instance-one-approve');
+});
+
+test('process-filtered My Work selects each task source inside a mixed-process plan revision', () => {
+  const mixedPlan = { ...plan, source: { ...plan.source, processId: 'process-root' }, tasks: [
+    { ...plan.tasks[0], sourceProcessId: 'process-root' },
+    { ...plan.tasks[1], sourceProcessId: 'process-child' },
+  ] };
+  const items = assignedHumanWorkItems([mixedPlan], [
+    runtime({ taskId: 'inspect' }), runtime({ taskId: 'approve', planInstanceId: 'instance-one' }),
+  ], 'project-one');
+  assert.deepEqual(assignedHumanWorkItemsForProcess(items, 'process-root').map((item) => item.taskId), ['inspect']);
+  assert.deepEqual(assignedHumanWorkItemsForProcess(items, 'process-child').map((item) => item.taskId), ['approve']);
+  assert.deepEqual(assignedHumanWorkItemsForProcess(items, null), ['approve', 'inspect'].map((taskId) => items.find((item) => item.taskId === taskId)));
 });

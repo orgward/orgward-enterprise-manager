@@ -8966,3 +8966,19 @@ task-bearing route round trip/invalid ID rejection. Syntax checks and diff check
 passed. The standalone My Work increment remains a bounded T-126 UX
 slice; T-126 and PR-17 remain open, PR-15 remains first open, and task/gate
 status is unchanged. No full check was run.
+
+T-126 process-map to My Work handoff follow-up (2026-10-06): a saved process's
+map detail now links to the existing My Work screen filtered to that process.
+The encoded route preserves the project and process filter across reload; the
+screen restricts its assigned-task list to tasks whose `sourceProcessId` in the
+exact retained plan revision matches the selected process (falling back to the
+plan source only where a task has no source-process pin), and uses a
+process-specific empty message. Selecting an item continues through its exact
+plan revision, instance and task route. A mixed-process plan regression proves
+each process link shows only its own sourced task. This adds navigation only
+and does not change task authority or runtime state. Focused My Work,
+assigned-work queue and process-plan navigation tests passed 20/20, 0
+failures/skips (TAP 0.39s; `/tmp/orgward-tests-e8aSYj/node-test.tap.log`).
+Syntax checks and `git diff --check` passed. T-126 and PR-17 remain open,
+PR-15 remains first open, and task/cursor/gate status is unchanged. No full
+check was run.
