@@ -69,3 +69,14 @@ test('My assigned work queue offers an exact-task navigation action and a clear 
   const empty = renderAssignedHumanWorkQueue({ items: [], el, onOpen() {} });
   assert.match(empty.children[1].text, /No active human tasks are assigned/);
 });
+
+test('opening one of multiple assigned tasks in the same instance targets only its task row', () => {
+  const items = assignedHumanWorkItems([plan], [runtime(), runtime({ taskId: 'approve', planInstanceId: 'instance-one' })], 'project-one');
+  assert.equal(items.length, 2);
+  assert.equal(items[0].planInstanceId, items[1].planInstanceId);
+  const selected = items.find((item) => item.taskId === 'approve');
+  const selectedInstances = new Map(); let focusedRow = null;
+  openAssignedHumanWorkItem({ item: selected, selectedInstances, render() {}, findRow: (id) => { focusedRow = id; return { id }; } });
+  assert.equal(selectedInstances.get('plan-one\n2'), 'instance-one');
+  assert.equal(focusedRow, 'assigned-human-work-plan-one-2-instance-one-approve');
+});

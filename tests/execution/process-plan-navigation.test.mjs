@@ -63,6 +63,18 @@ test('linked plan route round-trips exact visible project, revision, and instanc
   assert.equal(encodeExecutionRoute(projectId, { ...target, projectId: 'project-other' }), `/execution.html?project=${projectId}`);
 });
 
+test('assigned work deep links preserve the exact selected task within a shared plan instance', () => {
+  const target = { ...linkedProcessPlanTarget(run, [{ id: projectId }]), taskId: 'task-approve' };
+  const href = encodeExecutionRoute(projectId, target);
+  assert.match(href, /&task=task-approve$/);
+  assert.deepEqual(linkedPlanInstanceRouteTarget(`https://orgward.local${href}`, [{ id: projectId }]), {
+    requested: true, target,
+  });
+  assert.deepEqual(linkedPlanInstanceRouteTarget(`https://orgward.local${href.replace('task=task-approve', 'task=bad%20id')}`, [{ id: projectId }]), {
+    requested: true, target: null,
+  });
+});
+
 test('software runtime deep links require exact software snapshot identity at the authenticated runtime load', () => {
   const softwarePlanId = 'software-delivery-0123456789abcdef0123456789abcdef';
   const target = { projectId, processPlanId: softwarePlanId, revision: 2,

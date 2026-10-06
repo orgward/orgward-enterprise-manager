@@ -474,6 +474,67 @@ function showNew({ planTarget = null, preferredProcessId = null, preserveProcess
   if (state.projects.length) void loadPlanningProject(planProjectSelect.value, preferredProcessId, planTarget);
 }
 
+function showMyWork(projectId = state.projectContextId) {
+  selectedRunRefreshRequestId += 1;
+  deferredSelectedRun = null;
+  state.run = null; state.runProject = null;
+  const route = new URL(encodeExecutionRoute(projectId), window.location.origin);
+  route.searchParams.set('view', 'my-work');
+  history.replaceState(null, '', `${route.pathname}${route.search}`);
+  const panel = el('section', { className: 'execution-panel my-work-panel', attrs: { 'aria-label': 'My work' } });
+  panel.append(el('span', { className: 'eyebrow', text: 'Assigned work' }), el('h2', { text: 'My work' }),
+    el('p', { className: 'muted', text: 'Open an assigned human checkpoint directly. This list does not require the plan-creation form or an organisation map.' }));
+  const projectSelect = el('select', { attrs: { 'aria-label': 'Project for my work' } });
+  projectSelect.append(el('option', { text: 'Choose a project', attrs: { value: '' } }));
+  for (const project of state.projects) projectSelect.append(el('option', { text: project.name, attrs: { value: project.id } }));
+  if (state.projects.some((project) => project.id === projectId)) projectSelect.value = projectId;
+  const refreshButton = el('button', { className: 'button', text: 'Refresh my work', attrs: { type: 'button' } });
+  const status = el('p', { className: 'muted', attrs: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' } });
+  const queueRegion = el('div', { className: 'my-work-queue-region' });
+  panel.append(el('label', { text: 'Project' }, projectSelect), refreshButton, status, queueRegion);
+  main.replaceChildren(panel); renderList();
+  let requestId = 0;
+  const loadWork = async () => {
+    const projectIdToLoad = projectSelect.value;
+    state.projectContextId = projectIdToLoad || null;
+    syncEnterpriseDesignNavigation();
+    const currentRequest = ++requestId;
+    const selectedRoute = new URL(encodeExecutionRoute(projectIdToLoad), window.location.origin);
+    selectedRoute.searchParams.set('view', 'my-work');
+    history.replaceState(null, '', `${selectedRoute.pathname}${selectedRoute.search}`);
+    queueRegion.replaceChildren();
+    if (!projectIdToLoad) { status.textContent = 'Choose a project to see tasks assigned to you.'; return; }
+    if (!state.authenticated || !state.currentPrincipal) {
+      status.textContent = 'Sign in with the assigned human identity to view its tasks.'; return;
+    }
+    status.textContent = 'Loading assigned work…';
+    try {
+      const [projectResult, runtime] = await Promise.all([
+        api(`/api/v1/projects/${encodeURIComponent(projectIdToLoad)}`),
+        api(`/api/execution/process-task-instances?projectId=${encodeURIComponent(projectIdToLoad)}`),
+      ]);
+      if (currentRequest !== requestId || !panel.isConnected) return;
+      const project = projectResult.data;
+      const plans = mergeProcessPlanActivation(project.processPlans ?? [], runtime.plans ?? []);
+      const items = assignedHumanWorkItems(plans, runtime.instances ?? [], projectIdToLoad);
+      queueRegion.replaceChildren(renderAssignedHumanWorkQueue({ items, el, onOpen: (item) => {
+        const target = { projectId: item.projectId, processPlanId: item.planId, revision: item.revision,
+          planInstanceId: item.planInstanceId, taskId: item.taskId, selectionKey: `${item.planId}\n${item.revision}` };
+        const targetRoute = new URL(encodeExecutionRoute(item.projectId, target), window.location.origin);
+        history.replaceState(null, '', `${targetRoute.pathname}${targetRoute.search}`);
+        showNew({ planTarget: target });
+      } }));
+      status.textContent = `${items.length} active assigned task${items.length === 1 ? '' : 's'} in this project.`;
+    } catch (error) {
+      if (currentRequest !== requestId || !panel.isConnected) return;
+      status.textContent = `Assigned work is unavailable: ${error.message}`;
+    }
+  };
+  projectSelect.addEventListener('change', () => { void loadWork(); });
+  refreshButton.addEventListener('click', () => { void loadWork(); });
+  if (projectSelect.value) void loadWork();
+}
+
 async function loadPlanningProject(projectId, preferredProcessId = null, planTarget = null) {
   const processSelect = document.querySelector('#plan-process');
   const plansPanel = document.querySelector('#process-plans');
@@ -606,6 +667,8 @@ function focusLinkedPlanInstance(target) {
       && Number(candidate.dataset.planRevision) === target.revision);
   const instanceSelect = card?.querySelector('select[aria-label^="Process instance for"]');
   if (!instanceSelect || instanceSelect.value !== target.planInstanceId) return false;
+  if (target.taskId) return focusHumanTaskStatus({ processPlanId: target.processPlanId,
+    revision: target.revision, planInstanceId: target.planInstanceId, taskId: target.taskId });
   card.scrollIntoView?.({ block: 'nearest' });
   instanceSelect.focus({ preventScroll: true });
   return document.activeElement === instanceSelect;
@@ -3467,6 +3530,7 @@ function executionEvidence(execution, runId) {
 }
 
 document.querySelector('#new-run').addEventListener('click', () => showNew());
+document.querySelector('#my-work').addEventListener('click', () => showMyWork(state.projectContextId));
 try {
   const [meta, projectResult] = await Promise.all([api('/api/execution/meta'), api('/api/v1/projects')]);
   const session = await api('/auth/session');
@@ -3481,6 +3545,7 @@ try {
   syncEnterpriseDesignNavigation();
   await refresh();
   const routeRun = executionRunRouteTarget(window.location.href, state.runs);
+  const myWorkView = new URLSearchParams(window.location.search).get('view') === 'my-work';
   if (routePlan.requested && !planTarget) notify('The linked plan revision or instance is no longer available.');
   if (routeProcess.requested && !processTarget) notify('The selected saved process is no longer available. Choose a current process to continue.');
   if (routeRun.requested && !routeRun.target) notify('The selected run is no longer available in this workspace.');
@@ -3488,6 +3553,7 @@ try {
   else if (processTarget) showNew({ preferredProcessId: processTarget.processId, preserveProcessRoute: true });
   else if (routeRun.target) await load(routeRun.target.runId);
   else if (routeRun.requested) showNew();
+  else if (myWorkView) showMyWork(state.projectContextId);
   else if (projectContext.projectId) showNew();
   else if (state.runs.length) await load(state.runs[0].id);
   else showNew();

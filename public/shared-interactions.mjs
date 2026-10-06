@@ -59,6 +59,7 @@ export function encodeExecutionRoute(projectId = null, planTarget = null, runId 
     url.searchParams.set('plan', planTarget.processPlanId);
     url.searchParams.set('revision', String(planTarget.revision));
     url.searchParams.set('instance', planTarget.planInstanceId);
+    if (SAFE_ID.test(planTarget.taskId ?? '')) url.searchParams.set('task', planTarget.taskId);
   }
   if (!planTarget && SAFE_ID.test(runId ?? '')) url.searchParams.set('run', runId);
   return `/execution.html${url.search}`;

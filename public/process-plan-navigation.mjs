@@ -4,6 +4,7 @@ const PROCESS_PLAN_ID = /^(?:process-plan-[0-9a-f-]{36}|software-delivery-[a-f0-
 const SOFTWARE_PLAN_ID = /^software-delivery-[a-f0-9]{32}$/i;
 const PLAN_INSTANCE_ID = /^[0-9a-f-]{36}$/i;
 const PROJECT_ID = /^project-[0-9a-f-]{36}$/;
+const SAFE_ID = /^[a-z0-9][a-z0-9_-]{0,119}$/i;
 
 export function linkedProcessPlanTarget(run, visibleProjects, verifiedRuntimePlans = []) {
   const ref = run?.processTaskRef;
@@ -31,19 +32,21 @@ export function selectLinkedProcessPlanInstance(run, visibleProjects, selectedPl
 
 export function linkedPlanInstanceRouteTarget(value, visibleProjects) {
   const url = new URL(value, 'http://orgward.local');
-  const requested = ['plan', 'revision', 'instance'].some((key) => url.searchParams.has(key));
+  const requested = ['plan', 'revision', 'instance', 'task'].some((key) => url.searchParams.has(key));
   if (!requested) return { requested: false, target: null };
   const route = decodeStudioRoute(url.href);
   const revisionText = url.searchParams.get('revision');
   const revision = revisionText && /^(?:[1-9]\d*)$/.test(revisionText) ? Number(revisionText) : NaN;
+  const taskId = url.searchParams.get('task');
+  const hasTask = url.searchParams.has('task');
   const ref = { processPlanId: url.searchParams.get('plan'), revision,
-    planInstanceId: url.searchParams.get('instance') };
+    planInstanceId: url.searchParams.get('instance'), ...(hasTask ? { taskId } : {}) };
   const target = route.projectId && Array.isArray(visibleProjects)
     && visibleProjects.some((project) => project.id === route.projectId)
     && PROCESS_PLAN_ID.test(ref.processPlanId ?? '') && Number.isSafeInteger(ref.revision) && ref.revision > 0
-    && PLAN_INSTANCE_ID.test(ref.planInstanceId ?? '')
+    && PLAN_INSTANCE_ID.test(ref.planInstanceId ?? '') && (!hasTask || SAFE_ID.test(taskId ?? ''))
     ? { projectId: route.projectId, processPlanId: ref.processPlanId, revision: ref.revision,
-      planInstanceId: ref.planInstanceId, selectionKey: `${ref.processPlanId}\n${ref.revision}` }
+      planInstanceId: ref.planInstanceId, ...(hasTask ? { taskId } : {}), selectionKey: `${ref.processPlanId}\n${ref.revision}` }
     : null;
   return { requested: true, target };
 }

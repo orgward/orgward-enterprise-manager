@@ -8932,3 +8932,37 @@ unsent status, restore, explicit discard and clearing after confirmed success.
 Syntax checks and `git diff --check` passed. This is a bounded T-126 UX
 increment, not T-126 or PR-17 completion; PR-15 remains first open and task
 checkboxes, cursor and production gates are unchanged. No full check was run.
+
+T-126 standalone My Work entry follow-up (2026-10-06): Execution now has a
+separate sidebar entry and reloadable `view=my-work` screen with a project
+selector and refresh action. Workers can reach their current-principal active
+human task list without opening the controlled-run or plan-creation form. The
+screen loads the selected project's saved plans and authorized process runtime,
+uses the existing principal-assignment filter, and opens a selected item at its
+exact retained plan revision and instance; exact task-row focus was added in the
+review follow-up below. No task state or authority changes. Focused entry +
+queue tests passed 6/6, 0 failures/skips (TAP 0.24s,
+wrapper 0.372s; `/tmp/orgward-my-work-entry-final-yRBp7O.log`; TAP:
+`/tmp/orgward-tests-uFm9i2/node-test.tap.log`). Coverage checks the separate
+entry/reload route, auth/runtime filtering and retained revision/instance
+target. The
+first run had 5/6 pass because one source assertion assumed an accessibility
+attribute's nesting; the corrected test passed. Syntax and `git diff --check`
+passed. This is a bounded T-126 UX increment, not T-126 or PR-17 completion;
+PR-15 remains first open and task checkboxes, cursor and production gates are
+unchanged. No full check was run.
+
+T-126 My Work exact-task navigation review follow-up (2026-10-06): the selected
+`taskId` now accompanies project, retained plan revision and instance through
+the queue action and validated Execution route. After the exact plan and
+instance render, navigation scrolls and focuses the selected task's status row;
+legacy instance-only links still focus the instance selector. Route parsing
+rejects malformed task IDs. Focused My Work, assigned-work and process-plan
+navigation tests passed 18/18, 0 failures/skips (TAP 0.37s, wrapper 0.512s;
+`/tmp/orgward-my-work-exact-task-review-nzkcTf.log`; TAP:
+`/tmp/orgward-tests-DkOLAU/node-test.tap.log`). Coverage includes two assigned
+tasks sharing the same retained revision and instance, exact row focus, and
+task-bearing route round trip/invalid ID rejection. Syntax checks and diff check
+passed. The standalone My Work increment remains a bounded T-126 UX
+slice; T-126 and PR-17 remain open, PR-15 remains first open, and task/gate
+status is unchanged. No full check was run.
