@@ -729,6 +729,19 @@ test('process-run evidence presentation shows exact runtime identity, hashes, an
   assert.equal(presentation.applicability, 'STALE: the requirement draft changed after this link was created.');
 });
 
+test('human output evidence presentation separates reported values from execution verification', () => {
+  const presentation = processRunEvidencePresentation({
+    runtimeSource: { kind: 'human-task-completion', completionEventHash: 'c'.repeat(64) },
+    plan: { id: 'plan-human', revision: 2, taskId: 'task-human', snapshotHash: 'a'.repeat(64), taskHash: 'b'.repeat(64) },
+    instance: { id: '00000000-0000-4000-8000-000000000003', status: 'SUCCEEDED' },
+    verificationStatus: 'NOT_EXECUTED', applicability: 'CURRENT',
+    outputEvidence: [{ id: 'information-prioritised-need', status: 'HUMAN_REPORTED', recordHash: 'd'.repeat(64), reporterPrincipal: 'oidc:reporter' }],
+  });
+  assert.match(presentation.heading, /Human task completion · runtime SUCCEEDED · verification NOT_EXECUTED/);
+  assert.match(presentation.hashes, new RegExp(`Completion event SHA-256 ${'c'.repeat(64)}`));
+  assert.match(presentation.outputs[0], /HUMAN_REPORTED.*record SHA-256.*reported by oidc:reporter/);
+});
+
 test('authenticated SDLC routes fail closed when principal-scoped store methods are unavailable', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'orgward-sdlc-scope-contract-'));
   t.after(() => rm(root, { recursive: true, force: true }));

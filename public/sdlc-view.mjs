@@ -47,11 +47,13 @@ export function savedProjectPinSummary(context) {
 }
 
 export function processRunEvidencePresentation(link) {
-  if (!link?.run?.id || !link?.plan?.taskId || !link?.instance?.id) return null;
+  if (!link?.plan?.taskId || !link?.instance?.id || (!link?.run?.id && link?.runtimeSource?.kind !== 'human-task-completion')) return null;
+  const human = link.runtimeSource?.kind === 'human-task-completion';
   return {
-    heading: `${link.run.id} · runtime ${link.run.status} · verification ${link.verificationStatus}`,
+    heading: `${human ? 'Human task completion' : link.run.id} · runtime ${link.instance.status ?? link.run?.status} · verification ${link.verificationStatus}`,
     identity: `Task ${link.plan.taskId} · plan ${link.plan.id} r${link.plan.revision} · instance ${link.instance.id}`,
-    hashes: `Run aggregate SHA-256 ${link.run.aggregateHash} · plan SHA-256 ${link.plan.snapshotHash} · task SHA-256 ${link.plan.taskHash}`,
+    hashes: `${human ? `Completion event SHA-256 ${link.runtimeSource.completionEventHash}` : `Run aggregate SHA-256 ${link.run.aggregateHash}`} · plan SHA-256 ${link.plan.snapshotHash} · task SHA-256 ${link.plan.taskHash}`,
+    outputs: (link.outputEvidence ?? []).map((output) => `${output.id}: ${output.status}${output.recordHash ? ` · record SHA-256 ${output.recordHash}` : ''}${output.reporterPrincipal ? ` · reported by ${output.reporterPrincipal}` : ''}`),
     applicability: link.applicability === 'CURRENT'
       ? 'Applies to this exact requirement draft.'
       : 'STALE: the requirement draft changed after this link was created.',

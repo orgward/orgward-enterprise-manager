@@ -589,21 +589,31 @@ function renderRequirements(content) {
           return view ? el('article', { className: 'checkpoint-callout' }, [
             el('strong', { text: view.heading }), el('p', { text: view.identity }), el('p', { text: view.hashes }),
             el('p', { text: `${link.reason} ${view.applicability}` }),
+            ...(view.outputs ?? []).map((output) => el('p', { text: output })),
           ]) : empty('A linked process run has incomplete displayable identity.');
         }) : [empty('No persisted process run is linked to this draft.')]),
       ]));
       if (!baseline && state.authenticated) {
         const form = el('form', { className: 'requirement-edit-form' }, [
-          el('label', {}, [el('span', { text: 'Persisted execution run ID' }), el('input', { attrs: { name: 'runId', required: '', placeholder: 'execution-run-…' } })]),
-          el('button', { className: 'button secondary', text: 'Link run provenance', attrs: { type: 'submit' } }),
+          el('label', {}, [el('span', { text: 'Persisted execution run ID (workload)' }), el('input', { attrs: { name: 'runId', placeholder: 'execution-run-…' } })]),
+          el('p', { text: 'Or select a completed human task; reported values remain HUMAN_REPORTED and NOT EXECUTED.' }),
+          el('label', {}, [el('span', { text: 'Human task instance ID' }), el('input', { attrs: { name: 'planInstanceId', placeholder: 'UUID' } })]),
+          el('label', {}, [el('span', { text: 'Human task ID' }), el('input', { attrs: { name: 'taskId', placeholder: 'task-…' } })]),
+          el('button', { className: 'button secondary', text: 'Link runtime provenance', attrs: { type: 'submit' } }),
         ]);
         form.addEventListener('submit', async (event) => {
           event.preventDefault();
           try {
             const current = state.changeCase;
+            const runId = form.elements.runId.value.trim();
+            const planInstanceId = form.elements.planInstanceId.value.trim();
+            const taskId = form.elements.taskId.value.trim();
+            const runMode = Boolean(runId) && !planInstanceId && !taskId;
+            const humanMode = !runId && Boolean(planInstanceId) && Boolean(taskId);
+            if (!runMode && !humanMode) throw new Error('Choose one workload run or one human task instance and task ID.');
             state.changeCase = await api(`/api/sdlc/cases/${current.id}/process-run-evidence`, { method: 'POST', body: JSON.stringify({
               version: current.version, draftRevision: current.artifacts.requirements.draftRevision, requirementId: requirement.id,
-              runId: form.elements.runId.value.trim(), idempotencyKey: uid('process-run-evidence'),
+              ...(runMode ? { runId } : { planInstanceId, taskId }), idempotencyKey: uid('process-run-evidence'),
             }) });
             await refreshCases(); renderCase(); notify('Run provenance linked. Verification remains NOT EXECUTED.');
           } catch (error) { notify(error.message); await loadCase(state.changeCase.id); }

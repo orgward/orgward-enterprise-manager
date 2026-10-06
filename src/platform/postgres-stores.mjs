@@ -2497,12 +2497,15 @@ export function projectPortfolioIntegritySummary(project) {
 
 export class PostgresChangeCaseStore extends PostgresDocumentStore {
   constructor(persistence) { super(persistence, 'change_case'); }
-  async linkPersistedProcessRun({ id: caseId, tenantId, principal, authzGeneration, runId, requirementId, expectedVersion, expectedDraftRevision, commandId }) {
-    if (!principal || !/^execution-run-[0-9a-f-]{36}$/i.test(runId ?? '')
+  async linkPersistedProcessRun({ id: caseId, tenantId, principal, authzGeneration, runId, planInstanceId, taskId, requirementId, expectedVersion, expectedDraftRevision, commandId }) {
+    const humanSelector = !runId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(planInstanceId ?? '')
+      && /^[a-zA-Z0-9][a-zA-Z0-9._:-]{1,119}$/.test(taskId ?? '');
+    const runSelector = /^execution-run-[0-9a-f-]{36}$/i.test(runId ?? '') && !planInstanceId && !taskId;
+    if (!principal || !(humanSelector || runSelector)
       || !Number.isSafeInteger(expectedVersion) || !Number.isSafeInteger(expectedDraftRevision)
       || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{7,119}$/.test(commandId ?? '')) throw projectAccessDenied();
     const operation = 'sdlc.process-run-evidence-link';
-    const requestHash = contentHash({ caseId, runId, requirementId, expectedVersion, expectedDraftRevision, principal });
+    const requestHash = contentHash({ caseId, ...(runSelector ? { runId } : { planInstanceId, taskId }), requirementId, expectedVersion, expectedDraftRevision, principal });
     return this.persistence.transaction(async (client) => {
       await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${tenantId}:${operation}:${commandId}`]);
       await lockIdentityRows(client, tenantId, [principal]);
@@ -2548,34 +2551,57 @@ export class PostgresChangeCaseStore extends PostgresDocumentStore {
       if (!blueprint || contentHash(blueprint) !== trace.source.blueprintSnapshotHash) throw conflict('The pinned source blueprint is unavailable or changed.', current.version, 'PROCESS_SOURCE_STALE');
       const sourceProcess = Object.values(blueprint.areas ?? {}).flatMap((area) => area.items ?? []).find((entry) => entry.id === trace.process.id && entry.type === 'process');
       if (!sourceProcess || contentHash(sourceProcess) !== trace.source.processSnapshotHash) throw conflict('The selected process snapshot does not match the requirement trace.', current.version, 'PROCESS_SOURCE_STALE');
-      const runRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2 for share`, [tenantId, runId]);
-      if (!runRow.rowCount) throw conflict('The selected persisted process run is unavailable in this project.', current.version, 'PROCESS_RUN_NOT_FOUND');
-      const run = verifyAggregateRow(runRow.rows[0]);
-      const ref = run.processTaskRef;
-      if (run.projectId !== current.projectId || ref?.blueprintId !== trace.source.blueprintId
-        || Number(ref?.blueprintVersion) !== trace.source.blueprintVersion
-        || !ref?.processId || !ref?.processPlanId || !ref?.planInstanceId || !ref?.taskId) throw conflict('The run does not match the exact selected project and blueprint.', current.version, 'PROCESS_RUN_SOURCE_MISMATCH');
-      const runEvents = run.events ?? [];
-      const validRunEvents = runEvents.every((event) => {
-        const { contentHash: hash, ...core } = event ?? {};
-        return /^[a-f0-9]{64}$/.test(hash ?? '') && contentHash(core) === hash;
-      });
-      const requestedEvents = runEvents.filter((event) => event.type === 'ExecutionRequested');
-      const requestedRef = requestedEvents[0]?.data?.processTaskRef;
-      const expectedRequestedRef = { processPlanId: ref.processPlanId, revision: ref.revision, planInstanceId: ref.planInstanceId,
-        taskId: ref.taskId, blueprintId: ref.blueprintId, blueprintVersion: ref.blueprintVersion,
-        ...(ref.flowBinding ? { flowBinding: ref.flowBinding } : {}), ...(ref.delegation ? { delegation: ref.delegation } : {}),
-        ...(ref.repository ? { repository: ref.repository } : {}) };
-      if (!validRunEvents || requestedEvents.length !== 1 || contentHash(requestedRef ?? null) !== contentHash(expectedRequestedRef)) {
-        throw persistenceIntegrity('The persisted run request event does not authenticate its process-task reference.');
+      let run = null;
+      let ref;
+      let humanRuntime = null;
+      let runEvents = [];
+      if (runSelector) {
+        const runRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2 for share`, [tenantId, runId]);
+        if (!runRow.rowCount) throw conflict('The selected persisted process run is unavailable in this project.', current.version, 'PROCESS_RUN_NOT_FOUND');
+        run = verifyAggregateRow(runRow.rows[0]);
+        ref = run.processTaskRef;
+        if (run.projectId !== current.projectId || ref?.blueprintId !== trace.source.blueprintId
+          || Number(ref?.blueprintVersion) !== trace.source.blueprintVersion
+          || !ref?.processId || !ref?.processPlanId || !ref?.planInstanceId || !ref?.taskId) throw conflict('The run does not match the exact selected project and blueprint.', current.version, 'PROCESS_RUN_SOURCE_MISMATCH');
+        runEvents = run.events ?? [];
+        const validRunEvents = runEvents.every((event) => {
+          const { contentHash: hash, ...core } = event ?? {};
+          return /^[a-f0-9]{64}$/.test(hash ?? '') && contentHash(core) === hash;
+        });
+        const requestedEvents = runEvents.filter((event) => event.type === 'ExecutionRequested');
+        const requestedRef = requestedEvents[0]?.data?.processTaskRef;
+        const expectedRequestedRef = { processPlanId: ref.processPlanId, revision: ref.revision, planInstanceId: ref.planInstanceId,
+          taskId: ref.taskId, blueprintId: ref.blueprintId, blueprintVersion: ref.blueprintVersion,
+          ...(ref.flowBinding ? { flowBinding: ref.flowBinding } : {}), ...(ref.delegation ? { delegation: ref.delegation } : {}),
+          ...(ref.repository ? { repository: ref.repository } : {}) };
+        if (!validRunEvents || requestedEvents.length !== 1 || contentHash(requestedRef ?? null) !== contentHash(expectedRequestedRef)) {
+          throw persistenceIntegrity('The persisted run request event does not authenticate its process-task reference.');
+        }
+        const runEventAudit = await client.query(`select count(*)::int as count from orgward.audit_log
+          where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2 and event_hash = any($3::text[])`,
+        [tenantId, run.id, runEvents.map((event) => contentHash(event))]);
+        if (Number(runEventAudit.rows[0]?.count) !== runEvents.length) throw persistenceIntegrity('A persisted run event is missing its durable audit record.');
+      } else {
+        const selected = await client.query(`select * from orgward.process_task_instances
+          where tenant_id=$1 and project_id=$2 and plan_instance_id=$3 and task_id=$4 for share`,
+        [tenantId, current.projectId, planInstanceId, taskId]);
+        if (!selected.rowCount) throw conflict('The selected human task completion is unavailable in this project.', current.version, 'PROCESS_TASK_NOT_FOUND');
+        humanRuntime = selected.rows[0];
+        if (humanRuntime.actor_type !== 'human' || humanRuntime.execution_run_id
+          || humanRuntime.status !== 'SUCCEEDED'
+          || humanRuntime.blueprint_id !== trace.source.blueprintId
+          || Number(humanRuntime.blueprint_version) !== trace.source.blueprintVersion) {
+          throw conflict('The selected human task does not match the exact completed process source.', current.version, 'PROCESS_TASK_SOURCE_MISMATCH');
+        }
+        ref = { processPlanId: humanRuntime.process_plan_id, revision: Number(humanRuntime.plan_revision),
+          planInstanceId: humanRuntime.plan_instance_id, taskId: humanRuntime.task_id, processId: humanRuntime.process_id,
+          blueprintId: humanRuntime.blueprint_id, blueprintVersion: Number(humanRuntime.blueprint_version) };
       }
-      const runEventAudit = await client.query(`select count(*)::int as count from orgward.audit_log
-        where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2 and event_hash = any($3::text[])`,
-      [tenantId, run.id, runEvents.map((event) => contentHash(event))]);
-      if (Number(runEventAudit.rows[0]?.count) !== runEvents.length) throw persistenceIntegrity('A persisted run event is missing its durable audit record.');
       const plan = await resolveRuntimeProcessPlan(client, { tenantId, projectId: current.projectId, project, planId: ref.processPlanId, revision: Number(ref.revision) });
       if (!plan || plan.source?.blueprintId !== trace.source.blueprintId || Number(plan.source?.blueprintVersion) !== trace.source.blueprintVersion
-        || plan.source?.processId !== ref.processId) throw persistenceIntegrity('The persisted run plan does not resolve to the run’s pinned root process.');
+        || plan.source?.processId !== ref.processId || (humanRuntime && humanRuntime.process_id !== plan.source.processId)) {
+        throw persistenceIntegrity('The persisted task runtime does not resolve to its plan’s pinned root process.');
+      }
       const planHash = plan.snapshotHash ?? contentHash(plan);
       if (!/^[a-f0-9]{64}$/.test(planHash)) throw persistenceIntegrity('The persisted run plan has no stable content hash.');
       const task = plan.tasks?.find((entry) => entry.id === ref.taskId);
@@ -2584,11 +2610,15 @@ export class PostgresChangeCaseStore extends PostgresDocumentStore {
           !== contentHash(trace.outcome.outputRefs.map(({ id, type }) => ({ id, type })).sort((a,b) => a.id.localeCompare(b.id)))) {
         throw conflict('The run task does not declare the exact outputs in this requirement trace.', current.version, 'PROCESS_RUN_OUTPUT_MISMATCH');
       }
-      const runtimeResult = await client.query(`select * from orgward.process_task_instances where tenant_id=$1 and project_id=$2 and plan_instance_id=$3 and task_id=$4 for share`, [tenantId, current.projectId, ref.planInstanceId, ref.taskId]);
+      const runtimeResult = humanRuntime ? { rowCount: 1, rows: [humanRuntime] }
+        : await client.query(`select * from orgward.process_task_instances where tenant_id=$1 and project_id=$2 and plan_instance_id=$3 and task_id=$4 for share`, [tenantId, current.projectId, ref.planInstanceId, ref.taskId]);
       if (!runtimeResult.rowCount) throw persistenceIntegrity('The linked run has no canonical persisted process-task instance.');
       const runtime = runtimeResult.rows[0];
-      assertLinkedWorkloadRuntime(runtime, run);
-      if (runtime.execution_run_id !== run.id || runtime.process_id !== ref.processId) throw persistenceIntegrity('The canonical task instance does not match the run and its pinned root process.');
+      if (run) assertLinkedWorkloadRuntime(runtime, run);
+      else if (runtime.actor_type !== 'human' || runtime.execution_run_id || runtime.status !== 'SUCCEEDED') {
+        throw conflict('Only a completed human task without a workload run can use this selector.', current.version, 'PROCESS_TASK_SOURCE_MISMATCH');
+      }
+      if (runtime.process_id !== ref.processId) throw persistenceIntegrity('The canonical task instance does not match its pinned process source.');
       const runtimeEvents = runtime.events ?? [];
       if (!runtimeEvents.length || !runtimeEvents.every((event) => {
         const { contentHash: hash, ...core } = event ?? {};
@@ -2598,8 +2628,72 @@ export class PostgresChangeCaseStore extends PostgresDocumentStore {
         where tenant_id=$1 and aggregate_kind='process_task_instance' and aggregate_id=$2 and event_hash = any($3::text[])`,
       [tenantId, `${runtime.plan_instance_id}:${runtime.task_id}`, runtimeEvents.map((event) => contentHash(event))]);
       if (Number(runtimeEventAudit.rows[0]?.count) !== runtimeEvents.length) throw persistenceIntegrity('A process-task instance event is missing its durable audit record.');
+      let outputEvidence;
+      if (run) {
+        outputEvidence = trace.outcome.outputRefs.map(({ id, type, snapshotHash }) => ({ id, type, snapshotHash, status: 'UNAVAILABLE' }));
+      } else {
+        verifyPersistedOutputRecords(runtime);
+        const completedEvents = runtimeEvents.filter((event) => event.type === 'HumanTaskCompleted'
+          && event.data?.planInstanceId === ref.planInstanceId && event.data?.taskId === ref.taskId);
+        if (completedEvents.length !== 1 || completedEvents[0].data.result !== 'succeeded') {
+          throw persistenceIntegrity('The human task completion event is missing or does not match the successful runtime outcome.');
+        }
+        const completionEvent = completedEvents[0];
+        const completionAudit = await client.query(`select command_id,event,event_hash,actor,aggregate_version from orgward.audit_log
+          where tenant_id=$1 and aggregate_kind='process_task_instance' and aggregate_id=$2
+            and event_type='HumanTaskCompleted' and event_hash=$3`,
+        [tenantId, `${runtime.plan_instance_id}:${runtime.task_id}`, contentHash(completionEvent)]);
+        if (completionAudit.rowCount !== 1 || contentHash(completionAudit.rows[0].event) !== contentHash(completionEvent)
+          || completionAudit.rows[0].actor !== completionEvent.actor || Number(completionAudit.rows[0].aggregate_version) !== Number(runtime.version)
+          || !completionAudit.rows[0].command_id) throw persistenceIntegrity('The human completion has no matching durable audit command.');
+        const completionCommand = await client.query(`select * from orgward.command_results
+          where tenant_id=$1 and operation='execution.process-task.human-complete' and command_id=$2
+            and aggregate_kind='process_task_instance' and aggregate_id=$3`,
+        [tenantId, completionAudit.rows[0].command_id, `${runtime.plan_instance_id}:${runtime.task_id}`]);
+        if (completionCommand.rowCount !== 1 || !/^[a-f0-9]{64}$/.test(completionCommand.rows[0].payload_hash ?? '')) {
+          throw persistenceIntegrity('The human completion has no matching durable command result.');
+        }
+        const completionResult = verifyCommandRow(completionCommand.rows[0]);
+        if (completionResult.projectId !== current.projectId || completionResult.planId !== plan.id
+          || Number(completionResult.revision) !== Number(plan.revision) || completionResult.planInstanceId !== ref.planInstanceId
+          || completionResult.taskId !== task.id || completionResult.status !== runtime.status
+          || Number(completionResult.version) !== Number(runtime.version)) {
+          throw persistenceIntegrity('The human completion command result does not match the canonical runtime row.');
+        }
+        const assignee = effectiveHumanAssignee(runtime);
+        const humanOutputRecords = runtime.outcome.outputRecords ?? [];
+        const outputIds = humanOutputRecords.map((record) => record.outputId);
+        if (humanOutputRecords.length !== trace.outcome.outputRefs.length || new Set(outputIds).size !== outputIds.length
+          || trace.outcome.outputRefs.some(({ id }) => !outputIds.includes(id))) {
+          throw persistenceIntegrity('The persisted human output set does not exactly match the traced output declarations.');
+        }
+        if (completionEvent.actor !== runtime.outcome.outputRecords?.[0]?.reporterPrincipal
+          && runtime.outcome.outputRecords?.some((record) => record.status === 'HUMAN_REPORTED')) {
+          throw persistenceIntegrity('The human output reporter does not match the completion event actor.');
+        }
+        outputEvidence = trace.outcome.outputRefs.map(({ id, type, snapshotHash }) => {
+          const record = runtime.outcome.outputRecords?.find((entry) => entry.outputId === id);
+          const definition = Object.values(blueprint.areas ?? {}).flatMap((area) => area.items ?? []).find((entry) => entry.id === id);
+          if (!record || !definition || definition.type !== type || digest(definition) !== snapshotHash
+            || record.outputType !== type || record.referenceHash !== contentHash({ id, type, definition })) {
+            throw persistenceIntegrity('A persisted human output does not match the exact declared blueprint reference.');
+          }
+          if (record.blueprintId !== blueprint.id || Number(record.blueprintVersion) !== Number(blueprint.version)
+            || record.blueprintHash !== contentHash(blueprint) || record.sourceProcessId !== trace.process.id
+            || record.planHash !== contentHash(plan) || record.taskHash !== contentHash(task)
+            || record.reporterPrincipal !== completionEvent.actor || record.assignedPrincipal !== assignee.principal) {
+            throw persistenceIntegrity('A persisted human output does not match its exact task, source, or reporter provenance.');
+          }
+          return { id, type, snapshotHash, status: record.status, recordHash: record.recordHash,
+            referenceHash: record.referenceHash, reporterPrincipal: record.reporterPrincipal,
+            assignedPrincipal: record.assignedPrincipal, completionEventId: completionEvent.id,
+            completionEventHash: contentHash(completionEvent), completionCommandId: completionAudit.rows[0].command_id,
+            sourceRuntimeVersion: record.sourceRuntimeVersion };
+        });
+      }
       const linkCore = { schemaVersion: 1, id: `process-run-link-${randomUUID()}`, status: 'UNVERIFIED', verificationStatus: 'NOT_EXECUTED',
-        reason: 'The persisted run and task are pinned, but trusted typed output artifacts are not available for verification.',
+        reason: run ? 'The persisted run and task are pinned; no authorized typed human output record is attached to this workload run.'
+          : 'The exact human-reported output records are pinned to the completion, but human reports are not truth-verified and no behavior verification was executed.',
         tenantId, projectId: current.projectId, caseId, requirementId: requirement.id, draftRevision: requirements.draftRevision,
         requirementHash: contentHash(Object.fromEntries(Object.entries(requirement).filter(([key]) => key !== 'processRunEvidenceLinks'))),
         traceHash: trace.traceHash, contractHash: requirement.verificationContract.contractHash,
@@ -2609,11 +2703,16 @@ export class PostgresChangeCaseStore extends PostgresDocumentStore {
         plan: { id: plan.id, revision: Number(plan.revision), snapshotHash: planHash, rootProcessId: plan.source.processId,
           taskId: task.id, taskHash: contentHash(task), selectedProcessId: task.sourceProcessId },
         outputs: trace.outcome.outputRefs.map(({ id, type, snapshotHash }) => ({ id, type, snapshotHash })),
+        outputEvidence,
         instance: { id: ref.planInstanceId, taskId: ref.taskId, version: Number(runtime.version), status: runtime.status,
           runtimeHash: contentHash({ ...runtime, started_at: runtime.started_at?.toISOString?.() ?? runtime.started_at,
             completed_at: runtime.completed_at?.toISOString?.() ?? runtime.completed_at, created_at: runtime.created_at?.toISOString?.() ?? runtime.created_at,
             updated_at: runtime.updated_at?.toISOString?.() ?? runtime.updated_at }), eventHashes: runtimeEvents.map((event) => contentHash(event)) },
-        run: { id: run.id, version: run.version, status: run.status, aggregateHash: contentHash(run), eventHashes: runEvents.map((event) => contentHash(event)) }, actor: principal, linkedAt: new Date().toISOString() };
+        ...(run ? { run: { id: run.id, version: run.version, status: run.status, aggregateHash: contentHash(run), eventHashes: runEvents.map((event) => contentHash(event)) } }
+          : { runtimeSource: { kind: 'human-task-completion', planInstanceId: ref.planInstanceId, taskId: ref.taskId,
+            completionEventId: outputEvidence[0]?.completionEventId ?? runtimeEvents.find((event) => event.type === 'HumanTaskCompleted')?.id,
+            completionEventHash: outputEvidence[0]?.completionEventHash ?? contentHash(runtimeEvents.find((event) => event.type === 'HumanTaskCompleted')) } }),
+        actor: principal, linkedAt: new Date().toISOString() };
       const link = { ...linkCore, linkHash: contentHash(linkCore) };
       requirement.processRunEvidenceLinks ??= [];
       requirement.processRunEvidenceLinks.push(link);
@@ -2624,8 +2723,10 @@ export class PostgresChangeCaseStore extends PostgresDocumentStore {
       current.idempotency[commandId] = { action: 'link-process-run-evidence', requestHash, linkId: link.id, version: current.version, at: link.linkedAt };
       const event = { id: `event-${randomUUID()}`, type: 'ProcessRunEvidenceLinked', schemaVersion: 1, tenantId,
         actor: principal, correlationId: current.correlationId, causationId: commandId, timestamp: link.linkedAt,
-        data: { linkId: link.id, linkHash: link.linkHash, requirementId: requirement.id, runId, verificationStatus: 'NOT_EXECUTED' },
-        contentHash: contentHash({ type: 'ProcessRunEvidenceLinked', tenantId, data: { linkId: link.id, linkHash: link.linkHash, requirementId: requirement.id, runId, verificationStatus: 'NOT_EXECUTED' } }) };
+        data: { linkId: link.id, linkHash: link.linkHash, requirementId: requirement.id, runId: run?.id ?? null,
+          ...(run ? {} : { planInstanceId: ref.planInstanceId, taskId: ref.taskId }), verificationStatus: 'NOT_EXECUTED' },
+        contentHash: contentHash({ type: 'ProcessRunEvidenceLinked', tenantId, data: { linkId: link.id, linkHash: link.linkHash, requirementId: requirement.id,
+          runId: run?.id ?? null, ...(run ? {} : { planInstanceId: ref.planInstanceId, taskId: ref.taskId }), verificationStatus: 'NOT_EXECUTED' } }) };
       current.events.push(event);
       await this.saveInTransaction(client, current, { expectedVersion, principal, requiredPrincipalRoles: ['workspace-write'], authzGeneration });
       return { changeCase: current, link, replayed: false };

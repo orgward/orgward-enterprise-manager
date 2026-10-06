@@ -8657,3 +8657,25 @@ Values are human-reported, not truth-verified; this creates no verification PASS
 The T-91 SDLC consumer is not yet linked to these output records. T-91 and PR-15
 remain open; no task checkbox/cursor, backlog acceptance state or production
 gate changed.
+
+PR-15 T-91 human-output SDLC consumption (2026-10-06): Sol approved the
+follow-up link slice with no remaining findings. The authenticated SDLC action
+resolves the human task runtime, successful completion event, matching audit
+record and idempotency result, then verifies the persisted typed output records
+against the exact task, plan revision, pinned blueprint references, selected
+process and reporter/assignee identities. The immutable requirement link pins
+record/reference hashes and completion provenance. Workload links remain
+compatible; a human child task under a different plan root is accepted only
+when its task source matches the selected trace, and linking it to the wrong
+selected process is rejected. The UI displays HUMAN_REPORTED separately from
+runtime and verification status. Human reports and unavailable outputs always
+remain UNVERIFIED / NOT_EXECUTED; this is no truth claim, behavior verification
+or PASS.
+
+Focused evidence: `tests/persistence.test.mjs` passed 1/1 for the PostgreSQL
+link, tampered-record rejection, replay/conflict, unavailable output, restart
+readback, child-process/root distinction and wrong-selected-process rejection
+(`/tmp/orgward-tests-ErLDbS/node-test.tap.log`). The related persistence and UI
+presentation selection previously passed 3/3
+(`/tmp/orgward-tests-Dw0dom/node-test.tap.log`). T-91 and PR-15 remain open; no
+task checkbox/cursor, backlog acceptance state or production gate changed.

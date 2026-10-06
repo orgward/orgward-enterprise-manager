@@ -3644,18 +3644,21 @@ export function createApp({
         requirePrincipalStoreMethod(sdlcStore, 'linkPersistedProcessRun');
         const body = requireJsonObject(await readJson(request));
         rejectAuthorityClaims(body);
-        const allowed = new Set(['version', 'draftRevision', 'requirementId', 'runId', 'idempotencyKey']);
+        const allowed = new Set(['version', 'draftRevision', 'requirementId', 'runId', 'planInstanceId', 'taskId', 'idempotencyKey']);
         const unknown = Object.keys(body).filter((key) => !allowed.has(key));
         if (unknown.length) throw apiFailure(400, 'INVALID_PROCESS_RUN_EVIDENCE_LINK', 'Only a run selector and expected case/draft versions are accepted; status, outputs, hashes and provenance are server-derived.');
         if (!Number.isSafeInteger(body.version) || body.version < 1 || !Number.isSafeInteger(body.draftRevision) || body.draftRevision < 1
           || !/^REQ-PROC-[a-f0-9]{12}$/.test(body.requirementId ?? '')
-          || !/^execution-run-[0-9a-f-]{36}$/i.test(body.runId ?? '')
+          || !((/^execution-run-[0-9a-f-]{36}$/i.test(body.runId ?? '') && !body.planInstanceId && !body.taskId)
+            || (!body.runId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.planInstanceId ?? '')
+              && /^[a-zA-Z0-9][a-zA-Z0-9._:-]{1,119}$/.test(body.taskId ?? '')))
           || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{7,119}$/.test(body.idempotencyKey ?? '')) {
-          throw apiFailure(400, 'INVALID_PROCESS_RUN_EVIDENCE_LINK', 'Choose a valid requirement, persisted run, command ID, and current versions.');
+          throw apiFailure(400, 'INVALID_PROCESS_RUN_EVIDENCE_LINK', 'Choose exactly one persisted run or human task completion, a requirement, command ID, and current versions.');
         }
         const result = await sdlcStore.linkPersistedProcessRun({ id: processRunEvidenceMatch[1],
           tenantId: requestTenant(request), principal: requestActor(request), authzGeneration: request.identity.authzGeneration,
-          runId: body.runId, requirementId: body.requirementId, expectedVersion: body.version,
+          runId: body.runId, planInstanceId: body.planInstanceId, taskId: body.taskId,
+          requirementId: body.requirementId, expectedVersion: body.version,
           expectedDraftRevision: body.draftRevision, commandId: body.idempotencyKey });
         if (!result) throw apiFailure(404, 'CHANGE_CASE_NOT_FOUND', 'Change case not found.');
         return sendJson(response, result.replayed ? 200 : 201, { ...sdlcView(result.changeCase), processRunEvidenceLink: result.link,

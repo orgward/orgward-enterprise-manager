@@ -6269,17 +6269,19 @@ test('owner-authored human task information output is pinned, versioned, audited
   })).data;
   const plansRoute = `/api/v1/projects/${project.id}/process-plans`;
   const planned = await request(app.base, plansRoute, {
-    ...as('alice'), method: 'POST', body: command('human-output-plan', { processId: 'process-learn' }, project.version),
+    ...as('alice'), method: 'POST', body: command('human-output-plan', { processId: 'process-review' }, project.version),
   }, 201);
   const plan = planned.data.processPlans.at(-1);
   const revisionResponse = await request(app.base, `${plansRoute}/${plan.id}/revisions`, {
     ...as('alice'), method: 'POST', body: command('human-output-plan-revision', {
       tasks: plan.tasks.map((task) => ({ taskId: task.id, title: task.title, detail: task.detail,
-        dependencies: task.dependencies, actorId: 'actor-founder', roleId: 'role-founder' })),
+        dependencies: task.id === 'task-process-learn' ? [] : task.dependencies,
+        actorId: 'actor-founder', roleId: 'role-founder' })),
     }, planned.data.version),
   });
   const savedPlan = revisionResponse.data.processPlans.at(-1);
   const task = savedPlan.tasks.find((candidate) => candidate.id === 'task-process-learn');
+  assert.equal(task.sourceProcessId, 'process-learn', 'the typed output task is a child process selected under the process-review plan root');
   const output = task.outputs.find((candidate) => candidate.type === 'information');
   assert.ok(output, 'the exact saved human task declares an information output');
   const startPayload = { projectId: project.id, planId: savedPlan.id, revision: savedPlan.revision, taskId: task.id };
@@ -6382,6 +6384,110 @@ test('owner-authored human task information output is pinned, versioned, audited
   assert.deepEqual(completed.events.at(-1).data.outputRecords, completed.outcome.outputRecords);
   assert.equal(completed.outcome.outputRecords[0].status, 'HUMAN_REPORTED',
     'a durable completion records the reporter but makes no independent verification claim');
+  const traceProject = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
+  const traceBlueprint = traceProject.blueprintVersions.find((entry) => entry.id === savedPlan.source.blueprintId
+    && entry.version === savedPlan.source.blueprintVersion);
+  const traceProcess = Object.values(traceBlueprint.areas).flatMap((area) => area.items)
+    .find((entry) => entry.id === task.sourceProcessId && entry.type === 'process');
+  const traceCaseCreated = await request(app.base, '/api/sdlc/cases', { ...as('alice'), method: 'POST', body: JSON.stringify({
+    mode: 'golden', projectId: project.id, sourceObjectId: traceProcess.id,
+    expectedProjectVersion: traceProject.version, expectedBlueprintId: traceBlueprint.id,
+    expectedBlueprintVersion: traceBlueprint.version,
+  }) }, 201);
+  const traceCase = await request(app.base, `/api/sdlc/cases/${traceCaseCreated.id}/run`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: traceCaseCreated.version, idempotencyKey: 'human-output-trace-advance' }),
+  });
+  const traceRequirement = traceCase.artifacts.requirements.requirements.find((entry) => entry.processTrace?.process.id === traceProcess.id);
+  assert.ok(traceRequirement, 'the trace selects the same saved process as the human completion');
+  const humanLinkBody = { version: traceCase.version, draftRevision: traceCase.artifacts.requirements.draftRevision,
+    requirementId: traceRequirement.id, planInstanceId: started.planInstanceId, taskId: task.id,
+    idempotencyKey: 'human-output-trace-link' };
+  await app.persistence.transaction(async (client) => {
+    await client.query('alter table orgward.process_task_instances disable trigger process_task_instance_history_immutable');
+    await client.query(`update orgward.process_task_instances set outcome=jsonb_set(outcome, '{outputRecords,0,value}', '"tampered"'::jsonb)
+      where tenant_id='tenant-a' and project_id=$1 and plan_instance_id=$2 and task_id=$3`,
+    [project.id, started.planInstanceId, task.id]);
+    await client.query('alter table orgward.process_task_instances enable trigger process_task_instance_history_immutable');
+  });
+  await request(app.base, `/api/sdlc/cases/${traceCase.id}/process-run-evidence`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify(humanLinkBody),
+  }, 503);
+  assert.equal((await request(app.base, `/api/sdlc/cases/${traceCase.id}`, as('alice'))).version, traceCase.version,
+    'tampered human output creates no trace link or case mutation');
+  await app.persistence.transaction(async (client) => {
+    await client.query('alter table orgward.process_task_instances disable trigger process_task_instance_history_immutable');
+    await client.query(`update orgward.process_task_instances set outcome=$4::jsonb
+      where tenant_id='tenant-a' and project_id=$1 and plan_instance_id=$2 and task_id=$3`,
+    [project.id, started.planInstanceId, task.id, JSON.stringify(completed.outcome)]);
+    await client.query('alter table orgward.process_task_instances enable trigger process_task_instance_history_immutable');
+  });
+  const humanLinked = await request(app.base, `/api/sdlc/cases/${traceCase.id}/process-run-evidence`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify(humanLinkBody),
+  }, 201);
+  const humanLink = humanLinked.processRunEvidenceLink;
+  assert.equal(humanLink.verificationStatus, 'NOT_EXECUTED');
+  assert.equal(humanLink.status, 'UNVERIFIED');
+  assert.equal(humanLink.run, undefined, 'human task links do not fabricate workload execution runs');
+  assert.equal(humanLink.runtimeSource.kind, 'human-task-completion');
+  assert.equal(humanLink.outputEvidence[0].status, 'HUMAN_REPORTED');
+  assert.equal(humanLink.outputEvidence[0].recordHash, completed.outcome.outputRecords[0].recordHash);
+  assert.equal(humanLink.outputEvidence[0].reporterPrincipal, principal('bob'));
+  assert.equal(humanLink.outputEvidence[0].assignedPrincipal, principal('bob'));
+  const humanLinkReplay = await request(app.base, `/api/sdlc/cases/${traceCase.id}/process-run-evidence`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify(humanLinkBody),
+  });
+  assert.equal(humanLinkReplay.command.replayed, true);
+  assert.equal(humanLinkReplay.artifacts.requirements.processRunEvidenceLinks.length, 1);
+  const rootProcess = Object.values(traceBlueprint.areas).flatMap((area) => area.items)
+    .find((entry) => entry.id === 'process-review' && entry.type === 'process');
+  const wrongSourceCreated = await request(app.base, '/api/sdlc/cases', { ...as('alice'), method: 'POST', body: JSON.stringify({
+    mode: 'golden', projectId: project.id, sourceObjectId: rootProcess.id,
+    expectedProjectVersion: traceProject.version, expectedBlueprintId: traceBlueprint.id,
+    expectedBlueprintVersion: traceBlueprint.version,
+  }) }, 201);
+  const wrongSourceCase = await request(app.base, `/api/sdlc/cases/${wrongSourceCreated.id}/run`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: wrongSourceCreated.version, idempotencyKey: 'human-output-wrong-source-advance' }),
+  });
+  const wrongSourceRequirement = wrongSourceCase.artifacts.requirements.requirements.find((entry) => entry.processTrace?.process.id === rootProcess.id);
+  const wrongSourceLink = await request(app.base, `/api/sdlc/cases/${wrongSourceCase.id}/process-run-evidence`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ ...humanLinkBody, version: wrongSourceCase.version,
+      requirementId: wrongSourceRequirement.id, planInstanceId: started.planInstanceId,
+      idempotencyKey: 'human-output-wrong-source-link' }),
+  }, 409);
+  assert.ok(wrongSourceLink.error, 'a child task cannot be linked to a trace for its plan root process');
+  assert.equal((await request(app.base, `/api/sdlc/cases/${wrongSourceCase.id}`, as('alice'))).version, wrongSourceCase.version,
+    'wrong selected process rejection leaves the case unchanged');
+  const humanLinkConflict = await request(app.base, `/api/sdlc/cases/${traceCase.id}/process-run-evidence`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ ...humanLinkBody, taskId: 'task-other', idempotencyKey: humanLinkBody.idempotencyKey }),
+  }, 409);
+  assert.match(humanLinkConflict.error, /already used with different input/i);
+  const unavailableLinkStart = await request(app.base, '/api/execution/process-task-instances/start', {
+    ...as('bob'), method: 'POST', body: command('human-output-trace-unavailable-start', startPayload),
+  }, 201);
+  const unavailableLinkCompletion = await request(app.base, '/api/execution/process-task-instances/complete', {
+    ...as('bob'), method: 'POST', body: command('human-output-trace-unavailable-complete', {
+      ...startPayload, planInstanceId: unavailableLinkStart.planInstanceId,
+      result: 'succeeded', evidence: ['Task completed with no declared output value supplied.'], expectedVersion: unavailableLinkStart.version,
+    }),
+  }, 201);
+  assert.equal(unavailableLinkCompletion.outcome.outputRecords[0].status, 'UNAVAILABLE');
+  const unavailableLinkCase = await request(app.base, `/api/sdlc/cases/${traceCase.id}/process-run-evidence`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ ...humanLinkBody, version: humanLinked.version,
+      planInstanceId: unavailableLinkStart.planInstanceId, idempotencyKey: 'human-output-trace-link-unavailable' }),
+  }, 201);
+  assert.equal(unavailableLinkCase.processRunEvidenceLink.outputEvidence[0].status, 'UNAVAILABLE');
+  assert.equal(unavailableLinkCase.processRunEvidenceLink.verificationStatus, 'NOT_EXECUTED');
+  await close(app); app = null;
+  app = await start(postgres.databaseUrl, { oidcAuthenticator });
+  const humanLinkAfterRestart = await request(app.base, `/api/sdlc/cases/${traceCase.id}`, as('alice'));
+  const persistedHumanLink = humanLinkAfterRestart.artifacts.requirements.processRunEvidenceLinks[0];
+  assert.equal(persistedHumanLink.outputEvidence[0].recordHash, completed.outcome.outputRecords[0].recordHash);
+  assert.equal(persistedHumanLink.verificationStatus, 'NOT_EXECUTED');
+  assert.equal(humanLinkAfterRestart.artifacts.requirements.processRunEvidenceLinks[1].outputEvidence[0].status, 'UNAVAILABLE');
+  const humanRuntimeAfterRestart = (await request(app.base,
+    `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances
+    .find((runtime) => runtime.taskId === task.id && runtime.planInstanceId === started.planInstanceId);
+  assert.equal(humanRuntimeAfterRestart.outcome.outputRecords[0].recordHash, completed.outcome.outputRecords[0].recordHash);
   const completionReplay = await request(app.base, '/api/execution/process-task-instances/complete', {
     ...as('bob'), method: 'POST', body: command('human-output-complete', completionPayload),
   }, 200);
