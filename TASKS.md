@@ -8869,3 +8869,33 @@ readback checks, report-time cutoff, export, restart and owner UI selector/statu
 display. Syntax and `git diff --check` passed. No full check was run while the
 parent PR remains open. This does not complete T-125 or PR-17; PR-15 remains
 first open. Task checkboxes, cursor and production gates are unchanged.
+
+T-126 assigned-work queue increment (2026-10-06): the execution workbench now
+adds a project-scoped “My assigned work” list from the authorized process-task
+runtime snapshot. It includes only active IN_PROGRESS/ESCALATED human tasks
+assigned to the current principal and the latest displayed plan revision. Each
+entry shows process/task, instance, status and declared outputs; opening it
+selects the exact plan revision and instance, then scrolls/focuses the matching
+task row. Empty state is explicit. The queue adds no task authority or effect;
+existing completion/escalation forms and server checks remain the command path.
+
+Focused queue tests passed 2/2, 0 failures/skips in 0.18s
+(`/tmp/orgward-my-work-queue-WnDZTB.log`; TAP:
+`/tmp/orgward-tests-pQvLhd/node-test.tap.log`). Coverage includes filtering
+unassigned, non-human, other-project, terminal and older-revision entries,
+queue navigation to exact instance/task, and the empty state. Syntax and
+`git diff --check` passed. No full check was run while PR-17 remains open.
+This is one T-126 workbench increment, not T-126 or PR-17 completion. PR-15
+remains first open; task checkboxes, cursor and production gates are unchanged.
+
+T-126 assigned-work queue review follow-up (2026-10-06): aligned the filter to
+the runtime API's `actorType: human` enum and changed historical plan lookup to
+select `.process-plan` explicitly, so the new queue cannot be mistaken for the
+plan card when nested historical rendering is used. Focused queue tests passed
+3/3, 0 failures/skips; TAP duration 0.16s, wrapper elapsed 0.37s
+(`/tmp/orgward-my-work-queue-review-6w83wP.log`; TAP:
+`/tmp/orgward-tests-ltVm2x/node-test.tap.log`). Regressions cover the runtime
+actor enum and plan-card selection with an earlier queue element. Syntax and
+`git diff --check` passed. The initial 2/2 test fixture used a non-contract actor
+enum; the regression now uses the runtime's actual `human` value. PR-17 and its
+task statuses remain open and unchanged.

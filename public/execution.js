@@ -5,6 +5,8 @@ import { processTaskStatusAnnouncement, scheduleProcessTaskAnnouncement, summari
 import { humanTaskHistoryEntries } from './human-task-history.mjs';
 import { humanTaskEffectiveAssigneePresentation } from './human-task-effective-assignee.mjs';
 import { humanTaskEscalationResolutionOptions } from './human-task-escalation-resolution.mjs';
+import { assignedHumanWorkItems, assignedHumanWorkRowId, findHistoricalProcessPlanCard,
+  openAssignedHumanWorkItem, renderAssignedHumanWorkQueue } from './assigned-human-work-queue.mjs';
 import { humanTaskInputDisclosureKey, humanTaskInputDisclosureOpen, processTaskHumanInputReview,
   rememberHumanTaskInputDisclosure } from './human-task-input-review.mjs';
 import { humanTaskOutputApplicationState, humanTaskOutputCommand } from './human-task-output-application.mjs';
@@ -700,6 +702,13 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
   const focusedSavedTaskResult = captureFocusedSavedTaskResult(savedTaskResultDetails, document.activeElement);
   container.replaceChildren();
   if (!plans.length) return container.append(el('p', { className: 'muted', text: 'No planning graphs saved for this project.' }));
+  const assignedWork = assignedHumanWorkItems(plans, state.taskInstances, project.id);
+  const workQueue = renderAssignedHumanWorkQueue({ items: assignedWork, el, onOpen: (item) => {
+    openAssignedHumanWorkItem({ item, selectedInstances: state.selectedPlanInstances,
+      render: () => renderProcessPlans(container, plans, project, { allowNewInstances, showHistory, skipBlockedAnnouncement }),
+      findRow: (id) => document.getElementById(id) });
+  } });
+  container.append(workQueue);
   const blockedAnnouncements = [];
   const blockedAnnouncementContexts = new Map();
   const revisions = new Map();
@@ -917,7 +926,8 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
       const instanceTerminal = instanceAbandoned || instanceCancelled;
       const linkedRun = runtime?.executionRunId ? state.runs.find((candidate) => candidate.id === runtime.executionRunId) ?? null : null;
       const dependenciesSucceeded = runtimeState.dependenciesSucceeded;
-      const item = el('li');
+      const item = el('li', { attrs: { id: assignedHumanWorkRowId({ planId: plan.id,
+        revision: plan.revision ?? 1, planInstanceId: selectedInstance, taskId: task.id }), tabindex: '-1' } });
       item.append(el('h5', {
         className: 'process-task-status',
         text: `${task.title} — ${runtimeState.status}`,
@@ -1481,7 +1491,7 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
             && run.processTaskRef?.revision === earlier.revision)) continue;
         const historicalContainer = document.createElement('div');
         renderProcessPlans(historicalContainer, [earlier], project, { allowNewInstances: false, showHistory: false });
-        const historicalCard = historicalContainer.firstElementChild;
+        const historicalCard = findHistoricalProcessPlanCard(historicalContainer);
         if (!historicalCard) continue;
         historicalCard.querySelector('h4').textContent += ' · pinned existing instance';
         historicalCard.querySelector('p').textContent = 'Earlier immutable graph revision · existing instances only';
