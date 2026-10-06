@@ -26,6 +26,26 @@ export function eligibleActorBindings(response, blueprintVersion) {
     && entry.eligibilityStatus.includes('eligible') && entry.blueprintVersion === blueprintVersion);
 }
 
+export function sentinelAssessmentChoices(project) {
+  const blueprint = project?.latestBlueprint;
+  if (!blueprint || !Array.isArray(project.enterpriseSentinelAssessments)) return [];
+  return project.enterpriseSentinelAssessments.filter((entry) => entry?.source?.blueprintId === blueprint.id
+    && entry.source.blueprintVersion === blueprint.version && typeof entry.id === 'string'
+    && typeof entry.reportHash === 'string');
+}
+
+export function savedProjectPinSummary(context) {
+  if (context?.manifestVersion === 1 && !Object.hasOwn(context, 'savedProjectPin')) {
+    return 'Historical context manifest v1 has no structured saved-project pin.';
+  }
+  const pin = context?.savedProjectPin;
+  if (context?.manifestVersion !== 2 || !pin) return 'No saved project is pinned in this context manifest.';
+  const snapshot = pin.blueprintSnapshotStatus === 'PINNED'
+    ? `blueprint snapshot SHA-256 ${pin.blueprintSnapshotHash}`
+    : 'blueprint snapshot hash unavailable in this legacy source binding';
+  return `Project ${pin.projectId} v${pin.projectVersion} · blueprint ${pin.blueprintId} v${pin.blueprintVersion} · schema v${pin.blueprintSchemaVersion} · object ${pin.sourceObjectId} (${pin.sourceObjectType}) · source SHA-256 ${pin.sourceHash} · binding SHA-256 ${pin.bindingHash} · ${snapshot}`;
+}
+
 function clarificationModel(entry, currentRevision) {
   const isCurrent = entry.intentRevision === currentRevision;
   const control = isCurrent && entry.status === 'OPEN' ? 'ANSWER'

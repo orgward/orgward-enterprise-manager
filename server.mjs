@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { addConversationTurn, createProject, editProcessTaskGraph, graphForBlueprint, latestBlueprint, planProcessTaskGraph, publishBlueprintInternally } from './src/model.mjs';
 import { ProjectStore } from './src/store.mjs';
 import { MUTATIONS, STAGES, digest } from './src/sdlc/contracts.mjs';
-import { PROOF_ACTION_ATTEMPT_LIMIT, acceptArchitectureDraft, acceptRequirementDraft, advanceCase, answerClarification, approveRelease, assessProofs, commandRequestHash, completeProofAction, createChangeCase, editArchitectureDraft, editRequirementDraft, normalizeChangeCase, openClarification, pinProjectSourceObject, reconcileClarification, recordObservation, recordProofResult, registerProofObligation, releaseApprovalCandidate, resumeProofAction, routeProofResult, runToCheckpoint, traceability, verifyAcceptedG6Plan, verifyContextManifest, verifyEvidenceLedger, verifySourceBinding, workspaceStatus } from './src/sdlc/engine.mjs';
+import { PROOF_ACTION_ATTEMPT_LIMIT, acceptArchitectureDraft, acceptRequirementDraft, advanceCase, answerClarification, approveRelease, assessProofs, commandRequestHash, completeProofAction, createChangeCase, editArchitectureDraft, editRequirementDraft, normalizeChangeCase, openClarification, pinProjectSourceObject, sourceBindingSelection, reconcileClarification, recordObservation, recordProofResult, registerProofObligation, releaseApprovalCandidate, resumeProofAction, routeProofResult, runToCheckpoint, traceability, verifyAcceptedG6Plan, verifyContextManifest, verifyEvidenceLedger, verifySourceBinding, workspaceStatus } from './src/sdlc/engine.mjs';
 import { compileSoftwareDeliveryDraft, verifySoftwareDeliveryDraft } from './src/sdlc/software-plan-compiler.mjs';
 import { ChangeCaseStore } from './src/sdlc/store.mjs';
 import { EXECUTION_STATUSES } from './src/execution/contracts.mjs';
@@ -41,6 +41,7 @@ import { ENTERPRISE_SOURCE_ACCEPTANCE_KINDS } from './src/enterprise/source-acce
 import { ENTERPRISE_SOURCE_ATTESTATION_KINDS, authorizeEnterpriseCollectorPush, previewEnterpriseAttestedSourceProposal } from './src/enterprise/source-attestation.mjs';
 import { ENTERPRISE_GOVERNANCE_KINDS } from './src/enterprise/governance.mjs';
 import { ENTERPRISE_STEWARDSHIP_KINDS } from './src/enterprise/stewardship.mjs';
+import { ENTERPRISE_SENTINEL_KINDS } from './src/enterprise/sentinel.mjs';
 import { createLocalSandboxTestAdapter } from './src/enterprise/sandbox-adapter-contract.mjs';
 import { createLoopbackSandboxHttpAdapter } from './src/enterprise/loopback-sandbox-http-adapter.mjs';
 import { createEnterpriseInterchangeBundle, createEnterpriseDesignPack, ENTERPRISE_INTERCHANGE_KINDS,
@@ -250,6 +251,7 @@ async function requireCurrentSourceBinding(changeCase, store, request) {
   const currentBinding = pinProjectSourceObject(project, {
     projectId: project.id, sourceObjectId: binding.objectId, expectedProjectVersion: project.version,
     expectedBlueprintId: blueprint.id, expectedBlueprintVersion: blueprint.version,
+    ...sourceBindingSelection(binding),
   });
   if (currentBinding.sourceHash !== binding.sourceHash) {
     throw apiFailure(409, 'SOURCE_BINDING_STALE', 'The pinned design object changed. This case is read-only; create a new case from the current blueprint to continue.', {
@@ -1925,7 +1927,7 @@ export function createApp({
         if ((administrative || payload.kind === 'record-state' || ENTERPRISE_BRANCH_KINDS.has(payload.kind)
           || ENTERPRISE_PROCESS_KINDS.has(payload.kind) || ENTERPRISE_ECONOMIC_KINDS.has(payload.kind)
           || ENTERPRISE_REFINEMENT_KINDS.has(payload.kind) || ENTERPRISE_INTERCHANGE_KINDS.has(payload.kind)
-          || ENTERPRISE_INTEGRITY_KINDS.has(payload.kind) || ENTERPRISE_SOURCE_ACCEPTANCE_KINDS.has(payload.kind)
+          || ENTERPRISE_INTEGRITY_KINDS.has(payload.kind) || ENTERPRISE_SENTINEL_KINDS.has(payload.kind) || ENTERPRISE_SOURCE_ACCEPTANCE_KINDS.has(payload.kind)
           || ENTERPRISE_SOURCE_ATTESTATION_KINDS.has(payload.kind)
           || ENTERPRISE_GOVERNANCE_KINDS.has(payload.kind) || ENTERPRISE_STEWARDSHIP_KINDS.has(payload.kind)) && request.identity.actorType !== 'human') {
           throw apiFailure(403, 'ENTERPRISE_HUMAN_OWNER_REQUIRED', 'A current human project member must report state, refine records or import proposed design; a human project owner must review design or define scopes, validity and future proposals.');
@@ -1968,6 +1970,7 @@ export function createApp({
               : payload.kind === 'reconcile-sandbox-procurement-test' ? 'SandboxTransactionReconciled'
               : payload.kind === 'compensate-sandbox-procurement-test' ? 'SandboxCompensationApproved'
               : payload.kind === 'run-integrity-checks' ? 'EnterpriseIntegrityAssessed'
+              : payload.kind === 'run-sentinel-assessment' ? 'EnterpriseSentinelAssessed'
               : payload.kind === 'accept-integrity-exception' ? 'EnterpriseIntegrityExceptionAccepted'
               : payload.kind === 'propose-attested-source-correction' ? 'EnterpriseSourceCorrectionProposed'
               : payload.kind === 'compare-source-evidence' ? 'EnterpriseSourceEvidenceCompared'
@@ -1999,6 +2002,7 @@ export function createApp({
                 importSource: changed.source ?? null, importSourceHash: changed.sourceHash ?? null,
                 simulationId: changed.simulationId ?? null, economicEvaluationId: changed.economicEvaluationId ?? null,
                 integrityAssessmentId: changed.integrityAssessmentId ?? null,
+                sentinelAssessmentId: changed.sentinelAssessmentId ?? null,
                 integrityExceptionId: changed.integrityExceptionId ?? null,
                 governanceCaseId: changed.governanceCaseId ?? null, governanceRevision: changed.governanceRevision ?? null,
                 governanceStatus: changed.governanceStatus ?? null,
@@ -2022,6 +2026,8 @@ export function createApp({
         const economicEvaluation = receipt.economicEvaluationId ? result.project.enterpriseEconomicEvaluations?.find((entry) => entry.id === receipt.economicEvaluationId) : null;
         const integrityAssessment = receipt.integrityAssessmentId
           ? result.project.enterpriseIntegrityAssessments?.find((entry) => entry.id === receipt.integrityAssessmentId) : null;
+        const sentinelAssessment = receipt.sentinelAssessmentId
+          ? result.project.enterpriseSentinelAssessments?.find((entry) => entry.id === receipt.sentinelAssessmentId) : null;
         const integrityException = receipt.integrityExceptionId
           ? result.project.enterpriseIntegrityExceptions?.find((entry) => entry.id === receipt.integrityExceptionId) : null;
         const sandboxTransaction = receipt.sandboxTransactionId
@@ -2047,7 +2053,7 @@ export function createApp({
           ...(receipt.sourceAttestationCorrectionReceiptIds ? { sourceAttestationCorrectionReceipts:
             structuredClone(result.project.sourceAttestationCorrectionReceipts?.filter((entry) => receipt.sourceAttestationCorrectionReceiptIds.includes(entry.id)) ?? []) } : {}),
           ...(simulation ? { simulation } : {}), ...(economicEvaluation ? { economicEvaluation } : {}),
-          ...(integrityAssessment ? { integrityAssessment } : {}), ...(integrityException ? { integrityException } : {}),
+          ...(integrityAssessment ? { integrityAssessment } : {}), ...(sentinelAssessment ? { sentinelAssessment } : {}), ...(integrityException ? { integrityException } : {}),
           ...(receipt.governanceCaseId ? { governanceCaseId: receipt.governanceCaseId,
             governanceRevision: receipt.governanceRevision, governanceStatus: receipt.governanceStatus } : {}),
           ...(ENTERPRISE_STEWARDSHIP_KINDS.has(receipt.kind) ? { stewardshipRoleId: receipt.stewardshipRoleId,
@@ -3369,11 +3375,22 @@ export function createApp({
 
       if (request.method === 'POST' && pathname === '/api/sdlc/cases') {
         const body = requireJsonObject(await readJson(request));
+        if (Object.hasOwn(body, 'savedProjectPin')) {
+          throw apiFailure(400, 'SAVED_PROJECT_PIN_SERVER_DERIVED', 'The saved-project pin is derived from the verified source selection and cannot be supplied by the caller.');
+        }
+        if (Object.hasOwn(body, 'bindingSchemaVersion') && body.bindingSchemaVersion !== 2) {
+          throw apiFailure(400, 'SOURCE_BINDING_SCHEMA_UNSUPPORTED', 'New cases must use the current source-binding version.');
+        }
         if (request.identity) {
           rejectAuthorityClaims(body);
           requirePrincipalStoreMethod(sdlcStore, 'saveForPrincipal');
         }
         const hasSourceSelection = ['sourceObjectId', 'expectedProjectVersion', 'expectedBlueprintId', 'expectedBlueprintVersion'].some((key) => Object.hasOwn(body, key));
+        const hasSentinelSelection = Object.hasOwn(body, 'sentinelAssessmentId') || Object.hasOwn(body, 'sentinelReportHash')
+          || body.sentinelRequiredScope === 'PROCESS_ACCOUNTABILITY';
+        if (!request.identity && !body.projectId && !hasSourceSelection && hasSentinelSelection) {
+          throw apiFailure(400, 'SOURCE_BINDING_REQUIRED', 'Sentinel assessment pins and required scopes need a selected saved-project source.');
+        }
         let sourceBinding = null;
         if (body.projectId || hasSourceSelection) {
           if (!/^project-[0-9a-f-]{36}$/.test(body.projectId ?? '')) throw apiFailure(400, 'PROJECT_REQUIRED', 'Choose a saved project for this change case.');
@@ -3597,6 +3614,7 @@ export function createApp({
               projectId: lockedProject.id, expectedProjectVersion: lockedProject.version,
               expectedBlueprintId: binding.blueprintId, expectedBlueprintVersion: binding.blueprintVersion,
               sourceObjectId: binding.objectId,
+              ...sourceBindingSelection(binding),
             });
             if (currentBinding.sourceHash !== binding.sourceHash) throw apiFailure(409, 'SOURCE_BINDING_STALE', 'The saved design changed during compilation. Reload before retrying.');
             return draft;

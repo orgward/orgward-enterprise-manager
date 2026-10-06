@@ -7,6 +7,7 @@ import { PROCESS_MODEL } from './process-model.mjs';
 import { projectEconomicPortfolio } from './economics-scenario.mjs';
 import { projectRefinementTrace } from './refinement.mjs';
 import { projectEnterpriseIntegrity } from './integrity.mjs';
+import { projectEnterpriseSentinel } from './sentinel.mjs';
 import { projectEnterpriseGovernance } from './governance.mjs';
 import { projectEnterpriseStewardship } from './stewardship.mjs';
 import { projectEnterpriseSourceAttestationPushStatus, projectEnterpriseSourceReconciliationCurrentness } from './source-attestation.mjs';
@@ -148,6 +149,7 @@ export function projectEnterprise(project, query = {}, authority = {}) {
     economicEvaluationId: context.economicEvaluationId, branchId: context.branchId, branchRevision: branchContext.revision,
     proposalId: proposal?.id ?? null });
   const integrity = projectEnterpriseIntegrity(project, blueprint, savedBy);
+  const sentinel = projectEnterpriseSentinel(project, blueprint, savedBy);
   const governanceProjection = projectEnterpriseGovernance(project, blueprint, current, savedBy);
   const governance = { ...governanceProjection, cases: governanceProjection.cases.map((entry) => ({ ...entry,
     canAppeal: Boolean(isCurrent && authority.write && authority.human && entry.status === 'DECIDED'
@@ -164,6 +166,7 @@ export function projectEnterprise(project, query = {}, authority = {}) {
     sourceAttestationMappingRepairReceipts: (project.sourceAttestationMappingRepairReceipts ?? []).filter((entry) => savedBy(entry.recordedAt)),
     sourceAttestationManifestReceipts: (project.sourceAttestationManifestReceipts ?? []).filter((entry) => savedBy(entry.receivedAt)),
     sourceAttestationStreams: (project.sourceAttestationStreams ?? []).filter((entry) => savedBy(entry.updatedAt)),
+    enterpriseSentinelAssessments: (project.enterpriseSentinelAssessments ?? []).filter((entry) => savedBy(entry.evaluatedAt)),
   } : project;
   const sourceReconciliationCurrentness = projectEnterpriseSourceReconciliationCurrentness(sourceProjectionProject,
     context.recordedAt ?? new Date().toISOString());
@@ -205,7 +208,7 @@ export function projectEnterprise(project, query = {}, authority = {}) {
       baseBlueprintId: proposal.baseBlueprintId, baseBlueprintVersion: proposal.baseBlueprintVersion, baseSnapshotHash: proposal.baseSnapshotHash,
       snapshotHash: proposal.snapshotHash, baseStale: proposal.baseStale,
       diff: { before: structuredClone(proposal.snapshot.edit.before), after: structuredClone(proposal.snapshot.edit.after), changedFields: proposal.snapshot.edit.changedFields } } : null,
-    branches: branchContext.branches, branch: branchContext.branch, processModel: structuredClone(PROCESS_MODEL), simulations, simulation, economics, integrity, governance, sandboxTransactions,
+    branches: branchContext.branches, branch: branchContext.branch, processModel: structuredClone(PROCESS_MODEL), simulations, simulation, economics, integrity, sentinel, governance, sandboxTransactions,
     refinementTrace: projectRefinementTrace(objects, selected?.id), stewardship,
     permissions: { write: isCurrent && Boolean(authority.write), scopeAdmin: isCurrent && Boolean(authority.scopeAdmin),
       sourceAttestationAdmin: isCurrent && Boolean(authority.scopeAdmin && authority.human),

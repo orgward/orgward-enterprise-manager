@@ -10,7 +10,7 @@ import {
   verifyAggregateRow,
   verifyCommandRow,
 } from './postgres.mjs';
-import { pinProjectSourceObject, releaseApprovalCandidate, verifyAcceptedG6Plan, verifySourceBinding } from '../sdlc/engine.mjs';
+import { pinProjectSourceObject, releaseApprovalCandidate, sourceBindingSelection, verifyAcceptedG6Plan, verifySourceBinding } from '../sdlc/engine.mjs';
 import { digest } from '../sdlc/contracts.mjs';
 import { latestBlueprint } from '../model.mjs';
 import { SOFTWARE_PLAN_COMPILER_VERSION, verifySoftwareDeliveryDraft } from '../sdlc/software-plan-compiler.mjs';
@@ -2957,7 +2957,8 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         || changeCase.sourceBinding.projectVersion !== project.version) throw conflict('The pinned case source is stale or invalid.', project.version, 'SOURCE_BINDING_STALE');
       const pinned = pinProjectSourceObject(project, { projectId, expectedProjectVersion: project.version,
         expectedBlueprintId: changeCase.sourceBinding.blueprintId,
-        expectedBlueprintVersion: changeCase.sourceBinding.blueprintVersion, sourceObjectId: changeCase.sourceBinding.objectId });
+        expectedBlueprintVersion: changeCase.sourceBinding.blueprintVersion, sourceObjectId: changeCase.sourceBinding.objectId,
+        ...sourceBindingSelection(changeCase.sourceBinding) });
       if (pinned.sourceHash !== changeCase.sourceBinding.sourceHash || !verifyAcceptedG6Plan(changeCase).valid) {
         throw conflict('The source or accepted G4/G5/G6 baselines changed; create a new case before promotion.', changeCase.version, 'ACCEPTED_PLAN_STALE');
       }
@@ -3145,6 +3146,7 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         expectedBlueprintId: changeCase.sourceBinding.blueprintId,
         expectedBlueprintVersion: changeCase.sourceBinding.blueprintVersion,
         sourceObjectId: changeCase.sourceBinding.objectId,
+        ...sourceBindingSelection(changeCase.sourceBinding),
       });
       if (currentBinding.sourceHash !== changeCase.sourceBinding.sourceHash) {
         throw conflict('The pinned saved-design object changed. Create a new case from the current design.', project.version, 'SOURCE_BINDING_STALE');

@@ -1,6 +1,7 @@
 import { MUTATIONS, STAGES, digest, evaluation, eventEnvelope, evidence, finding, id, now, safeText, stageAt } from './contracts.mjs';
 import { EXPECTED_IMPACTS, referenceOrganization } from './fixture.mjs';
 import { isValidEnterpriseIntegrityAssessment } from '../enterprise/integrity.mjs';
+import { isKnownEnterpriseSentinelProfile, isValidEnterpriseSentinelAssessment } from '../enterprise/sentinel.mjs';
 
 const REQUIRED_CONTEXT_DOMAINS = ['strategy', 'business', 'process', 'ownership', 'information', 'application', 'integration', 'security', 'regulation', 'control', 'operations', 'code/runtime'];
 const ASSURANCE_DIMENSIONS = ['FUNCTIONAL', 'REQUIREMENTS', 'SECURITY', 'PRIVACY', 'DATA', 'ARCHITECTURE', 'REGULATORY_CONTROL', 'OPERATIONAL', 'PERFORMANCE', 'RESILIENCE', 'MAINTAINABILITY', 'AI_BEHAVIOR'];
@@ -50,11 +51,19 @@ function sourceBindingError(statusCode, code, message) {
   return Object.assign(new Error(message), { statusCode, code });
 }
 
+function legacySentinelContext(binding) {
+  const retainedSnapshotHash = binding.integrityContext?.blueprintSnapshotHash;
+  return { state: 'NOT_ASSESSED_LEGACY', blueprintSnapshotHash: /^[a-f0-9]{64}$/i.test(retainedSnapshotHash ?? '') ? retainedSnapshotHash : null,
+    legacyBindingHash: binding.bindingHash };
+}
+
 export function verifySourceBinding(binding) {
   const snapshot = binding?.snapshot;
   const snapshotKeys = snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)
     ? Object.keys(snapshot).sort() : [];
   const integrityContext = binding?.integrityContext;
+  const sentinelContext = binding?.sentinelContext;
+  const bindingSchemaVersion = binding?.bindingSchemaVersion ?? 1;
   const validIntegrityContext = integrityContext === undefined || (integrityContext && typeof integrityContext === 'object'
     && !Array.isArray(integrityContext)
     && /^[a-f0-9]{64}$/i.test(integrityContext.blueprintSnapshotHash ?? '')
@@ -68,6 +77,26 @@ export function verifySourceBinding(binding) {
         && ['PASS', 'REVIEW', 'FAIL'].includes(integrityContext.assessment.status)
         && typeof integrityContext.assessment.createdAt === 'string'
         && Number.isFinite(Date.parse(integrityContext.assessment.createdAt))));
+  const validSentinelContext = bindingSchemaVersion === 1 ? sentinelContext === undefined
+    : bindingSchemaVersion === 2 && sentinelContext && typeof sentinelContext === 'object' && !Array.isArray(sentinelContext)
+      && /^[a-f0-9]{64}$/.test(sentinelContext.blueprintSnapshotHash ?? '')
+      && ['NONE', 'PROCESS_ACCOUNTABILITY'].includes(sentinelContext.requiredScope)
+      && (sentinelContext.state === 'NOT_ASSESSED'
+        ? Object.keys(sentinelContext).sort().join(',') === 'blueprintSnapshotHash,requiredScope,state'
+        : sentinelContext.state === 'ASSESSED'
+          && Object.keys(sentinelContext).sort().join(',') === 'assessment,blueprintSnapshotHash,requiredScope,state'
+          && sentinelContext.assessment && typeof sentinelContext.assessment === 'object'
+          && /^sentinel-assessment-[0-9a-f-]{36}$/.test(sentinelContext.assessment.id ?? '')
+          && /^[a-f0-9]{64}$/.test(sentinelContext.assessment.reportHash ?? '')
+          && /^orgward-sentinel-[a-z0-9-]+$/.test(sentinelContext.assessment.profileId ?? '')
+          && /^\d+\.\d+\.\d+$/.test(sentinelContext.assessment.profileVersion ?? '')
+          && /^[a-f0-9]{64}$/.test(sentinelContext.assessment.profileHash ?? '')
+          && isKnownEnterpriseSentinelProfile({ id: sentinelContext.assessment.profileId,
+            version: sentinelContext.assessment.profileVersion, hash: sentinelContext.assessment.profileHash,
+            evaluatorRevision: sentinelContext.assessment.evaluatorRevision })
+          && ['PASS', 'FAIL', 'UNKNOWN'].includes(sentinelContext.assessment.status)
+          && Number.isSafeInteger(sentinelContext.assessment.assessedAggregateVersion)
+          && sentinelContext.assessment.assessedAggregateVersion > 0);
   const validShape = binding && typeof binding === 'object'
     && typeof binding.projectId === 'string' && /^project-[0-9a-f-]{36}$/i.test(binding.projectId)
     && Number.isInteger(binding.projectVersion) && binding.projectVersion > 0
@@ -80,14 +109,18 @@ export function verifySourceBinding(binding) {
     && snapshotKeys.join(',') === 'detail,id,name,type'
     && snapshot.id === binding.objectId && snapshot.type === binding.objectType
     && typeof snapshot.name === 'string' && typeof snapshot.detail === 'string'
-    && validIntegrityContext;
+    && validIntegrityContext && validSentinelContext
+    && (bindingSchemaVersion === 1 || (integrityContext?.blueprintSnapshotHash === sentinelContext?.blueprintSnapshotHash))
+    && (bindingSchemaVersion === 1 || bindingSchemaVersion === 2);
   const actualHash = validShape ? digest(snapshot) : null;
   const bindingPayload = validShape ? {
+    ...(bindingSchemaVersion === 2 ? { bindingSchemaVersion } : {}),
     projectId: binding.projectId, projectVersion: binding.projectVersion,
     blueprintId: binding.blueprintId, blueprintVersion: binding.blueprintVersion,
     blueprintSchemaVersion: binding.blueprintSchemaVersion,
     objectId: binding.objectId, objectType: binding.objectType, sourceHash: binding.sourceHash,
     ...(integrityContext === undefined ? {} : { integrityContext }),
+    ...(bindingSchemaVersion === 2 ? { sentinelContext } : {}),
   } : null;
   const actualBindingHash = bindingPayload ? digest(bindingPayload) : null;
   const valid = validShape && actualHash === binding.sourceHash && actualBindingHash === binding.bindingHash;
@@ -99,6 +132,15 @@ export function verifySourceBinding(binding) {
     actualBindingHash,
     reason: valid ? null : 'The pinned saved-design source failed its integrity check.',
   };
+}
+
+export function sourceBindingSelection(binding) {
+  if (!binding || typeof binding !== 'object') return {};
+  if ((binding.bindingSchemaVersion ?? 1) === 1) return { bindingSchemaVersion: 1 };
+  const assessment = binding.sentinelContext?.state === 'ASSESSED' ? binding.sentinelContext.assessment : null;
+  return { bindingSchemaVersion: 2, sentinelAssessmentId: assessment?.id ?? null,
+    sentinelReportHash: assessment?.reportHash ?? null,
+    sentinelRequiredScope: binding.sentinelContext?.requiredScope ?? 'NONE' };
 }
 
 export function pinProjectSourceObject(project, selection = {}) {
@@ -127,6 +169,14 @@ export function pinProjectSourceObject(project, selection = {}) {
   const snapshot = { id: source.id, type: source.type, name: source.name, detail: source.detail };
   const sourceHash = digest(snapshot);
   const blueprintSnapshotHash = digest(blueprint);
+  const schemaVersion = selection.bindingSchemaVersion ?? 2;
+  if (![1, 2].includes(schemaVersion)) throw sourceBindingError(400, 'SOURCE_BINDING_SCHEMA_UNSUPPORTED', 'Choose a supported source-binding version.');
+  const hasAssessmentId = Object.hasOwn(selection, 'sentinelAssessmentId');
+  const hasReportHash = Object.hasOwn(selection, 'sentinelReportHash');
+  if (hasAssessmentId !== hasReportHash) throw sourceBindingError(400, 'SENTINEL_SELECTION_INCOMPLETE', 'Select the exact Sentinel assessment ID and report hash together.');
+  if (schemaVersion === 1 && hasAssessmentId) throw sourceBindingError(400, 'SOURCE_BINDING_SCHEMA_UNSUPPORTED', 'Historical source-binding versions cannot be selected for new cases.');
+  const requiredScope = selection.sentinelRequiredScope ?? 'NONE';
+  if (!['NONE', 'PROCESS_ACCOUNTABILITY'].includes(requiredScope)) throw sourceBindingError(400, 'SENTINEL_SCOPE_UNSUPPORTED', 'Choose a supported Sentinel scope requirement.');
   const matchingAssessment = (project.enterpriseIntegrityAssessments ?? [])
     .filter((assessment) => isValidEnterpriseIntegrityAssessment(assessment, project.id)
       && assessment.source.blueprintId === blueprint.id
@@ -139,17 +189,42 @@ export function pinProjectSourceObject(project, selection = {}) {
     assessment: { id: matchingAssessment.id, reportHash: matchingAssessment.reportHash,
       status: matchingAssessment.status, createdAt: matchingAssessment.createdAt },
   } : { state: 'NOT_ASSESSED', blueprintSnapshotHash };
+  let sentinelContext;
+  if (schemaVersion === 2) {
+    if (!hasAssessmentId || (selection.sentinelAssessmentId === null && selection.sentinelReportHash === null)) {
+      sentinelContext = { state: 'NOT_ASSESSED', blueprintSnapshotHash, requiredScope };
+    } else {
+      const report = (project.enterpriseSentinelAssessments ?? []).find((entry) => entry.id === selection.sentinelAssessmentId);
+      if (!report || !isValidEnterpriseSentinelAssessment(report, project.id) || report.reportHash !== selection.sentinelReportHash) {
+        throw sourceBindingError(409, 'SENTINEL_ASSESSMENT_INVALID', 'The selected Sentinel report is missing or failed its integrity check; reload the current project and select a verified report.');
+      }
+      if (report.source.blueprintId !== blueprint.id || report.source.blueprintVersion !== blueprint.version
+        || report.source.snapshotHash !== blueprintSnapshotHash || report.input.blueprintSnapshotHash !== blueprintSnapshotHash) {
+        throw sourceBindingError(409, 'SENTINEL_ASSESSMENT_STALE', 'The selected Sentinel report was assessed against another design snapshot. Run Sentinel on the current saved design.');
+      }
+      sentinelContext = { state: 'ASSESSED', blueprintSnapshotHash,
+        requiredScope,
+        assessment: { id: report.id, reportHash: report.reportHash, profileId: report.profile.id,
+          profileVersion: report.profile.version, profileHash: report.profile.hash, status: report.status,
+          evaluatorRevision: report.profile.evaluatorRevision,
+          assessedAggregateVersion: report.source.assessedAggregateVersion } };
+    }
+  }
   const binding = {
+    ...(schemaVersion === 2 ? { bindingSchemaVersion: 2 } : {}),
     projectId: project.id, projectVersion: project.version, blueprintId: blueprint.id,
     blueprintVersion: blueprint.version, blueprintSchemaVersion: blueprint.blueprintSchemaVersion ?? 1,
     objectId: source.id, objectType: source.type, sourceHash, snapshot, integrityContext,
+    ...(schemaVersion === 2 ? { sentinelContext } : {}),
   };
   binding.bindingHash = digest({
+    ...(schemaVersion === 2 ? { bindingSchemaVersion: 2 } : {}),
     projectId: binding.projectId, projectVersion: binding.projectVersion,
     blueprintId: binding.blueprintId, blueprintVersion: binding.blueprintVersion,
     blueprintSchemaVersion: binding.blueprintSchemaVersion,
     objectId: binding.objectId, objectType: binding.objectType, sourceHash: binding.sourceHash,
     integrityContext: binding.integrityContext,
+    ...(schemaVersion === 2 ? { sentinelContext } : {}),
   });
   const verified = verifySourceBinding(binding);
   if (!verified.valid) {
@@ -326,6 +401,30 @@ function contextEvidenceManifestEntry(record) {
     sourceType: record.sourceType, objectRef: record.objectRef, authority: record.authority, freshness: record.freshness };
 }
 
+function savedProjectPinFor(binding) {
+  if (!binding) return null;
+  const schemaVersion = binding.bindingSchemaVersion ?? 1;
+  const blueprintSnapshotHash = schemaVersion === 2
+    ? binding.sentinelContext?.blueprintSnapshotHash
+    : binding.integrityContext?.blueprintSnapshotHash;
+  const hasBlueprintSnapshot = /^[a-f0-9]{64}$/i.test(blueprintSnapshotHash ?? '');
+  return {
+    schemaVersion: 1,
+    bindingSchemaVersion: schemaVersion,
+    projectId: binding.projectId,
+    projectVersion: binding.projectVersion,
+    blueprintId: binding.blueprintId,
+    blueprintVersion: binding.blueprintVersion,
+    blueprintSchemaVersion: binding.blueprintSchemaVersion,
+    blueprintSnapshotHash: hasBlueprintSnapshot ? blueprintSnapshotHash : null,
+    blueprintSnapshotStatus: hasBlueprintSnapshot ? 'PINNED' : 'UNAVAILABLE_LEGACY',
+    sourceObjectId: binding.objectId,
+    sourceObjectType: binding.objectType,
+    sourceHash: binding.sourceHash,
+    bindingHash: binding.bindingHash,
+  };
+}
+
 function sealContextManifest(context) {
   const { provenanceManifestHash: _priorHash, ...manifest } = context;
   context.provenanceManifestHash = digest(manifest);
@@ -334,7 +433,7 @@ function sealContextManifest(context) {
 
 function bindAcceptedRequirementsContext(changeCase, baseline) {
   const context = changeCase.artifacts.context;
-  if (!context || context.manifestVersion !== 1) return null;
+  if (!context || ![1, 2].includes(context.manifestVersion)) return null;
   const priorManifestHash = context.provenanceManifestHash;
   const relevantRequirements = {
     baselineVersion: baseline.version, contentHash: baseline.contentHash, intentHash: baseline.intentHash,
@@ -864,6 +963,7 @@ function contextDiscovery(changeCase) {
   }
   let sourceBindingEvidenceRef = null;
   let integrityAssessmentEvidenceRef = null;
+  let sentinelAssessmentEvidenceRef = null;
   if (changeCase.sourceBinding) {
     const binding = changeCase.sourceBinding;
     const record = evidence(changeCase, {
@@ -895,14 +995,53 @@ function contextDiscovery(changeCase) {
       evidenceRefs.push(integrityRecord.id);
       integrityAssessmentEvidenceRef = integrityRecord.id;
     }
+    const sentinel = binding.sentinelContext ?? legacySentinelContext(binding);
+    const report = sentinel.state === 'ASSESSED' ? sentinel.assessment : null;
+    const sentinelRecord = evidence(changeCase, {
+      sourceId: report ? `orgward:project:${binding.projectId}:sentinel:${report.id}`
+        : `orgward:project:${binding.projectId}:sentinel:none:${binding.blueprintId}:v${binding.blueprintVersion}`,
+      sourceType: 'saved-design-sentinel-context', objectRef: report?.id ?? binding.blueprintId,
+      authority: 'SAVED_PROJECT_SENTINEL', freshness: 'PINNED', classification: 'INTERNAL',
+      content: structuredClone(sentinel), relevance: 1,
+      provenanceChain: [`project:${binding.projectId}`, `blueprint:${binding.blueprintId}:v${binding.blueprintVersion}`,
+        ...(typeof sentinel.blueprintSnapshotHash === 'string'
+          ? [`blueprint-snapshot:sha256:${sentinel.blueprintSnapshotHash}`]
+          : ['blueprint-snapshot:unavailable:legacy-binding-has-no-retained-blueprint-hash', `legacy-binding:sha256:${sentinel.legacyBindingHash}`]),
+        ...(report ? [`sentinel-assessment:${report.id}`, `sentinel-report:sha256:${report.reportHash}`,
+          `profile:${report.profileId}@${report.profileVersion}`, `profile:sha256:${report.profileHash}`]
+          : ['sentinel-assessment:none-at-case-creation'])],
+    });
+    changeCase.evidenceLedger.push(sentinelRecord);
+    evidenceRefs.push(sentinelRecord.id);
+    sentinelAssessmentEvidenceRef = sentinelRecord.id;
   }
   const has = (objectId) => changeCase.enterpriseSnapshot.objects.some((object) => object.id === objectId && object.authority === 'AUTHORITATIVE');
   const coverage = REQUIRED_CONTEXT_DOMAINS.map((domain) => {
     const criticalMissing = (domain === 'regulation' && !has('obligation-kyc')) || (domain === 'control' && !has('control-screening'));
     return { domain, required: true, discovered: !criticalMissing, authoritativeCoverage: criticalMissing ? 0 : 1, conflicts: [], staleEvidence: [], unknowns: criticalMissing ? [`Missing ${domain} evidence`] : [], score: criticalMissing ? 0 : 1, status: criticalMissing ? 'BLOCKED' : 'PASSED', rationale: criticalMissing ? 'Critical authoritative evidence is absent.' : 'Required synthetic authoritative context discovered.' };
   });
+  let sentinelCoverage = null;
+  if (changeCase.sourceBinding) {
+    const sentinel = changeCase.sourceBinding.sentinelContext;
+    const assessment = sentinel?.state === 'ASSESSED' ? sentinel.assessment : null;
+    const required = sentinel?.requiredScope === 'PROCESS_ACCOUNTABILITY';
+    const hasScopedPass = Boolean(assessment?.status === 'PASS');
+    const scopedFailure = required && (!assessment || assessment.status !== 'PASS');
+    sentinelCoverage = { domain: 'sentinel', required, discovered: Boolean(assessment),
+      authoritativeCoverage: hasScopedPass ? 1 : 0, conflicts: [], staleEvidence: [],
+      unknowns: [...(assessment ? ['Authority conflicts, control effectiveness, and cross-project relationships are outside Sentinel v1 coverage.']
+        : ['No exact Sentinel assessment was selected for this saved design.']),
+      ], score: hasScopedPass ? 1 : 0, status: scopedFailure ? 'BLOCKED'
+        : required ? 'PASSED' : 'UNKNOWN',
+      rationale: scopedFailure ? 'The explicitly required process-accountability scope lacks a passing exact assessment.'
+        : hasScopedPass ? 'The required process-accountability scope passed; unsupported Sentinel domains remain visibly unknown.'
+          : 'No Sentinel scope is required for this case; Sentinel coverage remains explicitly unknown.' };
+  }
+  if (sentinelCoverage) coverage.push(sentinelCoverage);
   const untrusted = changeCase.enterpriseSnapshot.objects.filter((object) => object.authority === 'UNTRUSTED');
   const findings = coverage.filter((entry) => entry.status === 'BLOCKED').map((entry) => finding('CRITICAL_CONTEXT_MISSING', 'CRITICAL', `Critical ${entry.domain} context is missing.`, plan.id, `Provide current authoritative ${entry.domain} evidence.`, evidenceRefs));
+  if (sentinelCoverage?.status === 'BLOCKED') findings.push(finding('SENTINEL_CONTEXT_INCOMPLETE', 'CRITICAL', sentinelCoverage.rationale, plan.id,
+    'Select a verified assessment and resolve unsupported Sentinel coverage before planning can pass.', sentinelAssessmentEvidenceRef ? [sentinelAssessmentEvidenceRef] : []));
   const staleCritical = changeCase.enterpriseSnapshot.objects.filter((object) => object.freshness === 'STALE' && ['architecture-principle', 'policy', 'control'].includes(object.type));
   for (const entry of staleCritical) findings.push(finding('CRITICAL_CONTEXT_STALE', 'CRITICAL', `${entry.name} is stale beyond the reference policy threshold.`, entry.id, 'Retrieve and approve a current authoritative version before proceeding.'));
   const forged = changeCase.enterpriseSnapshot.objects.filter((object) => {
@@ -914,19 +1053,34 @@ function contextDiscovery(changeCase) {
   const unknownDependencies = coverage.flatMap((entry) => entry.unknowns.map((description) => ({ domain: entry.domain, description })));
   const excludedDependencies = untrusted.map((object) => ({ objectRef: object.id, sourceId: object.source,
     status: 'EXCLUDED', reason: 'UNTRUSTED_SOURCE_NOT_USED_FOR_AUTHORITATIVE_COVERAGE' }));
+  const savedProjectPin = savedProjectPinFor(changeCase.sourceBinding);
+  const contextCreationEvidence = evidence(changeCase, {
+    sourceId: `sdlc:case:${changeCase.id}:context-manifest-created:v2`,
+    sourceType: 'sdlc-context-manifest-created', objectRef: plan.id,
+    authority: 'ORGWARD_CONTEXT_ENGINE', freshness: 'PINNED', classification: 'INTERNAL', relevance: 1,
+    content: { manifestVersion: 2, sourceBindingHash: changeCase.sourceBinding?.bindingHash ?? null,
+      savedProjectPinHash: digest(savedProjectPin) },
+    provenanceChain: [`case:${changeCase.id}`, 'context-manifest-version:2', `saved-project-pin:sha256:${digest(savedProjectPin)}`],
+  });
+  changeCase.evidenceLedger.push(contextCreationEvidence);
+  evidenceRefs.push(contextCreationEvidence.id);
   const evidenceManifest = evidenceRefs.map((evidenceRef) => {
     const record = changeCase.evidenceLedger.find((entry) => entry.id === evidenceRef);
     return contextEvidenceManifestEntry(record);
   });
   const manifest = {
-    manifestVersion: 1, manifestRevision: 1, plan, coverage, evidenceRefs, evidenceManifest,
+    manifestVersion: 2, manifestRevision: 1, plan, coverage, evidenceRefs, evidenceManifest,
     guardrails: { intentRef: changeCase.intent.id, constraints: [...changeCase.intent.constraints], nonGoals: [...changeCase.intent.nonGoals] },
     enterpriseContext: { version: changeCase.enterpriseSnapshot.version ?? null,
       sourceKind: changeCase.enterpriseSnapshot.sourceKind ?? 'synthetic-reference-model',
       sourceLabel: changeCase.enterpriseSnapshot.sourceLabel ?? 'Synthetic reference organization' },
     unknownDependencies, excludedDependencies,
+    savedProjectPin,
+    contextCreationEvidenceRef: contextCreationEvidence.id,
     ...(changeCase.sourceBinding ? { sourceBindingHash: changeCase.sourceBinding.sourceHash, sourceBindingIntegrityHash: changeCase.sourceBinding.bindingHash, sourceBindingEvidenceRef,
-      ...(changeCase.sourceBinding.integrityContext ? { integrityContext: structuredClone(changeCase.sourceBinding.integrityContext), integrityAssessmentEvidenceRef } : {}) } : {}),
+      ...(changeCase.sourceBinding.integrityContext ? { integrityContext: structuredClone(changeCase.sourceBinding.integrityContext), integrityAssessmentEvidenceRef } : {}),
+      sentinelContext: structuredClone(changeCase.sourceBinding.sentinelContext ?? legacySentinelContext(changeCase.sourceBinding)),
+      sentinelAssessmentEvidenceRef } : {}),
     sourceModel: 'synthetic-reference-model',
   };
   changeCase.artifacts.context = { ...manifest, provenanceManifestHash: digest(manifest) };
@@ -936,7 +1090,15 @@ function contextDiscovery(changeCase) {
 export function verifyContextManifest(changeCase) {
   const context = changeCase?.artifacts?.context;
   if (!context) return { valid: null, reason: 'Context discovery has not run.' };
-  if (context.manifestVersion !== 1) return { valid: null, legacy: true, reason: 'This saved context predates manifest integrity sealing.' };
+  const creationEvidence = (changeCase.evidenceLedger ?? []).filter((entry) => entry.sourceType === 'sdlc-context-manifest-created');
+  if (!Object.hasOwn(context, 'manifestVersion')) {
+    if (creationEvidence.length || Object.hasOwn(context, 'provenanceManifestHash')) {
+      return { valid: false, reason: 'The saved context manifest is missing its version despite carrying a creation marker or integrity seal.' };
+    }
+    return { valid: null, legacy: true, reason: 'This saved context predates manifest versioning and integrity sealing.' };
+  }
+  if (context.manifestVersion === undefined) return { valid: false, reason: 'The saved context manifest version is malformed.' };
+  if (![1, 2].includes(context.manifestVersion)) return { valid: false, reason: 'The saved context manifest declares an unsupported version.' };
   if (!/^[a-f0-9]{64}$/.test(context.provenanceManifestHash ?? '')) return { valid: false, reason: 'The saved context manifest is missing its integrity hash.' };
   if (!Array.isArray(context.evidenceRefs) || !Array.isArray(context.evidenceManifest)
     || context.evidenceRefs.some((ref) => typeof ref !== 'string')
@@ -950,10 +1112,34 @@ export function verifyContextManifest(changeCase) {
   });
   const evidenceManifestValid = expectedEvidenceManifest.every(Boolean)
     && digest(expectedEvidenceManifest) === digest(context.evidenceManifest ?? []);
+  const savedProjectPinValid = context.manifestVersion === 2
+    ? Object.hasOwn(context, 'savedProjectPin') && digest(context.savedProjectPin) === digest(savedProjectPinFor(changeCase.sourceBinding))
+      && (!changeCase.sourceBinding || verifySourceBinding(changeCase.sourceBinding).valid)
+    : !Object.hasOwn(context, 'savedProjectPin')
+      || digest(context.savedProjectPin) === digest(savedProjectPinFor(changeCase.sourceBinding));
+  const contextCreationEvidenceValid = context.manifestVersion === 1
+    ? creationEvidence.length === 0
+    : creationEvidence.length === 1
+      && context.contextCreationEvidenceRef === creationEvidence[0].id
+      && context.evidenceRefs.includes(creationEvidence[0].id)
+      && creationEvidence[0].content && typeof creationEvidence[0].content === 'object' && !Array.isArray(creationEvidence[0].content)
+      && creationEvidence[0].contentHash === digest(creationEvidence[0].content)
+      && digest(creationEvidence[0].content) === digest({ manifestVersion: 2,
+        sourceBindingHash: changeCase.sourceBinding?.bindingHash ?? null,
+        savedProjectPinHash: digest(savedProjectPinFor(changeCase.sourceBinding)) });
+  let sentinelBindingValid = true;
+  if (changeCase.sourceBinding && (changeCase.sourceBinding.bindingSchemaVersion ?? 1) === 2) {
+    const expectedSentinel = changeCase.sourceBinding.sentinelContext
+      ?? legacySentinelContext(changeCase.sourceBinding);
+    const sentinelEvidence = changeCase.evidenceLedger.find((entry) => entry.id === context.sentinelAssessmentEvidenceRef);
+    sentinelBindingValid = digest(context.sentinelContext) === digest(expectedSentinel)
+      && Boolean(sentinelEvidence && sentinelEvidence.sourceType === 'saved-design-sentinel-context'
+        && digest(sentinelEvidence.content) === digest(expectedSentinel));
+  }
   const actualHash = digest(manifest);
-  return { valid: evidenceManifestValid && actualHash === provenanceManifestHash,
+  return { valid: evidenceManifestValid && savedProjectPinValid && contextCreationEvidenceValid && sentinelBindingValid && actualHash === provenanceManifestHash,
     expectedHash: provenanceManifestHash, actualHash,
-    reason: evidenceManifestValid && actualHash === provenanceManifestHash ? null : 'The saved context manifest or one of its evidence references changed after pinning.' };
+    reason: evidenceManifestValid && savedProjectPinValid && contextCreationEvidenceValid && sentinelBindingValid && actualHash === provenanceManifestHash ? null : 'The saved context manifest version, source pin, or one of its evidence references changed after pinning.' };
 }
 
 function impactAnalysis(changeCase) {

@@ -3,6 +3,7 @@ import { ENTERPRISE_ECONOMIC_COMMANDS, enterpriseEconomicCommandPayload } from '
 import { ENTERPRISE_REFINEMENT_COMMANDS, enterpriseRefinementCommandPayload } from './enterprise-refinement.mjs';
 import { ENTERPRISE_INTERCHANGE_COMMANDS, ENTERPRISE_SOURCE_ATTESTATION_COMMANDS, enterpriseInterchangeCommandPayload } from './enterprise-interchange.mjs';
 import { ENTERPRISE_BRANCH_COMMANDS, enterpriseBranchWritable, enterpriseBranchCommandPayload, enterpriseCommandResultRoute } from './enterprise-branches.mjs';
+import { ENTERPRISE_SENTINEL_COMMANDS } from './enterprise-sentinel.mjs';
 import { connectedNodeIds, filterGraph, focusFirstMapResult, focusSelectedMapControl, graphAccessibilityAttributes, mapControlPressed, searchGraph, shouldStartMapPan, toggleType, zoomTransform } from './map-state.js';
 import { apiErrorFrom, decodeStudioRoute, encodeExecutionRoute, encodeStudioRoute, fieldErrorsFor, founderConversationAnnouncement } from './shared-interactions.mjs';
 import { coverageAreaStateLabel, coverageForBlueprint } from './coverage-dashboard.mjs';
@@ -310,6 +311,7 @@ async function saveEnterpriseCommand(payload = null, { commandId = null } = {}) 
     } else {
       if (enterpriseReadOnly() || !model.permissions?.write
         || (payload.kind === 'run-integrity-checks' && !model.permissions?.integrityRun)
+        || (ENTERPRISE_SENTINEL_COMMANDS.includes(payload.kind) && !model.permissions?.integrityRun)
         || (payload.kind === 'accept-integrity-exception' && !model.permissions?.integrityException)
         || (payload.kind === 'configure-source-attestation-profile' && !model.permissions?.sourceAttestationAdmin)
         || (ENTERPRISE_SOURCE_ATTESTATION_COMMANDS.includes(payload.kind) && !model.context?.isCurrent)
@@ -355,6 +357,7 @@ async function saveEnterpriseCommand(payload = null, { commandId = null } = {}) 
       : result.data.integrityException ? `Recorded the human exception for finding ${result.data.integrityException.findingId} in report ${result.data.integrityException.reportId}. The finding remains unresolved and the integrity result is unchanged.`
       : result.data.acceptedClaims ? `Accepted ${result.data.acceptedClaims.length} reviewed source claims into one proposed design version from source snapshot ${result.data.acceptedClaims[0]?.sourceHash ?? 'unknown'}; first claim locator ${result.data.acceptedClaims[0]?.claimLocator ?? 'not supplied'}. No work was run or published.`
       : result.data.integrityAssessment ? `Saved the ${result.data.integrityAssessment.status} integrity and lineage assessment for its exact blueprint source. No design or operational state changed.`
+      : result.data.sentinelAssessment ? `Saved Sentinel ${result.data.sentinelAssessment.status} within its limited process-accountability profile. Unsupported domains remain unknown; no design or operational state changed.`
       : result.data.economicEvaluation ? 'Saved the exact-source economic evaluation. It contains declared assumptions and reported capacity only.'
       : result.data.simulation ? 'Saved the deterministic simulation for its exact source. No work was performed.'
       : saved.envelope.payload.kind === 'apply-reviewed-merge' ? 'Owner-reviewed merge applied to the proposed main design. Publication and execution remain separate actions.'

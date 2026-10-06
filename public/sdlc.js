@@ -1,4 +1,4 @@
-import { caseUiModel, createSourceSelectionGuard, eligibleActorBindings, sourceBindingDesignRoute } from './sdlc-view.mjs';
+import { caseUiModel, createSourceSelectionGuard, eligibleActorBindings, savedProjectPinSummary, sentinelAssessmentChoices, sourceBindingDesignRoute } from './sdlc-view.mjs';
 import { encodeExecutionRoute, encodeStudioRoute } from './shared-interactions.mjs';
 import { clearPendingSoftwareStart, createSoftwareStartFlightGuard, pendingSoftwareStartKey } from './software-runtime-start.mjs';
 import { openInitialCase, sourceObjectPreview } from './sdlc-routing.mjs';
@@ -71,6 +71,8 @@ function showWelcome({ requestedProjectId = null, exactProjectRequested = false 
   if (!state.projects.length) document.querySelector('#case-form button[type="submit"]').disabled = true;
   projectSelect.addEventListener('change', () => loadSourceProject(projectSelect.value));
   select.addEventListener('change', renderMutationExpectation);
+  document.querySelector('#case-sentinel-assessment').addEventListener('change', renderSourcePreview);
+  document.querySelector('#case-sentinel-scope').addEventListener('change', renderSourcePreview);
   document.querySelector('#case-form').addEventListener('submit', createCase);
   if (projectSelect.value) loadSourceProject(projectSelect.value);
   renderMutationExpectation(); renderCaseList();
@@ -79,16 +81,25 @@ function showWelcome({ requestedProjectId = null, exactProjectRequested = false 
 async function loadSourceProject(projectId) {
   const ticket = state.sourceSelectionGuard.begin(projectId);
   const objectSelect = document.querySelector('#case-source-object');
+  const sentinelSelect = document.querySelector('#case-sentinel-assessment');
   const preview = document.querySelector('#source-preview');
   const submitButton = document.querySelector('#case-form button[type="submit"]');
   submitButton.disabled = true;
   preview.textContent = 'Loading the selected project’s current saved design…';
   objectSelect.replaceChildren(el('option', { text: 'Choose a saved design object…', attrs: { value: '' } })); state.sourceProject = null;
+  sentinelSelect.replaceChildren(el('option', { text: 'Create as explicitly unassessed', attrs: { value: '' } })); sentinelSelect.disabled = true;
   try {
     const projectResult = await api(`/api/v1/projects/${encodeURIComponent(projectId)}`);
     const project = projectResult.data;
     if (!state.sourceSelectionGuard.isCurrent(ticket, document.querySelector('#case-project')?.value ?? null)) return;
     state.sourceProject = project;
+    const matchingAssessments = sentinelAssessmentChoices(project);
+    for (const report of matchingAssessments) sentinelSelect.append(el('option', { text: `${report.status} · ${report.profile?.id} v${report.profile?.version} · assessed aggregate v${report.source.assessedAggregateVersion} · ${report.id}`,
+      attrs: { value: report.id, 'data-report-hash': report.reportHash } }));
+    sentinelSelect.disabled = false;
+    document.querySelector('#sentinel-source-preview').textContent = matchingAssessments.length
+      ? 'Select one exact saved report. Its immutable profile and report hashes will be pinned to this case; coverage remains limited to the declared profile.'
+      : 'No assessment matches this exact blueprint. The case can be created as NOT_ASSESSED, but context planning will be blocked.';
     const objects = Object.values(project.latestBlueprint?.areas ?? {}).flatMap((area) => area.items ?? []);
     for (const object of objects) objectSelect.append(el('option', { text: `${object.name} · ${object.type}`, attrs: { value: object.id } }));
     if (!objects.length) {
@@ -114,6 +125,14 @@ function renderSourcePreview() {
   const item = Object.values(project?.latestBlueprint?.areas ?? {}).flatMap((area) => area.items ?? []).find((entry) => entry.id === selected);
   document.querySelector('#source-preview').textContent = sourceObjectPreview(project, item);
   document.querySelector('#case-form button[type="submit"]').disabled = !item;
+  const report = project?.enterpriseSentinelAssessments?.find((entry) => entry.id === document.querySelector('#case-sentinel-assessment').value);
+  const requiredScope = document.querySelector('#case-sentinel-scope').value;
+  document.querySelector('#sentinel-source-preview').textContent = report
+    ? `${report.status} within ${report.profile.id} v${report.profile.version} · report ${report.reportHash} · limited process-accountability coverage. Unsupported domains remain unknown.`
+    : project ? requiredScope === 'PROCESS_ACCOUNTABILITY'
+      ? 'No exact Sentinel report selected. The required process-accountability scope will block planning.'
+      : 'No exact Sentinel report selected. Sentinel remains explicitly unknown and is not required for planning.'
+      : 'Select a project to load Sentinel assessments.';
 }
 
 function renderMutationExpectation() {
@@ -129,10 +148,13 @@ async function createCase(event) {
   const submittedProjectId = form.elements.projectId.value;
   form.elements.projectId.disabled = true;
   form.elements.sourceObjectId.disabled = true;
+  form.elements.sentinelAssessmentId.disabled = true;
   try {
     const project = state.sourceProject;
     if (!project?.latestBlueprint) throw new Error('Choose a project with a saved blueprint before creating a change case.');
     const selectedObjectId = form.elements.sourceObjectId.value;
+    const selectedReport = form.elements.sentinelAssessmentId.value
+      ? project.enterpriseSentinelAssessments?.find((entry) => entry.id === form.elements.sentinelAssessmentId.value) : null;
     const sourceExists = Object.values(project.latestBlueprint.areas ?? {}).flatMap((area) => area.items ?? []).some((item) => item.id === selectedObjectId);
     if (project.id !== form.elements.projectId.value || !sourceExists) {
       throw new Error('The selected project or design object changed while loading. Select the source again.');
@@ -140,7 +162,10 @@ async function createCase(event) {
     state.changeCase = await api('/api/sdlc/cases', { method: 'POST', body: JSON.stringify({
       mode: 'golden', projectId: project.id, sourceObjectId: selectedObjectId,
       expectedProjectVersion: project.version, expectedBlueprintId: project.latestBlueprint.id,
-      expectedBlueprintVersion: project.latestBlueprint.version, rawIntent: form.elements.rawIntent.value,
+      expectedBlueprintVersion: project.latestBlueprint.version,
+      sentinelRequiredScope: form.elements.sentinelRequiredScope.value,
+      sentinelAssessmentId: selectedReport?.id ?? null, sentinelReportHash: selectedReport?.reportHash ?? null,
+      rawIntent: form.elements.rawIntent.value,
       mutation: form.elements.mutation.value,
     }) });
     state.activeSourceProject = project;
@@ -150,6 +175,7 @@ async function createCase(event) {
     notify(error.message);
     form.elements.projectId.disabled = false;
     form.elements.sourceObjectId.disabled = false;
+    form.elements.sentinelAssessmentId.disabled = false;
     button.disabled = !(state.sourceProject?.id === submittedProjectId && form.elements.projectId.value === submittedProjectId
       && Boolean(form.elements.sourceObjectId.value));
   }
@@ -465,6 +491,8 @@ function renderContext(content) {
   if (!context) return content.append(empty('Context discovery has not run yet.'));
   content.append(section('Context coverage matrix', context.coverage.map((entry) => el('div', { className: 'coverage-row' }, [el('b', { text: entry.domain }), el('div', { className: 'coverage-track' }, [el('i', { className: entry.score >= 1 ? 'coverage-full' : 'coverage-empty' })]), el('span', { className: entry.status === 'PASSED' ? 'status-PASS' : 'status-FAIL', text: `${Math.round(entry.score * 100)}%` })]))));
   content.append(section('Provenance manifest', [el('p', { text: `${context.evidenceRefs.length} evidence references · immutable manifest ${context.provenanceManifestHash.slice(0, 18)}…` }), el('p', { text: 'Authoritative, approved, informative, and untrusted sources remain distinguishable. Untrusted content never becomes instruction.' })]));
+  content.append(section('Saved-project manifest pin', [el('p', { text: savedProjectPinSummary(context) }),
+    el('small', { text: 'Enterprise context below is the synthetic reference organization; this saved-project pin covers only the exact selected project and blueprint.' })]));
   if (context.relevantRequirements) {
     content.append(section('Pinned accepted requirements', [
       el('p', { text: `Baseline v${context.relevantRequirements.baselineVersion} · SHA-256 ${context.relevantRequirements.contentHash} · evidence ${context.relevantRequirements.evidenceRef}` }),
@@ -485,6 +513,11 @@ function renderContext(content) {
       el('p', { text: `${binding.snapshot.name} · ${binding.objectType} · ${binding.snapshot.detail}` }),
       el('p', { text: `Project ${binding.projectId} v${binding.projectVersion} · blueprint ${binding.blueprintId} v${binding.blueprintVersion} · schema v${binding.blueprintSchemaVersion}` }),
       el('p', { text: `Source SHA-256 ${binding.sourceHash} · binding integrity ${binding.bindingHash} · evidence ${context.sourceBindingEvidenceRef}` }),
+      el('p', { attrs: { role: 'status', 'data-sentinel-pin': binding.sentinelContext?.state ?? 'UNASSESSED_LEGACY' }, text:
+        binding.sentinelContext?.state === 'ASSESSED'
+          ? `Pinned Sentinel assessment ${binding.sentinelContext.assessment.id} · ${binding.sentinelContext.assessment.profileId} v${binding.sentinelContext.assessment.profileVersion} · profile SHA-256 ${binding.sentinelContext.assessment.profileHash} · report SHA-256 ${binding.sentinelContext.assessment.reportHash} · assessed aggregate v${binding.sentinelContext.assessment.assessedAggregateVersion}.`
+          : binding.bindingSchemaVersion === 2 ? `Sentinel context: NOT ASSESSED for this exact design; required scope ${binding.sentinelContext.requiredScope}.`
+            : 'Sentinel context: UNASSESSED LEGACY binding; no assessment is inferred from current reports.' }),
       el('p', { text: binding.state === 'PINNED_OLDER_VERSION' ? 'Pinned version: this project has a newer saved design. The case still uses this original snapshot.' : binding.state === 'CURRENT' ? 'Pinned version: the case uses this exact current saved design snapshot.' : 'Pinned version: current project state is unavailable; the case retains this exact saved snapshot.' }),
       ...(binding.invalidation ? [el('div', { className: 'source-invalidation' }, [
         el('b', { text: binding.invalidation.status === 'DEPENDENCIES_STALE' ? 'Dependent artifacts are stale' : 'Pinned source is stale' }),

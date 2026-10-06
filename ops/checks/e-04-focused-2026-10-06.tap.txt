@@ -1,0 +1,13 @@
+✔ PostgreSQL commits state, command result, audit and outbox atomically under concurrency (1014.478867ms)
+✔ retry after a post-commit response failure returns the original result without another event (770.973561ms)
+✔ legacy preview and import preserve valid IDs and hashes, quarantine invalid data, and resume idempotently (913.27108ms)
+✔ startup refuses an applied migration whose checksum no longer matches (464.345273ms)
+✔ upgrade from the 001–006 baseline preserves owner, project, audit and session; failed migration rolls back and retry is idempotent (1229.947566ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3744.872407

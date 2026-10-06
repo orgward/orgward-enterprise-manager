@@ -82,6 +82,34 @@ test('SDLC actions block when a sealed context manifest no longer verifies', asy
   const unchanged = await request(app.base, `/api/sdlc/cases/${changeCase.id}`);
   assert.equal(unchanged.version, changeCase.version);
   assert.equal(unchanged.contextManifestIntegrity.valid, false);
+
+  const unsupported = await app.sdlcStore.get(changeCase.id);
+  unsupported.artifacts.context.manifestVersion = 77;
+  unsupported.artifacts.context.provenanceManifestHash = digest(Object.fromEntries(Object.entries(unsupported.artifacts.context)
+    .filter(([key]) => key !== 'provenanceManifestHash')));
+  await app.sdlcStore.save(unsupported);
+  const blockedUnsupported = await request(app.base, `/api/sdlc/cases/${changeCase.id}/run`, {
+    method: 'POST', body: JSON.stringify({ version: changeCase.version, actor: 'orchestrator', idempotencyKey: 'context-pin-unsupported-version' }),
+  }, 409);
+  assert.equal(blockedUnsupported.error.code, 'CONTEXT_MANIFEST_INTEGRITY_INVALID');
+  const unchangedUnsupported = await request(app.base, `/api/sdlc/cases/${changeCase.id}`);
+  assert.equal(unchangedUnsupported.version, changeCase.version);
+  assert.equal(unchangedUnsupported.contextManifestIntegrity.valid, false);
+  assert.match(unchangedUnsupported.contextManifestIntegrity.reason, /unsupported version/);
+
+  const missingVersion = await app.sdlcStore.get(changeCase.id);
+  delete missingVersion.artifacts.context.manifestVersion;
+  missingVersion.artifacts.context.provenanceManifestHash = digest(Object.fromEntries(Object.entries(missingVersion.artifacts.context)
+    .filter(([key]) => key !== 'provenanceManifestHash')));
+  await app.sdlcStore.save(missingVersion);
+  const blockedMissingVersion = await request(app.base, `/api/sdlc/cases/${changeCase.id}/run`, {
+    method: 'POST', body: JSON.stringify({ version: changeCase.version, actor: 'orchestrator', idempotencyKey: 'context-pin-missing-version' }),
+  }, 409);
+  assert.equal(blockedMissingVersion.error.code, 'CONTEXT_MANIFEST_INTEGRITY_INVALID');
+  const unchangedMissingVersion = await request(app.base, `/api/sdlc/cases/${changeCase.id}`);
+  assert.equal(unchangedMissingVersion.version, changeCase.version);
+  assert.equal(unchangedMissingVersion.contextManifestIntegrity.valid, false);
+  assert.match(unchangedMissingVersion.contextManifestIntegrity.reason, /missing its version/);
 });
 
 test('source selection from an inaccessible tenant blocks without exposing project data and gives recovery guidance', async (t) => {
@@ -180,6 +208,27 @@ test('missing critical context blocks the saved case with domain-specific recove
   assert.deepEqual(reloaded.artifacts.context.unknownDependencies.map((entry) => entry.domain), ['regulation', 'control']);
   assert.equal(reloaded.contextManifestIntegrity.valid, true);
   assert.match(caseUiModel(reloaded).checkpoint.remediation, /Provide current authoritative regulation evidence/);
+});
+
+test('local SDLC case creation rejects Sentinel pins or required scope without a saved source', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'orgward-sdlc-sentinel-without-source-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const app = await start(root);
+  t.after(async () => { if (app.server.listening) await close(app.server); });
+  const before = (await request(app.base, '/api/sdlc/cases')).cases.length;
+  const pinned = await request(app.base, '/api/sdlc/cases', { method: 'POST', body: JSON.stringify({
+    mode: 'golden', sentinelAssessmentId: 'sentinel-assessment-00000000-0000-4000-8000-000000000001', sentinelReportHash: 'a'.repeat(64),
+  }) }, 400);
+  assert.match(pinned.error, /Sentinel assessment pins and required scopes need a selected saved-project source/);
+  const required = await request(app.base, '/api/sdlc/cases', { method: 'POST', body: JSON.stringify({
+    mode: 'golden', sentinelRequiredScope: 'PROCESS_ACCOUNTABILITY',
+  }) }, 400);
+  assert.match(required.error, /Sentinel assessment pins and required scopes need a selected saved-project source/);
+  const forgedPin = await request(app.base, '/api/sdlc/cases', { method: 'POST', body: JSON.stringify({
+    mode: 'golden', savedProjectPin: { projectVersion: 9001 },
+  }) }, 400);
+  assert.match(forgedPin.error, /derived from the verified source selection/);
+  assert.equal((await request(app.base, '/api/sdlc/cases')).cases.length, before, 'invalid local requests create no synthetic cases');
 });
 
 test('SDLC case pins a saved design source, rejects stale or unresolved selections, and retains provenance after project edits and restart', async (t) => {
@@ -377,6 +426,10 @@ test('source-bound requirements are revisioned, validated, owner-accepted and in
   });
   assert.equal(changeCase.currentStage, 'S4');
   assert.equal(changeCase.status, 'NEEDS_HUMAN');
+  const sentinelContext = changeCase.artifacts.context.coverage.find((entry) => entry.domain === 'sentinel');
+  assert.equal(sentinelContext.status, 'UNKNOWN', 'unrequired Sentinel scope stays visible without blocking the existing requirements-to-planning journey');
+  assert.equal(sentinelContext.required, false);
+  assert.ok(changeCase.artifacts.context.unknownDependencies.some((entry) => entry.domain === 'sentinel'));
   const artifact = changeCase.artifacts.requirements;
   assert.equal(artifact.draftRevision, 1);
   assert.equal(artifact.acceptedBaseline, undefined);
@@ -627,6 +680,8 @@ test('served SDLC product surface and meta contract expose stages and mutation l
   assert.match(script, /api\(`\/api\/v1\/projects\/\$\{encodeURIComponent\(changeCase\.projectId\)\}`\)/);
   assert.match(script, /caseUiModel\(changeCase, state\.meta, state\.activeSourceProject\)/);
   assert.match(script, /Pinned saved-design evidence/);
+  assert.match(script, /Saved-project manifest pin/);
+  assert.match(script, /savedProjectPinSummary\(context\)/);
   assert.match(script, /requirement-edit-disclosure/);
   assert.match(script, /text: `Edit \$\{requirement\.id\}`/);
   assert.match(script, /aria-label': `\$\{requirement\.id\} actor`/);

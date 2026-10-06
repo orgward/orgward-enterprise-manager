@@ -11,6 +11,7 @@ import { digest, persistedDigest } from '../../src/sdlc/contracts.mjs';
 import { createLocalSandboxTestAdapter } from '../../src/enterprise/sandbox-adapter-contract.mjs';
 import { createLocalSandboxProviderService } from '../../src/enterprise/local-sandbox-provider-service.mjs';
 import { createLoopbackSandboxHttpAdapter } from '../../src/enterprise/loopback-sandbox-http-adapter.mjs';
+import { verifySourceBinding } from '../../src/sdlc/engine.mjs';
 import { startPostgres } from '../helpers/postgres.mjs';
 
 const tenantId = 'tenant-enterprise-test';
@@ -363,6 +364,96 @@ async function postCommand(base, subject, projectId, body, status = 200) {
   return request(base, subject, `/api/v1/projects/${projectId}/enterprise/commands`, { method: 'POST', body }, status);
 }
 function items(blueprint) { return Object.values(blueprint.areas).flatMap((area) => area.items); }
+
+test('Sentinel assessment is human-authorized, aggregate-versioned, replayable and exactly selected into SDLC source binding', async (t) => {
+  const postgres = await startPostgres(); let root; let instance;
+  t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-sentinel-source-'));
+  instance = await startApp(postgres, root);
+  for (const identity of identities.values()) await postgres.query(`insert into orgward.oidc_principals
+    (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+  [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  const project = await seedProject(postgres, 'Sentinel source project', { mutate(value) {
+    for (const process of items(value.blueprintVersions.at(-1)).filter((item) => item.type === 'process')) process.ownerRoleName = 'Operations owner';
+  } });
+  const view = await currentView(instance.base, 'owner', project.id);
+  const sourceBlueprint = project.blueprintVersions.at(-1);
+  const assessmentCommand = commandBody(view, 'sentinel-assessment-once', { kind: 'run-sentinel-assessment',
+    snapshotHash: digest(sourceBlueprint), reason: 'Check declared process ownership.' });
+  await postCommand(instance.base, 'reader', project.id, assessmentCommand, 403);
+  await postgres.query(`create function orgward.reject_sentinel_audit() returns trigger language plpgsql as $$
+    begin if NEW.event_type = 'EnterpriseSentinelAssessed' then raise exception 'injected sentinel audit failure'; end if; return NEW; end $$`);
+  await postgres.query(`create trigger reject_sentinel_audit before insert on orgward.audit_log
+    for each row execute function orgward.reject_sentinel_audit()`);
+  await postCommand(instance.base, 'owner', project.id, assessmentCommand, 500);
+  await postgres.query('drop trigger reject_sentinel_audit on orgward.audit_log');
+  await postgres.query('drop function orgward.reject_sentinel_audit()');
+  const rolledBack = await currentView(instance.base, 'owner', project.id);
+  const rolledBackProject = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  assert.equal(rolledBack.data.context.projectVersion, 1);
+  assert.equal(rolledBack.data.sentinel.assessments.length, 0, 'audit failure rolls back assessment append');
+  assert.equal(rolledBackProject.data.audit.filter((entry) => entry.action === 'enterprise.run-sentinel-assessment').length, 0,
+    'audit failure leaves no partial audit effect');
+  const assessed = await postCommand(instance.base, 'owner', project.id, assessmentCommand);
+  const report = assessed.data.sentinelAssessment;
+  assert.equal(report.status, 'PASS');
+  assert.equal(report.source.assessedAggregateVersion, 1);
+  assert.equal(report.source.snapshotHash, digest(sourceBlueprint));
+  await postCommand(instance.base, 'owner', project.id, assessmentCommand);
+  const afterReport = await currentView(instance.base, 'owner', project.id);
+  const afterReportProject = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  assert.equal(afterReport.data.context.projectVersion, 2, 'assessment append advances aggregate N to N+1');
+  assert.equal(afterReport.data.sentinel.current.id, report.id);
+  assert.equal(afterReport.data.sentinel.assessments.filter((entry) => entry.id === report.id).length, 1, 'replay leaves one report');
+  assert.equal(afterReportProject.data.audit.filter((entry) => entry.action === 'enterprise.run-sentinel-assessment').length, 1, 'replay leaves one audit effect');
+  const source = items(sourceBlueprint).find((item) => item.type === 'process');
+  await request(instance.base, 'foreign', '/api/sdlc/cases', { method: 'POST', body: {
+    mode: 'golden', projectId: project.id, sourceObjectId: source.id, expectedProjectVersion: 2,
+    expectedBlueprintId: sourceBlueprint.id, expectedBlueprintVersion: sourceBlueprint.version,
+    sentinelAssessmentId: report.id, sentinelReportHash: report.reportHash,
+  } }, 404);
+  const selected = await request(instance.base, 'owner', '/api/sdlc/cases', { method: 'POST', body: {
+    mode: 'golden', projectId: project.id, sourceObjectId: source.id, expectedProjectVersion: 2,
+    expectedBlueprintId: sourceBlueprint.id, expectedBlueprintVersion: sourceBlueprint.version,
+    sentinelRequiredScope: 'PROCESS_ACCOUNTABILITY',
+    sentinelAssessmentId: report.id, sentinelReportHash: report.reportHash,
+    rawIntent: 'Review process-accountability context from this saved design.',
+  } }, 201);
+  assert.equal(selected.sourceBinding.projectVersion, 2, 'current aggregate selection pin remains N+1');
+  assert.equal(selected.sourceBinding.sentinelContext.assessment.assessedAggregateVersion, 1, 'assessment input pin remains N');
+  assert.equal(verifySourceBinding(selected.sourceBinding).valid, true);
+  const contextRun = await request(instance.base, 'owner', `/api/sdlc/cases/${selected.id}/run`, { method: 'POST', body: {
+    version: selected.version, idempotencyKey: 'sentinel-context-run',
+  } });
+  assert.equal(contextRun.artifacts.context.sentinelContext.assessment.id, report.id);
+  assert.equal(contextRun.artifacts.context.coverage.find((entry) => entry.domain === 'sentinel').status, 'PASSED');
+  assert.match(contextRun.artifacts.context.coverage.find((entry) => entry.domain === 'sentinel').unknowns.join(' '), /outside Sentinel v1 coverage/);
+  await request(instance.base, 'owner', '/api/sdlc/cases', { method: 'POST', body: {
+    mode: 'golden', projectId: project.id, sourceObjectId: source.id, expectedProjectVersion: 2,
+    expectedBlueprintId: sourceBlueprint.id, expectedBlueprintVersion: sourceBlueprint.version,
+    bindingSchemaVersion: 1, sentinelAssessmentId: report.id, sentinelReportHash: report.reportHash,
+  } }, 400);
+  await request(instance.base, 'owner', '/api/sdlc/cases', { method: 'POST', body: {
+    mode: 'golden', projectId: project.id, sourceObjectId: source.id, expectedProjectVersion: 2,
+    expectedBlueprintId: sourceBlueprint.id, expectedBlueprintVersion: sourceBlueprint.version,
+    sentinelRequiredScope: 'PROCESS_ACCOUNTABILITY',
+    sentinelAssessmentId: report.id, sentinelReportHash: '0'.repeat(64), rawIntent: 'Reject a changed report hash.',
+  } }, 409);
+  const notAssessed = await request(instance.base, 'owner', '/api/sdlc/cases', { method: 'POST', body: {
+    mode: 'golden', projectId: project.id, sourceObjectId: source.id, expectedProjectVersion: 2,
+    expectedBlueprintId: sourceBlueprint.id, expectedBlueprintVersion: sourceBlueprint.version,
+    sentinelAssessmentId: null, sentinelReportHash: null, rawIntent: 'Keep missing assessment explicit.',
+  } }, 201);
+  assert.equal(notAssessed.sourceBinding.sentinelContext.state, 'NOT_ASSESSED');
+  await closeApp(instance); instance = null;
+  instance = await startApp(postgres, root);
+  const restarted = await currentView(instance.base, 'owner', project.id);
+  assert.equal(restarted.data.sentinel.current.id, report.id);
+  assert.equal(restarted.data.sentinel.current.reportHash, report.reportHash);
+  const reloadedCase = await request(instance.base, 'owner', `/api/sdlc/cases/${selected.id}`);
+  assert.equal(verifySourceBinding(reloadedCase.sourceBinding).valid, true);
+  assert.equal(reloadedCase.artifacts.context.sentinelContext.assessment.id, report.id);
+});
 
 test('interactive map edits use the shared semantic command boundary with denial, conflict, replay and restart', async (t) => {
   const postgres = await startPostgres(); let root; let instance;

@@ -15,6 +15,7 @@ import { enterpriseInterchangeCommandPayload, enterpriseInterchangeWritable, ren
 import { enterpriseIntegrityCommandPayload, enterpriseIntegrityExceptionPayload, renderEnterpriseIntegrity } from '../../public/enterprise-integrity.mjs';
 import { enterpriseGovernanceCommandPayload, renderEnterpriseGovernance } from '../../public/enterprise-governance.mjs';
 import { enterpriseStewardshipPayload, renderEnterpriseStewardship } from '../../public/enterprise-stewardship.mjs';
+import { enterpriseSentinelCommandPayload, renderEnterpriseSentinel } from '../../public/enterprise-sentinel.mjs';
 import { downloadPortfolioDesign, downloadPortfolioInventory, portfolioDesignExportFilename, portfolioInventoryBundle,
   portfolioInventoryFilename, projectPortfolioFacts, readPortfolioImportFile, renderProjectPortfolio,
   portfolioImportWorkspaceRoute, portfolioManageAccessRoute, verifyPortfolioDesignBundle } from '../../public/project-portfolio.mjs';
@@ -24,6 +25,7 @@ import { digest } from '../../src/sdlc/contracts.mjs';
 import { isValidEnterpriseIntegrityAssessment, projectEnterpriseIntegrity } from '../../src/enterprise/integrity.mjs';
 import { projectPortfolioIntegritySummary } from '../../src/platform/postgres-stores.mjs';
 import { decodeStudioRoute, encodeStudioRoute } from '../../public/shared-interactions.mjs';
+import { savedProjectPinSummary, sentinelAssessmentChoices } from '../../public/sdlc-view.mjs';
 import { renderOutcomeInbox } from '../../public/outcomes.mjs';
 import { renderProtectedRelease } from '../../public/protected-release.mjs';
 import { renderBlueprintImpactPreview } from '../../public/blueprint-impact-preview.mjs';
@@ -2514,4 +2516,50 @@ test('integrity UI keeps findings unresolved and binds exception review to curre
   assert.deepEqual(withinWindowRows.map((entry) => entry.attrs['data-remediation-finding']).sort(), ['finding-one', 'finding-two'],
     'a selected report in the ten-report window has its inbox finding and capped-out finding rendered exactly once each');
   assert.equal(Array.from(withinWindowPanel.querySelectorAll('form')).some((entry) => entry.attrs['data-enterprise-action']?.startsWith('accept-integrity-exception-')), false);
+});
+
+test('Sentinel UI binds a human assessment to exact source and labels scope and unknown coverage honestly', () => {
+  const submitted = [];
+  const modelValue = { blueprint: { id: 'blueprint-sentinel' }, context: { isCurrent: true, blueprintId: 'blueprint-sentinel',
+    blueprintVersion: 4, snapshotHash: 'a'.repeat(64), sourceKind: 'MAIN_DESIGN' }, permissions: { integrityRun: true },
+  sentinel: { profile: { id: 'orgward-sentinel-operational-accountability', version: '1.0.0', evaluatorRevision: 'sentinel-evaluator-1', hash: 'b'.repeat(64) },
+    current: { id: 'sentinel-assessment-00000000-0000-4000-8000-000000000001', status: 'PASS', appliesToContext: true,
+      evaluatedAt: '2026-10-06T12:00:00.000Z', source: { assessedAggregateVersion: 9 },
+      profile: { id: 'orgward-sentinel-operational-accountability', version: '1.0.0' }, reportHash: 'c'.repeat(64),
+      coverage: { applicable: 2 }, findings: [] } } };
+  const command = enterpriseSentinelCommandPayload(modelValue, 'Review current processes.');
+  assert.deepEqual(command, { kind: 'run-sentinel-assessment', blueprintId: 'blueprint-sentinel', blueprintVersion: 4,
+    snapshotHash: 'a'.repeat(64), reason: 'Review current processes.' });
+  const root = renderEnterpriseSentinel({ model: modelValue, el, ui: branchUi, onCommand: (value) => submitted.push(value) });
+  assert.match(root.textContent, /does not assess authority conflicts, control effectiveness/);
+  assert.match(root.textContent, /assessed project aggregate v9; the report append advanced the project aggregate separately/);
+  assert.match(root.textContent, /bounded profile checks accountable owner roles/);
+  const form = root.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === 'run-sentinel-assessment');
+  form.querySelectorAll('textarea').find((entry) => entry.attrs.name === 'reason').value = 'Review current processes.';
+  form.listeners.get('submit')({ preventDefault() {} });
+  assert.deepEqual(submitted, [command]);
+  assert.equal(enterpriseSentinelCommandPayload({ ...modelValue, context: { ...modelValue.context, isCurrent: false } }, 'review'), null);
+  assert.equal(enterpriseSentinelCommandPayload({ ...modelValue, permissions: { integrityRun: false } }, 'review'), null);
+});
+
+test('Sentinel case selector offers only reports pinned to the current blueprint version', () => {
+  const eligible = { id: 'sentinel-report-1', reportHash: 'a'.repeat(64), source: { blueprintId: 'blueprint-1', blueprintVersion: 3 } };
+  const staleVersion = { id: 'sentinel-report-2', reportHash: 'b'.repeat(64), source: { blueprintId: 'blueprint-1', blueprintVersion: 2 } };
+  const otherBlueprint = { id: 'sentinel-report-3', reportHash: 'c'.repeat(64), source: { blueprintId: 'blueprint-2', blueprintVersion: 3 } };
+  const malformed = { id: 'sentinel-report-4', source: { blueprintId: 'blueprint-1', blueprintVersion: 3 } };
+  assert.deepEqual(sentinelAssessmentChoices({ latestBlueprint: { id: 'blueprint-1', version: 3 },
+    enterpriseSentinelAssessments: [eligible, staleVersion, otherBlueprint, malformed] }), [eligible]);
+  assert.deepEqual(sentinelAssessmentChoices({ latestBlueprint: null, enterpriseSentinelAssessments: [eligible] }), []);
+});
+
+test('saved-project pin summary distinguishes exact manifest versions and legacy snapshot unavailability', () => {
+  const summary = savedProjectPinSummary({ manifestVersion: 2, savedProjectPin: { projectId: 'project-example', projectVersion: 8,
+    blueprintId: 'blueprint-example', blueprintVersion: 4, blueprintSchemaVersion: 2, sourceObjectId: 'process-one',
+    sourceObjectType: 'process', sourceHash: 'a'.repeat(64), bindingHash: 'b'.repeat(64), blueprintSnapshotHash: null,
+    blueprintSnapshotStatus: 'UNAVAILABLE_LEGACY' } });
+  assert.match(summary, /Project project-example v8 · blueprint blueprint-example v4/);
+  assert.match(summary, /binding SHA-256 b{64}/);
+  assert.match(summary, /blueprint snapshot hash unavailable in this legacy source binding/);
+  assert.match(savedProjectPinSummary({ manifestVersion: 1 }), /Historical context manifest v1/);
+  assert.match(savedProjectPinSummary({ manifestVersion: 2, savedProjectPin: null }), /No saved project is pinned/);
 });

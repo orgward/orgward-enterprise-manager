@@ -8562,3 +8562,41 @@ remains limited to source-reconciliation reports; another consumer family needs
 an independently persisted domain dependency before it can be safely included.
 No implementation or test run was needed for this boundary review. T-124 and
 PR-17 remain open; task cursor and release gates are unchanged.
+
+PR-15 T-90 Sentinel and saved-project context pins (2026-10-06): the reviewed
+slice adds a bounded, executable, versioned Sentinel rule profile and immutable
+assessment reports, then allows SDLC source selection to pin the exact report,
+profile and blueprint source. Context manifest v2 carries the server-derived
+`savedProjectPin` (project/blueprint versions, snapshot hash, source identity and
+binding); creation evidence and verification reject pin tampering, version
+downgrade and unsupported manifest versions while preserving historical v1 hash
+behavior. The synthetic `enterpriseContext` remains explicitly separate from
+the saved-project source. Sol review approved this slice with no remaining
+material findings.
+
+Focused evidence: Sentinel/source/context suite passed 9/9
+(`tests/enterprise/sentinel.test.mjs`, `tests/enterprise/server.test.mjs`,
+`tests/sdlc/server.test.mjs`;
+`/tmp/orgward-tests-L031cw/node-test.tap.log`); local no-source Sentinel
+selection regressions passed 2/2 (`tests/enterprise/sentinel.test.mjs`,
+`tests/sdlc/server.test.mjs`; `/tmp/orgward-tests-KlLuXY/node-test.tap.log`).
+The saved-project pin/context suite passed 9/9
+(`tests/enterprise/sentinel.test.mjs`, `tests/enterprise/server.test.mjs`,
+`tests/enterprise/view.test.mjs`, `tests/sdlc/engine.test.mjs`,
+`tests/sdlc/server.test.mjs`; `/tmp/orgward-tests-LLaq3d/node-test.tap.log`).
+Manifest verification and action-guard tests passed 5/5, then the historical-v1
+and deleted-version action-guard regressions passed 2/2
+(`tests/enterprise/sentinel.test.mjs`, `tests/sdlc/engine.test.mjs`,
+`tests/sdlc/server.test.mjs`;
+`/tmp/orgward-tests-CdcVmE/node-test.tap.log`,
+`/tmp/orgward-tests-TUnt2r/node-test.tap.log`; the 2/2 run used
+`tests/sdlc/engine.test.mjs` and `tests/sdlc/server.test.mjs`). These focused
+runs establish exact pins, bounded profile coverage, legacy compatibility and
+selected tamper/downgrade guards; they do not establish broad T-90 acceptance.
+
+Scope limits: the pin identifies the authoritative design for the saved
+project's represented scope. It does not establish factual truth, an accepted
+baseline or authority, operational effectiveness or compliance. Unsupported
+Sentinel domains remain unknown; external systems require their own exact source
+pins. T-90 and PR-15 remain open. No task checkbox/cursor, implementation
+backlog acceptance state or production gate was changed.

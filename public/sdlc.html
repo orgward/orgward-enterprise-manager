@@ -48,6 +48,9 @@
           <div class="form-heading"><span>Saved design change</span><strong>Describe a change to a current blueprint object</strong></div>
           <label>Project<select name="projectId" id="case-project" required></select></label>
           <label>Saved design object<select name="sourceObjectId" id="case-source-object" required></select></label>
+          <label>Exact Sentinel assessment<select name="sentinelAssessmentId" id="case-sentinel-assessment"></select></label>
+          <label>Required Sentinel scope<select name="sentinelRequiredScope" id="case-sentinel-scope"><option value="NONE">No Sentinel scope required</option><option value="PROCESS_ACCOUNTABILITY">Require process accountability</option></select></label>
+          <div id="sentinel-source-preview" class="mutation-expectation">Choose whether process accountability is a required planning scope. Unsupported Sentinel domains remain unknown.</div>
           <div id="source-preview" class="mutation-expectation">Select a project to load its current saved design objects.</div>
           <label>Change request<textarea name="rawIntent" rows="3">Allow corporate customers to update beneficial-owner information digitally while preserving KYC/AML controls, data integrity, authorization, auditability, and downstream consistency.</textarea></label>
           <label>Synthetic reference condition<select name="mutation" id="mutation-select"></select></label>

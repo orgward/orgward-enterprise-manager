@@ -6,6 +6,7 @@ import { ENTERPRISE_INTERCHANGE_COMMANDS, ENTERPRISE_SOURCE_ATTESTATION_COMMANDS
 import { ENTERPRISE_INTEGRITY_COMMANDS, renderEnterpriseIntegrity } from './enterprise-integrity.mjs';
 import { renderEnterpriseGovernance } from './enterprise-governance.mjs';
 import { renderEnterpriseStewardship } from './enterprise-stewardship.mjs';
+import { renderEnterpriseSentinel } from './enterprise-sentinel.mjs';
 const SCOPE_TYPES = new Set(['organization', 'legal-entity', 'unit']);
 const STATE_VALUES = {
   lifecycle: ['UNKNOWN', 'PLANNED', 'ACTIVE', 'RETIRED'],
@@ -282,6 +283,8 @@ export function renderEnterpriseContext({ model, query, loading = false, error =
   }
   const integrityPanel = renderEnterpriseIntegrity({ model, pending, draft: integrityDraft, loading, el, ui: { field, form }, onCommand, onInspectFinding });
   if (integrityPanel) root.append(integrityPanel);
+  const sentinelPanel = renderEnterpriseSentinel({ model, pending, loading, el, ui: { field, form }, onCommand });
+  if (sentinelPanel) root.append(sentinelPanel);
   const governancePanel = renderEnterpriseGovernance({ model, pending, loading, el, ui: { field, form }, onCommand });
   if (governancePanel) root.append(governancePanel);
   const disabled = loading || Boolean(pending) || enterpriseContextReadOnly(model.context) || !model.permissions?.scopeAdmin;

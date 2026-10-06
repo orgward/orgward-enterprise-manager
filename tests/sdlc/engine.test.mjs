@@ -86,7 +86,13 @@ test('context manifest seals coverage, unknowns, exclusions, guardrails and evid
   runToCheckpoint(changeCase, { actor: 'orchestrator', idempotencyKey: 'context-manifest-seal' });
 
   const context = changeCase.artifacts.context;
-  assert.equal(context.manifestVersion, 1);
+  assert.equal(context.manifestVersion, 2);
+  assert.equal(Object.hasOwn(context, 'savedProjectPin'), true);
+  assert.equal(context.savedProjectPin, null, 'synthetic-only cases explicitly carry a null saved-project pin');
+  const creationEvidence = changeCase.evidenceLedger.find((entry) => entry.id === context.contextCreationEvidenceRef);
+  assert.equal(creationEvidence.sourceType, 'sdlc-context-manifest-created');
+  assert.deepEqual(creationEvidence.content, { manifestVersion: 2, sourceBindingHash: null,
+    savedProjectPinHash: digest(null) });
   assert.equal(context.enterpriseContext.version, 1);
   assert.equal(context.guardrails.intentRef, changeCase.intent.id);
   assert.ok(context.guardrails.constraints.length);
@@ -103,6 +109,28 @@ test('context manifest seals coverage, unknowns, exclusions, guardrails and evid
   assert.equal(verifyContextManifest(changeCase).valid, true);
   changeCase.evidenceLedger[0].contentHash = '0'.repeat(64);
   assert.equal(verifyContextManifest(changeCase).valid, false);
+});
+
+test('historical context manifest v1 keeps its original digest recipe without a saved-project pin', () => {
+  const changeCase = createChangeCase({ mutation: 'missing_aml' });
+  runToCheckpoint(changeCase, { actor: 'orchestrator', idempotencyKey: 'historical-context-version-fixture' });
+  const context = structuredClone(changeCase.artifacts.context);
+  context.manifestVersion = 1;
+  delete context.savedProjectPin;
+  const creationRef = context.contextCreationEvidenceRef;
+  delete context.contextCreationEvidenceRef;
+  context.evidenceRefs = context.evidenceRefs.filter((ref) => ref !== creationRef);
+  context.evidenceManifest = context.evidenceManifest.filter((entry) => entry.evidenceRef !== creationRef);
+  changeCase.evidenceLedger = changeCase.evidenceLedger.filter((entry) => entry.id !== creationRef);
+  delete context.provenanceManifestHash;
+  context.provenanceManifestHash = digest(context);
+  changeCase.artifacts.context = context;
+  assert.equal(verifyContextManifest(changeCase).valid, true, 'historical v1 has no new pin field and verifies under its own digest');
+  const unsupported = structuredClone(changeCase);
+  unsupported.artifacts.context.manifestVersion = 77;
+  unsupported.artifacts.context.provenanceManifestHash = digest(Object.fromEntries(Object.entries(unsupported.artifacts.context)
+    .filter(([key]) => key !== 'provenanceManifestHash')));
+  assert.equal(verifyContextManifest(unsupported).valid, false, 'an explicitly unsupported version is invalid, not historical legacy');
 });
 
 for (const [mutation, expectedGate] of Object.entries({
