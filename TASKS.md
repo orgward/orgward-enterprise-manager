@@ -8277,3 +8277,20 @@ before/after values, direct affected record, unknown downstream status, plus
 existing stale apply conflict and UI rendering before apply. Syntax and diff
 checks passed. T-122 and PR-17 remain open; PR-15 remains the active cursor and
 no release gate changed.
+
+PR-17 T-122 main map browser UX receipt (2026-10-06): agent-browser exercised
+an isolated local JSON fixture with fixture-only verified identity and
+principal-scoped project access; no provider, secret, or external effect was
+used. The main map preview rendered at 1280px and 390×844. The narrow viewport
+had no horizontal overflow. Keyboard focus moved between SVG map nodes; Enter
+selected the focused node and changed `aria-pressed` from false to true. The
+preview semantic snapshot showed `INCOMPLETE`, exact workspace/blueprint/hash
+pins, changed fields, directly affected records, unknown role/Sentinel/SDLC and
+approval/work areas, and the explicit statement that preview grants no
+publication authority or dependent currentness. `Apply proposed edit` became
+enabled after preview and was not clicked. No browser console errors or framework
+overlay appeared. Screenshots: `/tmp/orgward-t122-laptop.png` and
+`/tmp/orgward-t122-narrow.png`. Branch preview was unavailable in this fixture;
+import preview was not exercised because it requires a bundle. This is a focused
+browser observation, not screen-reader or WCAG certification. No PR/task cursor
+or release-gate status changed; PR-15 remains active.
