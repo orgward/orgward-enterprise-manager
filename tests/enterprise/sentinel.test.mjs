@@ -226,6 +226,7 @@ test('legacy source-binding hash recipe remains valid and reports Sentinel as un
   const historicalManifest = structuredClone(legacyCase);
   historicalManifest.artifacts.context.manifestVersion = 1;
   delete historicalManifest.artifacts.context.savedProjectPin;
+  delete historicalManifest.artifacts.context.savedProjectCoverage;
   const creationRef = historicalManifest.artifacts.context.contextCreationEvidenceRef;
   delete historicalManifest.artifacts.context.contextCreationEvidenceRef;
   historicalManifest.artifacts.context.evidenceRefs = historicalManifest.artifacts.context.evidenceRefs.filter((ref) => ref !== creationRef);

@@ -26,7 +26,7 @@ import { digest } from '../../src/sdlc/contracts.mjs';
 import { isValidEnterpriseIntegrityAssessment, projectEnterpriseIntegrity } from '../../src/enterprise/integrity.mjs';
 import { projectPortfolioIntegritySummary } from '../../src/platform/postgres-stores.mjs';
 import { decodeStudioRoute, encodeStudioRoute } from '../../public/shared-interactions.mjs';
-import { savedProjectPinSummary, sentinelAssessmentChoices } from '../../public/sdlc-view.mjs';
+import { contextManifestPresentation, savedProjectPinSummary, sentinelAssessmentChoices } from '../../public/sdlc-view.mjs';
 import { renderOutcomeInbox } from '../../public/outcomes.mjs';
 import { renderProtectedRelease } from '../../public/protected-release.mjs';
 import { renderBlueprintImpactPreview } from '../../public/blueprint-impact-preview.mjs';
@@ -2806,4 +2806,32 @@ test('saved-project pin summary distinguishes exact manifest versions and legacy
   assert.match(summary, /blueprint snapshot hash unavailable in this legacy source binding/);
   assert.match(savedProjectPinSummary({ manifestVersion: 1 }), /Historical context manifest v1/);
   assert.match(savedProjectPinSummary({ manifestVersion: 2, savedProjectPin: null }), /No saved project is pinned/);
+});
+
+test('context manifest presentation keeps synthetic source, saved-project partial coverage, requirements, guardrails and gaps distinct', () => {
+  const context = contextManifestPresentation({ manifestVersion: 3, manifestRevision: 3, provenanceManifestHash: 'a'.repeat(64),
+    enterpriseContext: { version: 1, sourceKind: 'synthetic-reference-model', sourceLabel: 'Synthetic reference organization' },
+    guardrails: { intentRef: 'intent-one', constraints: ['Require human approval'], nonGoals: ['No live payments'] },
+    unknownDependencies: [{ domain: 'sentinel', description: 'Cross-project relationships are outside scope.' }],
+    excludedDependencies: [{ objectRef: 'external-file', sourceId: 'upload-1', status: 'EXCLUDED', reason: 'UNTRUSTED_SOURCE_NOT_USED_FOR_AUTHORITATIVE_COVERAGE' }],
+    savedProjectCoverage: { status: 'PARTIAL', sourcePinHash: 'c'.repeat(64), processTraceHash: 'e'.repeat(64),
+      represented: [{ domain: 'selected-source', objectRef: 'process-one', objectType: 'process', contentHash: 'd'.repeat(64) }],
+      unknownDependencies: [{ domain: 'external-systems', description: 'No exact external source pin is selected.' }],
+      excludedDependencies: { status: 'NOT_ENUMERATED', reason: 'Unselected dependencies remain unknown.' } },
+  });
+  assert.equal(context.manifest, `Context manifest v3 · revision 3 · SHA-256 ${'a'.repeat(64)}`);
+  assert.match(context.enterprise, /version 1 · Synthetic reference organization · synthetic-reference-model/);
+  assert.match(context.enterpriseStatus, /Synthetic reference context only; it is not authoritative/);
+  assert.deepEqual(context.guardrails, { intentRef: 'intent-one', constraints: ['Require human approval'], nonGoals: ['No live payments'] });
+  assert.equal(context.requirements.status, 'NOT_YET_ACCEPTED');
+  assert.match(context.requirements.summary, /No accepted requirements baseline is pinned/);
+  assert.deepEqual(context.unknownDependencies, [{ domain: 'sentinel', description: 'Cross-project relationships are outside scope.' }]);
+  assert.deepEqual(context.excludedDependencies, [{ objectRef: 'external-file', sourceId: 'upload-1', status: 'EXCLUDED', reason: 'UNTRUSTED_SOURCE_NOT_USED_FOR_AUTHORITATIVE_COVERAGE' }]);
+  assert.deepEqual(context.savedProjectCoverage, { status: 'PARTIAL', sourcePinHash: 'c'.repeat(64), processTraceHash: 'e'.repeat(64),
+    represented: [{ domain: 'selected-source', objectRef: 'process-one', objectType: 'process', contentHash: 'd'.repeat(64) }],
+    unknownDependencies: [{ domain: 'external-systems', description: 'No exact external source pin is selected.' }],
+    excludedDependencies: { status: 'NOT_ENUMERATED', reason: 'Unselected dependencies remain unknown.' } });
+  const accepted = contextManifestPresentation({ relevantRequirements: { baselineVersion: 2, contentHash: 'b'.repeat(64), evidenceRef: 'evidence-1', requirements: [{ id: 'REQ-1' }] } });
+  assert.equal(accepted.requirements.status, 'PINNED_ACCEPTED');
+  assert.deepEqual(accepted.requirements.entries, [{ id: 'REQ-1' }]);
 });

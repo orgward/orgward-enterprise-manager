@@ -488,7 +488,11 @@ test('source-bound requirements are revisioned, validated, owner-accepted and in
   assert.equal(baseline.requirements[0].status, 'ACCEPTED');
   assert.equal(accepted.artifacts.requirements.requirements[0].status, 'ACCEPTED');
   assert.equal(accepted.contextManifestIntegrity.valid, true);
+  assert.equal(accepted.artifacts.context.manifestVersion, 3);
   assert.equal(accepted.artifacts.context.manifestRevision, 2);
+  assert.equal(accepted.artifacts.context.savedProjectCoverage.status, 'PARTIAL');
+  assert.equal(accepted.artifacts.context.savedProjectCoverage.sourcePinHash,
+    digest(accepted.artifacts.context.savedProjectPin));
   assert.equal(accepted.artifacts.context.relevantRequirements.contentHash, baseline.contentHash);
   assert.deepEqual(accepted.artifacts.context.relevantRequirements.requirements, baseline.requirements);
   assert.ok(accepted.artifacts.context.evidenceRefs.includes(accepted.artifacts.context.relevantRequirements.evidenceRef));
@@ -851,6 +855,18 @@ test('served SDLC product surface and meta contract expose stages and mutation l
   assert.match(script, /Pinned saved-design evidence/);
   assert.match(script, /Saved-project manifest pin/);
   assert.match(script, /savedProjectPinSummary\(context\)/);
+  assert.match(script, /contextManifestPresentation\(context\)/);
+  assert.match(script, /Synthetic reference context coverage/);
+  assert.match(script, /Saved-project source coverage · PARTIAL/);
+  assert.match(script, /process trace SHA-256/);
+  assert.match(script, /Saved-project dependencies not retrieved/);
+  assert.match(script, /projectCoverage\.unknownDependencies\.map/);
+  assert.match(script, /Synthetic-context unknown dependencies/);
+  assert.match(script, /Synthetic-context excluded dependencies/);
+  assert.match(script, /Enterprise context source/);
+  assert.match(script, /Intent guardrails/);
+  assert.match(script, /Accepted requirements in context/);
+  assert.match(script, /attrs: \{ role: 'status' \}/);
   assert.match(script, /requirement-edit-disclosure/);
   assert.match(script, /Pinned process requirement trace · DRAFT · NOT EXECUTED/);
   assert.match(script, /\$\{contract\.type\}/);

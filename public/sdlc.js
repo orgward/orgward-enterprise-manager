@@ -1,4 +1,4 @@
-import { caseUiModel, createSourceSelectionGuard, eligibleActorBindings, processRunEvidencePresentation, savedProjectPinSummary, sentinelAssessmentChoices, sourceBindingDesignRoute } from './sdlc-view.mjs';
+import { caseUiModel, contextManifestPresentation, createSourceSelectionGuard, eligibleActorBindings, processRunEvidencePresentation, savedProjectPinSummary, sentinelAssessmentChoices, sourceBindingDesignRoute } from './sdlc-view.mjs';
 import { encodeExecutionRoute, encodeStudioRoute } from './shared-interactions.mjs';
 import { clearPendingSoftwareStart, createSoftwareStartFlightGuard, pendingSoftwareStartKey } from './software-runtime-start.mjs';
 import { openInitialCase, sourceObjectPreview } from './sdlc-routing.mjs';
@@ -489,15 +489,53 @@ function lineageView(trace) {
 function renderContext(content) {
   const context = state.changeCase.artifacts.context;
   if (!context) return content.append(empty('Context discovery has not run yet.'));
-  content.append(section('Context coverage matrix', context.coverage.map((entry) => el('div', { className: 'coverage-row' }, [el('b', { text: entry.domain }), el('div', { className: 'coverage-track' }, [el('i', { className: entry.score >= 1 ? 'coverage-full' : 'coverage-empty' })]), el('span', { className: entry.status === 'PASSED' ? 'status-PASS' : 'status-FAIL', text: `${Math.round(entry.score * 100)}%` })]))));
-  content.append(section('Provenance manifest', [el('p', { text: `${context.evidenceRefs.length} evidence references · immutable manifest ${context.provenanceManifestHash.slice(0, 18)}…` }), el('p', { text: 'Authoritative, approved, informative, and untrusted sources remain distinguishable. Untrusted content never becomes instruction.' })]));
+  const manifest = contextManifestPresentation(context);
+  content.append(section('Synthetic reference context coverage', [
+    el('p', { attrs: { role: 'status' }, text: 'This matrix evaluates the synthetic reference organization only. It does not certify coverage of the selected saved project.' }),
+    ...context.coverage.map((entry) => el('div', { className: 'coverage-row' }, [el('b', { text: entry.domain }), el('div', { className: 'coverage-track' }, [el('i', { className: entry.score >= 1 ? 'coverage-full' : 'coverage-empty' })]), el('span', { className: entry.status === 'PASSED' ? 'status-PASS' : 'status-FAIL', text: `${Math.round(entry.score * 100)}%` })])),
+  ]));
+  content.append(section('Provenance manifest', [el('p', { text: `${context.evidenceRefs.length} evidence references · ${manifest.manifest}` }), el('p', { text: 'Authoritative, approved, informative, and untrusted sources remain distinguishable. Untrusted content never becomes instruction.' })]));
+  content.append(section('Enterprise context source', [
+    el('p', { text: manifest.enterprise }),
+    el('p', { attrs: { role: 'status' }, text: manifest.enterpriseStatus }),
+  ]));
+  content.append(section('Intent guardrails', [
+    el('p', { text: `Intent ${manifest.guardrails.intentRef}` }),
+    el('h4', { text: 'Constraints' }),
+    manifest.guardrails.constraints.length ? el('ul', {}, manifest.guardrails.constraints.map((entry) => el('li', { text: entry })))
+      : el('p', { attrs: { role: 'status' }, text: 'No constraints are recorded in this context manifest.' }),
+    el('h4', { text: 'Non-goals' }),
+    manifest.guardrails.nonGoals.length ? el('ul', {}, manifest.guardrails.nonGoals.map((entry) => el('li', { text: entry })))
+      : el('p', { attrs: { role: 'status' }, text: 'No non-goals are recorded in this context manifest.' }),
+  ]));
+  content.append(section('Synthetic-context unknown dependencies', manifest.unknownDependencies.length
+    ? el('ul', {}, manifest.unknownDependencies.map((entry) => el('li', { text: `${entry.domain}: ${entry.description}` })))
+    : el('p', { attrs: { role: 'status' }, text: 'No synthetic-context unknown dependencies are recorded in this manifest.' })));
+  content.append(section('Synthetic-context excluded dependencies', manifest.excludedDependencies.length
+    ? el('ul', {}, manifest.excludedDependencies.map((entry) => el('li', { text: `${entry.objectRef} · ${entry.status} · ${entry.sourceId} · ${entry.reason}` })))
+    : el('p', { attrs: { role: 'status' }, text: 'No synthetic-context dependencies are explicitly excluded in this manifest.' })));
   content.append(section('Saved-project manifest pin', [el('p', { text: savedProjectPinSummary(context) }),
     el('small', { text: 'Enterprise context below is the synthetic reference organization; this saved-project pin covers only the exact selected project and blueprint.' })]));
+  if (manifest.savedProjectCoverage) {
+    const projectCoverage = manifest.savedProjectCoverage;
+    content.append(section('Saved-project source coverage · PARTIAL', [
+      el('p', { attrs: { role: 'status' }, text: `Exact saved-source pin SHA-256 ${projectCoverage.sourcePinHash}${projectCoverage.processTraceHash ? ` · process trace SHA-256 ${projectCoverage.processTraceHash}` : ''} · coverage ${projectCoverage.status}. Only listed source records are represented.` }),
+      el('h4', { text: 'Represented from the selected saved source' }),
+      projectCoverage.represented.length ? el('ul', {}, projectCoverage.represented.map((entry) => el('li', { text: `${entry.domain} · ${entry.objectType} ${entry.objectRef} · content SHA-256 ${entry.contentHash}${entry.snapshotHash ? ` · snapshot SHA-256 ${entry.snapshotHash}` : ''}` })))
+        : el('p', { attrs: { role: 'status' }, text: 'No source records are represented.' }),
+      el('h4', { text: 'Saved-project dependencies not retrieved' }),
+      projectCoverage.unknownDependencies.length ? el('ul', {}, projectCoverage.unknownDependencies.map((entry) => el('li', { text: `${entry.domain}: UNKNOWN · ${entry.description}` })))
+        : el('p', { attrs: { role: 'status' }, text: 'No saved-project unknowns are recorded.' }),
+      el('p', { attrs: { role: 'status' }, text: `Saved-project exclusions: ${projectCoverage.excludedDependencies.status} · ${projectCoverage.excludedDependencies.reason}` }),
+    ]));
+  }
   if (context.relevantRequirements) {
     content.append(section('Pinned accepted requirements', [
       el('p', { text: `Baseline v${context.relevantRequirements.baselineVersion} · SHA-256 ${context.relevantRequirements.contentHash} · evidence ${context.relevantRequirements.evidenceRef}` }),
       el('ul', {}, context.relevantRequirements.requirements.map((requirement) => el('li', { text: `${requirement.id} · ${requirement.statement} · ${requirement.priority}` }))),
     ]));
+  } else {
+    content.append(section('Accepted requirements in context', el('p', { attrs: { role: 'status' }, text: manifest.requirements.summary })));
   }
   const binding = caseUiModel(state.changeCase, state.meta, state.activeSourceProject).sourceBinding;
   if (binding) {

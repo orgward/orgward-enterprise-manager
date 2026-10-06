@@ -574,6 +574,43 @@ function savedProjectPinFor(binding) {
   };
 }
 
+function savedProjectCoverageFor(changeCase) {
+  const binding = changeCase?.sourceBinding;
+  if (!binding) return null;
+  const trace = changeCase.processRequirementTrace;
+  const represented = [{ domain: 'selected-source', objectRef: binding.objectId, objectType: binding.objectType,
+    contentHash: binding.sourceHash, snapshotHash: trace?.source?.processSnapshotHash ?? digest(binding.snapshot) }];
+  if (trace) {
+    const appendRefs = (domain, refs, objectType = undefined) => (refs ?? []).forEach((entry) => represented.push({
+      domain, objectRef: entry.id, objectType: entry.type ?? objectType, contentHash: entry.snapshotHash,
+    }));
+    appendRefs('process-input', trace.process.inputs);
+    appendRefs('process-output', trace.process.outputs);
+    appendRefs('capability-scope', trace.scope.capabilityRefs);
+    appendRefs('system-scope', trace.scope.systemRefs);
+    appendRefs('resource-scope', trace.scope.resourceRefs);
+    appendRefs('process-risk', trace.risk.refs, 'risk');
+    appendRefs('outcome-measure', trace.outcome.metricRefs, 'metric');
+    if (trace.process.flow) represented.push({ domain: 'process-flow', objectRef: binding.objectId,
+      objectType: 'process-flow', contentHash: trace.process.flow.hash });
+  }
+  represented.sort((left, right) => left.domain.localeCompare(right.domain) || left.objectRef.localeCompare(right.objectRef));
+  return {
+    schemaVersion: 1,
+    status: 'PARTIAL',
+    sourcePinHash: digest(savedProjectPinFor(binding)),
+    processTraceHash: trace?.traceHash ?? null,
+    represented,
+    unknownDependencies: [
+      { domain: 'enterprise-wide-activity-inventory', description: 'This context pins one selected saved-design source and its directly referenced objects; other activities and processes were not retrieved.' },
+      { domain: 'policy-authority-and-controls', description: 'Policy, authority and control claims are not inferred from this process source; only separately pinned references or assessments are represented.' },
+      { domain: 'observed-runtime-outcomes', description: 'The saved design does not establish observed business outcomes; linked human reports remain unverified and process behavior remains NOT_EXECUTED.' },
+      { domain: 'external-systems', description: 'Connected-system contracts and external records require their own exact source pins and are not retrieved by this context.' },
+    ],
+    excludedDependencies: { status: 'NOT_ENUMERATED', reason: 'The source adapter does not retrieve a complete project inventory; unselected project dependencies remain unknown rather than being declared excluded.' },
+  };
+}
+
 function sealContextManifest(context) {
   const { provenanceManifestHash: _priorHash, ...manifest } = context;
   context.provenanceManifestHash = digest(manifest);
@@ -582,7 +619,7 @@ function sealContextManifest(context) {
 
 function bindAcceptedRequirementsContext(changeCase, baseline) {
   const context = changeCase.artifacts.context;
-  if (!context || ![1, 2].includes(context.manifestVersion)) return null;
+  if (!context || ![1, 2, 3].includes(context.manifestVersion)) return null;
   const priorManifestHash = context.provenanceManifestHash;
   const relevantRequirements = {
     baselineVersion: baseline.version, contentHash: baseline.contentHash, intentHash: baseline.intentHash,
@@ -1203,13 +1240,15 @@ function contextDiscovery(changeCase) {
   const excludedDependencies = untrusted.map((object) => ({ objectRef: object.id, sourceId: object.source,
     status: 'EXCLUDED', reason: 'UNTRUSTED_SOURCE_NOT_USED_FOR_AUTHORITATIVE_COVERAGE' }));
   const savedProjectPin = savedProjectPinFor(changeCase.sourceBinding);
+  const savedProjectCoverage = savedProjectCoverageFor(changeCase);
   const contextCreationEvidence = evidence(changeCase, {
-    sourceId: `sdlc:case:${changeCase.id}:context-manifest-created:v2`,
+    sourceId: `sdlc:case:${changeCase.id}:context-manifest-created:v3`,
     sourceType: 'sdlc-context-manifest-created', objectRef: plan.id,
     authority: 'ORGWARD_CONTEXT_ENGINE', freshness: 'PINNED', classification: 'INTERNAL', relevance: 1,
-    content: { manifestVersion: 2, sourceBindingHash: changeCase.sourceBinding?.bindingHash ?? null,
-      savedProjectPinHash: digest(savedProjectPin) },
-    provenanceChain: [`case:${changeCase.id}`, 'context-manifest-version:2', `saved-project-pin:sha256:${digest(savedProjectPin)}`],
+    content: { manifestVersion: 3, sourceBindingHash: changeCase.sourceBinding?.bindingHash ?? null,
+      savedProjectPinHash: digest(savedProjectPin), savedProjectCoverageHash: digest(savedProjectCoverage) },
+    provenanceChain: [`case:${changeCase.id}`, 'context-manifest-version:3', `saved-project-pin:sha256:${digest(savedProjectPin)}`,
+      `saved-project-coverage:sha256:${digest(savedProjectCoverage)}`],
   });
   changeCase.evidenceLedger.push(contextCreationEvidence);
   evidenceRefs.push(contextCreationEvidence.id);
@@ -1218,13 +1257,14 @@ function contextDiscovery(changeCase) {
     return contextEvidenceManifestEntry(record);
   });
   const manifest = {
-    manifestVersion: 2, manifestRevision: 1, plan, coverage, evidenceRefs, evidenceManifest,
+    manifestVersion: 3, manifestRevision: 1, plan, coverage, evidenceRefs, evidenceManifest,
     guardrails: { intentRef: changeCase.intent.id, constraints: [...changeCase.intent.constraints], nonGoals: [...changeCase.intent.nonGoals] },
     enterpriseContext: { version: changeCase.enterpriseSnapshot.version ?? null,
       sourceKind: changeCase.enterpriseSnapshot.sourceKind ?? 'synthetic-reference-model',
       sourceLabel: changeCase.enterpriseSnapshot.sourceLabel ?? 'Synthetic reference organization' },
     unknownDependencies, excludedDependencies,
     savedProjectPin,
+    savedProjectCoverage,
     contextCreationEvidenceRef: contextCreationEvidence.id,
     ...(changeCase.sourceBinding ? { sourceBindingHash: changeCase.sourceBinding.sourceHash, sourceBindingIntegrityHash: changeCase.sourceBinding.bindingHash, sourceBindingEvidenceRef,
       ...(changeCase.sourceBinding.integrityContext ? { integrityContext: structuredClone(changeCase.sourceBinding.integrityContext), integrityAssessmentEvidenceRef } : {}),
@@ -1247,7 +1287,7 @@ export function verifyContextManifest(changeCase) {
     return { valid: null, legacy: true, reason: 'This saved context predates manifest versioning and integrity sealing.' };
   }
   if (context.manifestVersion === undefined) return { valid: false, reason: 'The saved context manifest version is malformed.' };
-  if (![1, 2].includes(context.manifestVersion)) return { valid: false, reason: 'The saved context manifest declares an unsupported version.' };
+  if (![1, 2, 3].includes(context.manifestVersion)) return { valid: false, reason: 'The saved context manifest declares an unsupported version.' };
   if (!/^[a-f0-9]{64}$/.test(context.provenanceManifestHash ?? '')) return { valid: false, reason: 'The saved context manifest is missing its integrity hash.' };
   if (!Array.isArray(context.evidenceRefs) || !Array.isArray(context.evidenceManifest)
     || context.evidenceRefs.some((ref) => typeof ref !== 'string')
@@ -1261,21 +1301,35 @@ export function verifyContextManifest(changeCase) {
   });
   const evidenceManifestValid = expectedEvidenceManifest.every(Boolean)
     && digest(expectedEvidenceManifest) === digest(context.evidenceManifest ?? []);
-  const savedProjectPinValid = context.manifestVersion === 2
+  const savedProjectPinValid = [2, 3].includes(context.manifestVersion)
     ? Object.hasOwn(context, 'savedProjectPin') && digest(context.savedProjectPin) === digest(savedProjectPinFor(changeCase.sourceBinding))
       && (!changeCase.sourceBinding || verifySourceBinding(changeCase.sourceBinding).valid)
     : !Object.hasOwn(context, 'savedProjectPin')
       || digest(context.savedProjectPin) === digest(savedProjectPinFor(changeCase.sourceBinding));
+  const savedProjectCoverageValid = context.manifestVersion === 3
+    ? Object.hasOwn(context, 'savedProjectCoverage')
+      && digest(context.savedProjectCoverage) === digest(savedProjectCoverageFor(changeCase))
+    : !Object.hasOwn(context, 'savedProjectCoverage');
   const contextCreationEvidenceValid = context.manifestVersion === 1
     ? creationEvidence.length === 0
-    : creationEvidence.length === 1
+    : context.manifestVersion === 2
+      ? creationEvidence.length === 1
+        && context.contextCreationEvidenceRef === creationEvidence[0].id
+        && context.evidenceRefs.includes(creationEvidence[0].id)
+        && creationEvidence[0].content && typeof creationEvidence[0].content === 'object' && !Array.isArray(creationEvidence[0].content)
+        && creationEvidence[0].contentHash === digest(creationEvidence[0].content)
+        && digest(creationEvidence[0].content) === digest({ manifestVersion: 2,
+          sourceBindingHash: changeCase.sourceBinding?.bindingHash ?? null,
+          savedProjectPinHash: digest(savedProjectPinFor(changeCase.sourceBinding)) })
+      : creationEvidence.length === 1
       && context.contextCreationEvidenceRef === creationEvidence[0].id
       && context.evidenceRefs.includes(creationEvidence[0].id)
       && creationEvidence[0].content && typeof creationEvidence[0].content === 'object' && !Array.isArray(creationEvidence[0].content)
       && creationEvidence[0].contentHash === digest(creationEvidence[0].content)
-      && digest(creationEvidence[0].content) === digest({ manifestVersion: 2,
+      && digest(creationEvidence[0].content) === digest({ manifestVersion: 3,
         sourceBindingHash: changeCase.sourceBinding?.bindingHash ?? null,
-        savedProjectPinHash: digest(savedProjectPinFor(changeCase.sourceBinding)) });
+        savedProjectPinHash: digest(savedProjectPinFor(changeCase.sourceBinding)),
+        savedProjectCoverageHash: digest(savedProjectCoverageFor(changeCase)) });
   let sentinelBindingValid = true;
   if (changeCase.sourceBinding && (changeCase.sourceBinding.bindingSchemaVersion ?? 1) === 2) {
     const expectedSentinel = changeCase.sourceBinding.sentinelContext
@@ -1286,9 +1340,9 @@ export function verifyContextManifest(changeCase) {
         && digest(sentinelEvidence.content) === digest(expectedSentinel));
   }
   const actualHash = digest(manifest);
-  return { valid: evidenceManifestValid && savedProjectPinValid && contextCreationEvidenceValid && sentinelBindingValid && actualHash === provenanceManifestHash,
+  return { valid: evidenceManifestValid && savedProjectPinValid && savedProjectCoverageValid && contextCreationEvidenceValid && sentinelBindingValid && actualHash === provenanceManifestHash,
     expectedHash: provenanceManifestHash, actualHash,
-    reason: evidenceManifestValid && savedProjectPinValid && contextCreationEvidenceValid && sentinelBindingValid && actualHash === provenanceManifestHash ? null : 'The saved context manifest version, source pin, or one of its evidence references changed after pinning.' };
+    reason: evidenceManifestValid && savedProjectPinValid && savedProjectCoverageValid && contextCreationEvidenceValid && sentinelBindingValid && actualHash === provenanceManifestHash ? null : 'The saved context manifest version, source pin, coverage, or one of its evidence references changed after pinning.' };
 }
 
 function impactAnalysis(changeCase) {

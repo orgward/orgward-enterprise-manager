@@ -39,11 +39,48 @@ export function savedProjectPinSummary(context) {
     return 'Historical context manifest v1 has no structured saved-project pin.';
   }
   const pin = context?.savedProjectPin;
-  if (context?.manifestVersion !== 2 || !pin) return 'No saved project is pinned in this context manifest.';
+  if (![2, 3].includes(context?.manifestVersion) || !pin) return 'No saved project is pinned in this context manifest.';
   const snapshot = pin.blueprintSnapshotStatus === 'PINNED'
     ? `blueprint snapshot SHA-256 ${pin.blueprintSnapshotHash}`
     : 'blueprint snapshot hash unavailable in this legacy source binding';
   return `Project ${pin.projectId} v${pin.projectVersion} · blueprint ${pin.blueprintId} v${pin.blueprintVersion} · schema v${pin.blueprintSchemaVersion} · object ${pin.sourceObjectId} (${pin.sourceObjectType}) · source SHA-256 ${pin.sourceHash} · binding SHA-256 ${pin.bindingHash} · ${snapshot}`;
+}
+
+export function contextManifestPresentation(context) {
+  if (!context || typeof context !== 'object') return null;
+  const enterprise = context.enterpriseContext ?? {};
+  const requirements = context.relevantRequirements;
+  return {
+    manifest: `Context manifest v${context.manifestVersion ?? 'unknown'} · revision ${context.manifestRevision ?? 'unknown'} · SHA-256 ${context.provenanceManifestHash ?? 'unavailable'}`,
+    enterprise: `Enterprise context version ${enterprise.version ?? 'unavailable'} · ${enterprise.sourceLabel ?? 'source label unavailable'} · ${enterprise.sourceKind ?? 'source kind unavailable'}`,
+    enterpriseStatus: enterprise.sourceKind === 'synthetic-reference-model'
+      ? 'Synthetic reference context only; it is not authoritative evidence about the selected business or saved project.'
+      : 'Source provenance is shown as recorded; this display does not assert authority.',
+    guardrails: {
+      intentRef: context.guardrails?.intentRef ?? 'unavailable',
+      constraints: Array.isArray(context.guardrails?.constraints) ? context.guardrails.constraints : [],
+      nonGoals: Array.isArray(context.guardrails?.nonGoals) ? context.guardrails.nonGoals : [],
+    },
+    requirements: requirements ? {
+      status: 'PINNED_ACCEPTED',
+      summary: `Accepted requirements baseline v${requirements.baselineVersion} · SHA-256 ${requirements.contentHash} · evidence ${requirements.evidenceRef}`,
+      entries: Array.isArray(requirements.requirements) ? requirements.requirements : [],
+    } : {
+      status: 'NOT_YET_ACCEPTED',
+      summary: 'No accepted requirements baseline is pinned in this manifest revision. Draft requirements remain separate until owner acceptance.',
+      entries: [],
+    },
+    unknownDependencies: Array.isArray(context.unknownDependencies) ? context.unknownDependencies : [],
+    excludedDependencies: Array.isArray(context.excludedDependencies) ? context.excludedDependencies : [],
+    savedProjectCoverage: context.savedProjectCoverage && typeof context.savedProjectCoverage === 'object' ? {
+      status: context.savedProjectCoverage.status ?? 'UNKNOWN',
+      sourcePinHash: context.savedProjectCoverage.sourcePinHash ?? 'unavailable',
+      processTraceHash: context.savedProjectCoverage.processTraceHash ?? null,
+      represented: Array.isArray(context.savedProjectCoverage.represented) ? context.savedProjectCoverage.represented : [],
+      unknownDependencies: Array.isArray(context.savedProjectCoverage.unknownDependencies) ? context.savedProjectCoverage.unknownDependencies : [],
+      excludedDependencies: context.savedProjectCoverage.excludedDependencies ?? { status: 'UNKNOWN', reason: 'Unavailable.' },
+    } : null,
+  };
 }
 
 export function processRunEvidencePresentation(link) {

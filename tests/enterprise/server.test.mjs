@@ -374,7 +374,14 @@ test('Sentinel assessment is human-authorized, aggregate-versioned, replayable a
     (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
   [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
   const project = await seedProject(postgres, 'Sentinel source project', { mutate(value) {
-    for (const process of items(value.blueprintVersions.at(-1)).filter((item) => item.type === 'process')) process.ownerRoleName = 'Operations owner';
+    const blueprintItems = items(value.blueprintVersions.at(-1));
+    const processes = blueprintItems.filter((item) => item.type === 'process');
+    for (const entry of processes) entry.ownerRoleName = 'Operations owner';
+    const process = processes[0];
+    const risk = blueprintItems.find((item) => item.type === 'risk');
+    if (risk) risk.processId = process.id;
+    const metric = blueprintItems.find((item) => item.type === 'metric');
+    if (metric) process.metrics = [...(process.metrics ?? []), metric.id];
   } });
   const view = await currentView(instance.base, 'owner', project.id);
   const sourceBlueprint = project.blueprintVersions.at(-1);
@@ -428,6 +435,34 @@ test('Sentinel assessment is human-authorized, aggregate-versioned, replayable a
   assert.equal(contextRun.artifacts.context.sentinelContext.assessment.id, report.id);
   assert.equal(contextRun.artifacts.context.coverage.find((entry) => entry.domain === 'sentinel').status, 'PASSED');
   assert.match(contextRun.artifacts.context.coverage.find((entry) => entry.domain === 'sentinel').unknowns.join(' '), /outside Sentinel v1 coverage/);
+  const context = contextRun.artifacts.context;
+  assert.equal(context.manifestVersion, 3);
+  assert.equal(context.savedProjectPin.projectVersion, 2, 'context selection pins current aggregate version N+1');
+  assert.equal(context.savedProjectPin.blueprintId, sourceBlueprint.id);
+  assert.equal(context.savedProjectPin.blueprintVersion, sourceBlueprint.version);
+  assert.equal(context.savedProjectCoverage.status, 'PARTIAL');
+  assert.equal(context.savedProjectCoverage.sourcePinHash, digest(context.savedProjectPin));
+  assert.equal(context.savedProjectCoverage.processTraceHash, selected.processRequirementTrace.traceHash);
+  assert.ok(context.savedProjectCoverage.represented.some((entry) => entry.domain === 'process-risk'
+    && entry.objectType === 'risk' && entry.objectRef === selected.processRequirementTrace.risk.refs[0]?.id));
+  assert.ok(context.savedProjectCoverage.represented.some((entry) => entry.domain === 'outcome-measure'
+    && entry.objectType === 'metric' && entry.objectRef === selected.processRequirementTrace.outcome.metricRefs[0]?.id));
+  assert.ok(context.savedProjectCoverage.represented.some((entry) => entry.domain === 'selected-source'
+    && entry.objectRef === source.id && entry.contentHash === selected.sourceBinding.sourceHash));
+  for (const domain of ['enterprise-wide-activity-inventory', 'policy-authority-and-controls',
+    'observed-runtime-outcomes', 'external-systems']) {
+    assert.ok(context.savedProjectCoverage.unknownDependencies.some((entry) => entry.domain === domain),
+      `${domain} remains explicitly unknown for this partial source context`);
+  }
+  assert.equal(context.savedProjectCoverage.excludedDependencies.status, 'NOT_ENUMERATED');
+  assert.equal(context.enterpriseContext.sourceKind, 'synthetic-reference-model');
+  assert.ok(Array.isArray(context.guardrails.constraints));
+  assert.ok(Array.isArray(context.guardrails.nonGoals));
+  assert.equal(context.sentinelContext.assessment.assessedAggregateVersion, 1,
+    'assessment evidence remains pinned to source aggregate version N');
+  const reloadedContextCase = await request(instance.base, 'owner', `/api/sdlc/cases/${selected.id}`);
+  assert.equal(reloadedContextCase.contextManifestIntegrity.valid, true);
+  assert.deepEqual(reloadedContextCase.artifacts.context.savedProjectCoverage, context.savedProjectCoverage);
   await request(instance.base, 'owner', '/api/sdlc/cases', { method: 'POST', body: {
     mode: 'golden', projectId: project.id, sourceObjectId: source.id, expectedProjectVersion: 2,
     expectedBlueprintId: sourceBlueprint.id, expectedBlueprintVersion: sourceBlueprint.version,
@@ -453,6 +488,11 @@ test('Sentinel assessment is human-authorized, aggregate-versioned, replayable a
   const reloadedCase = await request(instance.base, 'owner', `/api/sdlc/cases/${selected.id}`);
   assert.equal(verifySourceBinding(reloadedCase.sourceBinding).valid, true);
   assert.equal(reloadedCase.artifacts.context.sentinelContext.assessment.id, report.id);
+  assert.equal(reloadedCase.contextManifestIntegrity.valid, true);
+  assert.ok(reloadedCase.artifacts.context.savedProjectCoverage.represented.some((entry) => entry.domain === 'process-risk'
+    && entry.objectType === 'risk'));
+  assert.ok(reloadedCase.artifacts.context.savedProjectCoverage.represented.some((entry) => entry.domain === 'outcome-measure'
+    && entry.objectType === 'metric'));
 });
 
 test('interactive map edits use the shared semantic command boundary with denial, conflict, replay and restart', async (t) => {
