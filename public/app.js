@@ -8,6 +8,7 @@ import { apiErrorFrom, decodeStudioRoute, encodeExecutionRoute, encodeStudioRout
 import { coverageAreaStateLabel, coverageForBlueprint } from './coverage-dashboard.mjs';
 import { compareBlueprintObjectVersions } from './blueprint-comparison.mjs';
 import { renderBlueprintImpactPreview } from './blueprint-impact-preview.mjs';
+import { renderChatBlueprintEdit } from './chat-blueprint-edit.mjs';
 import { renderOutcomeInbox } from './outcomes.mjs';
 import { enterpriseContextFailure, enterpriseContextReadOnly, enterpriseStateSummary, enterpriseSourceAligned, hasEnterpriseContext, enterpriseQuery, enterpriseRequestPath, persistEnterpriseCommand, restoreEnterpriseCommand, persistEnterpriseInterchangeDraft, restoreEnterpriseInterchangeDraft, submitEnterpriseCommand, renderEnterpriseContext, renderEnterpriseObject, renderEnterpriseObjectHeader, renderEnterpriseStewardshipPanel } from './enterprise.mjs';
 import { downloadPortfolioDesign, downloadPortfolioInventory, portfolioImportWorkspaceRoute, readPortfolioImportFile, renderProjectPortfolio } from './project-portfolio.mjs';
@@ -37,6 +38,7 @@ const state = {
   pendingMessage: null,
   pendingBlueprintEdit: null,
   blueprintEditDraft: null,
+  chatBlueprintEditDraft: null,
   pendingActorBinding: null,
   pendingActorBindingEnable: null,
   pendingAgentEnvelope: null,
@@ -278,7 +280,7 @@ async function changeEnterpriseContext(query, { preserveProcessDraft = false, pr
   await loadEnterpriseContext({ resetTypes: true });
 }
 
-async function saveEnterpriseCommand(payload = null) {
+async function saveEnterpriseCommand(payload = null, { commandId = null } = {}) {
   if (state.enterpriseBusy || state.enterpriseLoading || !state.project) return;
   const projectId = state.project.id;
   if (!state.pendingEnterprise) {
@@ -314,7 +316,7 @@ async function saveEnterpriseCommand(payload = null) {
       boundPayload = { ...payload, blueprintId: model.context.blueprintId, blueprintVersion: model.context.blueprintVersion };
       if (payload.kind === 'run-integrity-checks') state.enterpriseIntegrityDraft = boundPayload;
     }
-    retainEnterprise({ projectId, route: currentRoute(), envelope: command(boundPayload, model.context.projectVersion, `enterprise:${crypto.randomUUID()}`) });
+    retainEnterprise({ projectId, route: currentRoute(), envelope: command(boundPayload, model.context.projectVersion, commandId ?? `enterprise:${crypto.randomUUID()}`) });
   }
   const saved = state.pendingEnterprise;
   if (ENTERPRISE_PROCESS_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseProcessDraft = saved.envelope.payload;
@@ -333,6 +335,7 @@ async function saveEnterpriseCommand(payload = null) {
   try {
     result = await submitEnterpriseCommand(api, projectId, saved);
     if (state.project?.id !== projectId) return;
+    if (state.chatBlueprintEditDraft?.commandId === saved.envelope.commandId) state.chatBlueprintEditDraft = null;
     retainEnterprise(null);
     if (ENTERPRISE_PROCESS_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseProcessDraft = null;
     if (ENTERPRISE_ECONOMIC_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseEconomicDraft = null;
@@ -399,7 +402,7 @@ function syncExecutionNavigation() {
 function hasUnsavedDraft({ includeProcessDraft = true, includeEconomicDraft = true, includeRefinementDraft = true, includeInterchangeDraft = true, includeIntegrityDraft = true } = {}) { return Boolean((includeProcessDraft && state.enterpriseProcessDraft)
   || (includeEconomicDraft && state.enterpriseEconomicDraft) || (includeRefinementDraft && state.enterpriseRefinementDraft)
   || (includeInterchangeDraft && state.enterpriseInterchangeDraft) || (includeIntegrityDraft && state.enterpriseIntegrityDraft)
-  || state.draft.trim() || state.pendingBlueprintEdit || state.blueprintEditDraft
+  || state.draft.trim() || state.pendingBlueprintEdit || state.blueprintEditDraft || state.chatBlueprintEditDraft
   || state.pendingActorBinding || state.pendingActorBindingEnable || state.pendingEnterprise); }
 
 function allowRouteChange({ preserveProcessDraft = false, preserveEconomicDraft = false, preserveRefinementDraft = false, preserveInterchangeDraft = false, preserveIntegrityDraft = false } = {}) {
@@ -407,14 +410,14 @@ function allowRouteChange({ preserveProcessDraft = false, preserveEconomicDraft 
   if (!hasUnsavedDraft({ includeProcessDraft: !preserveProcessDraft, includeEconomicDraft: !preserveEconomicDraft,
     includeRefinementDraft: !preserveRefinementDraft, includeInterchangeDraft: !preserveInterchangeDraft,
     includeIntegrityDraft: !preserveIntegrityDraft })) return true;
-  const prompt = state.pendingBlueprintEdit || state.blueprintEditDraft || state.pendingActorBinding
+  const prompt = state.pendingBlueprintEdit || state.blueprintEditDraft || state.chatBlueprintEditDraft || state.pendingActorBinding
     || (!preserveProcessDraft && state.enterpriseProcessDraft) || (!preserveEconomicDraft && state.enterpriseEconomicDraft)
     || (!preserveRefinementDraft && state.enterpriseRefinementDraft)
     || (!preserveInterchangeDraft && state.enterpriseInterchangeDraft) || (!preserveIntegrityDraft && state.enterpriseIntegrityDraft)
     ? 'Leave and discard this unsaved workspace change?' : 'Discard the unsent answer and leave this workspace?';
   const accepted = window.confirm(prompt);
   if (accepted) {
-    state.pendingBlueprintEdit = null; state.blueprintEditDraft = null; state.pendingActorBinding = null; state.pendingActorBindingEnable = null;
+    state.pendingBlueprintEdit = null; state.blueprintEditDraft = null; state.chatBlueprintEditDraft = null; state.pendingActorBinding = null; state.pendingActorBindingEnable = null;
     if (!preserveProcessDraft) state.enterpriseProcessDraft = null;
     if (!preserveEconomicDraft) state.enterpriseEconomicDraft = null;
     if (!preserveRefinementDraft) state.enterpriseRefinementDraft = null;
@@ -516,6 +519,7 @@ function showWelcome({ history = 'push', refreshPortfolio = true } = {}) {
   state.requestedProjectId = null;
   state.pendingBlueprintEdit = null;
   state.blueprintEditDraft = null;
+  state.chatBlueprintEditDraft = null;
   state.pendingActorBinding = null;
   state.pendingActorBindingEnable = null;
   state.project = null;
@@ -575,7 +579,7 @@ async function loadProject(id, { history = 'push', route = null, focusOutcomes =
   if (!id) return showWelcome({ history });
   const loadGeneration = ++state.projectLoadGeneration;
   if (state.project?.id !== id) state.enterpriseStatus = '';
-  if (state.project?.id !== id) { state.pendingBlueprintEdit = null; state.blueprintEditDraft = null; state.pendingActorBinding = null; state.pendingActorBindingEnable = null; state.mapSearch = ''; }
+  if (state.project?.id !== id) { state.pendingBlueprintEdit = null; state.blueprintEditDraft = null; state.chatBlueprintEditDraft = null; state.pendingActorBinding = null; state.pendingActorBindingEnable = null; state.mapSearch = ''; }
   state.requestedProjectId = id;
   state.enterpriseGeneration += 1;
   try {
@@ -838,6 +842,55 @@ function renderConversation() {
   } else {
     document.querySelector('#question-count').textContent = `Question ${project.questionIndex + 1} of 4`;
   }
+  renderChatBlueprintEditPanel();
+}
+
+function chatBlueprintEditSource() {
+  const project = state.project;
+  const model = state.enterpriseModel;
+  const latest = project?.latestBlueprint;
+  const context = model?.context;
+  const writable = Boolean(project && latest && project.phase !== 'discovery'
+    && state.sessionRoles.includes('workspace-write') && model?.permissions?.write
+    && !enterpriseReadOnly() && enterpriseSourceAligned(project, model)
+    && context?.isCurrent === true && context.sourceKind === 'MAIN_DESIGN'
+    && !context.branchId && !context.proposalId && context.effectiveAt == null && context.recordedAtCutoff == null
+    && context.blueprintId === latest.id && context.blueprintVersion === latest.version
+    && context.snapshotHash);
+  return { projectId: project?.id, projectVersion: project?.version,
+    blueprintId: latest?.id, blueprintVersion: latest?.version,
+    snapshotHash: context?.snapshotHash ?? null, selectedId: state.selectedId, writable };
+}
+
+function renderChatBlueprintEditPanel() {
+  const slot = document.querySelector('#chat-blueprint-edit-slot');
+  if (!slot) return;
+  slot.replaceChildren();
+  if (!state.project?.latestBlueprint || state.project.phase === 'discovery') return;
+  const model = state.enterpriseModel;
+  const source = chatBlueprintEditSource();
+  const draft = state.chatBlueprintEditDraft;
+  if (draft && (draft.projectId !== source.projectId || draft.projectVersion !== source.projectVersion
+    || draft.blueprintId !== source.blueprintId || draft.blueprintVersion !== source.blueprintVersion
+    || draft.snapshotHash !== source.snapshotHash || draft.objectId !== source.selectedId)) {
+    state.chatBlueprintEditDraft = null;
+  }
+  slot.append(renderChatBlueprintEdit({ project: state.project, model, selectedId: state.selectedId,
+    writable: source.writable, readCurrentSource: chatBlueprintEditSource, el: element, api,
+    initialDraft: state.chatBlueprintEditDraft,
+    onDraftChange: (next) => { state.chatBlueprintEditDraft = next; },
+    onApply: async (payload, commandId, expectedVersion) => {
+      const current = chatBlueprintEditSource();
+      const exactDraft = state.chatBlueprintEditDraft;
+      if (!current.writable || current.projectVersion !== expectedVersion
+        || current.projectId !== exactDraft?.projectId || current.blueprintId !== exactDraft?.blueprintId
+        || current.blueprintVersion !== exactDraft?.blueprintVersion || current.snapshotHash !== exactDraft?.snapshotHash
+        || current.selectedId !== exactDraft?.objectId || exactDraft.commandId !== commandId) {
+        notify('The selected customer or current main design changed. Preview the edit again.');
+        return;
+      }
+      await saveEnterpriseCommand(payload, { commandId });
+    } }));
 }
 
 async function sendMessage(event) {
@@ -882,6 +935,8 @@ async function sendMessage(event) {
 }
 
 function setView(view, { history = 'push' } = {}) {
+  const viewChanged = state.view !== view;
+  if (viewChanged && history !== null && state.chatBlueprintEditDraft && !allowRouteChange()) return;
   state.view = view;
   document.querySelector('#blueprint-view').hidden = view !== 'blueprint';
   document.querySelector('#map-view').hidden = view !== 'map';
@@ -892,6 +947,7 @@ function setView(view, { history = 'push' } = {}) {
     if (window.matchMedia('(max-width: 560px)').matches && state.mapMode === 'graph') state.mapMode = 'list';
     renderMap();
   }
+  if (viewChanged) renderChatBlueprintEditPanel();
   syncRoute(history);
 }
 
@@ -1363,6 +1419,10 @@ function renderList() {
 
 function selectNode(id) {
   const selectedChanged = state.selectedId !== id;
+  if (selectedChanged && state.chatBlueprintEditDraft) {
+    state.chatBlueprintEditDraft = null;
+    notify('The unsaved chat edit was discarded because the selected design item changed.');
+  }
   if (selectedChanged) state.enterpriseQuery.simulationId = null;
   state.selectedId = id;
   let needsStateProjection = false;
@@ -1376,6 +1436,7 @@ function selectNode(id) {
   }
   if (state.mapMode === 'graph') renderGraph(); else renderList();
   renderDetail();
+  renderChatBlueprintEditPanel();
   const mapCanvas = document.querySelector(state.mapMode === 'graph' ? '#graph-canvas' : '#list-canvas');
   focusSelectedMapControl(mapCanvas, state.mapMode, id);
   syncRoute('push');

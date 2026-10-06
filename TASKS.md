@@ -8294,3 +8294,71 @@ overlay appeared. Screenshots: `/tmp/orgward-t122-laptop.png` and
 import preview was not exercised because it requires a bundle. This is a focused
 browser observation, not screen-reader or WCAG certification. No PR/task cursor
 or release-gate status changed; PR-15 remains active.
+
+PR-17 T-122 preview announcement follow-up (2026-10-06): source inspection and
+an isolated verified-identity browser fixture found that bulk import updated its
+polite status with only a generic ready message while the newly rendered impact
+panel was outside any live region. The status now announces the number of direct
+impact rows and `INCOMPLETE` / `UNKNOWN` operational and downstream limits. Main
+and branch map previews use the shared named `aria-live="polite"` preview region.
+At 390×844, seeded branch and import previews both rendered without horizontal
+overflow; the import live status announced its impact summary and its detailed
+region remained available in the semantic snapshot. No browser console errors
+or framework overlay appeared. Focused regression
+`npm test -- tests/enterprise/view.test.mjs --test-name-pattern='enterprise import live status announces incomplete direct impact and unknown downstream effects'`
+passed 1/1 (0 failures, 0 skips; 0.30s; log
+`/tmp/orgward-tests-cQgFXm/node-test.tap.log`). No apply action, provider, secret,
+or external effect was used. Browser screenshots:
+`/tmp/orgward-t122-branch-narrow.png` and
+`/tmp/orgward-t122-import-narrow-after.png`. This is not screen-reader or WCAG
+certification. T-122 and PR-17 remain open; PR-15 remains the active cursor and
+no release gate changed.
+
+PR-17 T-121 saved-blueprint chat edit increment (2026-10-06): conversation now
+offers a recognizable, transient edit mode for one exact replacement of a
+current main-design customer name or detail. It pins the project/version,
+blueprint/version/hash, object, field, canonical trimmed value, reason and
+command ID; actor identities and branch/historical contexts are excluded. The
+existing impact-preview API shows `INCOMPLETE` / `UNKNOWN` before Apply. Apply
+uses the shared semantic command endpoint and its retained retry/reconcile
+envelope; no transcript or `/messages` write is made. Draft changes and source
+navigation invalidate preview, late responses are ignored, and there is no
+rebase on conflict. Focused view regression
+`npm test -- tests/enterprise/view.test.mjs --test-name-pattern='chat blueprint edit'`
+passed 2/2 (0 failures, 0 skips; 0.36s; log
+`/tmp/orgward-tests-2Ocuoq/node-test.tap.log`). Focused server regression
+`npm test -- tests/enterprise/server.test.mjs --test-name-pattern='chat edit preview stays read only and exact customer replacement applies through shared command with replay and restart'`
+passed 1/1 (0 failures, 0 skips; 2.23s; log
+`/tmp/orgward-tests-lXLQuP/node-test.tap.log`); it covers reader denial,
+normalization limits, stale pins, no mutation before apply, actor rejection,
+exact apply, replay, changed-payload conflict and restart persistence. Syntax
+and diff checks passed. No browser E2E was run: the prior ad hoc verified
+identity browser fixture is not running and no reusable customer-seeding
+browser helper exists in this tree, so the apply-and-refresh journey could not
+be exercised without creating a new harness. This increment does not close
+T-121 or PR-17, change the PR-15 cursor or release gates, or assert the T-123
+barrier; other named edit surfaces remain open.
+
+T-121 chat edit recovery follow-up (2026-10-06): added `edit-blueprint-object`
+to the safe retained-command restore allowlist. A focused remount regression
+persists the chat command, restores it under the same principal/project, and
+retries the identical command ID, payload and expected version without
+allocating another ID. `npm test -- tests/enterprise/view.test.mjs
+--test-name-pattern='chat blueprint edit recovery restores and retries the exact semantic command after reload'`
+passed 1/1 (0 failures, 0 skips; 0.33s; log
+`/tmp/orgward-tests-BSXEoI/node-test.tap.log`). This repairs uncertain-apply
+recovery for the chat edit path; T-121 and PR-17 remain open, PR-15 remains the
+active cursor and no release gate changed.
+
+T-121 chat edit responsive layout follow-up (2026-10-06): the desktop chat
+editor slot now has a bounded `min(48vh, 480px)` scroll area with a zero minimum
+flex size, so short viewports keep Apply reachable inside the sidebar. At
+mobile/tablet widths, the completed conversation panel grows with the editor
+instead of clipping it at 440px; the conversation retains its own bounded
+scroll area. Focused CSS contract regression
+`npm test -- tests/enterprise/view.test.mjs --test-name-pattern='chat blueprint editor has a bounded desktop scroll area and grows the completed mobile panel'`
+passed 1/1 (0 failures, 0 skips; 0.34s; log
+`/tmp/orgward-tests-cna817/node-test.tap.log`). No browser viewport check was
+run because the verified fixture is not running and no reusable local
+customer-seeding browser helper is available. T-121 and PR-17 remain open;
+PR-15 remains the active cursor and no release gate changed.

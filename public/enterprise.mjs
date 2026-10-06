@@ -131,7 +131,7 @@ export function restoreEnterpriseCommand(storage, principal, projectId) {
   if (!saved) return null;
   if (saved.projectId !== projectId || saved.envelope?.schemaVersion !== '1.0'
     || typeof saved.envelope.commandId !== 'string' || !Number.isSafeInteger(saved.envelope.expectedVersion)
-    || !['create-scope', 'rename-scope', 'assign-object-scope', 'record-state', 'set-validity', 'propose-future-design', ...ENTERPRISE_INTEGRITY_COMMANDS, ...ENTERPRISE_BRANCH_COMMANDS, ...ENTERPRISE_PROCESS_COMMANDS, ...ENTERPRISE_ECONOMIC_COMMANDS, ...ENTERPRISE_REFINEMENT_COMMANDS, ...ENTERPRISE_INTERCHANGE_COMMANDS].includes(saved.envelope.payload?.kind)) throw new Error('Saved enterprise command is unreadable.');
+    || !['create-scope', 'rename-scope', 'assign-object-scope', 'record-state', 'set-validity', 'propose-future-design', 'edit-blueprint-object', ...ENTERPRISE_INTEGRITY_COMMANDS, ...ENTERPRISE_BRANCH_COMMANDS, ...ENTERPRISE_PROCESS_COMMANDS, ...ENTERPRISE_ECONOMIC_COMMANDS, ...ENTERPRISE_REFINEMENT_COMMANDS, ...ENTERPRISE_INTERCHANGE_COMMANDS].includes(saved.envelope.payload?.kind)) throw new Error('Saved enterprise command is unreadable.');
   return saved;
 }
 

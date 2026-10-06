@@ -27,6 +27,7 @@ import { decodeStudioRoute, encodeStudioRoute } from '../../public/shared-intera
 import { renderOutcomeInbox } from '../../public/outcomes.mjs';
 import { renderProtectedRelease } from '../../public/protected-release.mjs';
 import { renderBlueprintImpactPreview } from '../../public/blueprint-impact-preview.mjs';
+import { renderChatBlueprintEdit } from '../../public/chat-blueprint-edit.mjs';
 
 class NodeListFixture extends Array {
   constructor(entries) { super(...entries); this.at = undefined; }
@@ -124,6 +125,93 @@ test('blueprint impact preview shows exact pins, direct changes and explicit unk
   assert.match(branchPreview.textContent, /branch enterprise-branch-1 revision 6/);
   assert.match(branchPreview.textContent, /main blueprint blueprint-main v9 SHA-256 c{64}/);
   assert.match(branchPreview.textContent, /Proposed branch revision 7/);
+});
+
+test('chat blueprint edit previews one exact customer replacement and only applies the unchanged current draft', async () => {
+  const project = { id: 'project-one', version: 5, phase: 'blueprint_ready', latestBlueprint: { id: 'blueprint-one', version: 2,
+    areas: { customers: { items: [{ id: 'customer-one', type: 'customer', name: 'Northstar customer', detail: 'Original customer detail.' }] } } } };
+  const model = { permissions: { write: true }, context: { projectVersion: 5, blueprintId: 'blueprint-one', blueprintVersion: 2,
+    snapshotHash: 'a'.repeat(64), isCurrent: true, sourceKind: 'MAIN_DESIGN' } };
+  let current = { projectId: 'project-one', projectVersion: 5, blueprintId: 'blueprint-one', blueprintVersion: 2,
+    snapshotHash: 'a'.repeat(64), selectedId: 'customer-one', writable: true };
+  const calls = []; const applied = [];
+  const panel = renderChatBlueprintEdit({ project, model, selectedId: 'customer-one', writable: true,
+    readCurrentSource: () => current, el,
+    api: async (path, options) => { calls.push([path, JSON.parse(options.body)]); return { data: {
+      status: 'INCOMPLETE', source: { projectId: 'project-one', projectVersion: 5, blueprintId: 'blueprint-one',
+        blueprintVersion: 2, snapshotHash: 'a'.repeat(64), kind: 'MAIN_DESIGN' }, proposedBlueprintVersion: 3,
+      changedFields: [{ field: 'detail', before: 'Original customer detail.', after: 'Updated customer detail.' }],
+      directlyAffectedObjects: [{ objectId: 'customer-one', name: 'Northstar customer', type: 'customer', edited: true,
+        source: { blueprintVersion: 2 } }], coverage: { operationalAndDownstreamImpact: 'UNKNOWN' },
+      unknownAreas: ['Sentinel, approvals, queued, running, or completed work'], limitation: 'Preview does not grant publication authority.' } }; },
+    onApply: async (...args) => applied.push(args) });
+  const find = (node, predicate) => predicate(node) ? node : node.children.map((child) => find(child, predicate)).find(Boolean);
+  const form = find(panel, (node) => node.tagName === 'form');
+  const field = find(form, (node) => node.attrs.name === 'field');
+  const value = find(form, (node) => node.attrs.name === 'replacement');
+  const apply = find(form, (node) => node.tagName === 'button' && node.text === 'Apply proposed change');
+  assert.equal(apply.disabled, true);
+  assert.equal(value.attrs.maxlength, '700');
+  field.value = 'name'; field.listeners.get('change')?.();
+  assert.equal(value.attrs.maxlength, '120');
+  field.value = 'detail'; value.value = '  Updated customer detail  ';
+  value.listeners.get('input')?.();
+  await form.listeners.get('submit')?.({ preventDefault() {} });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], '/api/v1/projects/project-one/enterprise/impact-preview');
+  assert.equal(calls[0][1].expectedVersion, 5);
+  assert.deepEqual(calls[0][1].command, { kind: 'edit-blueprint-object', blueprintId: 'blueprint-one', blueprintVersion: 2,
+    objectId: 'customer-one', name: 'Northstar customer', detail: 'Updated customer detail',
+    reason: 'Chat proposed an exact customer name or detail replacement.' });
+  assert.match(panel.textContent, /Updated customer detail/);
+  assert.match(panel.textContent, /INCOMPLETE/);
+  assert.match(panel.textContent, /UNKNOWN/);
+  assert.equal(apply.disabled, false);
+  await apply.listeners.get('click')?.();
+  assert.equal(applied.length, 1);
+  assert.equal(applied[0][0].detail, 'Updated customer detail');
+  assert.match(applied[0][1], /^chat-blueprint-edit:/);
+  assert.equal(applied[0][2], 5);
+  value.value = 'A changed after preview'; value.listeners.get('input')?.();
+  assert.equal(apply.disabled, true, 'editing the value invalidates the preview');
+});
+
+test('chat blueprint edit discards a late preview after selected target changes and excludes actor identities', async () => {
+  const project = { id: 'project-one', version: 5, phase: 'blueprint_ready', latestBlueprint: { id: 'blueprint-one', version: 2,
+    areas: { customers: { items: [{ id: 'customer-one', type: 'customer', name: 'Northstar customer', detail: 'Original.' }] } } } };
+  const model = { permissions: { write: true }, context: { projectVersion: 5, blueprintId: 'blueprint-one', blueprintVersion: 2,
+    snapshotHash: 'a'.repeat(64), isCurrent: true, sourceKind: 'MAIN_DESIGN' } };
+  let current = { projectId: 'project-one', projectVersion: 5, blueprintId: 'blueprint-one', blueprintVersion: 2,
+    snapshotHash: 'a'.repeat(64), selectedId: 'customer-one', writable: true };
+  let finishPreview;
+  const panel = renderChatBlueprintEdit({ project, model, selectedId: 'customer-one', writable: true,
+    readCurrentSource: () => current, el, api: () => new Promise((resolve) => { finishPreview = resolve; }), onApply() { assert.fail('late preview must not apply'); } });
+  const find = (node, predicate) => predicate(node) ? node : node.children.map((child) => find(child, predicate)).find(Boolean);
+  const form = find(panel, (node) => node.tagName === 'form');
+  const value = find(form, (node) => node.attrs.name === 'replacement');
+  const apply = find(form, (node) => node.tagName === 'button' && node.text === 'Apply proposed change');
+  value.value = 'Proposed customer detail'; value.listeners.get('input')?.();
+  const pending = form.listeners.get('submit')?.({ preventDefault() {} });
+  current = { ...current, selectedId: 'another-customer' };
+  finishPreview({ data: { status: 'INCOMPLETE', source: { kind: 'MAIN_DESIGN', projectVersion: 5,
+    blueprintId: 'blueprint-one', blueprintVersion: 2, snapshotHash: 'a'.repeat(64) }, proposedBlueprintVersion: 3,
+    changedFields: [], directlyAffectedObjects: [], unknownAreas: [], limitation: 'Not complete.' } });
+  await pending;
+  assert.equal(apply.disabled, true);
+  const actorProject = { ...project, latestBlueprint: { ...project.latestBlueprint,
+    areas: { identity: { items: [{ id: 'actor-founder', type: 'actor-human', name: 'Founder', detail: 'Human owner.' }] } } } };
+  const actorPanel = renderChatBlueprintEdit({ project: actorProject, model, selectedId: 'actor-founder', writable: true,
+    readCurrentSource: () => ({ ...current, selectedId: 'actor-founder' }), el, api: async () => assert.fail('actor must not preview'), onApply() {} });
+  assert.equal(find(actorPanel, (node) => node.tagName === 'form'), undefined);
+  assert.match(actorPanel.textContent, /Actor identities and other record types are not available/);
+  for (const context of [
+    { ...model.context, sourceKind: 'BRANCH_DRAFT', branchId: 'branch-one' },
+    { ...model.context, isCurrent: false },
+  ]) {
+    const readOnlyPanel = renderChatBlueprintEdit({ project, model: { ...model, context }, selectedId: 'customer-one', writable: true,
+      readCurrentSource: () => current, el, api: async () => assert.fail('non-current source must not preview'), onApply() {} });
+    assert.equal(find(readOnlyPanel, (node) => node.tagName === 'form'), undefined);
+  }
 });
 
 test('portfolio cards show saved workspace state and access and open the chosen project', () => {
@@ -954,6 +1042,34 @@ test('portfolio import opens the selected workspace information detail with its 
   assert.match(detail.textContent, /Approvals and work/);
   assert.equal(detail.querySelectorAll('[data-enterprise-interchange]').length, 1,
     'the selected workspace detail visibly contains the saved draft preview');
+});
+
+test('enterprise import live status announces incomplete direct impact and unknown downstream effects', async () => {
+  const model = { permissions: { write: true }, context: { isCurrent: true, blueprintId: 'blueprint-current', blueprintVersion: 4 },
+    blueprint: { id: 'blueprint-current', version: 4, areas: {} } };
+  const preview = { source: { projectId: 'source-project', blueprintId: 'source-blueprint', blueprintVersion: 2, snapshotHash: 'source-hash' },
+    currentSource: { projectId: 'target-project', projectVersion: 11, blueprintId: 'blueprint-current', blueprintVersion: 4, snapshotHash: 'target-hash' },
+    recordCount: 1, recognizedFields: 1, readyRecordIds: ['goal-imported'], previewHash: 'preview-hash',
+    unknownFields: [], lossyFields: [], collisions: [], validationErrors: [],
+    rows: [{ id: 'goal-imported', type: 'goal', status: 'READY', changedFields: ['name'], recognizedFields: ['name'],
+      impact: { status: 'INCOMPLETE', changedFields: [{ field: 'name', before: 'Before', after: 'After' }],
+        directlyAffectedObjects: [{ objectId: 'goal-imported', name: 'After', type: 'goal', edited: true }],
+        unknownAreas: ['Approvals and work'] } }] };
+  let requestedPath = null;
+  const rendered = renderEnterpriseInterchange({ projectId: 'target-project', model, el, ui: branchUi,
+    api: async (path) => { requestedPath = path; return { data: preview }; }, onCommand() {} });
+  const file = rendered.querySelectorAll('input').find((input) => input.attrs.type === 'file');
+  file.files = [{ name: 'design.json', size: 12, text: async () => '{"kind":"orgward-enterprise-blueprint"}' }];
+  const upload = rendered.querySelectorAll('button').find((button) => button.text === 'Preview import');
+  await upload.listeners.get('click')();
+
+  const status = rendered.querySelectorAll('p').find((paragraph) => paragraph.attrs.role === 'status');
+  assert.equal(requestedPath, '/api/v1/projects/target-project/enterprise/import-preview');
+  assert.equal(status.attrs['aria-live'], 'polite');
+  assert.match(status.textContent, /Import preview ready\. 1 record has direct impact preview marked INCOMPLETE/);
+  assert.match(status.textContent, /operational and downstream impact is UNKNOWN/);
+  assert.match(rendered.textContent, /Direct impact preview · INCOMPLETE/);
+  assert.match(rendered.textContent, /Approvals and work/);
 });
 
 test('portfolio process-pack import opens its exact destination on the packed root process and exposes reviewed mappings', async () => {
@@ -1915,6 +2031,33 @@ test('enterprise command recovery persists and resubmits the identical envelope 
       snapshotHash: 'c'.repeat(64), reason: 'Recover the exact human exception.', expiresAt: null } } };
   persistEnterpriseCommand(storageFixture(values), 'oidc:owner', 'project-one', exceptionSaved);
   assert.deepEqual(restoreEnterpriseCommand(storageFixture(values), 'oidc:owner', 'project-one'), exceptionSaved);
+});
+
+test('chat blueprint edit recovery restores and retries the exact semantic command after reload', async () => {
+  const values = new Map();
+  const saved = { projectId: 'project-one', envelope: { schemaVersion: '1.0', commandId: 'chat-blueprint-edit:stable-id', expectedVersion: 42,
+    payload: { kind: 'edit-blueprint-object', blueprintId: 'blueprint-one', blueprintVersion: 7, objectId: 'customer-one',
+      name: 'Northstar', detail: 'Updated delivery details.', reason: 'Clarify the customer-facing description.' } } };
+  persistEnterpriseCommand(storageFixture(values), 'oidc:owner', 'project-one', saved);
+
+  // A remount uses the same principal/project storage key and retries the retained envelope.
+  const restored = restoreEnterpriseCommand(storageFixture(values), 'oidc:owner', 'project-one');
+  assert.deepEqual(restored, saved);
+  const calls = [];
+  await submitEnterpriseCommand(async (...args) => { calls.push(args); return { data: { affectedObjectId: 'customer-one' } }; }, 'project-one', restored);
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(JSON.parse(calls[0][1].body), saved.envelope);
+  assert.equal(JSON.parse(calls[0][1].body).commandId, 'chat-blueprint-edit:stable-id');
+  assert.equal(JSON.parse(calls[0][1].body).expectedVersion, 42);
+  assert.deepEqual([...calls.map(([, options]) => JSON.parse(options.body).commandId)], [saved.envelope.commandId]);
+});
+
+test('chat blueprint editor has a bounded desktop scroll area and grows the completed mobile panel', () => {
+  const css = readFileSync(new URL('../../public/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /#chat-blueprint-edit-slot\s*\{[^}]*min-height:\s*0[^}]*max-height:\s*min\(48vh,\s*480px\)[^}]*overflow-y:\s*auto/);
+  assert.match(css, /@media\s*\(max-width:\s*900px\)[\s\S]*?\.studio\.complete \.conversation-panel\s*\{[^}]*max-height:\s*none/);
+  assert.match(css, /@media\s*\(max-width:\s*900px\)[\s\S]*?\.studio\.complete #chat-blueprint-edit-slot\s*\{[^}]*max-height:\s*none[^}]*overflow:\s*visible/);
 });
 
 test('first-run enterprise context gives blueprint guidance without rendering scope mutation forms', () => {

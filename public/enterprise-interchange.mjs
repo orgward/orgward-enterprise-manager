@@ -290,7 +290,13 @@ export function renderEnterpriseInterchange({ projectId, model, object = null, d
         ? 'Process pack preview ready. Review untrusted source provenance, dependency closure, omissions, target mappings and exact target pin before applying.'
         : response.data.mode === 'SOURCE_ONBOARDING_PREVIEW'
         ? 'Source evidence preview ready. Review provenance, candidate identities, unknowns and collisions. Nothing has been saved or published.'
-        : 'Import preview ready. Review every recognized, unknown, loss and collision field before applying.';
+        : (() => {
+          const impactRows = response.data.rows?.filter((row) => row.impact) ?? [];
+          const impactSummary = impactRows.length
+            ? ` ${impactRows.length} record${impactRows.length === 1 ? ' has' : 's have'} direct impact preview marked INCOMPLETE; operational and downstream impact is UNKNOWN.`
+            : '';
+          return `Import preview ready.${impactSummary} Review every recognized, unknown, loss and collision field before applying.`;
+        })();
     } catch (error) {
       if (attempt !== previewAttempt || !isCurrentContext()) return;
       if (parsedSuccessfully) showPreview({ fileName: selectedFile.name, bundle: parsedBundle, preview: null, recordIds: [], reason: '' });

@@ -96,6 +96,20 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .send-button { flex: 0 0 35px; height: 35px; border: 0; border-radius: 50%; background: var(--mint); color: #101710; font-size: 20px; cursor: pointer; }
 .message-form.complete textarea, .message-form.complete .send-button { display: none; }
 .message-form.complete > div { justify-content: flex-start; }
+.chat-blueprint-edit { padding: 14px 20px 18px; border-top: 1px solid var(--line); background: var(--surface); }
+.chat-blueprint-edit h2 { margin: 0 0 6px; font-size: 14px; }
+.chat-blueprint-edit > p, .chat-blueprint-edit-guidance, .chat-blueprint-edit-status { color: var(--faint); font-size: 12px; line-height: 1.5; }
+.chat-blueprint-edit-target { font-weight: 600; color: var(--ink) !important; }
+.chat-blueprint-edit-form { display: grid; gap: 8px; }
+.chat-blueprint-edit-form label { color: var(--ink); font-size: 12px; font-weight: 600; }
+.chat-blueprint-edit-form select, .chat-blueprint-edit-form textarea { width: 100%; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--ink); background: var(--surface-2); padding: 9px 10px; font: inherit; }
+.chat-blueprint-edit-form textarea { resize: vertical; min-height: 72px; }
+.chat-blueprint-edit-echo { margin: 4px 0; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); color: var(--ink); overflow-wrap: anywhere; }
+.chat-blueprint-edit-echo blockquote { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-blueprint-edit-preview { max-height: 340px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+.chat-blueprint-edit-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.chat-blueprint-edit-status { margin: 0; }
+#chat-blueprint-edit-slot { flex: 0 1 auto; min-height: 0; max-height: min(48vh, 480px); overflow-y: auto; overscroll-behavior: contain; }
 
 .workspace-panel { min-width: 0; min-height: 0; overflow: auto; position: relative; }
 .workspace-empty { min-height: 100%; display: grid; place-content: center; justify-items: center; text-align: center; padding: 40px; }
@@ -318,7 +332,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 @media (max-width: 900px) {
   .topbar { padding: 0 16px; }.privacy { display: none; }.project-switcher select { min-width: 100px; max-width: 150px; }.top-actions .button.ghost { display: none; }.product-nav a { padding: 7px; font-size: 10px; }
   .studio { height: auto; display: block; }.conversation-panel { height: calc(100vh - 72px); border-right: 0; border-bottom: 1px solid var(--line); }.workspace-panel { min-height: 90vh; }
-  .studio.complete .conversation-panel { height: auto; max-height: 440px; }.studio.complete .conversation { max-height: 230px; }.studio.complete .message-form { padding-bottom: 12px; }
+  .studio.complete .conversation-panel { height: auto; max-height: none; }.studio.complete .conversation { flex: 0 1 auto; max-height: 230px; }.studio.complete #chat-blueprint-edit-slot { flex: none; max-height: none; overflow: visible; }.studio.complete .message-form { padding-bottom: 12px; }
   .promise-grid { grid-template-columns: 1fr; }.promise-grid article + article { border-left: 0; border-top: 1px solid var(--line); padding-left: 0; }
   .area-grid { grid-template-columns: 1fr; }.summary-strip { grid-template-columns: repeat(2, 1fr); }.summary-strip div:nth-child(3) { border-left: 0; border-top: 1px solid var(--line); }.summary-strip div:nth-child(4) { border-top: 1px solid var(--line); }
   .coverage-lenses, .coverage-perspective-grid { grid-template-columns: 1fr; }.coverage-heading { display: block; }

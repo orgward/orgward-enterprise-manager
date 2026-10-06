@@ -443,6 +443,73 @@ test('interactive map edits use the shared semantic command boundary with denial
   assert.equal(items(saved.data.latestBlueprint).find((object) => object.id === 'process-deliver').name, edit.name);
 });
 
+test('chat edit preview stays read only and exact customer replacement applies through shared command with replay and restart', async (t) => {
+  const postgres = await startPostgres(); let root; let instance;
+  t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-enterprise-chat-edit-'));
+  instance = await startApp(postgres, root);
+  for (const identity of identities.values()) {
+    await postgres.query(`insert into orgward.oidc_principals
+      (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+    [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  }
+  const project = await seedProject(postgres, 'Chat edit command fixture');
+  const view = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'customer-primary' });
+  const customer = items(view.data.blueprint).find((entry) => entry.id === 'customer-primary');
+  const command = { kind: 'edit-blueprint-object', objectId: customer.id, name: customer.name,
+    detail: 'A reviewed exact customer detail from the transient chat editor.',
+    reason: 'Chat proposed an exact customer name or detail replacement.',
+    blueprintId: view.data.context.blueprintId, blueprintVersion: view.data.context.blueprintVersion };
+  const previewRoute = `/api/v1/projects/${project.id}/enterprise/impact-preview`;
+  const preview = await request(instance.base, 'editor', previewRoute, { method: 'POST', body: {
+    expectedVersion: project.version, command,
+  } });
+  assert.equal(preview.data.status, 'INCOMPLETE');
+  assert.equal(preview.data.changedFields[0].field, 'detail');
+  assert.equal(preview.data.changedFields[0].after, command.detail);
+  assert.equal(preview.data.coverage.operationalAndDownstreamImpact, 'UNKNOWN');
+  const readerPreview = await request(instance.base, 'reader', previewRoute, { method: 'POST', body: {
+    expectedVersion: project.version, command,
+  } }, 403);
+  assert.equal(readerPreview.error.code, 'ACTION_FORBIDDEN', 'reader cannot request an edit preview through the writer path');
+  const blankPreview = await request(instance.base, 'editor', previewRoute, { method: 'POST', body: {
+    expectedVersion: project.version, command: { ...command, detail: '  ' },
+  } }, 400);
+  assert.equal(blankPreview.error.code, 'INVALID_ENTERPRISE_COMMAND');
+  const oversizedPreview = await request(instance.base, 'editor', previewRoute, { method: 'POST', body: {
+    expectedVersion: project.version, command: { ...command, detail: 'x'.repeat(701) },
+  } }, 400);
+  assert.equal(oversizedPreview.error.code, 'INVALID_ENTERPRISE_COMMAND');
+  const stalePreview = await request(instance.base, 'editor', previewRoute, { method: 'POST', body: {
+    expectedVersion: project.version + 1, command,
+  } }, 409);
+  assert.equal(stalePreview.error.code, 'VERSION_CONFLICT');
+  const unchanged = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  assert.equal(unchanged.data.version, project.version, 'preview and invalid drafts must not mutate project state');
+
+  const body = commandBody(view, 'chat-blueprint-edit-apply', command);
+  const denied = await postCommand(instance.base, 'reader', project.id, body, 403);
+  assert.equal(denied.error.code, 'ACTION_FORBIDDEN');
+  const actor = items(view.data.blueprint).find((entry) => entry.type === 'actor-human');
+  const actorEdit = { ...command, objectId: actor.id, name: 'Changed actor identity', detail: actor.detail };
+  const actorDenied = await postCommand(instance.base, 'editor', project.id,
+    commandBody(view, 'chat-blueprint-actor-rejected', actorEdit), 400);
+  assert.equal(actorDenied.error.code, 'INVALID_BLUEPRINT_EDIT');
+  const accepted = await postCommand(instance.base, 'editor', project.id, body);
+  const saved = items(accepted.data.latestBlueprint).find((entry) => entry.id === customer.id);
+  assert.equal(saved.name, customer.name);
+  assert.equal(saved.detail, command.detail);
+  assert.equal(saved.provenance.at(-1).reason, command.reason);
+  assert.equal((await postCommand(instance.base, 'editor', project.id, body)).meta.replayed, true);
+  const conflicting = await postCommand(instance.base, 'editor', project.id,
+    commandBody(view, body.commandId, { ...command, detail: 'Different replacement.' }), 409);
+  assert.equal(conflicting.error.code, 'IDEMPOTENCY_CONFLICT');
+  await closeApp(instance);
+  instance = await startApp(postgres, root);
+  const afterRestart = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  assert.equal(items(afterRestart.data.latestBlueprint).find((entry) => entry.id === customer.id).detail, command.detail);
+});
+
 test('enterprise scopes retain design identity across sixteen lenses, commands, history, and restart', async (t) => {
   const postgres = await startPostgres();
   let root;
