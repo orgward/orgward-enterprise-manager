@@ -147,7 +147,8 @@ export class ProjectStore {
     return this.createWithCommand(project, commandId, payloadHash, principal);
   }
 
-  async updateWithCommand(id, tenantId, { commandId, operation = 'project.record-answer', payloadHash, expectedVersion, principal = null, minimumProjectAccess = null, apply }) {
+  async updateWithCommand(id, tenantId, { commandId, operation = 'project.record-answer', payloadHash, expectedVersion, principal = null,
+    minimumProjectAccess = null, apply, authorizeBeforeReplay = null, useCurrentVersion = false }) {
     return this.withWriteLock(async () => {
       let project;
       try { project = JSON.parse(await readFile(this.fileFor(id), 'utf8')); }
@@ -167,6 +168,7 @@ export class ProjectStore {
         error.code = 'ACTION_FORBIDDEN';
         throw error;
       }
+      if (authorizeBeforeReplay) await authorizeBeforeReplay(project);
       project.commandRecords ??= {};
       const recordId = operation === 'project.record-answer' ? commandId : `@${operation}:${commandId}`;
       const prior = project.commandRecords[recordId];
@@ -181,7 +183,7 @@ export class ProjectStore {
         return { project: structuredClone(prior.result), replayed: true };
       }
       const currentVersion = project.version ?? 1;
-      if (expectedVersion !== currentVersion) {
+      if (!useCurrentVersion && expectedVersion !== currentVersion) {
         const error = new Error(`Version conflict: the current version is ${currentVersion}. Reload before retrying.`);
         error.statusCode = 409;
         error.code = 'VERSION_CONFLICT';

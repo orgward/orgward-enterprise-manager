@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomUUID, sign as signManifest } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -2491,13 +2491,41 @@ test('human acceptance stores selected source claims once and rejects stale prev
   assert.equal(afterSave.data.versions.length, initial.data.versions.length + 1);
   assert.equal(afterSave.data.blueprint.areas.customersOfferingsValueEconomics.items.find((entry) => entry.id === customer.id).name,
     'Human accepted proposed customer name');
+  const acceptanceReceipt = afterSave.data.sourceAcceptanceReceipts.find((entry) => entry.id === saved.data.sourceAcceptanceReceiptId);
+  assert.equal(acceptanceReceipt.claims[0].value, 'Human accepted proposed customer name');
+  assert.equal(acceptanceReceipt.claims[0].path, 'name');
+  assert.equal(acceptanceReceipt.source.bundleHash, preview.data.source.snapshotHash);
+  const comparePayload = { kind: 'compare-source-evidence', acceptanceReceiptId: acceptanceReceipt.id, bundle: sourceBundle };
+  const compareBody = commandBody(afterSave, 'source-comparison-once', comparePayload);
+  const readerCompareDenied = await postCommand(instance.base, 'reader', project.id, compareBody, 403);
+  assert.equal(readerCompareDenied.error.code, 'ACTION_FORBIDDEN');
+  const comparison = await postCommand(instance.base, 'owner', project.id, compareBody);
+  assert.equal(comparison.event.type, 'EnterpriseSourceEvidenceCompared');
+  assert.equal(comparison.data.sourceReconciliationReport.claims[0].status, 'MATCHED');
+  assert.equal(comparison.data.sourceReconciliationReport.sourceAuthentication, 'UNVERIFIED');
+  assert.equal(comparison.data.sourceReconciliationReport.freshness, 'UNKNOWN');
+  assert.equal(comparison.data.sourceReconciliationReport.uploader, identities.get('owner').principal);
+  assert.equal(comparison.data.sourceReconciliationReport.baseline.acceptanceReceiptId, acceptanceReceipt.id);
+  assert.equal((await postCommand(instance.base, 'owner', project.id, compareBody)).meta.replayed, true);
+  const changedComparePayload = structuredClone(comparePayload);
+  changedComparePayload.bundle.records[0].claims[0].value = 'Changed payload must conflict';
+  const changedCompare = await postCommand(instance.base, 'owner', project.id,
+    commandBody(afterSave, 'source-comparison-once', changedComparePayload), 409);
+  assert.equal(changedCompare.error.code, 'IDEMPOTENCY_CONFLICT');
+  const afterComparison = await currentView(instance.base, 'owner', project.id, { lensId: 'all' });
+  assert.equal(afterComparison.data.context.blueprintVersion, afterSave.data.context.blueprintVersion,
+    'a comparison records evidence without creating a design version');
+  assert.equal(afterComparison.data.blueprint.areas.customersOfferingsValueEconomics.items.find((entry) => entry.id === customer.id).name,
+    'Human accepted proposed customer name');
+  assert.equal(afterComparison.data.sourceReconciliationReports.length, 1);
+  await postCommand(instance.base, 'foreign', project.id, commandBody(afterComparison, 'foreign-source-comparison', comparePayload), 404);
   const persistedProject = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
   assert.equal(persistedProject.data.audit.filter((entry) => entry.action === 'enterprise.accept-source-evidence').length, 1);
   const replay = await postCommand(instance.base, 'owner', project.id, command);
   assert.equal(replay.meta.replayed, true);
   assert.equal(replay.data.projectVersion, saved.data.projectVersion);
   const stale = await postCommand(instance.base, 'owner', project.id,
-    commandBody(afterSave, 'source-acceptance-stale', payload), 409);
+    commandBody(afterComparison, 'source-acceptance-stale', payload), 409);
   assert.equal(stale.error.code, 'ENTERPRISE_SOURCE_DESIGN_STALE');
 
   const acceptedRole = afterSave.data.blueprint.areas.responsibilityAuthority.items.find((entry) => entry.id === 'role-founder');
@@ -2511,7 +2539,7 @@ test('human acceptance stores selected source claims once and rejects stale prev
   });
   const beforeRepair = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
   const roleRepair = await postCommand(instance.base, 'owner', project.id,
-    commandBody(afterSave, 'source-acceptance-role-repair', {
+    commandBody(afterComparison, 'source-acceptance-role-repair', {
       kind: 'accept-source-evidence', blueprintId: repairPreview.data.currentSource.blueprintId,
       blueprintVersion: repairPreview.data.currentSource.blueprintVersion,
       blueprintHash: repairPreview.data.currentSource.snapshotHash, previewHash: repairPreview.data.previewHash,
@@ -2538,6 +2566,305 @@ test('human acceptance stores selected source claims once and rejects stale prev
   assert.equal(accepted.name, 'Human accepted proposed customer name');
   assert.equal(accepted.provenance.at(-1).source, 'workspace:source-evidence-acceptance');
   assert.equal(accepted.provenance.at(-1).sourceEvidence.sourceHash, preview.data.source.snapshotHash);
+  assert.equal(restarted.data.sourceAcceptanceReceipts[0].id, acceptanceReceipt.id);
+  assert.equal(restarted.data.sourceReconciliationReports[0].id, comparison.data.sourceReconciliationReportId);
+  assert.equal(restarted.data.sourceReconciliationReports[0].claims[0].acceptedValue, 'Human accepted proposed customer name');
+});
+
+test('owner-pinned collector attestation enforces profile authority and survives restart with an immutable report', async (t) => {
+  const postgres = await startPostgres(); let root; let instance;
+  t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-collector-attestation-')); instance = await startApp(postgres, root);
+  for (const identity of identities.values()) await postgres.query(`insert into orgward.oidc_principals
+    (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+  [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  const project = await seedProject(postgres, 'Collector attestation fixture', { mutate(project) {
+    const blueprint = project.blueprintVersions.at(-1);
+    const customer = blueprint.areas.customersOfferingsValueEconomics.items.find((entry) => entry.type === 'customer');
+    blueprint.areas.customersOfferingsValueEconomics.items.push({ ...structuredClone(customer), id: 'customer-alternate', name: 'Alternate customer' });
+  } });
+  const initial = await currentView(instance.base, 'owner', project.id, { lensId: 'all' });
+  const customer = initial.data.blueprint.areas.customersOfferingsValueEconomics.items.find((entry) => entry.type === 'customer');
+  const bundle = { kind: 'orgward-enterprise-source-evidence', schemaVersion: '1.0',
+    source: { id: 'crm-attested', label: 'Reviewed CRM export' }, records: [{ id: 'crm-record-1', type: 'customer', name: customer.name,
+      claims: [{ id: 'crm-name-1', path: 'name', value: 'Accepted CRM display name', locator: 'row/1/name' }] }] };
+  const preview = await request(instance.base, 'reader', `/api/v1/projects/${project.id}/enterprise/import-preview`, { method: 'POST', body: { bundle } });
+  const accept = { kind: 'accept-source-evidence', blueprintId: preview.data.currentSource.blueprintId,
+    blueprintVersion: preview.data.currentSource.blueprintVersion, blueprintHash: preview.data.currentSource.snapshotHash,
+    previewHash: preview.data.previewHash, bundle,
+    selections: [{ sourceRecordId: 'crm-record-1', targetObjectId: customer.id, claimIds: ['crm-name-1'] }], reason: 'Pin exact CRM export claim.' };
+  const accepted = await postCommand(instance.base, 'owner', project.id, commandBody(initial, 'attestation-baseline', accept));
+  const baselineView = await currentView(instance.base, 'owner', project.id, { lensId: 'all' });
+  const baseline = baselineView.data.sourceAcceptanceReceipts.find((entry) => entry.id === accepted.data.sourceAcceptanceReceiptId);
+  assert.ok(baseline);
+  const keys = generateKeyPairSync('ed25519');
+  const profileInput = { sourceId: 'crm-attested', sourceAccountId: 'acct-1', sourceInstanceId: 'prod-eu', resourceNamespace: 'customers',
+    collectorId: 'orgward-collector', coverageScope: { recordTypes: ['customer'], paths: ['name'] }, keyId: 'collector-key-1',
+    publicKeyPem: keys.publicKey.export({ type: 'spki', format: 'pem' }).toString(), intervalSeconds: 120,
+    freshnessPolicy: { maxAgeSeconds: 300, maxClockSkewSeconds: 30 } };
+  const profilePayload = { kind: 'configure-source-attestation-profile', mode: 'CREATE', profile: profileInput, reason: 'Pin local test collector.' };
+  const editorDenied = await postCommand(instance.base, 'editor', project.id, commandBody(baselineView, 'attestation-editor-denied', profilePayload), 403);
+  assert.equal(editorDenied.error.code, 'ACTION_FORBIDDEN');
+  const configured = await postCommand(instance.base, 'owner', project.id, commandBody(baselineView, 'attestation-profile-create', profilePayload));
+  const profileId = configured.event.data.sourceAttestationProfileId;
+  assert.ok(profileId);
+  const afterProfile = await currentView(instance.base, 'owner', project.id, { lensId: 'all' });
+  assert.equal(afterProfile.data.sourceAttestationProfiles[0].keys[0].publicKeyPem, undefined, 'projection never exposes pinned key material');
+  const now = new Date(); const observedAt = now.toISOString();
+  const iso = (offset) => new Date(now.getTime() + offset).toISOString();
+  const manifest = { kind: 'orgward-enterprise-observation-manifest', schemaVersion: '1.0', domain: 'orgward-enterprise-observation-attestation/v1',
+    tenantId, workspaceId: project.id, profile: { id: profileId, version: 1 }, baseline: { acceptanceReceiptId: baseline.id, receiptHash: baseline.receiptHash },
+    source: { id: 'crm-attested', accountId: 'acct-1', instanceId: 'prod-eu', resourceNamespace: 'customers', sequence: 1,
+      previousManifestHash: null, upstreamRevision: 'revision-1', cursor: null },
+    collector: { id: 'orgward-collector', version: '1.0' }, extractor: { id: 'crm-extractor', version: '1.0' }, observedAt,
+    validTime: { from: iso(-60_000), to: iso(3_600_000) }, coverage: { mode: 'SNAPSHOT', complete: true, resourceNamespace: 'customers',
+      recordTypes: ['customer'], paths: ['name'], exclusions: [], errors: [] },
+    records: [{ id: 'crm-record-1', type: 'customer', name: customer.name, claims: [{ id: 'crm-name-1', path: 'name', value: 'Accepted CRM display name',
+      locator: 'row/1/name', artifactHash: null }] }], signature: { algorithm: 'Ed25519', keyId: 'collector-key-1', keyVersion: 1, value: '' } };
+  const canonical = (value) => Array.isArray(value) ? `[${value.map(canonical).join(',')}]`
+    : value && typeof value === 'object' ? `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`
+      : JSON.stringify(value);
+  const unsigned = structuredClone(manifest); delete unsigned.signature;
+  manifest.signature.value = signManifest(null, Buffer.from(canonical(unsigned)), keys.privateKey).toString('base64');
+  const ingest = { kind: 'ingest-source-attestation-manifest', manifest };
+  let ingestBody = commandBody(afterProfile, 'attestation-ingest-1', ingest);
+  const deniedReader = await postCommand(instance.base, 'reader', project.id, commandBody(afterProfile, 'attestation-reader-denied', ingest), 403);
+  assert.equal(deniedReader.error.code, 'ACTION_FORBIDDEN');
+  const pushPath = `/api/v1/tenants/${tenantId}/projects/${project.id}/source-attestation-profiles/${profileId}/manifests`;
+  const pushRequest = async (path, value = manifest) => {
+    const response = await fetch(`${instance.base}${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) });
+    return { status: response.status, ...(await response.json()) };
+  };
+  const pushed = await pushRequest(pushPath);
+  assert.equal(pushed.status, 202, JSON.stringify(pushed));
+  assert.equal(pushed.data.accepted, true);
+  assert.equal(pushed.data.sequence, 1);
+  assert.equal(pushed.data.counts, undefined, 'collector response does not disclose report counts');
+  assert.equal(pushed.data.projectVersion, undefined, 'collector response exposes no project read model');
+  assert.deepEqual(Object.keys(pushed.data).sort(), ['accepted', 'manifestHash', 'recordedAt', 'reportId', 'sequence']);
+  const tamperedPush = structuredClone(manifest); tamperedPush.records[0].claims[0].value = 'Unsigned changed value';
+  const rejectedPush = await pushRequest(pushPath, tamperedPush);
+  assert.equal(rejectedPush.status, 404);
+  assert.equal(rejectedPush.error.code, 'SOURCE_ATTESTATION_DENIED');
+  assert.equal(rejectedPush.data, undefined);
+  assert.equal(rejectedPush.error.currentVersion, null);
+  assert.doesNotMatch(JSON.stringify(rejectedPush.error), /profile|baseline|fingerprint|key-v1/i);
+  const wrongRoutePush = await pushRequest(pushPath.replace(profileId, 'source-profile-00000000-0000-4000-8000-000000000099'));
+  assert.equal(wrongRoutePush.status, 404);
+  assert.equal(wrongRoutePush.error.code, 'SOURCE_ATTESTATION_DENIED');
+  const futurePush = structuredClone(manifest); futurePush.observedAt = new Date(Date.now() + 3_600_000).toISOString();
+  const unsignedFuture = structuredClone(futurePush); delete unsignedFuture.signature;
+  futurePush.signature.value = signManifest(null, Buffer.from(canonical(unsignedFuture)), keys.privateKey).toString('base64');
+  const rejectedFuture = await pushRequest(pushPath, futurePush);
+  assert.equal(rejectedFuture.status, 404);
+  assert.equal(rejectedFuture.error.code, 'SOURCE_ATTESTATION_DENIED');
+  assert.equal(rejectedFuture.error.currentVersion, null);
+  const changedSequence = structuredClone(manifest); changedSequence.records[0].claims[0].value = 'New signed payload for reused sequence';
+  const unsignedChangedSequence = structuredClone(changedSequence); delete unsignedChangedSequence.signature;
+  changedSequence.signature.value = signManifest(null, Buffer.from(canonical(unsignedChangedSequence)), keys.privateKey).toString('base64');
+  const sequenceConflict = await pushRequest(pushPath, changedSequence);
+  assert.equal(sequenceConflict.status, 409);
+  assert.equal(sequenceConflict.error.code, 'SOURCE_ATTESTATION_SEQUENCE_CONFLICT', 'sequence detail is returned only after signature authentication');
+  const replayedPush = await pushRequest(pushPath);
+  assert.equal(replayedPush.status, 200, JSON.stringify(replayedPush));
+  assert.equal(replayedPush.meta.replayed, true);
+  assert.equal(replayedPush.data.reportId, pushed.data.reportId);
+  const foreignPush = await pushRequest(pushPath.replace(tenantId, 'tenant-foreign'));
+  assert.equal(foreignPush.status, 404);
+  const afterPush = await currentView(instance.base, 'owner', project.id, { lensId: 'all' });
+  assert.equal(afterPush.data.sourceAttestationProfiles[0].pushStatus.status, 'CURRENT');
+  ingestBody = commandBody(afterPush, 'attestation-ingest-1', ingest);
+  const reportResponse = await postCommand(instance.base, 'owner', project.id, ingestBody);
+  assert.equal(reportResponse.event.type, 'EnterpriseSourceObservationReconciled');
+  assert.equal(reportResponse.event.data.sourceAttestationReportId != null, true);
+  const attestedView = await currentView(instance.base, 'owner', project.id, { lensId: 'all' });
+  const report = attestedView.data.sourceReconciliationReports.find((entry) => entry.comparatorVersion === 'collector-attestation/v1');
+  assert.ok(report);
+  assert.equal(report.claims[0].status, 'CURRENT');
+  assert.equal(report.sourceAuthentication, 'COLLECTOR_ATTESTED');
+  assert.equal(report.thirdPartyAcquisitionIndependentlyVerified, false);
+  assert.equal(attestedView.data.context.blueprintVersion, baselineView.data.context.blueprintVersion);
+  const alternateCustomer = attestedView.data.blueprint.areas.customersOfferingsValueEconomics.items
+    .find((entry) => entry.type === 'customer' && entry.id !== customer.id);
+  assert.ok(alternateCustomer, 'fixture includes a second canonical customer for a mapping repair');
+  const oldBinding = { sourceRecordId: 'crm-record-1', claimId: 'crm-name-1', path: 'name', targetObjectId: customer.id };
+  const mappingRepairPayload = { kind: 'repair-source-claim-mapping', profileId, expectedProfileVersion: 1, expectedMappingVersion: 1,
+    baselineAcceptanceReceiptId: baseline.id, baselineReceiptHash: baseline.receiptHash, reportId: report.id, reportHash: report.reportHash,
+    oldBinding, replacementTargetObjectId: alternateCustomer.id, reason: 'Repair the exact source-to-customer mapping.' };
+  const deniedMappingRepair = await postCommand(instance.base, 'editor', project.id,
+    commandBody(attestedView, 'attestation-editor-mapping-denied', mappingRepairPayload), 403);
+  assert.equal(deniedMappingRepair.error.code, 'ACTION_FORBIDDEN');
+  const mappingRepairResponse = await postCommand(instance.base, 'owner', project.id,
+    commandBody(attestedView, 'attestation-mapping-repair', mappingRepairPayload));
+  assert.equal(mappingRepairResponse.event.type, 'EnterpriseSourceClaimMappingRepaired');
+  const staleMappingView = await currentView(instance.base, 'owner', project.id, { lensId: 'all' });
+  const staleOriginal = staleMappingView.data.sourceReconciliationCurrentness.filter((entry) => entry.reportId === report.id).at(-1);
+  assert.equal(staleOriginal.state, 'STALE');
+  assert.equal(staleMappingView.data.sourceReconciliationReports.find((entry) => entry.id === report.id).reportHash, report.reportHash,
+    'mapping repair leaves saved report content immutable');
+  const recomputePayload = { kind: 'recompute-source-reconciliation-report', reportId: report.id, reportHash: report.reportHash, manifest };
+  const recomputeCommand = commandBody(staleMappingView, 'attestation-recompute-report', recomputePayload);
+  const recomputeResponse = await postCommand(instance.base, 'owner', project.id, recomputeCommand);
+  assert.equal(recomputeResponse.event.type, 'EnterpriseSourceReportRecomputed');
+  assert.equal((await postCommand(instance.base, 'owner', project.id, recomputeCommand)).meta.replayed, true);
+  const recomputedView = await currentView(instance.base, 'owner', project.id, { lensId: 'all' });
+  const recomputed = recomputedView.data.sourceReconciliationReports.find((entry) => entry.id === recomputeResponse.event.data.sourceAttestationReportId);
+  assert.ok(recomputed);
+  assert.equal(recomputed.recomputedFromReportId, report.id);
+  assert.equal(recomputed.mappingRevision, 2);
+  assert.equal(recomputed.claims[0].targetObjectId, alternateCustomer.id);
+  assert.equal(recomputed.claims[0].status, 'CURRENT');
+  assert.equal(recomputedView.data.sourceReconciliationCurrentness.filter((entry) => entry.reportId === recomputed.id).at(-1).state, 'FRESH');
+  assert.equal(recomputedView.data.sourceReconciliationCurrentness.filter((entry) => entry.reportId === report.id).at(-1).state, 'STALE');
+  const contradictory = structuredClone(manifest);
+  contradictory.source.sequence = 2; contradictory.source.previousManifestHash = report.manifest.hash;
+  contradictory.source.upstreamRevision = 'revision-2'; contradictory.source.cursor = 'collector-cursor-2';
+  contradictory.records[0].claims[0].value = 'Observed changed CRM display name';
+  const unsignedContradiction = structuredClone(contradictory); delete unsignedContradiction.signature;
+  contradictory.signature.value = signManifest(null, Buffer.from(canonical(unsignedContradiction)), keys.privateKey).toString('base64');
+  const contradictionResponse = await postCommand(instance.base, 'owner', project.id,
+    commandBody(recomputedView, 'attestation-ingest-2', { kind: 'ingest-source-attestation-manifest', manifest: contradictory }));
+  const findingView = await currentView(instance.base, 'owner', project.id, { lensId: 'all' });
+  const contradictionReport = findingView.data.sourceReconciliationReports.find((entry) => entry.id === contradictionResponse.event.data.sourceAttestationReportId);
+  const { reportHash: pinnedReportHash, ...reportCore } = contradictionReport;
+  assert.equal(pinnedReportHash, digest(reportCore));
+  const finding = contradictionReport.claims.find((entry) => entry.status === 'CONTRADICTED');
+  assert.equal(finding.findingStatus, 'PENDING_REVIEW');
+  assert.ok(finding.findingId);
+  const previewPath = `/api/v1/projects/${project.id}/enterprise/attestation-proposal-preview`;
+  const previewInput = { reportId: contradictionReport.id, reportHash: contradictionReport.reportHash, findingId: finding.findingId, manifest: contradictory };
+  const editorPreviewDenied = await request(instance.base, 'editor', previewPath, { method: 'POST', body: previewInput }, 403);
+  assert.equal(editorPreviewDenied.error.code, 'ACTION_FORBIDDEN');
+  const changedManifest = structuredClone(contradictory); changedManifest.records[0].claims[0].value = 'Arbitrary caller value';
+  const wrongManifest = await request(instance.base, 'owner', previewPath, { method: 'POST', body: { ...previewInput, manifest: changedManifest } }, 409);
+  assert.equal(wrongManifest.error.code, 'SOURCE_FINDING_MANIFEST_MISMATCH');
+  const wrongReportHash = await request(instance.base, 'owner', previewPath, { method: 'POST', body: { ...previewInput, reportHash: 'f'.repeat(64) } }, 409);
+  assert.equal(wrongReportHash.error.code, 'SOURCE_FINDING_MANIFEST_MISMATCH');
+  const correctionPreviewResponse = await request(instance.base, 'owner', previewPath, { method: 'POST', body: previewInput });
+  const correctionPreview = correctionPreviewResponse.data;
+  assert.equal(correctionPreview.finding.findingId, finding.findingId);
+  await request(instance.base, 'foreign', previewPath, { method: 'POST', body: previewInput }, 404);
+  const pendingBeforeProposal = await currentView(instance.base, 'owner', project.id, { lensId: 'all' });
+  assert.equal(pendingBeforeProposal.data.context.blueprintVersion, findingView.data.context.blueprintVersion,
+    'verifying a finding preview does not edit the design');
+  assert.equal(pendingBeforeProposal.data.context.projectVersion, findingView.data.context.projectVersion,
+    'verifying a finding preview does not advance project state');
+  assert.equal(pendingBeforeProposal.data.sourceAttestationCorrectionReceipts.length, 0);
+  const correctionPayload = { kind: 'propose-attested-source-correction', reportId: contradictionReport.id,
+    reportHash: contradictionReport.reportHash, findingId: finding.findingId, manifest: contradictory,
+    previewHash: correctionPreview.previewHash, blueprintHash: correctionPreview.currentSource.snapshotHash,
+    blueprintId: correctionPreview.currentSource.blueprintId, blueprintVersion: correctionPreview.currentSource.blueprintVersion,
+    selections: [{ sourceRecordId: finding.sourceRecordId, targetObjectId: finding.targetObjectId, claimIds: [finding.claimId] }],
+    reason: 'A human owner reviewed the exact collector finding and proposes this design correction.' };
+  const editorProposalDenied = await postCommand(instance.base, 'editor', project.id,
+    commandBody(findingView, 'attestation-editor-proposal-denied', correctionPayload), 403);
+  assert.equal(editorProposalDenied.error.code, 'ACTION_FORBIDDEN');
+  const detailEdit = { kind: 'edit-blueprint-object', objectId: customer.id, name: 'Accepted CRM display name',
+    detail: 'Changed during the source finding review.', reason: 'Exercise stale design conflict.' };
+  await postCommand(instance.base, 'owner', project.id, commandBody(findingView, 'attestation-stale-design-edit', detailEdit));
+  const changedDesignView = await currentView(instance.base, 'owner', project.id, { lensId: 'all' });
+  const staleProposal = await request(instance.base, 'owner', `/api/v1/projects/${project.id}/enterprise/commands`, { method: 'POST',
+    body: { schemaVersion: '1.0', commandId: 'attestation-stale-proposal', expectedVersion: changedDesignView.data.context.projectVersion,
+      payload: correctionPayload } }, 409);
+  assert.equal(staleProposal.error.code, 'ENTERPRISE_SOURCE_PREVIEW_STALE');
+  const refreshedPreview = await request(instance.base, 'owner', previewPath, { method: 'POST', body: previewInput });
+  const refreshedPayload = { ...correctionPayload, previewHash: refreshedPreview.data.previewHash,
+    blueprintHash: refreshedPreview.data.currentSource.snapshotHash, blueprintId: refreshedPreview.data.currentSource.blueprintId,
+    blueprintVersion: refreshedPreview.data.currentSource.blueprintVersion };
+  const wrongTargetPayload = { ...refreshedPayload, selections: [{ ...refreshedPayload.selections[0], targetObjectId: 'customer-other' }] };
+  const wrongTarget = await postCommand(instance.base, 'owner', project.id, commandBody(changedDesignView, 'attestation-wrong-target', wrongTargetPayload), 409);
+  assert.equal(wrongTarget.error.code, 'SOURCE_FINDING_MAPPING_MISMATCH');
+  const correctionCommand = commandBody(changedDesignView, 'attestation-propose-correction', refreshedPayload);
+  const proposed = await postCommand(instance.base, 'owner', project.id, correctionCommand);
+  assert.equal(proposed.event.type, 'EnterpriseSourceCorrectionProposed');
+  const correctionReceipt = proposed.data.sourceAttestationCorrectionReceipts[0];
+  const { receiptHash, ...correctionCore } = correctionReceipt;
+  assert.equal(receiptHash, digest(correctionCore));
+  assert.equal(correctionReceipt.findingId, finding.findingId);
+  assert.equal(correctionReceipt.findingStatus, 'PENDING_REVIEW');
+  assert.equal(correctionReceipt.signedManifestHash, contradictionReport.manifest.hash);
+  assert.notEqual(correctionReceipt.derivedBundleHash, correctionReceipt.signedManifestHash);
+  assert.equal(correctionReceipt.sourceClaim.targetObjectId, finding.targetObjectId);
+  assert.equal(correctionReceipt.acceptedEvidenceBaseline.acceptanceReceiptId, baseline.id);
+  assert.equal(correctionReceipt.currentDesign.snapshotHash, refreshedPreview.data.currentSource.snapshotHash);
+  assert.equal((await postCommand(instance.base, 'owner', project.id, correctionCommand)).meta.replayed, true);
+  const proposedView = await currentView(instance.base, 'owner', project.id, { lensId: 'all' });
+  assert.equal(proposedView.data.blueprint.epistemicStatus, 'proposed-design');
+  assert.equal(proposedView.data.context.blueprintVersion, changedDesignView.data.context.blueprintVersion + 1,
+    'one explicit correction command creates exactly one proposed-design version');
+  assert.deepEqual(correctionReceipt.candidate, { id: proposedView.data.blueprint.id, version: proposedView.data.blueprint.version,
+    snapshotHash: digest(proposedView.data.blueprint) });
+  const pendingFinding = proposedView.data.sourceReconciliationReports.find((entry) => entry.id === contradictionReport.id)
+    .claims.find((entry) => entry.findingId === finding.findingId);
+  assert.equal(pendingFinding.findingStatus, 'PENDING_REVIEW');
+  const acceptedName = proposedView.data.blueprint.areas.customersOfferingsValueEconomics.items.find((entry) => entry.id === alternateCustomer.id).name;
+  assert.equal(acceptedName, 'Observed changed CRM display name');
+  await request(instance.base, 'foreign', `/api/v1/projects/${project.id}/enterprise/commands`, { method: 'POST', body: commandBody(attestedView, 'attestation-foreign', ingest) }, 404);
+  const beforeRestartVersion = proposedView.data.context.projectVersion;
+  await closeApp(instance); instance = await startApp(postgres, root);
+  const afterRestart = await currentView(instance.base, 'owner', project.id, { lensId: 'all' });
+  assert.equal(afterRestart.data.context.projectVersion, beforeRestartVersion);
+  assert.equal(afterRestart.data.sourceReconciliationReports.find((entry) => entry.id === report.id).manifest.hash, report.manifest.hash);
+  assert.equal(afterRestart.data.sourceReconciliationReports.find((entry) => entry.id === recomputed.id).reportHash, recomputed.reportHash);
+  assert.equal(afterRestart.data.sourceReconciliationCurrentness.filter((entry) => entry.reportId === report.id).at(-1).state, 'STALE');
+  assert.equal(afterRestart.data.sourceReconciliationCurrentness.filter((entry) => entry.reportId === recomputed.id).at(-1).state, 'STALE',
+    'a later signed source sequence makes the prior recomputation stale on read');
+  assert.equal((await postCommand(instance.base, 'owner', project.id, recomputeCommand)).meta.replayed, true);
+  assert.equal(afterRestart.data.sourceAttestationCorrectionReceipts.find((entry) => entry.id === correctionReceipt.id).receiptHash, correctionReceipt.receiptHash);
+  assert.equal(afterRestart.data.sourceReconciliationReports.find((entry) => entry.id === contradictionReport.id).claims
+    .find((entry) => entry.findingId === finding.findingId).findingStatus, 'PENDING_REVIEW');
+  assert.equal((await postCommand(instance.base, 'owner', project.id, correctionCommand)).meta.replayed, true);
+  assert.equal((await postCommand(instance.base, 'owner', project.id, ingestBody)).meta.replayed, true);
+  const restartedPush = await pushRequest(pushPath);
+  assert.equal(restartedPush.status, 200);
+  assert.equal(restartedPush.meta.replayed, true);
+  assert.equal(restartedPush.data.reportId, pushed.data.reportId);
+
+  const rotatedKeys = generateKeyPairSync('ed25519');
+  let currentOwnerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all' });
+  const rotateProfile = { ...profileInput, keyId: 'collector-key-2',
+    publicKeyPem: rotatedKeys.publicKey.export({ type: 'spki', format: 'pem' }).toString() };
+  await postCommand(instance.base, 'owner', project.id, commandBody(currentOwnerView, 'attestation-key-rotate', {
+    kind: 'configure-source-attestation-profile', mode: 'ROTATE_KEY', profileId, expectedProfileVersion: 1,
+    profile: rotateProfile, reason: 'Rotate the external collector key for boundary verification.' }));
+  const retiredReplay = await pushRequest(pushPath);
+  assert.equal(retiredReplay.status, 404);
+  assert.equal(retiredReplay.error.code, 'SOURCE_ATTESTATION_DENIED');
+  const rotatedManifest = structuredClone(manifest);
+  rotatedManifest.profile.version = 2; rotatedManifest.source.sequence = 3; rotatedManifest.source.previousManifestHash = contradictionReport.manifest.hash;
+  rotatedManifest.source.upstreamRevision = 'revision-3';
+  rotatedManifest.signature.keyId = 'collector-key-2'; rotatedManifest.signature.keyVersion = 2;
+  const unsignedRotated = structuredClone(rotatedManifest); delete unsignedRotated.signature;
+  rotatedManifest.signature.value = signManifest(null, Buffer.from(canonical(unsignedRotated)), rotatedKeys.privateKey).toString('base64');
+  const pushedRotated = await pushRequest(pushPath, rotatedManifest);
+  assert.equal(pushedRotated.status, 202, JSON.stringify(pushedRotated));
+  assert.equal(pushedRotated.data.counts, undefined);
+  const replayedRotated = await pushRequest(pushPath, rotatedManifest);
+  assert.equal(replayedRotated.status, 200);
+  assert.equal(replayedRotated.meta.replayed, true);
+  currentOwnerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all' });
+  const currentAttestationProfile = currentOwnerView.data.sourceAttestationProfiles.filter((entry) => entry.id === profileId).at(-1);
+  assert.equal(currentAttestationProfile.version, 2);
+  assert.equal(currentAttestationProfile.pushStatus.status, 'CURRENT',
+    'the same stream continues under the rotated profile key');
+
+  const archivePath = `/api/v1/projects/${project.id}/lifecycle`;
+  const archived = await request(instance.base, 'owner', archivePath, { method: 'POST', body: {
+    action: 'archive', expectedVersion: currentOwnerView.data.context.projectVersion,
+    reason: 'Verify collector push denial for an archived workspace.' } });
+  const archivedReplay = await pushRequest(pushPath, rotatedManifest);
+  assert.equal(archivedReplay.status, 404);
+  assert.equal(archivedReplay.error.code, 'SOURCE_ATTESTATION_DENIED');
+  const restored = await request(instance.base, 'owner', archivePath, { method: 'POST', body: { action: 'restore', expectedVersion: archived.data.version } });
+  const restoredView = await currentView(instance.base, 'owner', project.id, { lensId: 'all' });
+  const { keyId: _retiredKeyId, publicKeyPem: _retiredPem, ...revokeProfile } = rotateProfile;
+  await postCommand(instance.base, 'owner', project.id, commandBody(restoredView, 'attestation-key-revoke', {
+    kind: 'configure-source-attestation-profile', mode: 'REVOKE_KEY', profileId, expectedProfileVersion: 2,
+    profile: revokeProfile, reason: 'Revoke the collector key after recovery testing.' }));
+  const revokedReplay = await pushRequest(pushPath, rotatedManifest);
+  assert.equal(revokedReplay.status, 404);
+  assert.equal(revokedReplay.error.code, 'SOURCE_ATTESTATION_DENIED');
+  assert.equal(restored.data.lifecycle.status, 'active');
 });
 
 test('governance decisions persist through owner review, requester appeal, restart and command replay', async (t) => {

@@ -63,6 +63,16 @@ function validateSourceBundle(bundle) {
   }
 }
 
+export function validateEnterpriseSourceEvidenceBundle(bundle) {
+  validateSourceBundle(bundle);
+  return true;
+}
+
+export function enterpriseSourceEvidenceHash(bundle) {
+  validateSourceBundle(bundle);
+  return digest({ kind: bundle.kind, schemaVersion: bundle.schemaVersion, source: bundle.source, records: bundle.records });
+}
+
 export function previewEnterpriseSourceEvidence(project, bundle) {
   validateSourceBundle(bundle);
   const blueprint = latestBlueprint(project);
@@ -75,7 +85,7 @@ export function previewEnterpriseSourceEvidence(project, bundle) {
     byName.set(key, [...(byName.get(key) ?? []), object]);
   }
   const currentSource = { projectId: project.id, blueprintId: blueprint.id, blueprintVersion: blueprint.version, snapshotHash: digest(blueprint) };
-  const sourceHash = digest({ kind: bundle.kind, schemaVersion: bundle.schemaVersion, source: bundle.source, records: bundle.records });
+  const sourceHash = enterpriseSourceEvidenceHash(bundle);
   const proposals = bundle.records.map((record) => {
     const key = `${record.type}\n${normalizedName(record.name)}`;
     const candidates = byName.get(key) ?? [];

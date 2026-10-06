@@ -8362,3 +8362,203 @@ passed 1/1 (0 failures, 0 skips; 0.34s; log
 run because the verified fixture is not running and no reusable local
 customer-seeding browser helper is available. T-121 and PR-17 remain open;
 PR-15 remains the active cursor and no release gate changed.
+
+PR-17 T-121 subtask closeout (2026-10-06): the current named edit surfaces now
+use the unified semantic command normalizer/applier. The main and branch map
+forms submit typed edits through the shared command boundary; the compatible
+legacy blueprint-edit API and the owner-applied learning/proposal endpoints
+delegate to the same normalizer/applier; the chat adapter previews then applies
+`edit-blueprint-object` through that boundary; the typed decision-table editor
+emits `define-decision-table`, registered in the shared process command family;
+and import bulk edits use the registered interchange commands. Receipts/tests:
+main map boundary and legacy route (`tests/enterprise/server.test.mjs`,
+`/tmp/orgward-tests-91u742/node-test.tap.log`); branch map edit
+(`/tmp/orgward-tests-Lzbi5H/node-test.tap.log`); chat view/server and exact
+retry recovery (`/tmp/orgward-tests-2Ocuoq/node-test.tap.log`,
+`/tmp/orgward-tests-lXLQuP/node-test.tap.log`,
+`/tmp/orgward-tests-BSXEoI/node-test.tap.log`); learning endpoints
+(`/tmp/orgward-tests-mqUrXp/node-test.tap.log`,
+`/tmp/orgward-tests-WIgyeS/node-test.tap.log`); and import preview/apply
+(`/tmp/orgward-tests-gZYBOF/node-test.tap.log`). To verify matrix/decision-table
+registration against the shared endpoint, focused command
+`npm test -- tests/enterprise/server.test.mjs --test-name-pattern='enterprise process definitions and simulations stay typed, bounded, source-bound and separate from actual work'`
+passed 1/1 (0 failures, 0 skips; 5.00s; log
+`/tmp/orgward-tests-u3ryy9/node-test.tap.log`). T-121’s unified command-registry
+acceptance is satisfied for these existing write surfaces. TASKS has no separate
+T-121 checkbox (only the PR-17 checkbox); PR-17 remains open for T-122–T-127,
+with no cursor or release-gate change.
+
+T-124 uploaded-claim comparison increment (2026-10-06): explicit human
+acceptance now pins an immutable, hashed receipt containing the accepted
+blueprint identity/hash, source bundle hash, canonical target mapping, and exact
+source record/claim/path/value. A shared `compare-source-evidence` command
+compares later uploads only with that receipt and records retained reports with
+uploader, server receipt time, input hash, baseline references, comparator
+version, reasons, `sourceAuthentication: UNVERIFIED`, and `freshness: UNKNOWN`.
+The import panel exposes explicit baseline selection and labels changed and
+absent-in-this-upload claims; comparisons do not create design versions or
+claim current source truth, and leave the uploaded bundle available after a
+successful comparison. Invalid or unavailable baseline receipts now produce an
+explicit UNVERIFIABLE issue row and reason in the report. The focused
+interchange suite passed 7/7 (including
+the comparator regression), the named source-evidence view test passed 1/1, and
+the named PostgreSQL acceptance,
+comparison denial/replay/conflict/foreign-tenant/restart test passed 1/1.
+The combined focused interchange/view-file run had one unrelated portfolio
+import assertion failure (`portfolio import round trip previews,
+applies one reviewed record and persists the saved change`, expected a
+destination label); the new source view assertion itself passed. No provider
+was called. Independent third-party acquisition/truth verification,
+branch/historical comparison, and operational applicability remain unimplemented; T-124 and PR-17 remain open, with
+task cursor and release gates unchanged.
+
+T-124 collector-attestation increment (2026-10-06): added owner-authorized,
+immutable source-profile revisions pinning tenant/workspace, source account,
+instance, namespace, declared coverage, permitted collector, Ed25519 public-key
+fingerprint/version, and bounded freshness policy. Key rotation/revocation
+preserves profile and stream history. A signed manifest binds its profile and
+accepted baseline, collector sequence/hash chain, separate upstream revision /
+cursor, observed and valid time, exact claim paths/values/locators/artifact
+hashes, and coverage completeness/exclusions/errors. The server verifies the
+signature only against the active owner-pinned key, rejects scope/key/time
+failures, records receipt/evaluation time separately, and persists report plus
+stream advancement with the command. Exact retries use the existing command
+replay boundary. Reports distinguish CURRENT, STALE, CONTRADICTED, MISSING,
+PROPOSED, and UNVERIFIABLE; only fresh, complete matching coverage can produce
+MISSING. A first stream must start at sequence 1 with no prior hash; skipped
+genesis, sequence gaps and prior-hash mismatches remain UNVERIFIABLE. Copy explicitly says collector attestation does not independently
+verify third-party acquisition or source truth. Reports do not change the
+accepted design or operational authority. Focused verification passed:
+`tests/enterprise/source-attestation.test.mjs` 4/4, named collector UI test
+1/1, and named PostgreSQL collector test 1/1. The first reducer run exposed
+that the result exposed `sourceReconciliationReport` while callers expected
+`sourceAttestationReport`; the reducer now returns both aliases and the rerun
+passed. A renderer-test fixture iteration also required using `Array.from`
+because its custom NodeList `map` species is not iterable; the named test then
+passed. Reducer tests directly cover tampered signatures, unknown/rotated keys
+and owner key rotation/revocation, wrong tenant/source scope, stale/future
+times, incomplete versus complete snapshot absence, replay conflict, out-of-
+order sequence, and existing-stream plus genesis gaps. No provider was
+configured or called. Collector signature verifies a
+configured collector statement only; independent source acquisition/truth,
+branch/historical ingestion, and ongoing operational applicability remain
+unverified. T-124 and PR-17 remain open; task cursor and release gates are
+unchanged.
+
+T-124 AC2 attested finding/proposal increment (2026-10-06): each fresh
+CONTRADICTED collector row now receives a stable report-bound finding ID and
+immutable `PENDING_REVIEW` state. The owner-only preview requires reuploading
+the exact signed manifest; the server verifies its digest against the hashed
+saved report and its signature against the report’s saved historical profile
+and key, then derives the typed source bundle itself. Callers cannot attach an
+arbitrary bundle to a real finding. An authorized human owner explicitly
+reviews the generated preview, confirms the finding’s pinned canonical target,
+selects the claim and enters a reason before `Create proposed correction` is
+enabled. Existing source-acceptance validation, current blueprint hash/version
+and preview conflict checks remain in force. The atomic command creates exactly
+one `proposed-design` version and a hashed receipt linking finding/report/row,
+accepted evidence baseline, signed manifest hash (separate from derived bundle
+hash), source/profile/key versions, sequence and observation/valid times, exact
+record/claim/path/values/target, current design pin, candidate ID/version/hash,
+and the acceptance receipt. The finding remains `PENDING_REVIEW`; the action
+does not approve or publish it or change operational authority. Focused tests
+passed: the four reducer/source tests (including expiry and no mutation), the
+named finding UI test 1/1, and the named PostgreSQL attestation/finding/proposal
+test 1/1; the existing human source-acceptance/restart regression also passed
+1/1. The server case covers owner/editor/foreign denial, wrong report hash
+and manifest, no mutation during preview, stale design preview rejection,
+wrong target rejection, explicit proposal, exact replay, and restart retention
+of the candidate receipt and pending finding. `git diff --check` passed. No
+provider was called; independent source truth/acquisition, review resolution,
+publication and operational applicability remain outside this increment.
+T-124 and PR-17 remain open; task cursor and release gates are unchanged.
+
+T-124 AC3 external collector push and gap recovery increment (2026-10-06):
+owner-controlled profile revisions now pin an expected collector push interval
+alongside scope and freshness policy. Owners see the scoped signed-manifest POST
+endpoint and instructions to send complete snapshots on interval even when
+values do not change. The endpoint accepts only the exact tenant/workspace/
+profile-bound manifest, verifies it through the active profile-pinned Ed25519
+key, and writes the report, sequence state, event, and replay record through the
+existing project transaction boundary. In that transaction, active profile
+scope, key and signature are checked against the locked current project before
+replay lookup; exact replay after key rotation, revocation, or archival is
+denied. Generic denials cover unauthenticated invalid signatures and route/body
+scope mismatch. The response contains only accepted/replayed status, opaque
+report ID, submitted manifest hash/sequence and receipt time; it exposes no
+report counts or project read model. Store version-race/archive conflicts are
+mapped to the same generic denial; the collector supplies no project version.
+Read projections derive CURRENT, OVERDUE, STALE, GAP, UNKNOWN, or UNAVAILABLE
+from server time and the active profile version; reads do not refresh evidence.
+Sequence state now separates received head, validated prefix, gaps, and current
+snapshot coverage. A late missing manifest is retained only when its signature
+and available adjacent hash links verify; filling a gap appends a repair receipt
+for the reconstructed interval, preserves prior reports/findings, and cannot
+lower the received head. A full snapshot cannot clear a remaining sequence gap
+or imply recovery of missed event/tombstone history. Focused tests passed:
+`tests/enterprise/source-attestation.test.mjs` 5/5 (late s2 repair, persistent
+s1→s3→s4 gap, snapshot with unresolved gap, overdue/stale read projection), the
+named collector profile/push UI test 1/1, and the named PostgreSQL collector
+attestation server test 1/1 (anonymous signed push, tampered/future signature
+denial, wrong route and foreign tenant denial, exact replay/restart, denial of
+replay after rotation/revocation/archive, and minimal response).
+`node --check` for the edited server/reducer/projection files and `git diff --check` passed.
+Sol reviewed the signature-scoped route and required locked
+current-profile authorization before replay, generic denials, and omission of
+report counts; those changes are covered by the focused server case. This is
+an external push contract, not an OrgWard scheduler or independent verification
+of third-party acquisition/source truth. No provider was called. T-124 and PR-17 remain open;
+task cursor and release gates are unchanged.
+
+T-124 AC4 source-report consumer increment (2026-10-06): added owner-only,
+profile-scoped exact source-claim target repair bound to expected profile and
+mapping revisions, exact old binding, accepted receipt ID/hash, and report
+ID/hash. Repair verifies the intact saved report belongs to the active profile
+version and pins that exact receipt/hash, then requires the report claim and
+dependency to match the old binding. Both canonical targets are checked against
+the source record type in that exact report baseline claim. Regressions reject
+overlapping claim IDs from another source and an alternate same-source baseline
+that the selected report does not pin.
+Each repair appends a mapping revision, hashed repair
+receipt and audit entry, then appends STALE currentness only for reports whose
+pinned source/claim/path/target dependencies intersect the removed or added
+binding. Saved report content and prior currentness entries remain unchanged.
+The interchange history shows stale historical status and offers repair only
+to owners. Explicit recomputation requires the exact saved report hash and
+reupload of its signed manifest; server verification uses the report’s pinned
+profile/key and accepted baseline, while recomputation additionally requires
+that report to be the latest sequence head under the currently active same
+profile/key. It evaluates under the current mapping revision and writes a new
+immutable report with predecessor/evaluator pins, input manifest hash, result
+hash, dependency manifest and a separate currentness/recompute receipt. Only
+the successor can become FRESH; original reports stay STALE. Focused checks
+passed: `tests/enterprise/source-attestation.test.mjs` 7/7, the named source
+report consumer view test 1/1, and the named PostgreSQL collector attestation
+server test 1/1, including owner denial, mapping conflict, invalidation of two
+matching reports across old/new bindings, one-at-a-time recompute, exact replay
+and restart persistence. Read projections expire FRESH currentness when the
+profile freshness/interval or valid-time window expires, mapping changes, a newer
+sequence arrives, or sequence continuity is lost; stored report/history rows
+are not mutated. Mapping projection checks only complete dependencies against
+intervening repair revisions, so unrelated same-profile reports remain fresh.
+Recorded-time views derive against source records filtered to that cutoff and do
+not include later sequence or mapping events. The reducer suite now passes 7/7;
+syntax checks and `git diff --check` passed. Scope is
+the source-reconciliation report consumer family only; economics and other
+evaluation consumers are not covered. Collector attestation still does not
+independently verify third-party acquisition/source truth. No provider was
+called; T-124 and PR-17 remain open, with task cursor and release gates
+unchanged.
+
+T-124 AC4 consumer-family boundary review (2026-10-06): no additional existing
+evaluation consumer has a persisted dependency on source-profile mappings. The
+economic scenario evaluator consumes typed blueprint assumptions and pins the
+whole blueprint snapshot; its calculation references are present in scenario
+data, while `sourceLabels.records` is display-only. Economic input `source`
+fields are owner-entered text, not source-claim/profile bindings. Therefore the
+source mapping repair does not invalidate economic evaluations, and no link was
+inferred from labels or free text. The AC4 selective invalidation/recompute slice
+remains limited to source-reconciliation reports; another consumer family needs
+an independently persisted domain dependency before it can be safely included.
+No implementation or test run was needed for this boundary review. T-124 and
+PR-17 remain open; task cursor and release gates are unchanged.

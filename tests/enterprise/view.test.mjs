@@ -1297,6 +1297,31 @@ test('source evidence preview and human acceptance show provenance and retain ex
   assert.deepEqual(accepted, { kind: 'accept-source-evidence', bundle, previewHash: sourcePreview.previewHash,
     blueprintHash: sourcePreview.currentSource.snapshotHash,
     selections: [{ sourceRecordId: 'crm-1', targetObjectId: 'customer-1', claimIds: ['claim-1'] }], reason: 'Reviewed against customer record.' });
+  const baselineId = 'source-acceptance-00000000-0000-4000-8000-000000000001';
+  const baseline = { id: baselineId, source: { id: 'crm-export' }, receivedAt: '2026-10-01T00:00:00.000Z',
+    acceptedBlueprint: { version: 5 } };
+  const report = { id: 'source-reconciliation-1', receivedAt: '2026-10-02T00:00:00.000Z', uploader: 'owner',
+    input: { sourceId: 'crm-export', sourceBundleHash: 'd'.repeat(64) }, baseline: { acceptanceReceiptId: baselineId },
+    sourceAuthentication: 'UNVERIFIED', freshness: 'UNKNOWN', counts: { DRIFTED: 1, MISSING: 1, UNVERIFIABLE: 0 },
+    issues: [{ status: 'UNVERIFIABLE', reason: 'The baseline receipt failed its integrity check.' }],
+    claims: [{ sourceRecordId: 'crm-1', targetObjectId: 'customer-1', path: 'name', status: 'DRIFTED', reason: 'Value differs.' },
+      { sourceRecordId: 'crm-2', targetObjectId: 'customer-2', path: 'detail', status: 'MISSING', reason: 'Absent in this upload.' }] };
+  const comparisonModel = { ...currentModel, sourceAcceptanceReceipts: [baseline], sourceReconciliationReports: [report] };
+  let comparisonCommand = null;
+  const comparisonView = renderEnterpriseInterchange({ projectId: 'project-x', model: comparisonModel, draft, el, ui: branchUi,
+    api: async () => ({}), onCommand(value) { comparisonCommand = value; } });
+  assert.match(comparisonView.textContent, /Uploaded claim comparison — source unverified/);
+  assert.match(comparisonView.textContent, /Changed in upload/);
+  assert.match(comparisonView.textContent, /Absent from upload/);
+  assert.match(comparisonView.textContent, /freshness UNKNOWN/);
+  assert.match(comparisonView.textContent, /UNVERIFIABLE · The baseline receipt failed its integrity check/);
+  const compareButton = comparisonView.querySelectorAll('button').find((button) => button.text === 'Compare uploaded claims');
+  const baselineSelect = comparisonView.querySelectorAll('select').find((select) => select.attrs.name === 'source-acceptance-baseline');
+  assert.ok(compareButton && baselineSelect);
+  assert.equal(compareButton.disabled, false);
+  baselineSelect.value = baselineId;
+  compareButton.listeners.get('click')();
+  assert.deepEqual(comparisonCommand, { kind: 'compare-source-evidence', acceptanceReceiptId: baselineId, bundle });
   const readerPanel = renderEnterpriseInterchange({ projectId: 'project-x', model: { ...currentModel, permissions: { write: false } },
     el, ui: branchUi, api: async () => ({}), onCommand() {} });
   assert.equal(readerPanel.querySelectorAll('button').find((button) => button.text === 'Preview import').disabled, false);
@@ -1355,6 +1380,137 @@ test('source evidence preview and human acceptance show provenance and retain ex
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(staleDraftCallback, false);
   assert.doesNotMatch(late.textContent, /Source evidence preview · proposals only/);
+});
+
+test('collector attestation UI discloses trust boundary and submits profile and signed manifest commands', () => {
+  const model = { permissions: { write: true, sourceAttestationAdmin: true },
+    context: { isCurrent: true, blueprintId: 'blueprint-00000000-0000-4000-8000-000000000001', blueprintVersion: 5,
+      effectiveAt: null, recordedAtCutoff: null, proposalId: null, branchId: null },
+    blueprint: { id: 'visible' }, sourceAttestationProfiles: [{ id: 'source-profile-00000000-0000-4000-8000-000000000001',
+      tenantId: 'tenant-fixture', sourceId: 'crm', sourceAccountId: 'acct', sourceInstanceId: 'prod', resourceNamespace: 'customers',
+      collectorId: 'collector', version: 1, active: true, activeKeyId: 'key-1', keys: [], intervalSeconds: 120,
+      freshnessPolicy: { maxAgeSeconds: 300 }, coverageScope: { recordTypes: ['customer'], paths: ['name'] },
+      pushStatus: { status: 'OVERDUE', reason: 'Push interval elapsed.' } }], sourceReconciliationReports: [] };
+  const submitted = [];
+  const view = renderEnterpriseInterchange({ projectId: 'project-x', model, el, ui: branchUi, api: async () => ({}), onCommand(value) { submitted.push(value); } });
+  assert.match(view.textContent, /does not independently verify third-party acquisition or source truth/);
+  const profile = view.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === 'configure-source-attestation-profile');
+  const manifest = view.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === 'ingest-source-attestation-manifest');
+  assert.ok(profile && manifest);
+  const fields = Object.fromEntries(Array.from(profile.querySelectorAll('input,select,textarea'), (entry) => [entry.attrs.name, entry]));
+  fields.mode.value = 'CREATE'; fields.sourceId.value = 'crm'; fields.sourceAccountId.value = 'account'; fields.sourceInstanceId.value = 'instance';
+  fields.resourceNamespace.value = 'customers'; fields.collectorId.value = 'collector'; fields.recordTypes.value = 'customer'; fields.paths.value = 'name';
+  fields.keyId.value = 'key-1'; fields.publicKeyPem.value = '-----BEGIN PUBLIC KEY----- test'; fields.intervalSeconds.value = '120'; fields.maxAgeSeconds.value = '300';
+  fields.maxClockSkewSeconds.value = '30'; fields.reason.value = 'Pin reviewed local collector';
+  profile.listeners.get('submit')({ preventDefault() {} });
+  assert.equal(submitted[0].kind, 'configure-source-attestation-profile');
+  assert.deepEqual(submitted[0].profile.coverageScope, { recordTypes: ['customer'], paths: ['name'] });
+  assert.equal(submitted[0].profile.intervalSeconds, 120);
+  assert.match(view.textContent, /Expected collector push interval in seconds/);
+  assert.match(view.textContent, /Collector push endpoint: POST \/api\/v1\/tenants\/tenant-fixture\/projects\/project-x\/source-attestation-profiles\//);
+  assert.match(view.textContent, /Send a signed complete snapshot every 120s/);
+  manifest.querySelectorAll('textarea')[0].value = '{"kind":"orgward-enterprise-observation-manifest"}';
+  manifest.listeners.get('submit')({ preventDefault() {} });
+  assert.deepEqual(submitted[1], { kind: 'ingest-source-attestation-manifest', manifest: { kind: 'orgward-enterprise-observation-manifest' } });
+  const reader = renderEnterpriseInterchange({ projectId: 'project-x', model: { ...model, permissions: { write: false, sourceAttestationAdmin: false } },
+    el, ui: branchUi, api: async () => ({}), onCommand() {} });
+  assert.equal(reader.querySelectorAll('form').some((entry) => entry.attrs['data-enterprise-action'] === 'configure-source-attestation-profile'), false);
+  assert.equal(reader.querySelectorAll('form').some((entry) => entry.attrs['data-enterprise-action'] === 'ingest-source-attestation-manifest'), false);
+});
+
+test('collector finding UI stays pending until an owner explicitly creates a proposed correction', async () => {
+  const blueprintId = 'blueprint-00000000-0000-4000-8000-000000000001';
+  const finding = { findingId: 'source-finding-00000000-0000-4000-8000-000000000001', findingStatus: 'PENDING_REVIEW',
+    findingRowIndex: 0, sourceRecordId: 'crm-row-1', sourceRecordType: 'customer', sourceRecordName: 'North Star',
+    targetObjectId: 'customer-1', claimId: 'crm-name', path: 'name', acceptedValue: 'Accepted name', observedValue: 'Observed name',
+    status: 'CONTRADICTED', reason: 'Fresh collector-attested evidence differs.' };
+  const report = { id: 'source-reconciliation-00000000-0000-4000-8000-000000000001', reportHash: 'a'.repeat(64),
+    comparatorVersion: 'collector-attestation/v1', receivedAt: '2026-10-06T10:00:00.000Z', manifest: { hash: 'b'.repeat(64) },
+    sourceProfile: { sourceId: 'crm' }, counts: { CONTRADICTED: 1 }, claims: [finding] };
+  const model = { permissions: { write: true, sourceAttestationAdmin: true },
+    context: { isCurrent: true, blueprintId, blueprintVersion: 5, effectiveAt: null, recordedAtCutoff: null, proposalId: null, branchId: null },
+    blueprint: { id: blueprintId, areas: { customers: { items: [{ id: 'customer-1', type: 'customer', name: 'Current name' }] } } },
+    sourceReconciliationReports: [report], sourceAttestationCorrectionReceipts: [], sourceAcceptanceReceipts: [] };
+  const signedManifest = { kind: 'orgward-enterprise-observation-manifest', signature: { value: 'fixture' } };
+  const proposalPreview = { reportId: report.id, reportHash: report.reportHash, manifestHash: report.manifest.hash, finding,
+    previewHash: 'c'.repeat(64), currentSource: { blueprintId, blueprintVersion: 5, snapshotHash: 'd'.repeat(64) },
+    proposals: [{ identity: { sourceRecordId: finding.sourceRecordId, type: 'customer', name: 'North Star', status: 'UNMATCHED', candidateObjectIds: [] },
+      claims: [{ id: finding.claimId, path: finding.path, value: finding.observedValue, status: 'PROPOSED',
+        provenance: { claimLocator: 'row/name' } }] }] };
+  const requests = []; let submitted = null;
+  const view = renderEnterpriseInterchange({ projectId: 'project-x', model, el, ui: branchUi,
+    api: async (path, options) => { requests.push({ path, options: JSON.parse(options.body) }); return { data: proposalPreview }; },
+    onCommand(payload) { submitted = payload; } });
+  const findingRoot = view.querySelectorAll('[data-attested-correction-finding]')[0];
+  assert.ok(findingRoot);
+  assert.match(findingRoot.textContent, /Pending review/);
+  const textArea = findingRoot.querySelectorAll('textarea')[0]; textArea.value = JSON.stringify(signedManifest);
+  const review = findingRoot.querySelectorAll('button').find((button) => button.text === 'Review signed finding');
+  review.listeners.get('click')();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(requests[0], { path: '/api/v1/projects/project-x/enterprise/attestation-proposal-preview',
+    options: { reportId: report.id, reportHash: report.reportHash, findingId: finding.findingId, manifest: signedManifest } });
+  assert.equal(submitted, null, 'report preview does not mutate the design or create a proposal');
+  assert.match(findingRoot.textContent, /Create proposed correction/);
+  const form = findingRoot.querySelectorAll('form').find((node) => node.attrs['data-enterprise-action'] === 'propose-attested-source-correction');
+  assert.ok(form);
+  const checkbox = form.querySelectorAll('input').find((input) => input.attrs.value === finding.claimId);
+  assert.equal(checkbox.checked, true);
+  const target = form.querySelectorAll('select')[0];
+  assert.equal(target.value, '', 'the owner must explicitly confirm the finding’s pinned target');
+  assert.deepEqual(Array.from(target.querySelectorAll('option'), (option) => option.attrs.value), ['', finding.targetObjectId]);
+  target.value = finding.targetObjectId;
+  form.querySelectorAll('textarea')[0].value = 'Owner reviewed the immutable source finding.';
+  form.listeners.get('submit')({ preventDefault() {} });
+  assert.equal(submitted.kind, 'propose-attested-source-correction');
+  assert.equal(submitted.reportId, report.id);
+  assert.equal(submitted.findingId, finding.findingId);
+  assert.deepEqual(submitted.manifest, signedManifest);
+  assert.deepEqual(submitted.selections, [{ sourceRecordId: finding.sourceRecordId, targetObjectId: finding.targetObjectId,
+    claimIds: [finding.claimId] }]);
+  assert.equal(submitted.reason, 'Owner reviewed the immutable source finding.');
+});
+
+test('source report consumer UI separates stale historical status from explicit owner recomputation and mapping repair', () => {
+  const blueprintId = 'blueprint-00000000-0000-4000-8000-000000000001';
+  const profileId = 'source-profile-00000000-0000-4000-8000-000000000001';
+  const report = { id: 'source-reconciliation-00000000-0000-4000-8000-000000000001', reportHash: 'a'.repeat(64),
+    comparatorVersion: 'collector-attestation/v1', receivedAt: '2026-10-06T10:00:00.000Z', uploader: 'collector',
+    sourceAuthentication: 'COLLECTOR_ATTESTED', freshness: 'WITHIN_POLICY_WINDOW', sourceProfile: { id: profileId, sourceId: 'crm' },
+    baseline: { acceptanceReceiptId: 'source-acceptance-00000000-0000-4000-8000-000000000001', receiptHash: 'c'.repeat(64) },
+    manifest: { hash: 'b'.repeat(64) }, counts: { CURRENT: 1 }, claims: [{ sourceRecordId: 'row-1', sourceRecordType: 'customer',
+      sourceRecordName: 'North Star', targetObjectId: 'customer-1', claimId: 'name-claim', path: 'name', status: 'CURRENT', reason: 'Matches.' }] };
+  const model = { permissions: { write: true, sourceAttestationAdmin: true },
+    context: { isCurrent: true, blueprintId, blueprintVersion: 5, effectiveAt: null, recordedAtCutoff: null, proposalId: null, branchId: null },
+    blueprint: { id: blueprintId, areas: { customers: { items: [{ id: 'customer-1', type: 'customer', name: 'North Star' },
+      { id: 'customer-2', type: 'customer', name: 'Other customer' }] } } },
+    sourceReconciliationReports: [report], sourceReconciliationCurrentness: [{ reportId: report.id, state: 'STALE', mappingRevision: 2,
+      reason: 'Mapping changed.' }], sourceAttestationMappingRevisions: [{ profileId, version: 2 }],
+    sourceAttestationProfiles: [{ id: profileId, version: 1, tenantId: 'tenant-x', sourceId: 'crm', sourceAccountId: 'acct',
+      sourceInstanceId: 'prod', resourceNamespace: 'customers', collectorId: 'collector', active: true, activeKeyId: 'key', keys: [],
+      intervalSeconds: 300, freshnessPolicy: { maxAgeSeconds: 3600 }, coverageScope: { recordTypes: ['customer'], paths: ['name'] },
+      pushStatus: { reportId: report.id } }] };
+  let submitted = null;
+  const view = renderEnterpriseInterchange({ projectId: 'project-x', model, el, ui: branchUi, api: async () => ({}), onCommand(payload) { submitted = payload; } });
+  const history = view.querySelectorAll('[data-source-reconciliation-report]')[0];
+  assert.match(history.textContent, /Historical status only; this report is not current/);
+  const forms = history.querySelectorAll('form');
+  const recompute = forms.find((form) => form.attrs['data-enterprise-action'] === 'recompute-source-reconciliation-report');
+  const repair = forms.find((form) => form.attrs['data-enterprise-action'] === 'repair-source-claim-mapping');
+  assert.ok(recompute && repair);
+  recompute.querySelectorAll('textarea')[0].value = '{"signature":{"value":"signed"}}';
+  recompute.listeners.get('submit')({ preventDefault() {} });
+  assert.equal(submitted.kind, 'recompute-source-reconciliation-report');
+  assert.equal(submitted.reportId, report.id);
+  assert.deepEqual(submitted.manifest, { signature: { value: 'signed' } });
+  const target = repair.querySelectorAll('select')[0]; target.value = 'customer-2';
+  repair.querySelectorAll('textarea')[0].value = 'Repair exact mapping.';
+  repair.listeners.get('submit')({ preventDefault() {} });
+  assert.deepEqual(submitted, { kind: 'repair-source-claim-mapping', profileId, expectedProfileVersion: 1, expectedMappingVersion: 2,
+    baselineAcceptanceReceiptId: report.baseline.acceptanceReceiptId, baselineReceiptHash: report.baseline.receiptHash,
+    reportId: report.id, reportHash: report.reportHash,
+    oldBinding: { sourceRecordId: 'row-1', claimId: 'name-claim', path: 'name', targetObjectId: 'customer-1' },
+    replacementTargetObjectId: 'customer-2', reason: 'Repair exact mapping.' });
 });
 function storageFixture(values = new Map()) {
   return { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, String(value)),

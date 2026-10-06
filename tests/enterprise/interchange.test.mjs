@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { addConversationTurn, createProject, latestBlueprint } from '../../src/model.mjs';
 import { digest } from '../../src/sdlc/contracts.mjs';
 import { applyEnterpriseBulkEdit, applyEnterpriseDesignPack, createEnterpriseDesignPack, createEnterpriseInterchangeBundle,
   normalizeEnterpriseInterchangeCommand, previewEnterpriseDesignPack, previewEnterpriseInterchange } from '../../src/enterprise/interchange.mjs';
-import { previewEnterpriseSourceEvidence } from '../../src/enterprise/source-onboarding.mjs';
+import { enterpriseSourceEvidenceHash, previewEnterpriseSourceEvidence } from '../../src/enterprise/source-onboarding.mjs';
 import { applyEnterpriseSourceAcceptance, normalizeEnterpriseSourceAcceptanceCommand } from '../../src/enterprise/source-acceptance.mjs';
 
 function completeProject() {
@@ -160,6 +161,70 @@ test('accepted source claims create one exact-source proposed snapshot and rejec
       && error.invalidFields.includes('proposedInstructions')
       && error.invalidFields.includes('proposedScopeStatements'));
   assert.equal(JSON.stringify(rollbackProject), beforeLateFailure, 'earlier scratch edits are not persisted when a later canonical edit fails');
+});
+
+test('uploaded source comparison is pinned to immutable accepted claim values and never rematches the latest design', () => {
+  const project = completeProject(); const initial = latestBlueprint(project);
+  const customer = initial.areas.customersOfferingsValueEconomics.items.find((entry) => entry.type === 'customer');
+  const bundle = { kind: 'orgward-enterprise-source-evidence', schemaVersion: '1.0',
+    source: { id: 'crm-pinned', label: 'Pinned CRM upload' }, records: [{ id: 'crm-customer-1', type: 'customer', name: customer.name,
+      claims: [{ id: 'crm-name', path: 'name', value: 'Accepted name', locator: 'row/1/name' }] }] };
+  const preview = previewEnterpriseSourceEvidence(project, bundle);
+  const accepted = applyEnterpriseSourceAcceptance(project, normalizeEnterpriseSourceAcceptanceCommand({ kind: 'accept-source-evidence',
+    blueprintId: initial.id, blueprintVersion: initial.version, blueprintHash: digest(initial), previewHash: preview.previewHash, bundle,
+    selections: [{ sourceRecordId: 'crm-customer-1', targetObjectId: customer.id, claimIds: ['crm-name'] }],
+    reason: 'Pin this exact uploaded claim as the comparison baseline.' }), 'owner', { commandId: 'acceptance-command-1', receivedAt: '2026-10-06T10:00:00.000Z' });
+  const receipt = project.sourceAcceptanceReceipts[0];
+  assert.equal(receipt.id, accepted.sourceAcceptanceReceiptId);
+  assert.equal(receipt.commandId, 'acceptance-command-1');
+  assert.equal(receipt.source.bundleHash, preview.source.snapshotHash);
+  assert.deepEqual(receipt.claims[0], { sourceRecordId: 'crm-customer-1', sourceRecordType: 'customer', sourceRecordName: customer.name,
+    claimId: 'crm-name', targetObjectId: customer.id, path: 'name', value: 'Accepted name', sourceLocator: null,
+    recordLocator: 'crm-customer-1', claimLocator: 'row/1/name', sourceHash: preview.source.snapshotHash });
+
+  const later = structuredClone(latestBlueprint(project));
+  later.version += 1; later.id = `blueprint-${randomUUID()}`;
+  later.areas.customersOfferingsValueEconomics.items.find((entry) => entry.id === customer.id).name = 'Later design edit';
+  project.blueprintVersions.push(later);
+  const compare = (upload, id) => applyEnterpriseSourceAcceptance(project, normalizeEnterpriseSourceAcceptanceCommand({ kind: 'compare-source-evidence',
+    blueprintId: later.id, blueprintVersion: later.version, acceptanceReceiptId: receipt.id, bundle: upload }), 'owner',
+  { commandId: id, expectedVersion: 7, receivedAt: '2026-10-06T11:00:00.000Z' }).sourceReconciliationReport;
+  const same = compare(bundle, 'compare-same');
+  assert.equal(same.claims[0].status, 'MATCHED');
+  const changed = structuredClone(bundle); changed.records[0].claims[0].value = 'Changed upload name';
+  const drift = compare(changed, 'compare-drift');
+  assert.equal(drift.claims[0].status, 'DRIFTED');
+  assert.equal(drift.claims[0].acceptedValue, 'Accepted name');
+  const absent = structuredClone(bundle); absent.records[0].claims = [];
+  assert.equal(compare(absent, 'compare-absent').claims[0].status, 'MISSING');
+  const changedIdentity = structuredClone(bundle); changedIdentity.records[0].name = 'Renamed source identity';
+  assert.equal(compare(changedIdentity, 'compare-identity').claims[0].status, 'UNVERIFIABLE');
+  const otherSource = structuredClone(bundle); otherSource.source.id = 'different-source';
+  const unverifiable = compare(otherSource, 'compare-source');
+  assert.equal(unverifiable.claims[0].status, 'UNVERIFIABLE');
+  assert.equal(unverifiable.sourceAuthentication, 'UNVERIFIED');
+  assert.equal(unverifiable.freshness, 'UNKNOWN');
+  assert.equal(unverifiable.input.sourceBundleHash, enterpriseSourceEvidenceHash(otherSource));
+  assert.equal(unverifiable.baseline.acceptanceReceiptId, receipt.id);
+  assert.equal(unverifiable.baseline.acceptedBlueprint.id, accepted.blueprint.id);
+  const missingBaseline = applyEnterpriseSourceAcceptance(project, normalizeEnterpriseSourceAcceptanceCommand({ kind: 'compare-source-evidence',
+    blueprintId: later.id, blueprintVersion: later.version, acceptanceReceiptId: 'source-acceptance-00000000-0000-4000-8000-000000000099',
+    bundle }), 'owner', { receivedAt: '2026-10-06T12:00:00.000Z' }).sourceReconciliationReport;
+  assert.equal(missingBaseline.counts.UNVERIFIABLE, 1);
+  assert.equal(missingBaseline.issues[0].status, 'UNVERIFIABLE');
+  assert.match(missingBaseline.issues[0].reason, /receipt is missing/);
+  const forgedReceipt = structuredClone(receipt);
+  forgedReceipt.claims[0].value = 'Value not pinned by accepted blueprint';
+  const { receiptHash: _oldHash, ...forgedCore } = forgedReceipt;
+  forgedReceipt.receiptHash = digest(forgedCore);
+  project.sourceAcceptanceReceipts[0] = forgedReceipt;
+  const detachedBaseline = applyEnterpriseSourceAcceptance(project, normalizeEnterpriseSourceAcceptanceCommand({ kind: 'compare-source-evidence',
+    blueprintId: later.id, blueprintVersion: later.version, acceptanceReceiptId: receipt.id, bundle }), 'owner',
+  { receivedAt: '2026-10-06T13:00:00.000Z' }).sourceReconciliationReport;
+  assert.equal(detachedBaseline.counts.UNVERIFIABLE, 1);
+  assert.match(detachedBaseline.issues[0].reason, /failed its integrity check/);
+  assert.equal(latestBlueprint(project).areas.customersOfferingsValueEconomics.items.find((entry) => entry.id === customer.id).name, 'Later design edit');
+  assert.equal(project.sourceReconciliationReports.length, 7);
 });
 
 test('enterprise bundle preview binds source identity, reports known/unknown/loss fields and applies multiple edits as one atomic proposed version', () => {

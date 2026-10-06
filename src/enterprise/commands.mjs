@@ -10,6 +10,7 @@ import { applyEnterpriseRefinementCommand, ENTERPRISE_REFINEMENT_KINDS, normaliz
 import { applyEnterpriseBulkEdit, applyEnterpriseDesignPack, ENTERPRISE_INTERCHANGE_KINDS, normalizeEnterpriseInterchangeCommand } from './interchange.mjs';
 import { applyEnterpriseIntegrityCommand, ENTERPRISE_INTEGRITY_KINDS, normalizeEnterpriseIntegrityCommand } from './integrity.mjs';
 import { applyEnterpriseSourceAcceptance, ENTERPRISE_SOURCE_ACCEPTANCE_KINDS, normalizeEnterpriseSourceAcceptanceCommand } from './source-acceptance.mjs';
+import { applyEnterpriseSourceAttestationCommand, ENTERPRISE_SOURCE_ATTESTATION_KINDS, normalizeEnterpriseSourceAttestationCommand } from './source-attestation.mjs';
 import { applyEnterpriseGovernanceCommand, ENTERPRISE_GOVERNANCE_KINDS, normalizeEnterpriseGovernanceCommand } from './governance.mjs';
 import { applyEnterpriseStewardshipCommand, ENTERPRISE_STEWARDSHIP_KINDS, normalizeEnterpriseStewardshipCommand } from './stewardship.mjs';
 
@@ -31,6 +32,7 @@ export function normalizeEnterpriseCommand(input) {
   if (input && ENTERPRISE_STEWARDSHIP_KINDS.has(input.kind)) return normalizeEnterpriseStewardshipCommand(input);
   if (input && ENTERPRISE_GOVERNANCE_KINDS.has(input.kind)) return normalizeEnterpriseGovernanceCommand(input);
   if (input && ENTERPRISE_INTEGRITY_KINDS.has(input.kind)) return normalizeEnterpriseIntegrityCommand(input);
+  if (input && ENTERPRISE_SOURCE_ATTESTATION_KINDS.has(input.kind)) return normalizeEnterpriseSourceAttestationCommand(input);
   if (input && ENTERPRISE_SOURCE_ACCEPTANCE_KINDS.has(input.kind)) return normalizeEnterpriseSourceAcceptanceCommand(input);
   if (input && ENTERPRISE_PROCESS_KINDS.has(input.kind)) return normalizeEnterpriseProcessCommand(input);
   if (input && ENTERPRISE_ECONOMIC_KINDS.has(input.kind)) return normalizeEnterpriseEconomicCommand(input);
@@ -124,7 +126,8 @@ export function applyEnterpriseCommand(project, command, actor, options = {}) {
   }
   if (ENTERPRISE_GOVERNANCE_KINDS.has(command.kind)) return applyEnterpriseGovernanceCommand(project, command, actor);
   if (ENTERPRISE_INTEGRITY_KINDS.has(command.kind)) return applyEnterpriseIntegrityCommand(project, command, actor);
-  if (ENTERPRISE_SOURCE_ACCEPTANCE_KINDS.has(command.kind)) return applyEnterpriseSourceAcceptance(project, command, actor);
+  if (ENTERPRISE_SOURCE_ATTESTATION_KINDS.has(command.kind)) return applyEnterpriseSourceAttestationCommand(project, command, actor, options);
+  if (ENTERPRISE_SOURCE_ACCEPTANCE_KINDS.has(command.kind)) return applyEnterpriseSourceAcceptance(project, command, actor, options);
   if (ENTERPRISE_PROCESS_KINDS.has(command.kind)) return applyEnterpriseProcessCommand(project, command, actor, options);
   if (ENTERPRISE_ECONOMIC_KINDS.has(command.kind)) return applyEnterpriseEconomicCommand(project, command, actor);
   if (ENTERPRISE_REFINEMENT_KINDS.has(command.kind)) return applyEnterpriseRefinementCommand(project, command, actor);

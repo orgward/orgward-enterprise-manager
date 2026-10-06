@@ -1983,6 +1983,7 @@ export class PostgresProjectStore extends PostgresDocumentStore {
   async updateWithCommand(id, tenantId, {
     commandId, operation = 'project.record-answer', payloadHash, expectedVersion, principal = null,
     requiredPrincipalRoles = null, authzGeneration = null, minimumProjectAccess = null, apply,
+    authorizeBeforeReplay = null, useCurrentVersion = false,
   }) {
     const result = await this.persistence.transaction(async (client) => {
       if (principal) {
@@ -1994,7 +1995,7 @@ export class PostgresProjectStore extends PostgresDocumentStore {
       if (requiredPrincipalRoles) await requirePrincipalAuthority(client, {
         tenantId, principal, roles: requiredPrincipalRoles, authzGeneration,
       });
-      const prior = await this.#priorCommand(client, tenantId, operation, commandId, payloadHash);
+      let prior = authorizeBeforeReplay ? null : await this.#priorCommand(client, tenantId, operation, commandId, payloadHash);
       if (prior) {
         if (prior.id !== id) throw conflict('This command ID belongs to a different project.', null, 'IDEMPOTENCY_CONFLICT');
         return { project: prior, replayed: true };
@@ -2006,21 +2007,30 @@ export class PostgresProjectStore extends PostgresDocumentStore {
       `, [tenantId, id]);
       if (!selected.rowCount) return null;
       const project = verifyAggregateRow(selected.rows[0]);
+      if (authorizeBeforeReplay) {
+        await authorizeBeforeReplay(project, client);
+        prior = await this.#priorCommand(client, tenantId, operation, commandId, payloadHash);
+      }
+      if (prior) {
+        if (prior.id !== id) throw conflict('This command ID belongs to a different project.', null, 'IDEMPOTENCY_CONFLICT');
+        return { project: prior, replayed: true };
+      }
       if (project.lifecycle?.status === 'archived' && operation !== 'project.restore') {
         throw conflict('This workspace is archived and read-only. Its owner must restore it before making changes.', project.version, 'PROJECT_ARCHIVED');
       }
-      if (project.version !== expectedVersion) {
+      if (!useCurrentVersion && project.version !== expectedVersion) {
         throw conflict(`Version conflict: the current version is ${project.version}. Reload before retrying.`, project.version);
       }
+      const startingVersion = project.version;
       const priorEvents = structuredClone(project.events ?? []);
       await apply(project, client);
-      if (project.version !== expectedVersion + 1) throw persistenceIntegrity('The project version did not advance exactly once.');
+      if (project.version !== startingVersion + 1) throw persistenceIntegrity('The project version did not advance exactly once.');
       if (!Array.isArray(project.events) || project.events.length !== priorEvents.length + 1
         || contentHash(project.events.slice(0, priorEvents.length)) !== contentHash(priorEvents)) {
         throw persistenceIntegrity('A project command must append exactly one event without rewriting history.');
       }
       delete project.commandRecords;
-      await updateAggregate(client, project, 'project', expectedVersion);
+      await updateAggregate(client, project, 'project', startingVersion);
       const snapshot = await this.#recordCommand(client, { tenantId, operation, commandId, payloadHash, project });
       return { project: snapshot, replayed: false };
     });

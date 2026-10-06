@@ -1,7 +1,7 @@
 import { ENTERPRISE_PROCESS_COMMANDS, enterpriseProcessCommandPayload } from './enterprise-process.mjs';
 import { ENTERPRISE_ECONOMIC_COMMANDS, enterpriseEconomicCommandPayload } from './enterprise-economics.mjs';
 import { ENTERPRISE_REFINEMENT_COMMANDS, enterpriseRefinementCommandPayload } from './enterprise-refinement.mjs';
-import { ENTERPRISE_INTERCHANGE_COMMANDS, enterpriseInterchangeCommandPayload } from './enterprise-interchange.mjs';
+import { ENTERPRISE_INTERCHANGE_COMMANDS, ENTERPRISE_SOURCE_ATTESTATION_COMMANDS, enterpriseInterchangeCommandPayload } from './enterprise-interchange.mjs';
 import { ENTERPRISE_BRANCH_COMMANDS, enterpriseBranchWritable, enterpriseBranchCommandPayload, enterpriseCommandResultRoute } from './enterprise-branches.mjs';
 import { connectedNodeIds, filterGraph, focusFirstMapResult, focusSelectedMapControl, graphAccessibilityAttributes, mapControlPressed, searchGraph, shouldStartMapPan, toggleType, zoomTransform } from './map-state.js';
 import { apiErrorFrom, decodeStudioRoute, encodeExecutionRoute, encodeStudioRoute, fieldErrorsFor, founderConversationAnnouncement } from './shared-interactions.mjs';
@@ -311,6 +311,8 @@ async function saveEnterpriseCommand(payload = null, { commandId = null } = {}) 
       if (enterpriseReadOnly() || !model.permissions?.write
         || (payload.kind === 'run-integrity-checks' && !model.permissions?.integrityRun)
         || (payload.kind === 'accept-integrity-exception' && !model.permissions?.integrityException)
+        || (payload.kind === 'configure-source-attestation-profile' && !model.permissions?.sourceAttestationAdmin)
+        || (ENTERPRISE_SOURCE_ATTESTATION_COMMANDS.includes(payload.kind) && !model.context?.isCurrent)
         || ((['create-scope', 'rename-scope', 'set-validity', 'propose-future-design'].includes(payload.kind)
           || (payload.kind === 'record-state' && payload.dimension === 'review')) && !model.permissions.scopeAdmin)) return;
       boundPayload = { ...payload, blueprintId: model.context.blueprintId, blueprintVersion: model.context.blueprintVersion };
@@ -322,7 +324,8 @@ async function saveEnterpriseCommand(payload = null, { commandId = null } = {}) 
   if (ENTERPRISE_PROCESS_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseProcessDraft = saved.envelope.payload;
   if (ENTERPRISE_ECONOMIC_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseEconomicDraft = saved.envelope.payload;
   if (ENTERPRISE_REFINEMENT_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseRefinementDraft = saved.envelope.payload;
-  if (ENTERPRISE_INTERCHANGE_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseInterchangeDraft = {
+  if (ENTERPRISE_INTERCHANGE_COMMANDS.includes(saved.envelope.payload.kind)
+    && saved.envelope.payload.kind !== 'compare-source-evidence') state.enterpriseInterchangeDraft = {
     ...(state.enterpriseInterchangeDraft ?? {}), bundle: saved.envelope.payload.bundle,
     recordIds: saved.envelope.payload.recordIds, sourceSelections: saved.envelope.payload.selections,
     reason: saved.envelope.payload.reason };
@@ -340,10 +343,14 @@ async function saveEnterpriseCommand(payload = null, { commandId = null } = {}) 
     if (ENTERPRISE_PROCESS_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseProcessDraft = null;
     if (ENTERPRISE_ECONOMIC_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseEconomicDraft = null;
     if (ENTERPRISE_REFINEMENT_COMMANDS.includes(saved.envelope.payload.kind)) state.enterpriseRefinementDraft = null;
-    if (ENTERPRISE_INTERCHANGE_COMMANDS.includes(saved.envelope.payload.kind)) retainEnterpriseInterchangeDraft(null);
+    if (ENTERPRISE_INTERCHANGE_COMMANDS.includes(saved.envelope.payload.kind)
+      && saved.envelope.payload.kind !== 'compare-source-evidence') retainEnterpriseInterchangeDraft(null);
     if (saved.envelope.payload.kind === 'run-integrity-checks') state.enterpriseIntegrityDraft = null;
     if (result.data.simulation) state.enterpriseSimulation = result.data.simulation;
-    state.enterpriseStatus = result.data.governanceCaseId ? `Saved governance decision ${saved.envelope.payload.kind.replaceAll('-', ' ')} as ${result.data.governanceStatus} at revision ${result.data.governanceRevision}. The proposed design was unchanged.`
+    state.enterpriseStatus = result.data.sourceAttestationReport ? `Recorded collector-attested evidence: ${result.data.sourceAttestationReport.counts.CURRENT} current, ${result.data.sourceAttestationReport.counts.PROPOSED} proposed, ${result.data.sourceAttestationReport.counts.STALE} stale, ${result.data.sourceAttestationReport.counts.CONTRADICTED} contradicted, ${result.data.sourceAttestationReport.counts.MISSING} missing, ${result.data.sourceAttestationReport.counts.UNVERIFIABLE} unverifiable. Third-party source truth/acquisition are not independently verified. The accepted design and evaluations were unchanged.`
+      : result.data.sourceAttestationProfile ? `Saved source attestation profile ${result.data.sourceAttestationProfile.id} version ${result.data.sourceAttestationProfile.version}; collector trust and freshness policy are owner controlled.`
+      : result.data.sourceReconciliationReport ? `Recorded an uploaded claim comparison: ${result.data.sourceReconciliationReport.counts.MATCHED} matched, ${result.data.sourceReconciliationReport.counts.DRIFTED} changed in upload, ${result.data.sourceReconciliationReport.counts.MISSING} absent from upload, ${result.data.sourceReconciliationReport.counts.UNVERIFIABLE} unverifiable. Source unverified; freshness unknown. The accepted design was unchanged.`
+      : result.data.governanceCaseId ? `Saved governance decision ${saved.envelope.payload.kind.replaceAll('-', ' ')} as ${result.data.governanceStatus} at revision ${result.data.governanceRevision}. The proposed design was unchanged.`
       : result.data.stewardshipRevision ? `Saved information stewardship ${saved.envelope.payload.kind.replaceAll('-', ' ')} at assignment revision ${result.data.stewardshipRevision}${result.data.stewardshipOutcome ? ` with outcome ${result.data.stewardshipOutcome}` : ''}. The information definition was unchanged.`
       : result.data.integrityException ? `Recorded the human exception for finding ${result.data.integrityException.findingId} in report ${result.data.integrityException.reportId}. The finding remains unresolved and the integrity result is unchanged.`
       : result.data.acceptedClaims ? `Accepted ${result.data.acceptedClaims.length} reviewed source claims into one proposed design version from source snapshot ${result.data.acceptedClaims[0]?.sourceHash ?? 'unknown'}; first claim locator ${result.data.acceptedClaims[0]?.claimLocator ?? 'not supplied'}. No work was run or published.`

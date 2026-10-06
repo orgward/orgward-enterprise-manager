@@ -38,6 +38,7 @@ import { ENTERPRISE_ECONOMIC_KINDS } from './src/enterprise/economics-commands.m
 import { ENTERPRISE_REFINEMENT_KINDS } from './src/enterprise/refinement-commands.mjs';
 import { ENTERPRISE_INTEGRITY_KINDS } from './src/enterprise/integrity.mjs';
 import { ENTERPRISE_SOURCE_ACCEPTANCE_KINDS } from './src/enterprise/source-acceptance.mjs';
+import { ENTERPRISE_SOURCE_ATTESTATION_KINDS, authorizeEnterpriseCollectorPush, previewEnterpriseAttestedSourceProposal } from './src/enterprise/source-attestation.mjs';
 import { ENTERPRISE_GOVERNANCE_KINDS } from './src/enterprise/governance.mjs';
 import { ENTERPRISE_STEWARDSHIP_KINDS } from './src/enterprise/stewardship.mjs';
 import { createLocalSandboxTestAdapter } from './src/enterprise/sandbox-adapter-contract.mjs';
@@ -940,7 +941,9 @@ export function createApp({
         return;
       }
 
-      if (oidcAuthenticator && pathname.startsWith('/api/') && pathname !== '/api/health') {
+      const sourceAttestationCollectorPush = request.method === 'POST'
+        && /^\/api\/v1\/tenants\/[a-z0-9][a-z0-9_-]{0,79}\/projects\/project-[0-9a-f-]{36}\/source-attestation-profiles\/source-profile-[0-9a-f-]{36}\/manifests$/.test(pathname);
+      if (oidcAuthenticator && pathname.startsWith('/api/') && pathname !== '/api/health' && !sourceAttestationCollectorPush) {
         const authorization = request.headers.authorization;
         if (typeof authorization === 'string' && authorization.startsWith('Bearer ')) {
           const verified = await oidcAuthenticator.authenticate(request);
@@ -963,7 +966,7 @@ export function createApp({
           }
         }
         if (request.method === 'POST') {
-          const readOnlyEnterprisePreview = /^\/api\/v1\/projects\/project-[0-9a-f-]{36}\/enterprise\/import-preview$/.test(pathname);
+          const readOnlyEnterprisePreview = /^\/api\/v1\/projects\/project-[0-9a-f-]{36}\/enterprise\/(?:import-preview|attestation-proposal-preview)$/.test(pathname);
           const required = pathname === '/api/v1/persistence/imports'
             || /^\/api\/v1\/secrets\/secret-[a-z0-9][a-z0-9._-]{0,79}\/revoke$/.test(pathname)
             ? ['tenant-admin']
@@ -1732,6 +1735,57 @@ export function createApp({
         return;
       }
 
+      const collectorPushMatch = pathname.match(/^\/api\/v1\/tenants\/([a-z0-9][a-z0-9_-]{0,79})\/projects\/(project-[0-9a-f-]{36})\/source-attestation-profiles\/(source-profile-[0-9a-f-]{36})\/manifests$/);
+      if (collectorPushMatch && request.method === 'POST') {
+        const [, tenantId, projectId, profileId] = collectorPushMatch;
+        const manifest = await readJson(request, 1_000_000);
+        if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)
+          || manifest.profile?.id !== profileId || manifest.tenantId !== tenantId || manifest.workspaceId !== projectId) {
+          throw apiFailure(404, 'SOURCE_ATTESTATION_DENIED', 'Collector request denied.');
+        }
+        const manifestHash = digest(manifest);
+        const commandId = `collector-push:${profileId}:${manifestHash}`;
+        const actor = `collector:${profileId}`;
+        let payload = null; let receivedAt = null;
+        let result;
+        try { result = await store.updateWithCommand(projectId, tenantId, {
+          operation: 'project.enterprise-collector-push', commandId,
+          payloadHash: payloadHash({ tenantId, projectId, profileId, manifestHash }), useCurrentVersion: true,
+          authorizeBeforeReplay(project) {
+            receivedAt = new Date().toISOString();
+            authorizeEnterpriseCollectorPush(project, { profileId, tenantId, projectId, manifest, now: receivedAt });
+            if (project.lifecycle?.status === 'archived') throw apiFailure(404, 'SOURCE_ATTESTATION_DENIED', 'Collector request denied.');
+            const currentBlueprint = latestBlueprint(project);
+            if (!currentBlueprint) throw apiFailure(404, 'SOURCE_ATTESTATION_DENIED', 'Collector request denied.');
+            try {
+              payload = normalizeEnterpriseCommand({ kind: 'ingest-source-attestation-manifest',
+                blueprintId: currentBlueprint.id, blueprintVersion: currentBlueprint.version, manifest });
+            } catch {
+              throw apiFailure(404, 'SOURCE_ATTESTATION_DENIED', 'Collector request denied.');
+            }
+          },
+          async apply(project) {
+            const changed = await applyEnterpriseCommand(project, payload, actor, { commandId,
+              expectedVersion: project.version, receivedAt, tenantId });
+            project.version += 1; project.updatedAt = changed.recordedAt; project.updatedBy = actor;
+            project.events.push(projectEvent(project, { type: 'EnterpriseSourceObservationReconciled', actor, commandId,
+              correlationId, data: { kind: payload.kind, profileId, manifestHash,
+                sourceReconciliationReportId: changed.sourceAttestationReport?.id ?? null,
+                idempotent: changed.idempotent === true } }));
+          },
+        }); } catch (error) {
+          if (error?.code === 'VERSION_CONFLICT' || error?.code === 'PROJECT_ARCHIVED') {
+            throw apiFailure(404, 'SOURCE_ATTESTATION_DENIED', 'Collector request denied.');
+          }
+          throw error;
+        }
+        if (!result) throw apiFailure(404, 'SOURCE_ATTESTATION_DENIED', 'Collector request denied.');
+        const receipt = result.project.sourceAttestationManifestReceipts?.find((entry) => entry.profileId === profileId && entry.manifestHash === manifestHash);
+        const report = result.project.sourceReconciliationReports?.find((entry) => entry.id === receipt?.reportId);
+        return sendApi(response, result.replayed ? 200 : 202, { accepted: true, reportId: report?.id ?? null,
+          manifestHash, sequence: manifest.source?.sequence ?? null, recordedAt: receipt?.receivedAt ?? null },
+        { correlationId, meta: { replayed: result.replayed } });
+      }
       const enterpriseMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/enterprise(?:\/(commands))?$/);
       const enterpriseExportMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/enterprise\/export$/);
       if (enterpriseExportMatch && request.method === 'GET') {
@@ -1768,6 +1822,30 @@ export function createApp({
               throw apiFailure(409, 'ENTERPRISE_BLUEPRINT_STALE', 'Reload the current saved design before exporting a process pack.');
             }
             sendApi(response, 200, createEnterpriseDesignPack(project.id, blueprint, body.rootId), { correlationId });
+            return project;
+          } });
+        if (!found) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
+        return;
+      }
+      const attestationProposalPreviewMatch = pathname.match(/^\/api\/v1\/projects\/(project-[0-9a-f-]{36})\/enterprise\/attestation-proposal-preview$/);
+      if (attestationProposalPreviewMatch && request.method === 'POST') {
+        if (!request.identity) throw apiFailure(401, 'AUTHENTICATION_REQUIRED', 'A verified human project owner is required to review an attested source finding.');
+        requirePrincipalStoreMethod(store, 'getWithPrincipalAuthority');
+        const body = await readJson(request);
+        if (!body || typeof body !== 'object' || Array.isArray(body)
+          || Object.keys(body).some((key) => !['reportId', 'reportHash', 'findingId', 'manifest'].includes(key))) {
+          throw apiFailure(400, 'INVALID_ATTESTED_SOURCE_PROPOSAL_PREVIEW', 'Provide the exact report and finding plus its reuploaded signed manifest.');
+        }
+        rejectAuthorityClaims(body);
+        const found = await store.getWithPrincipalAuthority({ id: attestationProposalPreviewMatch[1], tenantId: requestTenant(request),
+          principal: requestActor(request), anyPrincipalRoleGroups: [['workspace-read', 'workspace-write', 'tenant-admin']],
+          authzGeneration: request.identity.authzGeneration,
+          operation(project, membership) {
+            if (membership?.access !== 'owner' || request.identity.actorType !== 'human' || !requestRoles(request).includes('workspace-write')) {
+              throw apiFailure(403, 'ACTION_FORBIDDEN', 'A human workspace owner must review an attested correction finding.');
+            }
+            const preview = previewEnterpriseAttestedSourceProposal(project, body, requestTenant(request), new Date().toISOString());
+            sendApi(response, 200, preview, { correlationId });
             return project;
           } });
         if (!found) throw apiFailure(404, 'PROJECT_NOT_FOUND', 'Project not found.');
@@ -1839,11 +1917,16 @@ export function createApp({
           || ['decide-governance-decision', 'review-governance-appeal', 'assign-information-steward'].includes(payload.kind)
           || ['run-sandbox-procurement-test', 'dispatch-sandbox-procurement-test', 'reconcile-sandbox-procurement-test', 'compensate-sandbox-procurement-test'].includes(payload.kind)
           || (payload.kind === 'record-state' && payload.dimension === 'review')
+          || payload.kind === 'configure-source-attestation-profile'
+          || payload.kind === 'repair-source-claim-mapping'
+          || payload.kind === 'recompute-source-reconciliation-report'
+          || payload.kind === 'propose-attested-source-correction'
           || (payload.kind === 'edit-branch-scope' && ['create-scope', 'rename-scope'].includes(payload.change.kind));
         if ((administrative || payload.kind === 'record-state' || ENTERPRISE_BRANCH_KINDS.has(payload.kind)
           || ENTERPRISE_PROCESS_KINDS.has(payload.kind) || ENTERPRISE_ECONOMIC_KINDS.has(payload.kind)
           || ENTERPRISE_REFINEMENT_KINDS.has(payload.kind) || ENTERPRISE_INTERCHANGE_KINDS.has(payload.kind)
           || ENTERPRISE_INTEGRITY_KINDS.has(payload.kind) || ENTERPRISE_SOURCE_ACCEPTANCE_KINDS.has(payload.kind)
+          || ENTERPRISE_SOURCE_ATTESTATION_KINDS.has(payload.kind)
           || ENTERPRISE_GOVERNANCE_KINDS.has(payload.kind) || ENTERPRISE_STEWARDSHIP_KINDS.has(payload.kind)) && request.identity.actorType !== 'human') {
           throw apiFailure(403, 'ENTERPRISE_HUMAN_OWNER_REQUIRED', 'A current human project member must report state, refine records or import proposed design; a human project owner must review design or define scopes, validity and future proposals.');
         }
@@ -1874,7 +1957,9 @@ export function createApp({
                 throw apiFailure(403, 'ENTERPRISE_MERGE_REVIEW_AUTHORITY_STALE', 'The saved reviewer no longer has the same human owner authority. Prepare a new candidate and obtain a current review.');
               }
             }
-            const changed = await applyEnterpriseCommand(project, payload, actor, { sandboxEffectAdapter,
+            const changed = await applyEnterpriseCommand(project, payload, actor, { sandboxEffectAdapter, commandId: body.commandId,
+              expectedVersion: body.expectedVersion, receivedAt: new Date().toISOString(),
+              tenantId: requestTenant(request),
               authzGeneration: request.identity.authzGeneration,
               membershipGeneration: reviewMembershipGeneration });
             project.version += 1; project.updatedAt = changed.recordedAt ?? changed.blueprint.createdAt; project.updatedBy = actor;
@@ -1884,6 +1969,12 @@ export function createApp({
               : payload.kind === 'compensate-sandbox-procurement-test' ? 'SandboxCompensationApproved'
               : payload.kind === 'run-integrity-checks' ? 'EnterpriseIntegrityAssessed'
               : payload.kind === 'accept-integrity-exception' ? 'EnterpriseIntegrityExceptionAccepted'
+              : payload.kind === 'propose-attested-source-correction' ? 'EnterpriseSourceCorrectionProposed'
+              : payload.kind === 'compare-source-evidence' ? 'EnterpriseSourceEvidenceCompared'
+              : payload.kind === 'configure-source-attestation-profile' ? 'EnterpriseSourceAttestationProfileChanged'
+              : payload.kind === 'ingest-source-attestation-manifest' ? 'EnterpriseSourceObservationReconciled'
+              : payload.kind === 'repair-source-claim-mapping' ? 'EnterpriseSourceClaimMappingRepaired'
+              : payload.kind === 'recompute-source-reconciliation-report' ? 'EnterpriseSourceReportRecomputed'
               : ENTERPRISE_GOVERNANCE_KINDS.has(payload.kind) ? 'EnterpriseGovernanceChanged'
               : ENTERPRISE_STEWARDSHIP_KINDS.has(payload.kind) ? 'EnterpriseStewardshipChanged'
               : ['record-state', 'set-validity', 'propose-future-design'].includes(payload.kind)
@@ -1899,6 +1990,12 @@ export function createApp({
                 importedRecordIds: changed.importedRecordIds ?? null,
                 ...(changed.packHash ? { designPackHash: changed.packHash } : {}),
                 acceptedSourceClaims: changed.acceptedClaims ?? null,
+                sourceAcceptanceReceiptId: changed.sourceAcceptanceReceiptId ?? null,
+                sourceReconciliationReportId: changed.sourceReconciliationReportId ?? null,
+                sourceAttestationProfileId: changed.sourceAttestationProfileId ?? null,
+                sourceAttestationReportId: changed.sourceAttestationReport?.id ?? null,
+                sourceAttestationManifestHash: changed.manifestHash ?? null,
+                sourceAttestationCorrectionReceiptIds: changed.sourceAttestationCorrectionReceiptIds ?? null,
                 importSource: changed.source ?? null, importSourceHash: changed.sourceHash ?? null,
                 simulationId: changed.simulationId ?? null, economicEvaluationId: changed.economicEvaluationId ?? null,
                 integrityAssessmentId: changed.integrityAssessmentId ?? null,
@@ -1938,6 +2035,17 @@ export function createApp({
           ...(sandboxTransaction ? { sandboxTransaction: structuredClone(sandboxTransaction), idempotent: Boolean(receipt.idempotent) } : {}),
           ...(receipt.designPackHash ? { designPackHash: receipt.designPackHash } : {}),
           acceptedClaims: receipt.acceptedSourceClaims ?? null,
+          sourceAcceptanceReceiptId: receipt.sourceAcceptanceReceiptId ?? null,
+          ...(receipt.sourceReconciliationReportId ? { sourceReconciliationReportId: receipt.sourceReconciliationReportId,
+            sourceReconciliationReport: structuredClone(result.project.sourceReconciliationReports?.find((entry) => entry.id === receipt.sourceReconciliationReportId) ?? null) } : {}),
+          ...(receipt.sourceAttestationProfileId ? { sourceAttestationProfileId: receipt.sourceAttestationProfileId,
+            sourceAttestationProfile: structuredClone(result.project.sourceAttestationProfiles?.filter((entry) => entry.id === receipt.sourceAttestationProfileId)
+              .sort((a, b) => b.version - a.version)[0] ?? null) } : {}),
+          ...(receipt.sourceAttestationReportId ? { sourceAttestationReportId: receipt.sourceAttestationReportId,
+            sourceAttestationReport: structuredClone(result.project.sourceReconciliationReports?.find((entry) => entry.id === receipt.sourceAttestationReportId) ?? null),
+            sourceAttestationManifestHash: receipt.sourceAttestationManifestHash } : {}),
+          ...(receipt.sourceAttestationCorrectionReceiptIds ? { sourceAttestationCorrectionReceipts:
+            structuredClone(result.project.sourceAttestationCorrectionReceipts?.filter((entry) => receipt.sourceAttestationCorrectionReceiptIds.includes(entry.id)) ?? []) } : {}),
           ...(simulation ? { simulation } : {}), ...(economicEvaluation ? { economicEvaluation } : {}),
           ...(integrityAssessment ? { integrityAssessment } : {}), ...(integrityException ? { integrityException } : {}),
           ...(receipt.governanceCaseId ? { governanceCaseId: receipt.governanceCaseId,

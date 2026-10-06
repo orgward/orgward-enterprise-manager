@@ -9,6 +9,7 @@ import { projectRefinementTrace } from './refinement.mjs';
 import { projectEnterpriseIntegrity } from './integrity.mjs';
 import { projectEnterpriseGovernance } from './governance.mjs';
 import { projectEnterpriseStewardship } from './stewardship.mjs';
+import { projectEnterpriseSourceAttestationPushStatus, projectEnterpriseSourceReconciliationCurrentness } from './source-attestation.mjs';
 
 export function normalizeEnterpriseQuery(input = {}) {
   const accepted = ['lensId', 'scopeId', 'blueprintVersion', 'selectedId', 'proposalId', 'effectiveAt', 'recordedAt', 'branchId', 'branchRevision', 'simulationId', 'economicEvaluationId'];
@@ -154,6 +155,19 @@ export function projectEnterprise(project, query = {}, authority = {}) {
   const stewardship = projectEnterpriseStewardship(project, blueprint, current, savedBy);
   const sandboxTransactions = (project.sandboxTransactions ?? []).filter((entry) => savedBy(entry.approval?.at))
     .map((entry) => structuredClone(entry));
+  const sourceProjectionProject = context.recordedAt ? { ...project,
+    sourceAcceptanceReceipts: (project.sourceAcceptanceReceipts ?? []).filter((entry) => savedBy(entry.receivedAt)),
+    sourceReconciliationReports: (project.sourceReconciliationReports ?? []).filter((entry) => savedBy(entry.receivedAt)),
+    sourceReconciliationCurrentness: (project.sourceReconciliationCurrentness ?? []).filter((entry) => savedBy(entry.recordedAt)),
+    sourceAttestationProfiles: (project.sourceAttestationProfiles ?? []).filter((entry) => savedBy(entry.recordedAt)),
+    sourceAttestationMappingRevisions: (project.sourceAttestationMappingRevisions ?? []).filter((entry) => savedBy(entry.recordedAt)),
+    sourceAttestationMappingRepairReceipts: (project.sourceAttestationMappingRepairReceipts ?? []).filter((entry) => savedBy(entry.recordedAt)),
+    sourceAttestationManifestReceipts: (project.sourceAttestationManifestReceipts ?? []).filter((entry) => savedBy(entry.receivedAt)),
+    sourceAttestationStreams: (project.sourceAttestationStreams ?? []).filter((entry) => savedBy(entry.updatedAt)),
+  } : project;
+  const sourceReconciliationCurrentness = projectEnterpriseSourceReconciliationCurrentness(sourceProjectionProject,
+    context.recordedAt ?? new Date().toISOString());
+  const sourceProfilesRecorded = (sourceProjectionProject.sourceAttestationProfiles ?? []).filter((entry) => savedBy(entry.recordedAt));
   return { context: { projectVersion: project.version, blueprintId: blueprint?.id ?? null, blueprintVersion: blueprint?.version ?? null,
     isCurrent, lensId: context.lensId, scopeId: context.scopeId, branch: context.branchId ?? 'main', proposalId: proposal?.id ?? null,
     branchId: context.branchId, branchRevision: branchContext.revision,
@@ -170,6 +184,20 @@ export function projectEnterprise(project, query = {}, authority = {}) {
       organizationId: object.enterpriseScope.organizationId, legalEntityId: object.enterpriseScope.legalEntityId,
       parentUnitId: object.parentUnitId ?? null, jurisdiction: object.jurisdiction ?? null, ownerRoleId: object.owner ?? null })),
     versions: recorded.map(({ id, version, createdAt }) => ({ id, version, createdAt })),
+    sourceAcceptanceReceipts: (project.sourceAcceptanceReceipts ?? []).filter((entry) => savedBy(entry.receivedAt)).map((entry) => structuredClone(entry)),
+    sourceReconciliationReports: (project.sourceReconciliationReports ?? []).filter((entry) => savedBy(entry.receivedAt)).map((entry) => structuredClone(entry)),
+    sourceAttestationCorrectionReceipts: (project.sourceAttestationCorrectionReceipts ?? []).filter((entry) => savedBy(entry.createdAt)).map((entry) => structuredClone(entry)),
+    sourceAttestationRepairReceipts: (project.sourceAttestationRepairReceipts ?? []).filter((entry) => savedBy(entry.recordedAt)).map((entry) => structuredClone(entry)),
+    sourceAttestationMappingRepairReceipts: (project.sourceAttestationMappingRepairReceipts ?? []).filter((entry) => savedBy(entry.recordedAt)).map((entry) => structuredClone(entry)),
+    sourceAttestationRecomputeReceipts: (project.sourceAttestationRecomputeReceipts ?? []).filter((entry) => savedBy(entry.recordedAt)).map((entry) => structuredClone(entry)),
+    sourceReconciliationCurrentness,
+    sourceAttestationMappingRevisions: (project.sourceAttestationMappingRevisions ?? []).filter((entry) => savedBy(entry.recordedAt)).map((entry) => structuredClone(entry)),
+    sourceAttestationProfiles: sourceProfilesRecorded.map((entry) => ({
+      ...Object.fromEntries(Object.entries(entry).filter(([key]) => key !== 'keys')),
+      keys: (entry.keys ?? []).map(({ publicKeyPem, ...key }) => key),
+      ...(entry.version === sourceProfilesRecorded.filter((profile) => profile.id === entry.id).at(-1)?.version
+        ? { pushStatus: projectEnterpriseSourceAttestationPushStatus(sourceProjectionProject, entry, context.recordedAt ?? new Date().toISOString()) } : {}),
+    })),
     proposals: proposals.filter((entry) => savedBy(entry.recordedAt) && (!context.effectiveAt || effectiveStatus(entry.snapshot, context.effectiveAt) === 'IN_RANGE'))
       .map(({ id, title, objectId, recordedAt, effectiveFrom, effectiveTo, baseBlueprintId, baseBlueprintVersion, baseSnapshotHash, snapshotHash, proposalHash, status, baseStale }) =>
         ({ id, title, objectId, recordedAt, effectiveFrom, effectiveTo, baseBlueprintId, baseBlueprintVersion, baseSnapshotHash, snapshotHash, proposalHash, status, baseStale })),
@@ -180,6 +208,7 @@ export function projectEnterprise(project, query = {}, authority = {}) {
     branches: branchContext.branches, branch: branchContext.branch, processModel: structuredClone(PROCESS_MODEL), simulations, simulation, economics, integrity, governance, sandboxTransactions,
     refinementTrace: projectRefinementTrace(objects, selected?.id), stewardship,
     permissions: { write: isCurrent && Boolean(authority.write), scopeAdmin: isCurrent && Boolean(authority.scopeAdmin),
+      sourceAttestationAdmin: isCurrent && Boolean(authority.scopeAdmin && authority.human),
       branchCreate: Boolean(blueprint && !context.branchId && authority.write && authority.human),
       branchWrite: Boolean(branchContext.writable && authority.write && authority.human),
       branchAdmin: Boolean(branchContext.writable && authority.scopeAdmin && authority.human),
