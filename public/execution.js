@@ -11,6 +11,8 @@ import { humanTaskInputDisclosureKey, humanTaskInputDisclosureOpen, processTaskH
   rememberHumanTaskInputDisclosure } from './human-task-input-review.mjs';
 import { humanTaskOutputApplicationState, humanTaskOutputCommand } from './human-task-output-application.mjs';
 import { parseHumanTaskEvidence } from './human-task-evidence.mjs';
+import { clearHumanTaskFormDraft, humanTaskFormDraftScope, readHumanTaskFormDraft,
+  saveHumanTaskFormDraft, restoreHumanTaskFormDraftControls, humanTaskDraftForgetPresentation } from './human-task-form-draft.mjs';
 import { submitHumanTaskCommand } from './human-task-command-ui.mjs';
 import { definitiveHumanTaskStartRejection, humanTaskActionFailureDisposition } from './human-task-action-failure.mjs';
 import { processInstanceControlHistoryEntries } from './process-instance-history.mjs';
@@ -1639,6 +1641,11 @@ function renderHumanTaskCompletion({ project, plan, task, runtime, selectedInsta
   updateOutputAvailability();
   result.addEventListener('change', updateOutputAvailability);
   const submit = el('button', { className: 'button primary', text: 'Complete human task', attrs: { type: 'submit' } });
+  const draftScope = humanTaskFormDraftScope({ tenantId: project.tenantId, principal: state.currentPrincipal,
+    projectId: project.id, planId: plan.id, revision: plan.revision, planInstanceId: selectedInstance, taskId: task.id });
+  const draftStatus = el('p', { className: 'muted human-task-local-draft-status', attrs: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' } });
+  const forgetDraft = el('button', { className: 'button', text: 'Forget saved browser draft', attrs: { type: 'button' } });
+  forgetDraft.hidden = true;
   const status = el('p', { className: 'muted human-task-command-status', attrs: { role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' } });
   const decision = renderManualFlowDecisionChoice({ project, plan, task, el });
   form.append(el('label', { text: 'Work outcome' }, result), ...(decision ? [decision.node] : []), evidenceLabel);
@@ -1646,7 +1653,7 @@ function renderHumanTaskCompletion({ project, plan, task, runtime, selectedInsta
     el('legend', { text: 'Declared task outputs (human reported; not independently verified)' }),
     ...outputInputs.map(({ field }) => field),
   ]));
-  form.append(status, submit);
+  form.append(draftStatus, forgetDraft, status, submit);
   if (decision) {
     const syncChoice = () => decision.setRequired(result.value === 'succeeded');
     result.addEventListener('change', syncChoice); syncChoice();
@@ -1663,11 +1670,35 @@ function renderHumanTaskCompletion({ project, plan, task, runtime, selectedInsta
     for (const control of form.elements) if (control !== submit) control.disabled = true;
     submit.textContent = 'Retry saved completion';
     status.textContent = 'The exact saved completion is pending. Retry preserves its work outcome, decision choice, observed inputs and evidence.';
+  } else if (draftScope) {
+    const savedDraft = readHumanTaskFormDraft(processTaskIntentStorage(), draftScope);
+    if (savedDraft) {
+      restoreHumanTaskFormDraftControls(form, savedDraft.values);
+      draftStatus.textContent = 'Restored from this browser only. This draft has not been sent or saved to the process runtime.';
+      forgetDraft.hidden = false;
+    }
+    const persistDraft = () => {
+      const values = Array.from(form.elements).filter((control) => control.name && control !== submit)
+        .map((control) => ({ name: control.name, value: String(control.value ?? '') }));
+      if (saveHumanTaskFormDraft(processTaskIntentStorage(), draftScope, values)) {
+        draftStatus.textContent = 'Saved in this browser only · not submitted to the process runtime.';
+        forgetDraft.hidden = false;
+      } else {
+        draftStatus.textContent = 'This browser could not save a local draft. Submit the form to save work to the process runtime.';
+      }
+    };
+    form.addEventListener('input', persistDraft);
+    form.addEventListener('change', persistDraft);
+    forgetDraft.addEventListener('click', () => {
+      const presentation = humanTaskDraftForgetPresentation(clearHumanTaskFormDraft(processTaskIntentStorage(), draftScope));
+      forgetDraft.hidden = presentation.buttonHidden;
+      draftStatus.textContent = presentation.status;
+    });
   }
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     if (pending) {
-      void completeHumanTask({ project, plan, task, selectedInstance, ...pending.payload, form, status, button: submit });
+      void completeHumanTask({ project, plan, task, selectedInstance, draftScope, ...pending.payload, form, status, button: submit });
       return;
     }
     const evidenceEntries = parseHumanTaskEvidence(evidence.value);
@@ -1694,7 +1725,7 @@ function renderHumanTaskCompletion({ project, plan, task, runtime, selectedInsta
       });
     } catch (error) { status.textContent = error.message; return; }
     void completeHumanTask({ project, plan, task, selectedInstance, result: result.value, evidence: evidenceEntries,
-      decisionChoice, outputs, expectedVersion: runtime.version, form, status, button: submit });
+      decisionChoice, outputs, expectedVersion: runtime.version, draftScope, form, status, button: submit });
   });
   return form;
 }
@@ -2002,7 +2033,7 @@ async function startHumanTask({ project, plan, task, selectedInstance, button, s
   }
 }
 
-async function completeHumanTask({ project, plan, task, selectedInstance, result, evidence, decisionChoice, outputs, expectedVersion, form, status, button }) {
+async function completeHumanTask({ project, plan, task, selectedInstance, result, evidence, decisionChoice, outputs, expectedVersion, draftScope = null, form, status, button }) {
   const key = humanTaskCommandKey('complete', plan, task, selectedInstance);
   const priorFocus = document.activeElement;
   let saved = false;
@@ -2019,6 +2050,7 @@ async function completeHumanTask({ project, plan, task, selectedInstance, result
     });
     if (submission.kind === 'saved') {
       saved = true;
+      clearHumanTaskFormDraft(processTaskIntentStorage(), draftScope);
       await refresh();
       restoreHumanTaskStatusFocusAfterAction({ button, plan, task, planInstanceId: selectedInstance });
       notify('Human task outcome and evidence were saved to its process runtime.');

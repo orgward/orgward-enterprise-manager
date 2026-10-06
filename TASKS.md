@@ -8912,3 +8912,23 @@ on revision 1 alongside current revision 2 and exact selection of its retained
 instance. Syntax and `git diff --check` passed. This does not complete T-126 or
 PR-17; PR-15 remains first open and task checkboxes, cursor and production
 gates are unchanged. No full check was run while PR-17 remains open.
+
+T-126 local human-task form draft follow-up (2026-10-06): unfinished completion
+form values are saved in the current browser under exact tenant, principal,
+project, plan revision, instance and task pins. Reopening that same assigned
+checkpoint restores the form; the UI says clearly that the copy is local and
+unsent, and lets the user forget the saved copy. A confirmed server completion
+clears the local draft. Stored schema v1 records reject malformed, mismatched or
+oversized data; this is interruption recovery for this browser, not server-side
+task progress or accepted runtime evidence. The review follow-up synchronizes
+success-only decision controls when restoring a failed outcome and reports
+draft-removal failure without hiding the retry control. Focused helper/UI
+behavior tests passed 5/5, 0 failures/skips (TAP 0.23s, wrapper 0.368s;
+`/tmp/orgward-human-task-local-draft-review-0I9ePs.log`; TAP:
+`/tmp/orgward-tests-3ojCsy/node-test.tap.log`). Coverage includes exact-pin
+restore/isolation, malformed and size-boundary rejection, failed-outcome
+required-state synchronization, storage-removal failure, and UI wiring for local
+unsent status, restore, explicit discard and clearing after confirmed success.
+Syntax checks and `git diff --check` passed. This is a bounded T-126 UX
+increment, not T-126 or PR-17 completion; PR-15 remains first open and task
+checkboxes, cursor and production gates are unchanged. No full check was run.
