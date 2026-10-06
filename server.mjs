@@ -4,7 +4,8 @@ import { readFile } from 'node:fs/promises';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { addConversationTurn, createProject, editProcessTaskGraph, graphForBlueprint, latestBlueprint, planProcessTaskGraph, publishBlueprintInternally } from './src/model.mjs';
+import { addConversationTurn, createProject, editProcessTaskGraph, graphForBlueprint, latestBlueprint, planProcessTaskGraph,
+  publishBlueprintInternally, verifyBlueprintPublicationWatermark } from './src/model.mjs';
 import { ProjectStore } from './src/store.mjs';
 import { MUTATIONS, STAGES, digest } from './src/sdlc/contracts.mjs';
 import { PROOF_ACTION_ATTEMPT_LIMIT, acceptArchitectureDraft, acceptRequirementDraft, advanceCase, answerClarification, approveRelease, assessProofs, commandRequestHash, completeProofAction, createChangeCase, deriveProcessRequirementTrace, editArchitectureDraft, editRequirementDraft, normalizeChangeCase, openClarification, pinProjectSourceObject, sourceBindingSelection, reconcileClarification, recordObservation, recordProofResult, registerProofObligation, releaseApprovalCandidate, resumeProofAction, routeProofResult, runToCheckpoint, traceability, verifyAcceptedG6Plan, verifyContextManifest, verifyEvidenceLedger, verifySourceBinding, workspaceStatus } from './src/sdlc/engine.mjs';
@@ -273,6 +274,11 @@ function requireValidContextManifest(changeCase) {
 function projectView(project) {
   const { commandRecords: _commandRecords, memberships: _memberships, ...visible } = project;
   const blueprint = latestBlueprint(project);
+  for (const publication of project.blueprintPublications ?? []) {
+    if (!verifyBlueprintPublicationWatermark(project, publication).valid) {
+      throw apiFailure(409, 'BLUEPRINT_PUBLICATION_INTEGRITY_INVALID', 'A saved internal baseline failed its publication watermark integrity check.');
+    }
+  }
   return { ...visible, latestBlueprint: blueprint, graph: graphForBlueprint(blueprint) };
 }
 
@@ -2445,6 +2451,10 @@ export function createApp({
               data: {
                 publicationId: publication.id, blueprintId: publication.blueprintId,
                 blueprintVersion: publication.blueprintVersion, digest: publication.digest,
+                publicationSchemaVersion: publication.publicationSchemaVersion,
+                sourceSnapshotHash: publication.sourceSnapshotHash,
+                publishedProjectVersion: publication.publishedProjectVersion,
+                publicationHash: publication.publicationHash,
               },
             });
             project.events.push(event);

@@ -9,7 +9,8 @@ import { createServer } from 'node:http';
 import path from 'node:path';
 import test from 'node:test';
 import { createApp } from '../server.mjs';
-import { blueprintPublicationDigest, createProject, validateBlueprint } from '../src/model.mjs';
+import { blueprintPublicationDigest, blueprintPublicationHash, blueprintSnapshotHash, createProject,
+  validateBlueprint, verifyBlueprintPublicationWatermark } from '../src/model.mjs';
 import { coverageForBlueprint } from '../public/coverage-dashboard.mjs';
 import { linkedProcessTaskResult } from '../public/linked-process-task-result.mjs';
 import { encodeExecutionRoute } from '../public/shared-interactions.mjs';
@@ -2397,6 +2398,26 @@ test('owner-only internal blueprint publication snapshots disclosures immutably 
     blueprintVersion: project.latestBlueprint.version,
     acknowledgeDisclosures: true,
   }, publishExpectedVersion);
+  const publicationRollbackVersion = project.version;
+  const publicationRollbackCount = project.blueprintPublications?.length ?? 0;
+  await app.persistence.query(`create function orgward.reject_internal_publication_audit() returns trigger language plpgsql as $$
+    begin
+      if new.aggregate_kind='project' and new.event_type='BlueprintInternalBaselinePublished' then
+        raise exception 'fixture rejects internal publication audit';
+      end if;
+      return new;
+    end
+  $$`);
+  await app.persistence.query(`create trigger reject_internal_publication_audit before insert on orgward.audit_log
+    for each row execute function orgward.reject_internal_publication_audit()`);
+  const rolledBackPublication = await fetch(`${app.base}${route}`, { method: 'POST', headers: tenantHeaders, body: publishBody });
+  assert.equal(rolledBackPublication.status, 500, await rolledBackPublication.clone().text());
+  await app.persistence.query('drop trigger reject_internal_publication_audit on orgward.audit_log');
+  await app.persistence.query('drop function orgward.reject_internal_publication_audit()');
+  const afterPublicationRollback = (await request(app.base, `/api/v1/projects/${project.id}`)).data;
+  assert.equal(afterPublicationRollback.version, publicationRollbackVersion);
+  assert.equal(afterPublicationRollback.blueprintPublications?.length ?? 0, publicationRollbackCount);
+  assert.deepEqual(afterPublicationRollback.events, project.events, 'audit failure rolls back publication, event and version');
   const publishedResponse = await request(app.base, route, { method: 'POST', body: publishBody });
   project = publishedResponse.data;
   assert.equal(project.version, publishExpectedVersion + 1);
@@ -2409,9 +2430,22 @@ test('owner-only internal blueprint publication snapshots disclosures immutably 
   const publication = project.blueprintPublications.at(-1);
   assert.equal(publication.blueprintId, project.latestBlueprint.id);
   assert.equal(publication.blueprintVersion, project.latestBlueprint.version);
+  assert.equal(publication.publicationSchemaVersion, 2);
+  assert.equal(publication.sourceSnapshotHash, blueprintSnapshotHash(project.latestBlueprint));
+  assert.equal(publication.publishedProjectVersion, project.version);
   assert.equal(publication.publishedBy, principal('alice'));
   assert.match(publication.digest, /^[a-f0-9]{64}$/);
   assert.equal(publication.digest, blueprintPublicationDigest(project.latestBlueprint, publication.disclosures));
+  assert.equal(publication.publicationHash, blueprintPublicationHash(publication));
+  assert.equal(verifyBlueprintPublicationWatermark(project, publication).valid, true);
+  const publicationEvent = project.events.find((event) => event.type === 'BlueprintInternalBaselinePublished'
+    && event.data.publicationId === publication.id);
+  assert.equal(publicationEvent.aggregateVersion, publication.publishedProjectVersion);
+  assert.deepEqual(publicationEvent.data, {
+    publicationId: publication.id, blueprintId: publication.blueprintId, blueprintVersion: publication.blueprintVersion,
+    digest: publication.digest, publicationSchemaVersion: 2, sourceSnapshotHash: publication.sourceSnapshotHash,
+    publishedProjectVersion: publication.publishedProjectVersion, publicationHash: publication.publicationHash,
+  });
   assert.ok(publication.disclosures.gaps.length > 0);
   assert.deepEqual(publication.disclosures.gaps, validateBlueprint(project.latestBlueprint).gaps);
   assert.ok(publication.disclosures.unknownAreas.some((area) => area.key === 'customersOfferingsValueEconomics'));
@@ -2480,6 +2514,81 @@ test('owner-only internal blueprint publication snapshots disclosures immutably 
   const publicationEvents = await app.persistence.query(`select count(*)::int count from orgward.audit_log
     where tenant_id='tenant-a' and aggregate_id=$1 and event_type='BlueprintInternalBaselinePublished'`, [project.id]);
   assert.ok(publicationEvents.rows[0].count >= 1);
+
+  const validStateResult = await app.persistence.query(`select state from orgward.aggregates
+    where tenant_id='tenant-a' and aggregate_kind='project' and aggregate_id=$1`, [project.id]);
+  const validState = validStateResult.rows[0].state;
+  const eventForTamper = (state) => state.events.find((event) => event.type === 'BlueprintInternalBaselinePublished'
+    && event.data.publicationId === publication.id);
+  const assertPublicationTamperRejected = async (state, label) => {
+    await app.persistence.query(`update orgward.aggregates set state=$1::jsonb,state_hash=$2
+      where tenant_id='tenant-a' and aggregate_kind='project' and aggregate_id=$3`,
+    [JSON.stringify(state), contentHash(state), project.id]);
+    const response = await request(app.base, `/api/v1/projects/${project.id}`, {}, 409);
+    assert.equal(response.error.code, 'BLUEPRINT_PUBLICATION_INTEGRITY_INVALID', label);
+  };
+  const markerDeletedState = structuredClone(validState);
+  delete markerDeletedState.blueprintPublications.find((entry) => entry.id === publication.id).publicationSchemaVersion;
+  await assertPublicationTamperRejected(markerDeletedState, 'removing only the v2 marker cannot downgrade a watermarked record');
+
+  const allRecordWatermarksDeletedState = structuredClone(validState);
+  const allRecordWatermarksDeleted = allRecordWatermarksDeletedState.blueprintPublications.find((entry) => entry.id === publication.id);
+  delete allRecordWatermarksDeleted.publicationSchemaVersion;
+  delete allRecordWatermarksDeleted.sourceSnapshotHash;
+  delete allRecordWatermarksDeleted.publishedProjectVersion;
+  delete allRecordWatermarksDeleted.publicationHash;
+  await assertPublicationTamperRejected(allRecordWatermarksDeletedState,
+    'the retained same-ID v2 event prevents removal of all record watermark fields');
+
+  const mismatchedEventState = structuredClone(validState);
+  eventForTamper(mismatchedEventState).data.publicationHash = 'c'.repeat(64);
+  await app.persistence.query(`update orgward.aggregates set state=$1::jsonb,state_hash=$2
+    where tenant_id='tenant-a' and aggregate_kind='project' and aggregate_id=$3`,
+  [JSON.stringify(mismatchedEventState), contentHash(mismatchedEventState), project.id]);
+  const eventTamperRead = await request(app.base, `/api/v1/projects/${project.id}`, {}, 409);
+  assert.equal(eventTamperRead.error.code, 'BLUEPRINT_PUBLICATION_INTEGRITY_INVALID');
+
+  const resealedWatermarkTamper = structuredClone(validState);
+  const tamperedPublication = resealedWatermarkTamper.blueprintPublications.find((entry) => entry.id === publication.id);
+  tamperedPublication.sourceSnapshotHash = 'd'.repeat(64);
+  tamperedPublication.publicationHash = blueprintPublicationHash(tamperedPublication);
+  await app.persistence.query(`update orgward.aggregates set state=$1::jsonb,state_hash=$2
+    where tenant_id='tenant-a' and aggregate_kind='project' and aggregate_id=$3`,
+  [JSON.stringify(resealedWatermarkTamper), contentHash(resealedWatermarkTamper), project.id]);
+  const sourceTamperRead = await request(app.base, `/api/v1/projects/${project.id}`, {}, 409);
+  assert.equal(sourceTamperRead.error.code, 'BLUEPRINT_PUBLICATION_INTEGRITY_INVALID',
+    'a self-consistent publication hash cannot hide a snapshot hash that differs from the retained blueprint');
+  await app.persistence.query(`update orgward.aggregates set state=$1::jsonb,state_hash=$2
+    where tenant_id='tenant-a' and aggregate_kind='project' and aggregate_id=$3`,
+  [JSON.stringify(validState), contentHash(validState), project.id]);
+
+  const legacyState = structuredClone(validState);
+  const legacyPublication = structuredClone(legacyState.blueprintPublications.find((entry) => entry.id === publication.id));
+  delete legacyPublication.publicationSchemaVersion;
+  delete legacyPublication.sourceSnapshotHash;
+  delete legacyPublication.publishedProjectVersion;
+  delete legacyPublication.publicationHash;
+  legacyState.blueprintPublications[legacyState.blueprintPublications.findIndex((entry) => entry.id === publication.id)] = legacyPublication;
+  const legacyEvent = eventForTamper(legacyState);
+  delete legacyEvent.data.publicationSchemaVersion;
+  delete legacyEvent.data.sourceSnapshotHash;
+  delete legacyEvent.data.publishedProjectVersion;
+  delete legacyEvent.data.publicationHash;
+  assert.equal(verifyBlueprintPublicationWatermark(legacyState, legacyPublication).historical, true);
+  await app.persistence.query(`update orgward.aggregates set state=$1::jsonb,state_hash=$2
+    where tenant_id='tenant-a' and aggregate_kind='project' and aggregate_id=$3`,
+  [JSON.stringify(legacyState), contentHash(legacyState), project.id]);
+  const legacyCommandRow = await app.persistence.query(`update orgward.command_results set result=$1::jsonb,result_hash=$2
+    where tenant_id='tenant-a' and operation='project.publish-blueprint-internally'
+      and command_id='internal-publication-owner-success'`, [JSON.stringify(legacyState), contentHash(legacyState)]);
+  assert.equal(legacyCommandRow.rowCount, 1);
+  const legacyRead = await request(app.base, `/api/v1/projects/${project.id}`);
+  assert.deepEqual(legacyRead.data.blueprintPublications.find((entry) => entry.id === publication.id), legacyPublication,
+    'historical publication record bytes and digest remain unchanged on read');
+  const legacyReplay = await request(app.base, route, { method: 'POST', body: publishBody });
+  assert.equal(legacyReplay.meta.replayed, true);
+  assert.deepEqual(legacyReplay.data.blueprintPublications.find((entry) => entry.id === publication.id), legacyPublication,
+    'replay does not manufacture a v2 watermark for a historical publication');
 });
 
 test('blueprint actor identity proposals are restricted, type-checked, pinned, idempotent and non-authorizing', async (t) => {

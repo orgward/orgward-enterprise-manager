@@ -50,6 +50,40 @@ export function blueprintPublicationDigest(blueprint, disclosures) {
   return createHash('sha256').update(canonicalJson({ blueprint, disclosures })).digest('hex');
 }
 
+export function blueprintSnapshotHash(blueprint) {
+  return createHash('sha256').update(canonicalJson(blueprint)).digest('hex');
+}
+
+export function blueprintPublicationHash(publication) {
+  const { publicationHash: _publicationHash, ...record } = publication;
+  return createHash('sha256').update(canonicalJson(record)).digest('hex');
+}
+
+export function verifyBlueprintPublicationWatermark(project, publication) {
+  const watermarkFields = ['publicationSchemaVersion', 'sourceSnapshotHash', 'publishedProjectVersion', 'publicationHash'];
+  const hasRecordWatermark = watermarkFields.some((field) => Object.hasOwn(publication ?? {}, field));
+  const events = (project.events ?? []).filter((event) => event.type === 'BlueprintInternalBaselinePublished'
+    && event.data?.publicationId === publication?.id);
+  const hasEventWatermark = events.some((event) => watermarkFields.some((field) => Object.hasOwn(event.data ?? {}, field)));
+  if (!hasRecordWatermark && !hasEventWatermark) return { valid: true, historical: true };
+  if (publication?.publicationSchemaVersion !== 2) return { valid: false, historical: false };
+  const blueprint = project.blueprintVersions?.find((entry) => entry.id === publication.blueprintId
+    && entry.version === publication.blueprintVersion);
+  if (!blueprint || !Number.isSafeInteger(publication.publishedProjectVersion) || publication.publishedProjectVersion <= 1
+    || publication.sourceSnapshotHash !== blueprintSnapshotHash(blueprint)
+    || publication.digest !== blueprintPublicationDigest(blueprint, publication.disclosures)
+    || publication.publicationHash !== blueprintPublicationHash(publication)) return { valid: false, historical: false };
+  if (events.length !== 1) return { valid: false, historical: false };
+  const [event] = events;
+  if (event.aggregateVersion !== publication.publishedProjectVersion || event.actor !== publication.publishedBy
+    || event.occurredAt !== publication.publishedAt || event.data.publicationSchemaVersion !== publication.publicationSchemaVersion
+    || event.data.blueprintId !== publication.blueprintId || event.data.blueprintVersion !== publication.blueprintVersion
+    || event.data.digest !== publication.digest || event.data.sourceSnapshotHash !== publication.sourceSnapshotHash
+    || event.data.publishedProjectVersion !== publication.publishedProjectVersion
+    || event.data.publicationHash !== publication.publicationHash) return { valid: false, historical: false };
+  return { valid: true, historical: false };
+}
+
 function titleFromDescription(description) {
   const words = compact(description, 80).split(' ').filter(Boolean).slice(0, 6);
   if (!words.length) return 'New enterprise';
@@ -1316,14 +1350,18 @@ export function publishBlueprintInternally(project, payload, actor) {
   const digest = blueprintPublicationDigest(blueprint, snapshot);
   const publishedAt = new Date().toISOString();
   const publication = {
+    publicationSchemaVersion: 2,
     id: `blueprint-publication-${randomUUID()}`,
     blueprintId: blueprint.id,
     blueprintVersion: blueprint.version,
     publishedAt,
     publishedBy: actor,
+    sourceSnapshotHash: blueprintSnapshotHash(blueprint),
+    publishedProjectVersion: project.version + 1,
     digest,
     disclosures: snapshot,
   };
+  publication.publicationHash = blueprintPublicationHash(publication);
   project.blueprintPublications ??= [];
   project.blueprintPublications.push(publication);
   return publication;

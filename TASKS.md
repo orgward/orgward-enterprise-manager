@@ -8734,3 +8734,32 @@ records (`/tmp/orgward-tests-fZ7Nbe/node-test.tap.log`; run log
 `/tmp/orgward-repository-check-parent-baseline-20261006.log`). T-91 and PR-15
 remain open; no task checkbox/cursor, backlog acceptance state or production gate
 changed.
+
+PR-17 internal publication watermark increment (2026-10-06): following Sol's
+design recommendation, new internal baseline publications use
+`publicationSchemaVersion: 2` and pin the canonical source blueprint snapshot
+hash and committed project aggregate version (N+1). `publicationHash` covers
+the complete v2 publication record excluding itself, without changing the
+existing blueprint/disclosure `digest` recipe. The publication event mirrors
+the v2 pins and hashes. Project readback verifies the retained blueprint,
+publication hash/digest, event fields and committed aggregate version; integrity
+failures are denied. Historical unmarked records retain their original digest,
+bytes and replay behavior, with watermark shown unavailable rather than inferred
+from current project state. A record is historical only when none of the four
+watermark fields is an own-property on either record or its matching publication
+event; partial removal or downgrade is rejected. This UI concerns only the
+internal design baseline and makes no operational-readiness, effect-authority,
+or downstream-approval-invalidation claim.
+
+Focused persistence plus view tests passed 2/2 (`/tmp/orgward-tests-2DJKYG/node-test.tap.log`);
+after the anti-downgrade regressions, the focused persistence case passed 1/1
+(`/tmp/orgward-tests-pFKulk/node-test.tap.log`). Coverage includes source and
+aggregate pins, hash/event agreement, audit-trigger rollback, conflict/replay,
+race/restart, record/event tampering, marker-only downgrade, removal of all
+record watermark fields with the v2 event retained, and genuine historical
+read/replay plus unavailable UI display. Initial fixture-only attempts exposed
+missing authentication on the rollback request and a stale cached command result
+in the simulated legacy replay fixture; both were corrected before final passing
+runs. Syntax and diff checks passed. No full check was run because the parent PR
+is not complete. PR-17 remains open, PR-15 remains first open by `npm run
+task:next`, and no task checkbox/cursor or production gate changed.

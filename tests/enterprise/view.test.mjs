@@ -29,6 +29,7 @@ import { savedProjectPinSummary, sentinelAssessmentChoices } from '../../public/
 import { renderOutcomeInbox } from '../../public/outcomes.mjs';
 import { renderProtectedRelease } from '../../public/protected-release.mjs';
 import { renderBlueprintImpactPreview } from '../../public/blueprint-impact-preview.mjs';
+import { renderBlueprintPublicationWatermark } from '../../public/blueprint-publication.mjs';
 import { renderChatBlueprintEdit } from '../../public/chat-blueprint-edit.mjs';
 
 class NodeListFixture extends Array {
@@ -137,6 +138,20 @@ test('blueprint impact preview shows exact pins, direct changes and explicit unk
   assert.match(branchPreview.textContent, /branch enterprise-branch-1 revision 6/);
   assert.match(branchPreview.textContent, /main blueprint blueprint-main v9 SHA-256 c{64}/);
   assert.match(branchPreview.textContent, /Proposed branch revision 7/);
+});
+
+test('internal baseline watermark shows exact v2 pins and leaves historical pins unavailable', () => {
+  const watermark = renderBlueprintPublicationWatermark({ publicationSchemaVersion: 2,
+    publishedProjectVersion: 24, blueprintId: 'blueprint-published', blueprintVersion: 8,
+    sourceSnapshotHash: 'a'.repeat(64), publicationHash: 'b'.repeat(64) }, el);
+  assert.equal(watermark.attrs['data-publication-watermark'], 'available');
+  assert.match(watermark.textContent, /project aggregate v24/);
+  assert.match(watermark.textContent, /source blueprint blueprint-published v8/);
+  assert.match(watermark.textContent, /snapshot SHA-256 a{64}/);
+  const historical = renderBlueprintPublicationWatermark({ blueprintId: 'blueprint-old', blueprintVersion: 3 }, el);
+  assert.equal(historical.attrs['data-publication-watermark'], 'unavailable');
+  assert.match(historical.textContent, /unavailable for this historical baseline/);
+  assert.doesNotMatch(historical.textContent, /project aggregate v/);
 });
 
 test('chat blueprint edit previews one exact customer replacement and only applies the unchanged current draft', async () => {

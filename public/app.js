@@ -9,6 +9,7 @@ import { apiErrorFrom, decodeStudioRoute, encodeExecutionRoute, encodeStudioRout
 import { coverageAreaStateLabel, coverageForBlueprint } from './coverage-dashboard.mjs';
 import { compareBlueprintObjectVersions } from './blueprint-comparison.mjs';
 import { renderBlueprintImpactPreview } from './blueprint-impact-preview.mjs';
+import { renderBlueprintPublicationWatermark } from './blueprint-publication.mjs';
 import { renderChatBlueprintEdit } from './chat-blueprint-edit.mjs';
 import { renderOutcomeInbox } from './outcomes.mjs';
 import { enterpriseContextFailure, enterpriseContextReadOnly, enterpriseStateSummary, enterpriseSourceAligned, hasEnterpriseContext, enterpriseQuery, enterpriseRequestPath, persistEnterpriseCommand, restoreEnterpriseCommand, persistEnterpriseInterchangeDraft, restoreEnterpriseInterchangeDraft, submitEnterpriseCommand, renderEnterpriseContext, renderEnterpriseObject, renderEnterpriseObjectHeader, renderEnterpriseStewardshipPanel } from './enterprise.mjs';
@@ -1002,6 +1003,7 @@ function renderBlueprintPublication(coverage) {
     section.append(element('p', { text: latest.version > publication.blueprintVersion
       ? `Published internal design baseline: blueprint v${publication.blueprintVersion}. Newer proposed draft: v${latest.version}.`
       : `Published internal design baseline: blueprint v${publication.blueprintVersion}.` }));
+    section.append(renderBlueprintPublicationWatermark(publication, element));
   } else {
     section.append(element('p', { text: 'No internal design baseline has been published. This record will not mean complete, verified, ready, or operational.' }));
   }
