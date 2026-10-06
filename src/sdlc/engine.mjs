@@ -51,6 +51,143 @@ function sourceBindingError(statusCode, code, message) {
   return Object.assign(new Error(message), { statusCode, code });
 }
 
+const PROCESS_TRACE_FIELDS = ['schemaVersion', 'source', 'process', 'scope', 'risk', 'outcome'];
+
+function processTraceCore(trace) {
+  return Object.fromEntries(PROCESS_TRACE_FIELDS.map((field) => [field, trace?.[field]]));
+}
+
+function processTraceIsValid(trace, binding = null) {
+  if (!trace || trace.schemaVersion !== 1 || !/^[a-f0-9]{64}$/.test(trace.traceHash ?? '')
+    || digest(processTraceCore(trace)) !== trace.traceHash) return false;
+  const { source, process, scope, risk, outcome } = trace;
+  if (!source || !process || !scope || !risk || !outcome
+    || !/^project-[0-9a-f-]{36}$/i.test(source.projectId ?? '')
+    || !Number.isSafeInteger(source.projectVersion) || source.projectVersion < 1
+    || !/^blueprint-[0-9a-f-]{36}$/i.test(source.blueprintId ?? '')
+    || !Number.isSafeInteger(source.blueprintVersion) || source.blueprintVersion < 1
+    || !/^[a-f0-9]{64}$/.test(source.blueprintSnapshotHash ?? '')
+    || !/^[a-f0-9]{64}$/.test(source.processSnapshotHash ?? '')
+    || !/^[a-f0-9]{64}$/.test(source.sourceHash ?? '')
+    || !/^[a-f0-9]{64}$/.test(source.bindingHash ?? '')
+    || !/^process-[a-z0-9-]{1,100}$/i.test(process.id ?? '')
+    || source.processId !== process.id
+    || typeof process.name !== 'string' || !process.name.trim()
+    || !Array.isArray(process.inputs) || !Array.isArray(process.outputs)
+    || process.inputs.length > 32 || process.outputs.length > 32
+    || process.inputs.some((entry) => entry?.type !== 'information')
+    || process.outputs.some((entry) => !['information', 'decision'].includes(entry?.type))
+    || !Array.isArray(scope.capabilityRefs) || !Array.isArray(scope.systemRefs) || !Array.isArray(scope.resourceRefs)
+    || !Array.isArray(risk.refs) || !['LINKED', 'UNKNOWN'].includes(risk.status)
+    || !Array.isArray(outcome.metricRefs) || !Array.isArray(outcome.outputRefs)
+    || digest(process.outputs) !== digest(outcome.outputRefs)
+    || !Array.isArray(process.flow?.steps ?? [])) return false;
+  if (binding && (source.projectId !== binding.projectId || source.projectVersion !== binding.projectVersion
+    || source.blueprintId !== binding.blueprintId || source.blueprintVersion !== binding.blueprintVersion
+    || source.processId !== binding.objectId || source.sourceHash !== binding.sourceHash || source.bindingHash !== binding.bindingHash)) return false;
+  return true;
+}
+
+function processVerificationContractFor(trace) {
+  const outputs = trace.outcome.outputRefs.map((entry) => entry.id);
+  const flowSteps = trace.process.flow?.steps ?? [];
+  const producerStepIds = flowSteps.filter((step) => (step.outputIds ?? []).some((outputId) => outputs.includes(outputId)))
+    .map((step) => step.id);
+  const contract = {
+    schemaVersion: 1,
+    type: 'PROCESS_RUN_OUTPUTS',
+    sourceTraceHash: trace.traceHash,
+    engine: 'unavailable-until-authorized-runtime-adapter-v1',
+    requiredOutputIds: outputs,
+    requiredSuccessfulStepIds: producerStepIds,
+    evidenceKind: 'PROCESS_RUN',
+    status: 'NOT_EXECUTED',
+    reason: flowSteps.length ? 'No authorized persisted-runtime adapter can resolve process-run identity, provenance or artifacts.'
+      : 'No authorized persisted-runtime adapter is available, and the saved process has no typed executable flow.',
+  };
+  return { ...contract, contractHash: digest(contract) };
+}
+
+export function evaluateProcessVerificationContract(trace, contract, runEvidence = null) {
+  if (!processTraceIsValid(trace) || !contract || contract.type !== 'PROCESS_RUN_OUTPUTS'
+    || contract.sourceTraceHash !== trace.traceHash) return { status: 'INVALID_CONTRACT', reason: 'The process trace or verification contract failed integrity checks.' };
+  const { contractHash, ...core } = contract;
+  if (contractHash !== digest(core) || digest(contract) !== digest(processVerificationContractFor(trace))) return { status: 'INVALID_CONTRACT', reason: 'The process verification contract changed after it was pinned.' };
+  if (!runEvidence) return { status: 'NOT_EXECUTED', reason: 'No persisted runtime process-run evidence is linked to this requirement.' };
+  return { status: 'NOT_EXECUTED', reason: runEvidence.kind === 'SIMULATION_ONLY'
+    ? 'A simulation is not runtime execution evidence.'
+    : 'Caller-supplied process-run records are unverified; a trusted persisted runtime adapter is required before this contract can pass.' };
+}
+
+export function deriveProcessRequirementTrace(project, binding) {
+  if (!binding || binding.objectType !== 'process') return null;
+  const verification = verifySourceBinding(binding);
+  if (!verification.valid || project?.id !== binding.projectId || project?.version !== binding.projectVersion) {
+    throw sourceBindingError(409, 'PROCESS_SOURCE_STALE', 'The selected process is not pinned to the current saved project version. Reload the project and select the process again.');
+  }
+  const blueprint = project.blueprintVersions?.at(-1);
+  const pinnedBlueprintHash = binding.sentinelContext?.blueprintSnapshotHash ?? binding.integrityContext?.blueprintSnapshotHash;
+  if (!blueprint || blueprint.id !== binding.blueprintId || blueprint.version !== binding.blueprintVersion
+    || !/^[a-f0-9]{64}$/.test(pinnedBlueprintHash ?? '') || digest(blueprint) !== pinnedBlueprintHash) {
+    throw sourceBindingError(409, 'PROCESS_SOURCE_STALE', 'The selected process blueprint changed after source selection. Reload the project and select the current process.');
+  }
+  const objects = Object.values(blueprint.areas ?? {}).flatMap((area) => area.items ?? []);
+  const byId = new Map(objects.map((entry) => [entry.id, entry]));
+  const selected = byId.get(binding.objectId);
+  if (!selected || selected.type !== 'process') throw sourceBindingError(409, 'PROCESS_SOURCE_INVALID', 'The pinned source is no longer the selected saved process.');
+  const sourceHash = digest({ id: selected.id, type: selected.type, name: selected.name, detail: selected.detail });
+  if (sourceHash !== binding.sourceHash) throw sourceBindingError(409, 'PROCESS_SOURCE_INVALID', 'The selected process fields do not match the source binding.');
+  const refs = (ids, type) => {
+    if (!Array.isArray(ids ?? []) || (ids ?? []).length > 32 || new Set(ids ?? []).size !== (ids ?? []).length) {
+      throw sourceBindingError(409, 'PROCESS_SOURCE_INVALID', `The selected process has invalid or excessive ${type} references.`);
+    }
+    return (ids ?? []).map((ref) => {
+      const target = byId.get(ref);
+      const allowedTypes = Array.isArray(type) ? type : [type];
+      if (!target || !allowedTypes.includes(target.type)) throw sourceBindingError(409, 'PROCESS_SOURCE_INVALID', `The process references a missing or invalid ${allowedTypes.join('/')} record.`);
+      return { id: target.id, name: target.name, type: target.type, snapshotHash: digest(target) };
+    });
+  };
+  const riskEntries = objects.filter((entry) => entry.type === 'risk'
+    && (entry.processId === selected.id || (Array.isArray(entry.scope) && entry.scope.includes(selected.id))
+      || (Array.isArray(entry.processIds) && entry.processIds.includes(selected.id))));
+  let flow = null;
+  if (selected.processFlow !== undefined && selected.processFlow !== null) {
+    if (!selected.processFlow || !Array.isArray(selected.processFlow.steps) || selected.processFlow.steps.length > 32
+      || selected.processFlow.steps.some((step) => !step || typeof step.id !== 'string' || typeof step.kind !== 'string'
+        || !Array.isArray(step.inputIds ?? []) || !Array.isArray(step.outputIds ?? []))) {
+      throw sourceBindingError(409, 'PROCESS_SOURCE_INVALID', 'The selected process has an invalid or oversized typed flow.');
+    }
+    flow = structuredClone(selected.processFlow);
+  }
+  const inputs = refs(selected.inputs, 'information');
+  const outputs = refs(selected.outputs, ['information', 'decision']);
+  const linkedMetrics = objects.filter((entry) => entry.type === 'metric'
+    && (outputs.some((output) => entry.reads === output.id) || selected.metrics?.includes(entry.id)));
+  if (riskEntries.length > 32 || linkedMetrics.length > 32) throw sourceBindingError(409, 'PROCESS_SOURCE_INVALID', 'The selected process has too many directly linked risk or outcome records.');
+  const core = {
+    schemaVersion: 1,
+    source: { projectId: project.id, projectVersion: project.version,
+      blueprintId: blueprint.id, blueprintVersion: blueprint.version, blueprintSnapshotHash: pinnedBlueprintHash,
+      processId: selected.id, processSnapshotHash: digest(selected), sourceHash: binding.sourceHash,
+      bindingHash: binding.bindingHash },
+    process: { id: selected.id, name: selected.name, detail: selected.detail, trigger: selected.trigger ?? null,
+      ownerRef: selected.owner ?? null, flow: flow ? { hash: digest(flow), steps: flow.steps.map((step) => ({ id: step.id, kind: step.kind,
+        inputIds: step.inputIds ?? [], outputIds: step.outputIds ?? [], nextStepId: step.nextStepId ?? null })) } : null,
+      inputs, outputs },
+    scope: { capabilityRefs: refs(selected.capability ? [selected.capability] : [], 'capability'),
+      systemRefs: refs(selected.systems, 'system'), resourceRefs: refs(selected.resources, 'resource') },
+    risk: { status: riskEntries.length ? 'LINKED' : 'UNKNOWN', refs: riskEntries.map((entry) => ({ id: entry.id,
+      name: entry.name, snapshotHash: digest(entry) })).sort((left, right) => left.id.localeCompare(right.id)) },
+    outcome: { type: outputs.length ? 'DECLARED_PROCESS_OUTPUTS' : 'UNKNOWN',
+      outputRefs: outputs, metricRefs: linkedMetrics.map((entry) => ({ id: entry.id, name: entry.name,
+        snapshotHash: digest(entry) })).sort((left, right) => left.id.localeCompare(right.id)) },
+  };
+  const trace = { ...core, traceHash: digest(core) };
+  if (!processTraceIsValid(trace, binding)) throw sourceBindingError(409, 'PROCESS_SOURCE_INVALID', 'The selected process could not produce a valid requirement trace.');
+  return trace;
+}
+
 function legacySentinelContext(binding) {
   const retainedSnapshotHash = binding.integrityContext?.blueprintSnapshotHash;
   return { state: 'NOT_ASSESSED_LEGACY', blueprintSnapshotHash: /^[a-f0-9]{64}$/i.test(retainedSnapshotHash ?? '') ? retainedSnapshotHash : null,
@@ -233,7 +370,7 @@ export function pinProjectSourceObject(project, selection = {}) {
   return binding;
 }
 
-export function createChangeCase(input = {}, { sourceBinding = null } = {}) {
+export function createChangeCase(input = {}, { sourceBinding = null, processRequirementTrace = null } = {}) {
   const createdAt = now();
   const mutation = MUTATIONS[input.mutation] ? input.mutation : 'none';
   const tenantId = safeText(input.tenantId, 80) || 'tenant-reference-bank';
@@ -275,6 +412,7 @@ export function createChangeCase(input = {}, { sourceBinding = null } = {}) {
       sourceRefs: [pinnedSource ? `blueprint:${pinnedSource.blueprintId}:v${pinnedSource.blueprintVersion}:${pinnedSource.objectId}` : 'request:raw-intent'], revision: 1,
     },
     ...(pinnedSource ? { sourceBinding: pinnedSource } : {}),
+    ...(processRequirementTrace ? { processRequirementTrace: structuredClone(processRequirementTrace) } : {}),
     intentHistory: [],
     clarifications: [],
     proofs: { obligations: [], results: [], assessments: [], actions: [], loopCounters: {} },
@@ -350,9 +488,10 @@ export function normalizeChangeCase(changeCase) {
 }
 
 function requirementDraftHash(requirements) {
-  return digest(requirements.map(({ id: requirementId, kind, statement, rationale, actor, precondition, observableResult, independentVerification, derivedFrom, affectedObjects, priority, acceptanceCriteria, verificationMethod, owner, risk, sourceLinks }) => ({
+  return digest(requirements.map(({ id: requirementId, kind, statement, rationale, actor, precondition, observableResult, independentVerification, derivedFrom, affectedObjects, priority, acceptanceCriteria, verificationMethod, owner, risk, sourceLinks, processTrace, verificationContract }) => ({
     id: requirementId, kind, statement, rationale, actor, precondition, observableResult, independentVerification,
     derivedFrom, affectedObjects, priority, acceptanceCriteria, verificationMethod, owner, risk, sourceLinks,
+    ...(processTrace ? { processTrace, verificationContract } : {}),
   })));
 }
 
@@ -376,6 +515,16 @@ function validateRequirementDraft(requirements, changeCase = null) {
         && links.some((entry) => entry.type === 'INTENT' && entry.ref === changeCase.intent.id)
         && links.some((entry) => entry.type === 'SAVED_DESIGN_OBJECT' && entry.ref === changeCase.sourceBinding.objectId && entry.hash === changeCase.sourceBinding.sourceHash);
       if (!validLinks) findings.push(finding('REQUIREMENT_SOURCE_LINK_INVALID', 'HIGH', `${requirement.id} is missing its pinned intent/source link.`, requirement.id, 'Restore the stable links to the case intent and pinned saved-design object.'));
+    }
+    if (changeCase?.processRequirementTrace || requirement.processTrace || requirement.verificationContract) {
+      const expectedTrace = changeCase?.processRequirementTrace;
+      const expectedContract = expectedTrace ? processVerificationContractFor(expectedTrace) : null;
+      if (!expectedTrace || !processTraceIsValid(requirement.processTrace, changeCase.sourceBinding)
+        || requirement.processTrace.traceHash !== expectedTrace.traceHash
+        || !requirement.verificationContract || !expectedContract
+        || digest(requirement.verificationContract) !== digest(expectedContract)) {
+        findings.push(finding('PROCESS_REQUIREMENT_TRACE_INVALID', 'HIGH', `${requirement.id} is missing its exact server-pinned process trace or verification contract.`, requirement.id, 'Regenerate the draft from the currently selected saved process.'));
+      }
     }
     if (!Array.isArray(requirement.acceptanceCriteria) || !requirement.acceptanceCriteria.length || requirement.acceptanceCriteria.some((value) => typeof value !== 'string' || !value.trim() || value.length > 500)) findings.push(finding('UNTESTABLE_REQUIREMENT', 'HIGH', `${requirement.id} needs one or more valid acceptance criteria.`, requirement.id, 'Add verifiable acceptance criteria.'));
     if (!requirement.verificationMethod) findings.push(finding('UNTESTABLE_REQUIREMENT', 'HIGH', `${requirement.id} has no verification method.`, requirement.id, 'Select a verification method.'));
@@ -1199,7 +1348,24 @@ function requirementsEngineering(changeCase) {
       { type: 'INTENT', ref: changeCase.intent.id },
       { type: 'SAVED_DESIGN_OBJECT', ref: changeCase.sourceBinding.objectId, hash: changeCase.sourceBinding.sourceHash },
     ] : [];
-    const requirements = REQUIREMENT_SEED.map(([idValue, kind, statement, derivedFrom, criterion], index) => ({
+    const processTrace = changeCase.processRequirementTrace;
+    const requirements = processTrace ? [{
+      id: `REQ-PROC-${processTrace.traceHash.slice(0, 12)}`, kind: 'BUSINESS',
+      statement: `${processTrace.process.name}: when ${processTrace.process.trigger || 'the declared process trigger occurs'}, produce the declared process outputs.`,
+      rationale: `Draft derived from saved process ${processTrace.process.id} and its exact pinned source trace; review scope and UNKNOWN evidence before approval.`,
+      actor: processTrace.process.ownerRef || 'Process owner assignment is UNKNOWN; assign an accountable owner before approval.',
+      precondition: processTrace.process.trigger || 'The saved process trigger is UNKNOWN and must be specified before approval.',
+      observableResult: processTrace.outcome.outputRefs.length ? `Declared outputs: ${processTrace.outcome.outputRefs.map((entry) => `${entry.name} (${entry.id})`).join(', ')}.` : 'No process outputs are declared; outcome is UNKNOWN.',
+      derivedFrom: [processTrace.process.id, ...processTrace.outcome.metricRefs.map((entry) => entry.id)],
+      sourceLinks: structuredClone(sourceLinks),
+      affectedObjects: [processTrace.process.id, ...processTrace.process.inputs.map((entry) => entry.id), ...processTrace.process.outputs.map((entry) => entry.id)],
+      priority: 'MUST', acceptanceCriteria: ['An authorized persisted runtime record must identify this exact process run and verify that it produced every declared output.'],
+      verificationMethod: 'AUTOMATED_TEST',
+      independentVerification: 'No authorized persisted-runtime adapter is available; this draft remains NOT_EXECUTED until one can verify run identity, provenance and artifacts.',
+      owner: processTrace.process.ownerRef || changeCase.accountableOwner || 'Unassigned',
+      risk: processTrace.risk.status === 'LINKED' ? 'HIGH' : 'UNKNOWN', status: 'DRAFT',
+      processTrace: structuredClone(processTrace), verificationContract: processVerificationContractFor(processTrace),
+    }] : REQUIREMENT_SEED.map(([idValue, kind, statement, derivedFrom, criterion], index) => ({
       id: idValue, kind, statement, rationale: 'Synthetic reference template for owner review; verify against the linked intent and pinned saved-design source.',
       actor: 'Authorized customer representative', precondition: 'The actor is authenticated and authorized for the requested change.',
       observableResult: 'The requested change is saved with a durable outcome record.', derivedFrom,

@@ -6,6 +6,7 @@ import test from 'node:test';
 import { createApp } from '../../server.mjs';
 import { addConversationTurn, createProject, editBlueprintObject, latestBlueprint } from '../../src/model.mjs';
 import { digest } from '../../src/sdlc/contracts.mjs';
+import { evaluateProcessVerificationContract } from '../../src/sdlc/engine.mjs';
 import { applyEnterpriseIntegrityCommand } from '../../src/enterprise/integrity.mjs';
 import { caseUiModel, eligibleActorBindings } from '../../public/sdlc-view.mjs';
 
@@ -581,6 +582,101 @@ test('source-bound requirements are revisioned, validated, owner-accepted and in
   assert.ok(blockedArchitecture.gateHistory.at(-1).findings.some((entry) => entry.code === 'ACCEPTED_ARCHITECTURE_INVALID'));
 });
 
+test('process-bound requirement draft traces the exact selected process and stays explicitly unexecuted across restart', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'orgward-sdlc-process-requirement-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let app = await start(root);
+  t.after(async () => { if (app.server.listening) await close(app.server); });
+  const project = createProject('Process requirement source');
+  for (const answer of [
+    'A membership that reduces restaurant equipment downtime.',
+    'Independent restaurant owners need clear maintenance records.',
+    'Monthly membership funds preventive service.',
+    'Owners approve safety critical work.',
+  ]) addConversationTurn(project, answer);
+  project.version = 1;
+  project.tenantId = 'tenant-reference-bank';
+  await app.store.save(project);
+  const blueprint = latestBlueprint(project);
+  const processes = ['process-learn', 'process-deliver', 'process-review'].map((id) => Object.values(blueprint.areas).flatMap((area) => area.items).find((item) => item.id === id));
+  const createFor = (sourceObjectId) => request(app.base, '/api/sdlc/cases', { method: 'POST', body: JSON.stringify({
+    mode: 'golden', projectId: project.id, sourceObjectId, expectedProjectVersion: project.version,
+    expectedBlueprintId: blueprint.id, expectedBlueprintVersion: blueprint.version,
+    processRequirementTrace: { traceHash: 'client-forgery' },
+  }) }, 201);
+  const first = await createFor(processes[0].id);
+  const second = await createFor(processes[1].id);
+  const review = await createFor(processes[2].id);
+  const run = async (changeCase, idempotencyKey) => request(app.base, `/api/sdlc/cases/${changeCase.id}/run`, {
+    method: 'POST', body: JSON.stringify({ version: changeCase.version, idempotencyKey }),
+  });
+  const firstAtG4 = await run(first, 'process-req-first');
+  const secondAtG4 = await run(second, 'process-req-second');
+  const reviewAtG4 = await run(review, 'process-req-review');
+  for (const [changeCase, process] of [[firstAtG4, processes[0]], [secondAtG4, processes[1]], [reviewAtG4, processes[2]]]) {
+    assert.equal(changeCase.currentStage, 'S4');
+    const requirement = changeCase.artifacts.requirements.requirements[0];
+    assert.equal(changeCase.artifacts.requirements.requirements.length, 1);
+    assert.equal(requirement.status, 'DRAFT');
+    assert.equal(requirement.processTrace.process.id, process.id);
+    assert.equal(requirement.processTrace.source.processSnapshotHash, digest(process));
+    assert.equal(requirement.processTrace.source.projectId, project.id);
+    assert.equal(requirement.processTrace.source.projectVersion, project.version);
+    assert.equal(requirement.processTrace.source.blueprintSnapshotHash, digest(blueprint));
+    assert.equal(requirement.processTrace.source.bindingHash, changeCase.sourceBinding.bindingHash);
+    assert.equal(requirement.processTrace.outcome.outputRefs[0].id, process.outputs[0]);
+    assert.equal(requirement.processTrace.outcome.outputRefs[0].type,
+      process.id === 'process-review' ? 'decision' : 'information');
+    assert.equal(requirement.verificationContract.type, 'PROCESS_RUN_OUTPUTS');
+    assert.equal(requirement.verificationContract.status, 'NOT_EXECUTED');
+    assert.match(requirement.verificationContract.reason, /No authorized persisted-runtime adapter/);
+    assert.equal(changeCase.artifacts.requirements.acceptedBaseline, undefined);
+  }
+  const reqA = firstAtG4.artifacts.requirements.requirements[0];
+  const reqB = secondAtG4.artifacts.requirements.requirements[0];
+  assert.notEqual(reqA.processTrace.traceHash, reqB.processTrace.traceHash);
+  assert.notEqual(reqA.statement, reqB.statement);
+  assert.equal(evaluateProcessVerificationContract(reqA.processTrace, reqA.verificationContract, { kind: 'SIMULATION_ONLY' }).status, 'NOT_EXECUTED');
+  const evidenceCore = { kind: 'PROCESS_RUN', status: 'COMPLETED', source: {
+    projectId: reqA.processTrace.source.projectId, projectVersion: reqA.processTrace.source.projectVersion,
+    blueprintId: reqA.processTrace.source.blueprintId, blueprintVersion: reqA.processTrace.source.blueprintVersion,
+    blueprintSnapshotHash: reqA.processTrace.source.blueprintSnapshotHash, processId: reqA.processTrace.source.processId,
+    processSnapshotHash: reqA.processTrace.source.processSnapshotHash, bindingHash: reqA.processTrace.source.bindingHash,
+    sourceTraceHash: reqA.processTrace.traceHash,
+  }, steps: [], producedOutputIds: reqA.verificationContract.requiredOutputIds };
+  const runEvidence = { ...evidenceCore, contentHash: digest(evidenceCore) };
+  assert.equal(evaluateProcessVerificationContract(reqA.processTrace, reqA.verificationContract, runEvidence).status, 'NOT_EXECUTED');
+  assert.equal(evaluateProcessVerificationContract(reqA.processTrace, { ...reqA.verificationContract, status: 'PASS' }, runEvidence).status, 'INVALID_CONTRACT');
+  const otherSourceEvidenceCore = { ...evidenceCore, source: { ...evidenceCore.source, processId: reqB.processTrace.process.id } };
+  const otherSourceEvidence = { ...otherSourceEvidenceCore, contentHash: digest(otherSourceEvidenceCore) };
+  assert.equal(evaluateProcessVerificationContract(reqA.processTrace, reqA.verificationContract, otherSourceEvidence).status, 'NOT_EXECUTED');
+  const missingOutput = { ...runEvidence, producedOutputIds: [], contentHash: undefined };
+  delete missingOutput.contentHash;
+  missingOutput.contentHash = digest(Object.fromEntries(Object.entries(missingOutput).filter(([key]) => key !== 'contentHash')));
+  assert.equal(evaluateProcessVerificationContract(reqA.processTrace, reqA.verificationContract, missingOutput).status, 'NOT_EXECUTED');
+  const denied = await request(app.base, `/api/sdlc/cases/${firstAtG4.id}/accept-requirements`, {
+    method: 'POST', body: JSON.stringify({ version: firstAtG4.version, expectedDraftRevision: 1, actor: 'not-the-owner', idempotencyKey: 'process-requirement-denied' }),
+  }, 403);
+  assert.match(denied.error, /Only the case owner/);
+  const wrongSource = await request(app.base, '/api/sdlc/cases', { method: 'POST', body: JSON.stringify({
+    mode: 'golden', projectId: project.id, sourceObjectId: 'process-not-in-blueprint', expectedProjectVersion: project.version,
+    expectedBlueprintId: blueprint.id, expectedBlueprintVersion: blueprint.version,
+  }) }, 404);
+  assert.match(wrongSource.error, /not present in the current saved blueprint/i);
+  const staleSource = await request(app.base, '/api/sdlc/cases', { method: 'POST', body: JSON.stringify({
+    mode: 'golden', projectId: project.id, sourceObjectId: processes[0].id, expectedProjectVersion: project.version + 1,
+    expectedBlueprintId: blueprint.id, expectedBlueprintVersion: blueprint.version,
+  }) }, 409);
+  assert.match(staleSource.error, /saved project changed/i);
+  const id = firstAtG4.id;
+  const expectedTrace = reqA.processTrace;
+  await close(app.server);
+  app = await start(root);
+  const reloaded = await request(app.base, `/api/sdlc/cases/${id}`);
+  assert.deepEqual(reloaded.artifacts.requirements.requirements[0].processTrace, expectedTrace);
+  assert.equal(reloaded.artifacts.requirements.requirements[0].verificationContract.status, 'NOT_EXECUTED');
+});
+
 test('SDLC API enforces optimistic concurrency, authority, isolation, and immutable action replay', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'orgward-sdlc-api-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -683,6 +779,9 @@ test('served SDLC product surface and meta contract expose stages and mutation l
   assert.match(script, /Saved-project manifest pin/);
   assert.match(script, /savedProjectPinSummary\(context\)/);
   assert.match(script, /requirement-edit-disclosure/);
+  assert.match(script, /Pinned process requirement trace · DRAFT · NOT EXECUTED/);
+  assert.match(script, /\$\{contract\.type\}/);
+  assert.match(script, /Simulation results and caller-supplied records do not count as verified execution/);
   assert.match(script, /text: `Edit \$\{requirement\.id\}`/);
   assert.match(script, /aria-label': `\$\{requirement\.id\} actor`/);
   assert.match(script, /Comparable target architecture alternatives/);

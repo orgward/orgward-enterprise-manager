@@ -568,6 +568,20 @@ function renderRequirements(content) {
       el('p', { text: requirement.statement }),
       el('small', { text: `Owner ${requirement.owner} · ${requirement.priority} · ${requirement.status} · Links: ${(requirement.sourceLinks ?? []).map((link) => link.ref).join(' · ') || requirement.derivedFrom.join(' · ')}` }),
     ]);
+    if (requirement.processTrace && requirement.verificationContract) {
+      const trace = requirement.processTrace;
+      const contract = requirement.verificationContract;
+      card.append(el('section', { className: 'process-requirement-trace' }, [
+        el('strong', { text: 'Pinned process requirement trace · DRAFT · NOT EXECUTED' }),
+        el('p', { text: `Source project ${trace.source.projectId} v${trace.source.projectVersion} · blueprint ${trace.source.blueprintId} v${trace.source.blueprintVersion} · snapshot SHA-256 ${trace.source.blueprintSnapshotHash}` }),
+        el('p', { text: `Process ${trace.process.id} · full process SHA-256 ${trace.source.processSnapshotHash} · compact source SHA-256 ${trace.source.sourceHash} · binding SHA-256 ${trace.source.bindingHash}` }),
+        el('p', { text: `Process detail: ${trace.process.detail || 'UNKNOWN'} · trigger: ${trace.process.trigger || 'UNKNOWN'} · owner reference: ${trace.process.ownerRef || 'UNKNOWN'}` }),
+        el('p', { text: `Inputs: ${trace.process.inputs.map((entry) => `${entry.type}: ${entry.name} (${entry.id})`).join(', ') || 'UNKNOWN'} · Outputs: ${trace.outcome.outputRefs.map((entry) => `${entry.type}: ${entry.name} (${entry.id})`).join(', ') || 'UNKNOWN'}` }),
+        el('p', { text: `Scope: capabilities ${trace.scope.capabilityRefs.map((entry) => entry.id).join(', ') || 'UNKNOWN'}; systems ${trace.scope.systemRefs.map((entry) => entry.id).join(', ') || 'UNKNOWN'}; resources ${trace.scope.resourceRefs.map((entry) => entry.id).join(', ') || 'UNKNOWN'}` }),
+        el('p', { text: `Risk: ${trace.risk.status}${trace.risk.refs.length ? ` · ${trace.risk.refs.map((entry) => `${entry.id} (${entry.snapshotHash})`).join(', ')}` : ''} · outcome: ${trace.outcome.type} · metrics: ${trace.outcome.metricRefs.map((entry) => entry.id).join(', ') || 'UNKNOWN'}` }),
+        el('p', { text: `Verification: ${contract.type} · ${contract.evidenceKind} · ${contract.status}. ${contract.reason} Simulation results and caller-supplied records do not count as verified execution.` }),
+      ]));
+    }
     if (!baseline) {
       const disclosure = el('details', { className: 'requirement-edit-disclosure' });
       disclosure.append(el('summary', { text: `Edit ${requirement.id}` }));
@@ -585,7 +599,7 @@ function renderRequirements(content) {
       const save = el('button', { className: 'button', attrs: { type: 'submit' }, text: 'Save draft requirement' });
       form.append(
         el('label', {}, [el('span', { text: 'Statement' }), statement]),
-        el('label', {}, [el('span', { text: 'Rationale · synthetic template, review against pinned sources' }), rationale]),
+        el('label', {}, [el('span', { text: requirement.processTrace ? 'Rationale · derived from the pinned saved process' : 'Rationale · synthetic template, review against pinned sources' }), rationale]),
         el('label', {}, [el('span', { text: 'Actor' }), actor]),
         el('label', {}, [el('span', { text: 'Precondition' }), precondition]),
         el('label', {}, [el('span', { text: 'Observable result' }), observableResult]),

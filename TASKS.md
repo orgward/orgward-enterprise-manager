@@ -8600,3 +8600,22 @@ baseline or authority, operational effectiveness or compliance. Unsupported
 Sentinel domains remain unknown; external systems require their own exact source
 pins. T-90 and PR-15 remain open. No task checkbox/cursor, implementation
 backlog acceptance state or production gate was changed.
+
+PR-15 T-91 AC1 process-specific requirement trace (2026-10-06): the reviewed
+slice generates one draft requirement from the exact selected saved process and
+pins project/blueprint/process identities and hashes, source-binding hash,
+typed inputs/outputs, represented scope, directly linked risks and outcomes.
+Typed output references preserve both information and decision records,
+including `process-review`'s decision output. The SDLC UI shows the source and
+trace and keeps the requirement DRAFT / NOT_EXECUTED. Caller-constructed,
+hash-self-consistent process-run records and simulations cannot produce PASS;
+verification remains NOT_EXECUTED until a trusted persisted-runtime adapter can
+resolve run identity, provenance and artifacts. Sol approved the slice with no
+remaining material findings.
+
+Focused tests passed 3/3, 0 failed/skipped (`tests/sdlc/server.test.mjs`;
+`/tmp/orgward-tests-zm5Fvs/node-test.tap.log`), covering process-specific source
+traces, typed decision output, denial/stale-source/restart paths and the existing
+information-source flow. This does not establish runtime execution or full T-91
+acceptance. T-91 and PR-15 remain open; no task checkbox/cursor, backlog
+acceptance state or production gate changed.

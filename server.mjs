@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { addConversationTurn, createProject, editProcessTaskGraph, graphForBlueprint, latestBlueprint, planProcessTaskGraph, publishBlueprintInternally } from './src/model.mjs';
 import { ProjectStore } from './src/store.mjs';
 import { MUTATIONS, STAGES, digest } from './src/sdlc/contracts.mjs';
-import { PROOF_ACTION_ATTEMPT_LIMIT, acceptArchitectureDraft, acceptRequirementDraft, advanceCase, answerClarification, approveRelease, assessProofs, commandRequestHash, completeProofAction, createChangeCase, editArchitectureDraft, editRequirementDraft, normalizeChangeCase, openClarification, pinProjectSourceObject, sourceBindingSelection, reconcileClarification, recordObservation, recordProofResult, registerProofObligation, releaseApprovalCandidate, resumeProofAction, routeProofResult, runToCheckpoint, traceability, verifyAcceptedG6Plan, verifyContextManifest, verifyEvidenceLedger, verifySourceBinding, workspaceStatus } from './src/sdlc/engine.mjs';
+import { PROOF_ACTION_ATTEMPT_LIMIT, acceptArchitectureDraft, acceptRequirementDraft, advanceCase, answerClarification, approveRelease, assessProofs, commandRequestHash, completeProofAction, createChangeCase, deriveProcessRequirementTrace, editArchitectureDraft, editRequirementDraft, normalizeChangeCase, openClarification, pinProjectSourceObject, sourceBindingSelection, reconcileClarification, recordObservation, recordProofResult, registerProofObligation, releaseApprovalCandidate, resumeProofAction, routeProofResult, runToCheckpoint, traceability, verifyAcceptedG6Plan, verifyContextManifest, verifyEvidenceLedger, verifySourceBinding, workspaceStatus } from './src/sdlc/engine.mjs';
 import { compileSoftwareDeliveryDraft, verifySoftwareDeliveryDraft } from './src/sdlc/software-plan-compiler.mjs';
 import { ChangeCaseStore } from './src/sdlc/store.mjs';
 import { EXECUTION_STATUSES } from './src/execution/contracts.mjs';
@@ -3392,6 +3392,7 @@ export function createApp({
           throw apiFailure(400, 'SOURCE_BINDING_REQUIRED', 'Sentinel assessment pins and required scopes need a selected saved-project source.');
         }
         let sourceBinding = null;
+        let sourceProject = null;
         if (body.projectId || hasSourceSelection) {
           if (!/^project-[0-9a-f-]{36}$/.test(body.projectId ?? '')) throw apiFailure(400, 'PROJECT_REQUIRED', 'Choose a saved project for this change case.');
           if (request.identity) requirePrincipalStoreMethod(store, 'getWithPrincipalAuthority');
@@ -3407,13 +3408,14 @@ export function createApp({
           project = normalizeProject(project, { tenantId: requestTenant(request) });
           if (!hasSourceSelection) throw apiFailure(400, 'SOURCE_REFERENCE_REQUIRED', 'Choose a saved design object and submit its current project and blueprint versions.');
           sourceBinding = pinProjectSourceObject(project, body);
+          sourceProject = project;
         }
         const changeCase = createChangeCase({
           ...body, projectId: sourceBinding?.projectId,
           ...(request.identity ? { tenantId: request.identity.tenantId, createdBy: request.identity.principal, accountableOwner: request.identity.principal }
             : sourceBinding ? { tenantId: requestTenant(request), createdBy: requestActor(request), accountableOwner: requestActor(request) }
               : { tenantId: requestTenant(request) }),
-        }, { sourceBinding });
+        }, { sourceBinding, processRequirementTrace: sourceBinding ? deriveProcessRequirementTrace(sourceProject, sourceBinding) : null });
         if (request.identity) {
           if (!/^project-[0-9a-f-]{36}$/.test(body.projectId ?? '')) throw apiFailure(400, 'PROJECT_REQUIRED', 'Choose a project for this change case.');
         }
