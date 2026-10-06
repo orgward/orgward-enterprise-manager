@@ -33,16 +33,22 @@ const rawEditableKeys = new Set(['id', 'type', 'name', 'detail', 'owner', 'goals
   'proposedToolStatements', 'proposedEscalationRules', 'authority', 'by', 'scope', 'assignedRoles', 'evidence', 'goal',
   'decisionIds', 'reads', 'consumerLoop', 'control']);
 
-export function createEnterpriseInterchangeBundle(projectId, blueprint) {
+export function createEnterpriseInterchangeBundle(projectId, blueprint, conceptSchemas = null) {
   if (!blueprint) fail('BLUEPRINT_NOT_FOUND', 'Save an initial proposed design before exporting it.', 409);
   const source = { projectId, blueprintId: blueprint.id, blueprintVersion: blueprint.version, snapshotHash: digest(blueprint) };
   const records = blueprintObjects(blueprint).map((object) => {
     const { objectId, ...fields } = blueprintObjectEditInput(blueprint, object);
     return { id: object.id, type: object.type, fields };
   });
-  return { kind: 'orgward-enterprise-blueprint', schemaVersion: '1.0', source,
+  const bundle = { kind: 'orgward-enterprise-blueprint', schemaVersion: '1.0', source,
     baseline: structuredClone(blueprint), records, recordsCount: records.length,
+    ...(conceptSchemas?.length ? { projectPrivateConceptSchemas: structuredClone(conceptSchemas),
+      projectPrivateConceptSchemasHash: digest(conceptSchemas) } : {}),
     meaning: 'PROPOSED_DESIGN_EDITABLE_FIELDS_ONLY' };
+  if (conceptSchemas?.length && jsonSize(bundle) > ENTERPRISE_INTERCHANGE_LIMITS.bundleBytes) {
+    fail('ENTERPRISE_EXPORT_TOO_LARGE', 'The lossless design and project-private schema bundle exceeds 1 MB; reduce its scope before export.');
+  }
+  return bundle;
 }
 
 const PACK_TYPES = Object.freeze({
@@ -326,6 +332,12 @@ export function previewEnterpriseInterchange(project, bundle) {
     || bundle.records.length > ENTERPRISE_INTERCHANGE_LIMITS.records) {
     fail('INVALID_ENTERPRISE_BUNDLE', 'Choose a supported enterprise blueprint JSON bundle of at most 1 MB and 500 records.');
   }
+  if (Object.hasOwn(bundle, 'projectPrivateConceptSchemas') || Object.hasOwn(bundle, 'projectPrivateConceptSchemasHash')) {
+    if (!Array.isArray(bundle.projectPrivateConceptSchemas) || bundle.projectPrivateConceptSchemas.length > 500
+      || typeof bundle.projectPrivateConceptSchemasHash !== 'string' || digest(bundle.projectPrivateConceptSchemas) !== bundle.projectPrivateConceptSchemasHash) {
+      fail('ENTERPRISE_IMPORT_EXTENSION_UNVERIFIED', 'The project-private concept schemas are not intact. Keep the source project or use a supported schema migration path.', 409);
+    }
+  }
   const source = bundle.source; const baseline = bundle.baseline;
   if (!canonicalBaselineAreas(baseline)) {
     fail('INVALID_ENTERPRISE_BUNDLE_BASELINE', 'The source baseline must contain each canonical enterprise area and well-formed, uniquely identified records.', 400);
@@ -430,7 +442,9 @@ export function previewEnterpriseInterchange(project, bundle) {
     collisions: rows.flatMap((row) => row.collisions.map((collision) => ({ recordId: row.id, ...collision }))),
     validationErrors: rows.flatMap((row) => row.validationErrors.map((error) => ({ recordId: row.id, ...error }))),
     readyRecordIds: rows.filter((row) => row.status === 'READY').map((row) => row.id),
-    rows, meaning: 'PROPOSED_DESIGN_ONLY' };
+    rows, ...(Object.hasOwn(bundle, 'projectPrivateConceptSchemas') ? { unsupportedExtensions: [{ field: 'projectPrivateConceptSchemas',
+      reason: 'Project-private concept schemas are preserved in export but this design import path cannot merge them.' }] } : {}),
+    meaning: 'PROPOSED_DESIGN_ONLY' };
   return { ...core, previewHash: digest(core), currentSource };
 }
 

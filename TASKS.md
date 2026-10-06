@@ -8763,3 +8763,19 @@ in the simulated legacy replay fixture; both were corrected before final passing
 runs. Syntax and diff checks passed. No full check was run because the parent PR
 is not complete. PR-17 remains open, PR-15 remains first open by `npm run
 task:next`, and no task checkbox/cursor or production gate changed.
+
+PR-17 T-55/T-125 bounded customer concept-schema foundation (2026-10-06): the
+project now supports owner-defined, project-private declarative schema versions
+with bounded typed fields and predicates, exact project-local reference pins,
+server-derived immutable hashes/predecessors, audit/idempotency, readback and
+customer UI. Export retains the registry and its hash; import preview labels it
+as an unsupported extension and apply rejects it rather than dropping or
+migrating it. The registry is only a foundation: no object migration, arbitrary
+expressions, scripts, permissions, action capability or full manifest support
+is claimed. Sol review closed the enum-canonicalization and complete-record
+capacity findings. Focused concept-schema tests passed 5/5 in 0.26s
+(`/tmp/orgward-concept-schema-review-0nbZ0z.log`; TAP:
+`/tmp/orgward-tests-MvnaDX/node-test.tap.log`); syntax checks and `git diff
+--check` passed. This does not complete T-55, T-125 or PR-17. PR-17 remains open,
+PR-15 remains first open by `npm run task:next`; task checkboxes, cursor and
+production gates are unchanged.

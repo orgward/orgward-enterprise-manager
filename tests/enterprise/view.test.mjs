@@ -16,6 +16,7 @@ import { enterpriseIntegrityCommandPayload, enterpriseIntegrityExceptionPayload,
 import { enterpriseGovernanceCommandPayload, renderEnterpriseGovernance } from '../../public/enterprise-governance.mjs';
 import { enterpriseStewardshipPayload, renderEnterpriseStewardship } from '../../public/enterprise-stewardship.mjs';
 import { enterpriseSentinelCommandPayload, renderEnterpriseSentinel } from '../../public/enterprise-sentinel.mjs';
+import { renderEnterpriseConceptSchemas } from '../../public/enterprise-concepts.mjs';
 import { downloadPortfolioDesign, downloadPortfolioInventory, portfolioDesignExportFilename, portfolioInventoryBundle,
   portfolioInventoryFilename, projectPortfolioFacts, readPortfolioImportFile, renderProjectPortfolio,
   portfolioImportWorkspaceRoute, portfolioManageAccessRoute, verifyPortfolioDesignBundle } from '../../public/project-portfolio.mjs';
@@ -1282,6 +1283,19 @@ test('enterprise interchange UI binds edits to the visible source and restores a
   const reason = form.querySelectorAll('textarea')[0]; reason.value = 'Reviewed and corrected';
   form.listeners.get('submit')({ preventDefault() {} });
   assert.deepEqual(called, { kind: 'bulk-edit-objects', bundle, recordIds: ['customer-x'], reason: 'Reviewed and corrected' });
+
+  const extensionPreview = { ...preview, unsupportedExtensions: [{ field: 'projectPrivateConceptSchemas',
+    reason: 'Project-private concept schemas are preserved in export but this design import path cannot merge them.' }],
+  unknownFields: [{ recordId: null, field: 'projectPrivateConceptSchemas' }] };
+  const extensionBundle = { ...bundle, projectPrivateConceptSchemas: [{ schemaHash: 'a'.repeat(64) }], projectPrivateConceptSchemasHash: 'b'.repeat(64) };
+  const extensionRoot = renderEnterpriseInterchange({ projectId: 'project-x', model,
+    draft: { bundle: extensionBundle, recordIds: ['customer-x'], reason: 'Try unsupported extension import.' }, el, ui: branchUi,
+    api: async () => ({ data: extensionPreview }), onDraftChange() {}, onCommand() {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(extensionRoot.textContent, /preserved in the export but cannot be imported here/);
+  assert.match(extensionRoot.textContent, /Import is blocked until every unsupported extension has a supported migration path/);
+  assert.equal(extensionRoot.querySelectorAll('form').some((entry) => entry.attrs['data-enterprise-action'] === 'bulk-edit-objects'), false,
+    'unsupported project schemas cannot be silently dropped by applying the design edits');
 });
 
 test('source evidence preview and human acceptance show provenance and retain explicit target and claim selections', async () => {
@@ -2159,6 +2173,35 @@ test('an unavailable requested enterprise context stays explicit and offers an i
   assert.match(root.textContent, /has not been replaced with another context/i);
   assert.equal(root.querySelectorAll('select').length, 0);
   assert.ok(root.querySelectorAll('button').some((button) => button.textContent === 'Open current design with all objects'));
+});
+
+test('concept schema panel shows project-private scope, exact immutable pins, supported limits and owner-only definition form', () => {
+  const schema = { formatVersion: 1, projectId: 'project-one', tenantId: 'tenant-one', namespace: 'customer.quality', conceptId: 'inspection',
+    version: 1, predecessorHash: null, schemaHash: 'a'.repeat(64), createdBy: 'owner', createdAt: '2026-10-06T00:00:00.000Z',
+    fields: [{ id: 'sample', label: 'Sample', type: 'text', required: true, cardinality: 'ONE' }], predicates: [] };
+  const model = { conceptSchemas: [schema], context: { isCurrent: true }, permissions: { scopeAdmin: true } };
+  let submitted;
+  const panel = renderEnterpriseConceptSchemas({ model, el, onCommand: (payload) => { submitted = payload; } });
+  assert.match(panel.textContent, /Project-private · declarative only/);
+  assert.match(panel.textContent, /do not add actions, run code, migrate existing objects, or grant permissions/);
+  assert.match(panel.textContent, /text, number, boolean, enum, quantity with explicit units, and reference to an exact registered schema/);
+  assert.match(panel.textContent, /schema hash a{64}/);
+  const form = panel.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === 'define-concept-schema');
+  assert.ok(form);
+  const control = (name) => form.querySelectorAll('input,textarea').find((entry) => entry.attrs.name === name);
+  control('namespace').value = 'customer.quality';
+  control('conceptId').value = 'inspection';
+  control('fields').value = JSON.stringify([{ id: 'batch', label: 'Batch', type: 'text', required: true, cardinality: 'ONE' }]);
+  control('predicates').value = '[]';
+  control('reason').value = 'Define the inspection shape.';
+  form.listeners.get('submit')({ preventDefault() {} });
+  assert.deepEqual(submitted, { kind: 'define-concept-schema', definition: { formatVersion: 1, namespace: 'customer.quality',
+    conceptId: 'inspection', fields: [{ id: 'batch', label: 'Batch', type: 'text', required: true, cardinality: 'ONE' }], predicates: [] },
+  reason: 'Define the inspection shape.' });
+
+  const editor = renderEnterpriseConceptSchemas({ model: { ...model, permissions: { scopeAdmin: false } }, el, onCommand() {} });
+  assert.equal(editor.querySelectorAll('form').length, 0, 'non-owner view cannot expose schema registration');
+  assert.match(editor.textContent, /available to a human project owner/);
 });
 
 test('default perspective failure preserves the existing map while explicit route context stays unavailable', async () => {

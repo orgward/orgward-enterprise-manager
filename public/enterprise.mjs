@@ -7,6 +7,7 @@ import { ENTERPRISE_INTEGRITY_COMMANDS, renderEnterpriseIntegrity } from './ente
 import { renderEnterpriseGovernance } from './enterprise-governance.mjs';
 import { renderEnterpriseStewardship } from './enterprise-stewardship.mjs';
 import { renderEnterpriseSentinel } from './enterprise-sentinel.mjs';
+import { renderEnterpriseConceptSchemas } from './enterprise-concepts.mjs';
 const SCOPE_TYPES = new Set(['organization', 'legal-entity', 'unit']);
 const STATE_VALUES = {
   lifecycle: ['UNKNOWN', 'PLANNED', 'ACTIVE', 'RETIRED'],
@@ -132,7 +133,7 @@ export function restoreEnterpriseCommand(storage, principal, projectId) {
   if (!saved) return null;
   if (saved.projectId !== projectId || saved.envelope?.schemaVersion !== '1.0'
     || typeof saved.envelope.commandId !== 'string' || !Number.isSafeInteger(saved.envelope.expectedVersion)
-    || !['create-scope', 'rename-scope', 'assign-object-scope', 'record-state', 'set-validity', 'propose-future-design', 'edit-blueprint-object', ...ENTERPRISE_INTEGRITY_COMMANDS, ...ENTERPRISE_BRANCH_COMMANDS, ...ENTERPRISE_PROCESS_COMMANDS, ...ENTERPRISE_ECONOMIC_COMMANDS, ...ENTERPRISE_REFINEMENT_COMMANDS, ...ENTERPRISE_INTERCHANGE_COMMANDS, ...ENTERPRISE_SOURCE_ATTESTATION_COMMANDS].includes(saved.envelope.payload?.kind)) throw new Error('Saved enterprise command is unreadable.');
+    || !['create-scope', 'rename-scope', 'assign-object-scope', 'record-state', 'set-validity', 'propose-future-design', 'edit-blueprint-object', 'define-concept-schema', ...ENTERPRISE_INTEGRITY_COMMANDS, ...ENTERPRISE_BRANCH_COMMANDS, ...ENTERPRISE_PROCESS_COMMANDS, ...ENTERPRISE_ECONOMIC_COMMANDS, ...ENTERPRISE_REFINEMENT_COMMANDS, ...ENTERPRISE_INTERCHANGE_COMMANDS, ...ENTERPRISE_SOURCE_ATTESTATION_COMMANDS].includes(saved.envelope.payload?.kind)) throw new Error('Saved enterprise command is unreadable.');
   return saved;
 }
 
@@ -285,6 +286,7 @@ export function renderEnterpriseContext({ model, query, loading = false, error =
   if (integrityPanel) root.append(integrityPanel);
   const sentinelPanel = renderEnterpriseSentinel({ model, pending, loading, el, ui: { field, form }, onCommand });
   if (sentinelPanel) root.append(sentinelPanel);
+  root.append(renderEnterpriseConceptSchemas({ model, pending, loading, el, onCommand }));
   const governancePanel = renderEnterpriseGovernance({ model, pending, loading, el, ui: { field, form }, onCommand });
   if (governancePanel) root.append(governancePanel);
   const disabled = loading || Boolean(pending) || enterpriseContextReadOnly(model.context) || !model.permissions?.scopeAdmin;

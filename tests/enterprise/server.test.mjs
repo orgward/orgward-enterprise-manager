@@ -2398,6 +2398,86 @@ test('enterprise interchange export, preview and bulk apply enforce source, type
   assert.equal(persisted.data.blueprintVersions.at(-1).edit.sourceHash, bundle.source.snapshotHash);
 });
 
+test('customer concept schemas are owner-defined, project-private, hash-chained, exported losslessly and persist across restart', async (t) => {
+  const postgres = await startPostgres(); let root; let instance;
+  t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-concept-schema-'));
+  instance = await startApp(postgres, root);
+  for (const identity of identities.values()) await postgres.query(`insert into orgward.oidc_principals
+    (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+  [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  const project = await seedProject(postgres, 'Customer concept schema fixture');
+  const otherProject = await seedProject(postgres, 'Independent schema namespace fixture');
+  const definition = { formatVersion: 1, namespace: 'customer.quality', conceptId: 'inspection', fields: [
+    { id: 'sample', label: 'Sample reference', type: 'text', required: true, cardinality: 'ONE' },
+    { id: 'temperature', label: 'Temperature', type: 'quantity', required: true, cardinality: 'ONE', units: ['C'] },
+    { id: 'decision', label: 'Decision', type: 'enum', required: true, cardinality: 'ONE', enumValues: ['PASS', 'FAIL'] },
+  ], predicates: [{ id: 'temperature-high', fieldId: 'temperature', operator: 'gt', value: { value: 80, unit: 'C' } }] };
+  const initialView = await currentView(instance.base, 'owner', project.id);
+  const command = commandBody(initialView, 'concept-schema-inspection-v1', { kind: 'define-concept-schema', definition,
+    reason: 'Describe inspection records for this project.' });
+  const editorDenied = await postCommand(instance.base, 'editor', project.id, { ...command, commandId: 'concept-schema-editor-denied' }, 403);
+  assert.equal(editorDenied.error.code, 'ACTION_FORBIDDEN');
+  const created = await postCommand(instance.base, 'owner', project.id, command);
+  const schemaV1 = created.data.conceptSchema;
+  assert.equal(schemaV1.version, 1);
+  assert.equal(schemaV1.predecessorHash, null);
+  assert.match(schemaV1.schemaHash, /^[a-f0-9]{64}$/);
+  assert.equal(created.event.type, 'EnterpriseConceptSchemaDefined');
+  assert.equal(created.event.data.conceptSchemaHash, schemaV1.schemaHash);
+  assert.equal(created.data.projectVersion, initialView.data.context.projectVersion + 1);
+  assert.equal(created.data.blueprintVersion, initialView.data.context.blueprintVersion, 'schema registration does not mutate blueprint');
+  const replay = await postCommand(instance.base, 'owner', project.id, command);
+  assert.equal(replay.meta.replayed, true);
+  assert.deepEqual(replay.data, created.data);
+  const changedReplay = await postCommand(instance.base, 'owner', project.id, { ...command,
+    payload: { ...command.payload, reason: 'Change the content behind a retained command ID.' } }, 409);
+  assert.equal(changedReplay.error.code, 'IDEMPOTENCY_CONFLICT');
+  const projectData = await postgres.query(`select state from orgward.aggregates where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2`, [tenantId, project.id]);
+  assert.equal(projectData.rows[0].state.enterpriseConceptSchemas.length, 1, 'idempotent replay appends one schema version');
+  assert.equal(projectData.rows[0].state.audit.filter((entry) => entry.action === 'enterprise.define-concept-schema').length, 1);
+  assert.equal(projectData.rows[0].state.events.filter((entry) => entry.type === 'EnterpriseConceptSchemaDefined').length, 1);
+
+  const stale = await postCommand(instance.base, 'owner', project.id, { ...command, commandId: 'concept-schema-stale',
+    payload: { ...command.payload, reason: 'Stale concurrent schema write.' } }, 409);
+  assert.equal(stale.error.code, 'VERSION_CONFLICT');
+  const afterConflict = await currentView(instance.base, 'owner', project.id);
+  assert.equal(afterConflict.data.conceptSchemas.length, 1);
+  const schemaV2Definition = { ...definition, fields: [...definition.fields,
+    { id: 'notes', label: 'Notes', type: 'text', required: false, cardinality: 'MANY', minItems: 0, maxItems: 4 }] };
+  const successorCommand = commandBody(afterConflict, 'concept-schema-inspection-v2', { kind: 'define-concept-schema',
+    definition: schemaV2Definition, reason: 'Add a bounded optional notes field.' });
+  const successor = await postCommand(instance.base, 'owner', project.id, successorCommand);
+  assert.equal(successor.data.conceptSchema.version, 2);
+  assert.equal(successor.data.conceptSchema.predecessorHash, schemaV1.schemaHash);
+  assert.equal(successor.data.conceptSchema.fields.some((field) => field.id === 'notes'), true);
+  assert.deepEqual(schemaV1.fields.map((field) => field.id), ['sample', 'temperature', 'decision'], 'prior versions remain immutable');
+
+  const separateProjectView = await currentView(instance.base, 'owner', otherProject.id);
+  assert.deepEqual(separateProjectView.data.conceptSchemas, [], 'schemas are private to the project aggregate');
+  const inaccessible = await currentView(instance.base, 'foreign', project.id, {}, 404);
+  assert.equal(inaccessible.error.code, 'PROJECT_NOT_FOUND');
+
+  const exported = await request(instance.base, 'owner', `/api/v1/projects/${project.id}/enterprise/export`);
+  assert.deepEqual(exported.data.projectPrivateConceptSchemas.map((schema) => schema.schemaHash), [schemaV1.schemaHash, successor.data.conceptSchema.schemaHash]);
+  assert.equal(exported.data.projectPrivateConceptSchemasHash, digest(exported.data.projectPrivateConceptSchemas));
+  const preview = await request(instance.base, 'owner', `/api/v1/projects/${project.id}/enterprise/import-preview`, {
+    method: 'POST', body: { bundle: exported.data },
+  });
+  assert.ok(preview.data.unsupportedExtensions.some((entry) => entry.field === 'projectPrivateConceptSchemas'));
+  assert.ok(preview.data.unknownFields.some((entry) => entry.field === 'projectPrivateConceptSchemas'));
+  const importAttempt = await postCommand(instance.base, 'owner', project.id, { schemaVersion: '1.0', commandId: 'concept-schema-import-rejected',
+    expectedVersion: preview.data.currentSource.projectVersion, payload: { kind: 'bulk-edit-objects', blueprintId: preview.data.currentSource.blueprintId,
+      blueprintVersion: preview.data.currentSource.blueprintVersion, reason: 'Attempt unsupported schema merge.', bundle: exported.data,
+      recordIds: [exported.data.records[0].id] } }, 409);
+  assert.equal(importAttempt.error.code, 'ENTERPRISE_IMPORT_REVIEW_REQUIRED');
+
+  await closeApp(instance);
+  instance = await startApp(postgres, root);
+  const restarted = await currentView(instance.base, 'owner', project.id);
+  assert.deepEqual(restarted.data.conceptSchemas.map((schema) => [schema.version, schema.schemaHash]), [[1, schemaV1.schemaHash], [2, successor.data.conceptSchema.schemaHash]]);
+});
+
 test('portfolio import round trip previews, applies one reviewed record and persists the saved change after restart', async (t) => {
   const postgres = await startPostgres(); let root; let instance;
   t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });

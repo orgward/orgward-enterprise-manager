@@ -447,9 +447,14 @@ export function renderEnterpriseInterchange({ projectId, model, object = null, d
       el('p', { text: `Current destination: workspace v${preview.currentSource.projectVersion} · blueprint ${preview.currentSource.blueprintId} v${preview.currentSource.blueprintVersion} · hash ${preview.currentSource.snapshotHash}` }),
       el('p', { text: `${preview.recordCount} records · ${preview.recognizedFields} recognized fields · ${preview.readyRecordIds.length} ready to apply. Preview hash ${preview.previewHash}.` }),
       fieldSummary('Unknown fields (not applied)', preview.unknownFields, el),
+      ...(preview.unsupportedExtensions ?? []).map((extension) => el('p', { text: `${extension.field} is preserved in the export but cannot be imported here: ${extension.reason}` })),
       fieldSummary('Loss fields (preserved in destination)', preview.lossyFields, el),
       fieldSummary('Identity/type/field collisions (blocked)', preview.collisions, el),
       fieldSummary('Typed-reference/model validation errors (blocked)', preview.validationErrors, el));
+    if (preview.unsupportedExtensions?.length) {
+      previewRegion.append(el('p', { text: 'Import is blocked until every unsupported extension has a supported migration path.' }));
+      return;
+    }
     const impactRows = preview.rows.filter((row) => row.impact);
     if (impactRows.length) {
       const impactPanel = el('section', { attrs: { 'aria-label': 'Read-only direct import impact preview' } }, [
