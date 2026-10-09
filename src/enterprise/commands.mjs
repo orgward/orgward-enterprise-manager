@@ -21,7 +21,7 @@ const base = ['kind', 'blueprintId', 'blueprintVersion', 'reason'];
 const BLUEPRINT_EDIT_FIELDS = ['objectId', 'name', 'detail', 'ownerRoleName', 'trigger', 'capabilityId',
   'proposedInstructions', 'proposedScopeStatements', 'proposedToolStatements', 'proposedEscalationRules',
   'servesCustomerIds', 'enabledByCapabilityIds', 'inputInformationIds', 'outputInformationIds', 'inputDecisionIds',
-  'outputDecisionIds', 'resourceIds', 'systemIds', 'evidenceMetricIds', 'feedbackGoalId', 'feedbackDecisionIds',
+  'outputDecisionIds', 'resourceIds', 'systemIds', 'processIds', 'evidenceMetricIds', 'feedbackGoalId', 'feedbackDecisionIds',
   'readInformationId', 'metricId', 'consumerLoopId', 'mitigatingControlId', 'capabilityMetricIds', 'assignedRoleIds',
   'responsibilityIds', 'decisionMakerRoleId', 'decisionScopeIds', 'strategyGoalIds'];
 function reference(value, field, { nullable = false } = {}) {

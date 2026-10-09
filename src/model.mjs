@@ -54,25 +54,100 @@ export function blueprintSnapshotHash(blueprint) {
   return createHash('sha256').update(canonicalJson(blueprint)).digest('hex');
 }
 
+// Read-time applicability is derived from immutable publication pins and the
+// current saved blueprint. It never edits historical publication records.
+export function blueprintPublicationFreshness(project) {
+  const publication = project?.blueprintPublications?.at(-1);
+  if (!publication) return { status: 'NOT_PUBLISHED', publicationId: null };
+  const current = latestBlueprint(project);
+  const pinned = [2, 3].includes(publication.publicationSchemaVersion)
+    && /^[a-f0-9]{64}$/.test(publication.sourceSnapshotHash ?? '')
+    && /^[a-f0-9]{64}$/.test(publication.publicationHash ?? '');
+  if (!pinned || !current) return { status: 'UNKNOWN', publicationId: publication.id,
+    publishedBlueprintId: publication.blueprintId, publishedBlueprintVersion: publication.blueprintVersion,
+    currentBlueprintId: current?.id ?? null, currentBlueprintVersion: current?.version ?? null,
+    reason: 'PUBLICATION_WATERMARK_UNAVAILABLE' };
+  const exactCurrent = publication.blueprintId === current.id && publication.blueprintVersion === current.version
+    && publication.sourceSnapshotHash === blueprintSnapshotHash(current);
+  return { status: exactCurrent ? 'CURRENT_FOR_SAVED_BLUEPRINT' : 'STALE', publicationId: publication.id,
+    publishedBlueprintId: publication.blueprintId, publishedBlueprintVersion: publication.blueprintVersion,
+    currentBlueprintId: current.id, currentBlueprintVersion: current.version,
+    ...(exactCurrent ? {} : { reason: 'SAVED_BLUEPRINT_ADVANCED' }) };
+}
+
+// A project view and its internal baseline form one consistency lens only when
+// both identify the same aggregate generation and saved blueprint snapshot.
+// This is a read-time projection; publication history remains immutable.
+export function blueprintPublicationConsistency(project) {
+  const current = latestBlueprint(project);
+  const publication = project?.blueprintPublications?.at(-1) ?? null;
+  const projectVersion = Number.isSafeInteger(project?.version) ? project.version : null;
+  const baselineLens = publication ? {
+    publicationId: publication.id ?? null,
+    projectVersion: Number.isSafeInteger(publication.publishedProjectVersion) ? publication.publishedProjectVersion : null,
+    blueprintId: publication.blueprintId ?? null,
+    blueprintVersion: Number.isSafeInteger(publication.blueprintVersion) ? publication.blueprintVersion : null,
+    sourceSnapshotHash: /^[a-f0-9]{64}$/.test(publication.sourceSnapshotHash ?? '') ? publication.sourceSnapshotHash : null,
+    publicationHash: /^[a-f0-9]{64}$/.test(publication.publicationHash ?? '') ? publication.publicationHash : null,
+  } : null;
+  const base = { schemaVersion: 1, projectId: project?.id ?? null,
+    projectLens: { projectVersion }, baselineLens,
+    currentBlueprint: current ? { id: current.id, version: current.version,
+      sourceSnapshotHash: blueprintSnapshotHash(current) } : null };
+  if (!publication) return { ...base, status: 'PENDING', reason: 'BASELINE_NOT_PUBLISHED' };
+  if (projectVersion === null || baselineLens.projectVersion === null || baselineLens.sourceSnapshotHash === null
+    || baselineLens.publicationHash === null || !current) {
+    return { ...base, status: 'PENDING', reason: 'CONSISTENCY_WATERMARK_UNAVAILABLE' };
+  }
+  if (projectVersion !== baselineLens.projectVersion) {
+    return { ...base, status: 'STALE', reason: 'PROJECT_VERSION_MISMATCH' };
+  }
+  const publicationFreshness = blueprintPublicationFreshness(project);
+  if (publicationFreshness.status !== 'CURRENT_FOR_SAVED_BLUEPRINT') {
+    return { ...base, status: publicationFreshness.status === 'UNKNOWN' ? 'PENDING' : 'STALE',
+      reason: publicationFreshness.status === 'UNKNOWN' ? 'BLUEPRINT_WATERMARK_UNAVAILABLE' : 'BLUEPRINT_VERSION_MISMATCH' };
+  }
+  return { ...base, status: 'CONSISTENT', reason: null };
+}
+
 export function blueprintPublicationHash(publication) {
   const { publicationHash: _publicationHash, ...record } = publication;
   return createHash('sha256').update(canonicalJson(record)).digest('hex');
 }
 
 export function verifyBlueprintPublicationWatermark(project, publication) {
-  const watermarkFields = ['publicationSchemaVersion', 'sourceSnapshotHash', 'publishedProjectVersion', 'publicationHash'];
+  const watermarkFields = ['publicationSchemaVersion', 'sourceSnapshotHash', 'publishedProjectVersion', 'publicationHash', 'impactHash', 'impactManifest'];
   const hasRecordWatermark = watermarkFields.some((field) => Object.hasOwn(publication ?? {}, field));
   const events = (project.events ?? []).filter((event) => event.type === 'BlueprintInternalBaselinePublished'
     && event.data?.publicationId === publication?.id);
   const hasEventWatermark = events.some((event) => watermarkFields.some((field) => Object.hasOwn(event.data ?? {}, field)));
   if (!hasRecordWatermark && !hasEventWatermark) return { valid: true, historical: true };
-  if (publication?.publicationSchemaVersion !== 2) return { valid: false, historical: false };
+  if (![2, 3].includes(publication?.publicationSchemaVersion)) return { valid: false, historical: false };
   const blueprint = project.blueprintVersions?.find((entry) => entry.id === publication.blueprintId
     && entry.version === publication.blueprintVersion);
   if (!blueprint || !Number.isSafeInteger(publication.publishedProjectVersion) || publication.publishedProjectVersion <= 1
     || publication.sourceSnapshotHash !== blueprintSnapshotHash(blueprint)
     || publication.digest !== blueprintPublicationDigest(blueprint, publication.disclosures)
     || publication.publicationHash !== blueprintPublicationHash(publication)) return { valid: false, historical: false };
+  if (publication.publicationSchemaVersion === 2
+    && (Object.hasOwn(publication, 'impactHash') || Object.hasOwn(publication, 'impactManifest')
+      || events.some((event) => Object.hasOwn(event.data ?? {}, 'impactHash')
+        || Object.hasOwn(event.data ?? {}, 'impactManifest')))) return { valid: false, historical: false };
+  if (publication.publicationSchemaVersion === 3) {
+    const manifest = publication.impactManifest;
+    const { impactHash, ...manifestCore } = manifest ?? {};
+    const validFlows = Array.isArray(manifest?.flows) && manifest.flows.every((flow) => flow
+      && typeof flow.processId === 'string' && flow.status === 'COMPUTED'
+      && Number.isSafeInteger(flow.visitedCount) && flow.visitedCount >= 0
+      && Number.isSafeInteger(flow.budget) && Array.isArray(flow.visitedObjectIds)
+      && flow.visitedObjectIds.length === flow.visitedCount);
+    const manifestHash = createHash('sha256').update(canonicalJson(manifestCore)).digest('hex');
+    if (!/^[a-f0-9]{64}$/.test(publication.impactHash ?? '') || publication.impactHash !== impactHash
+      || impactHash !== manifestHash || manifest?.schemaVersion !== 1 || manifest.status !== 'COMPUTED'
+      || manifest.projectId !== project.id || manifest.projectVersion !== publication.publishedProjectVersion - 1
+      || manifest.blueprintId !== publication.blueprintId || manifest.blueprintVersion !== publication.blueprintVersion
+      || manifest.sourceSnapshotHash !== publication.sourceSnapshotHash || !validFlows) return { valid: false, historical: false };
+  }
   if (events.length !== 1) return { valid: false, historical: false };
   const [event] = events;
   if (event.aggregateVersion !== publication.publishedProjectVersion || event.actor !== publication.publishedBy
@@ -80,7 +155,9 @@ export function verifyBlueprintPublicationWatermark(project, publication) {
     || event.data.blueprintId !== publication.blueprintId || event.data.blueprintVersion !== publication.blueprintVersion
     || event.data.digest !== publication.digest || event.data.sourceSnapshotHash !== publication.sourceSnapshotHash
     || event.data.publishedProjectVersion !== publication.publishedProjectVersion
-    || event.data.publicationHash !== publication.publicationHash) return { valid: false, historical: false };
+    || event.data.publicationHash !== publication.publicationHash
+    || (publication.publicationSchemaVersion === 3 && event.data.impactHash !== publication.impactHash)
+    || (publication.publicationSchemaVersion === 2 && Object.hasOwn(event.data, 'impactHash'))) return { valid: false, historical: false };
   return { valid: true, historical: false };
 }
 
@@ -422,6 +499,7 @@ function displayObjectForEdit(blueprint, object) {
     } : {}),
     ...(object.type === 'risk' ? {
       mitigatingControlName: objectsById.get(object.control)?.type === 'control' ? objectsById.get(object.control).name : null,
+      processIds: (object.processIds ?? []).filter((id) => objectsById.get(id)?.type === 'process').sort(),
     } : {}),
     ...(object.type === 'strategy' ? {
       strategyGoalNames: (object.goals ?? []).filter((id) => objectsById.get(id)?.type === 'goal')
@@ -491,7 +569,10 @@ export function blueprintObjectEditInput(blueprint, object) {
     input.readInformationId = byId.get(object.reads)?.type === 'information' ? object.reads : null;
     input.consumerLoopId = byId.get(object.consumerLoop)?.type === 'feedback-loop' ? object.consumerLoop : null;
   }
-  if (object.type === 'risk') input.mitigatingControlId = byId.get(object.control)?.type === 'control' ? object.control : null;
+  if (object.type === 'risk') {
+    input.mitigatingControlId = byId.get(object.control)?.type === 'control' ? object.control : null;
+    input.processIds = (Array.isArray(object.processIds) ? object.processIds : []).filter((id) => byId.get(id)?.type === 'process');
+  }
   if (['goal', 'economics'].includes(object.type)) input.metricId = byId.get(object.metric)?.type === 'metric' ? object.metric : null;
   return input;
 }
@@ -528,7 +609,7 @@ export function editBlueprintObject(project, payload, actor, reason = null) {
     ? (original.type === 'strategy' ? ['objectId', 'name', 'detail', 'ownerRoleName', 'strategyGoalIds']
       : ['goal', 'economics'].includes(original.type) ? ['objectId', 'name', 'detail', 'ownerRoleName', 'metricId']
       : original.type === 'feedback-loop' ? ['objectId', 'name', 'detail', 'ownerRoleName', 'evidenceMetricIds', 'feedbackGoalId', 'feedbackDecisionIds']
-      : original.type === 'risk' ? ['objectId', 'name', 'detail', 'ownerRoleName', 'mitigatingControlId']
+      : original.type === 'risk' ? ['objectId', 'name', 'detail', 'ownerRoleName', 'mitigatingControlId', 'processIds']
       : original.type === 'metric' ? ['objectId', 'name', 'detail', 'ownerRoleName', ...(editableInformationSourceMetric ? ['readInformationId'] : []), 'consumerLoopId']
         : OWNER_RELATION_EDITABLE_TYPES.has(original.type) ? ['objectId', 'name', 'detail', 'ownerRoleName'] : ['objectId', 'name', 'detail'])
     : original.type === 'process' ? ['objectId', 'name', 'detail', 'ownerRoleName', 'trigger', 'capabilityId', 'inputInformationIds', 'outputInformationIds', 'inputDecisionIds', 'outputDecisionIds', 'resourceIds', 'systemIds']
@@ -805,6 +886,19 @@ export function editBlueprintObject(project, payload, actor, reason = null) {
       }
     }
     itemValue.control = payload.mitigatingControlId;
+  }
+  if (original.type === 'risk' && payload.processIds !== undefined) {
+    if (!Array.isArray(payload.processIds) || payload.processIds.length > 32
+      || payload.processIds.some((id) => typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,119}$/i.test(id))
+      || new Set(payload.processIds).size !== payload.processIds.length) {
+      editFailure('Choose up to 32 distinct process records for this risk scope.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    const processes = Object.values(next.areas).flatMap((entry) => entry.items).filter((candidate) => candidate.type === 'process');
+    const processIds = new Set(processes.map((candidate) => candidate.id));
+    if (payload.processIds.some((id) => !processIds.has(id))) {
+      editFailure('Every risk scope link must target an existing process in this project.', 'INVALID_BLUEPRINT_RELATION');
+    }
+    itemValue.processIds = [...payload.processIds];
   }
   if (original.type === 'metric' && payload.readInformationId !== undefined) {
     if (payload.readInformationId !== null && (typeof payload.readInformationId !== 'string'
@@ -1310,7 +1404,7 @@ export function latestBlueprint(project) {
   return project.blueprintVersions.at(-1) ?? null;
 }
 
-export function publishBlueprintInternally(project, payload, actor) {
+export function publishBlueprintInternally(project, payload, actor, impactManifest = null) {
   const blueprint = latestBlueprint(project);
   if (!blueprint) editFailure('A saved blueprint is required before publishing an internal baseline.', 'BLUEPRINT_NOT_FOUND', 409);
   if (payload.blueprintId !== blueprint.id || payload.blueprintVersion !== blueprint.version) {
@@ -1318,6 +1412,15 @@ export function publishBlueprintInternally(project, payload, actor) {
   }
   if (payload.acknowledgeDisclosures !== true) {
     editFailure('Review and acknowledge the blueprint disclosures before publishing.', 'BLUEPRINT_DISCLOSURE_ACK_REQUIRED');
+  }
+  const { impactHash, ...impactCore } = impactManifest ?? {};
+  if (impactManifest?.schemaVersion !== 1 || impactManifest.status !== 'COMPUTED'
+    || impactManifest.projectId !== project.id || impactManifest.projectVersion !== project.version
+    || impactManifest.blueprintId !== blueprint.id || impactManifest.blueprintVersion !== blueprint.version
+    || impactManifest.sourceSnapshotHash !== blueprintSnapshotHash(blueprint)
+    || !/^[a-f0-9]{64}$/.test(impactHash ?? '')
+    || createHash('sha256').update(canonicalJson(impactCore)).digest('hex') !== impactHash) {
+    editFailure('A current complete publication impact manifest is required.', 'BLUEPRINT_PUBLICATION_IMPACT_STALE', 409);
   }
 
   const validatedBlueprint = structuredClone(blueprint);
@@ -1350,7 +1453,7 @@ export function publishBlueprintInternally(project, payload, actor) {
   const digest = blueprintPublicationDigest(blueprint, snapshot);
   const publishedAt = new Date().toISOString();
   const publication = {
-    publicationSchemaVersion: 2,
+    publicationSchemaVersion: 3,
     id: `blueprint-publication-${randomUUID()}`,
     blueprintId: blueprint.id,
     blueprintVersion: blueprint.version,
@@ -1358,6 +1461,8 @@ export function publishBlueprintInternally(project, payload, actor) {
     publishedBy: actor,
     sourceSnapshotHash: blueprintSnapshotHash(blueprint),
     publishedProjectVersion: project.version + 1,
+    impactHash,
+    impactManifest: structuredClone(impactManifest),
     digest,
     disclosures: snapshot,
   };

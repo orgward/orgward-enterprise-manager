@@ -375,6 +375,7 @@ test('allowlisted failed and interrupted outcome guidance survives restart-shape
     ['INTERRUPTED', 'authorization_changed', 'Execution authorization changed while this work was running. Have an authorized project owner review access before continuing.'],
     ['INTERRUPTED', 'credential_changed', 'The bound credential changed during execution. Ask an administrator to confirm the current binding before requesting a new run.'],
     ['INTERRUPTED', 'approval_stale', 'The approved request became stale before completion. Review the run history and obtain fresh independent approval before continuing.'],
+    ['INTERRUPTED', 'source_stale', 'The saved design advanced after this run was approved, so dispatch was stopped. Keep this run as history and start from a current process plan.'],
     ['INTERRUPTED', 'worker_recovery', 'The worker stopped before a verified result was saved. Review activity and artifacts before starting a distinct process instance.'],
     ['INTERRUPTED', 'outcome_unverified', 'Delivery could not be verified. Reconcile whether the work took effect before requesting another run.'],
   ];

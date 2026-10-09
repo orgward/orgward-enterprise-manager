@@ -6,6 +6,7 @@ const knownInterruptions = new Set([
   'control_plane_shutdown',
   'dispatch_commit_unknown',
   'execution_approval_stale',
+  'process_plan_blueprint_stale',
   'worker_lease_unavailable',
 ]);
 
@@ -15,6 +16,7 @@ export function linkedRunOutcomeCategory(run, { status, errorCode = null, reason
   if (status === 'INTERRUPTED') {
     if (reason === 'control_plane_restarted' && providerProfileKinds.has(run.profile?.kind)) return 'outcome_unverified';
     if (reason === 'execution_approval_stale') return 'approval_stale';
+    if (reason === 'process_plan_blueprint_stale') return 'source_stale';
     if (reason === 'credential_generation_changed') return 'credential_changed';
     if (reason === 'authorization_revoked') return 'authorization_changed';
     if (reason === 'dispatch_commit_unknown' || reason === 'worker_lease_unavailable') return 'outcome_unverified';

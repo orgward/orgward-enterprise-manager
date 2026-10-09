@@ -2,6 +2,7 @@ import { digest } from '../sdlc/contracts.mjs';
 import { blueprintObjects, enterpriseFailure } from './types.mjs';
 import { ECONOMIC_LIMITS, ECONOMIC_MODEL, normalizeEconomicScenario, normalizeResourcePlan,
   normalizeValueLifecycle, valueStageBasisHash, QUANTITY_DECIMAL_PLACES } from './economics-model.mjs';
+import { classifyEconomicInputProvenance } from './derived-input-provenance.mjs';
 
 export const ECONOMIC_ENGINE_VERSION = 'declared-economics-1.0';
 const unknown = (message) => ({ status: 'UNKNOWN', explanation: message });
@@ -221,7 +222,8 @@ export function projectEconomicPortfolio(project, blueprint, context = {}) {
       || sourceSnapshot.id !== source.blueprintId || sourceSnapshot.version !== source.blueprintVersion || digest(sourceSnapshot) !== source.snapshotHash) {
       throw enterpriseFailure('ECONOMIC_EVALUATION_INTEGRITY', 'The saved economic evaluation failed its immutable scenario/result checks.', 409);
     }
-    evaluation = { ...structuredClone(evaluation), matchesSelectedSource: Boolean(matches(evaluation)) };
+    evaluation = { ...structuredClone(evaluation), matchesSelectedSource: Boolean(matches(evaluation)),
+      inputProvenance: classifyEconomicInputProvenance(evaluation, project.id, sourceSnapshot) };
   }
   return { model: structuredClone(ECONOMIC_MODEL), scenarios: objects.filter((object) => object.type === 'economics').map((object) => ({ objectId: object.id,
     name: object.name, definition: structuredClone(object.economicScenario ?? null), status: object.economicScenario ? 'DECLARED_ASSUMPTIONS' : 'UNKNOWN' })),

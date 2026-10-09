@@ -22,6 +22,7 @@ const failureGuidanceByCategory = Object.freeze({
   verification_failed: 'Local verification did not pass or changed the candidate. Review the verification evidence before starting a new process instance.',
   provider_failed: 'The configured model request failed. Review the linked run and profile or credential configuration before requesting new work.',
   approval_stale: 'The approved request became stale before completion. Review the run history and obtain fresh independent approval before continuing.',
+  source_stale: 'The saved design advanced after this run was approved, so dispatch was stopped. Keep this run as history and start from a current process plan.',
   credential_changed: 'The bound credential changed during execution. Ask an administrator to confirm the current binding before requesting a new run.',
   authorization_changed: 'Execution authorization changed while this work was running. Have an authorized project owner review access before continuing.',
   worker_recovery: 'The worker stopped before a verified result was saved. Review activity and artifacts before starting a distinct process instance.',

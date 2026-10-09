@@ -86,14 +86,15 @@ test('context manifest seals coverage, unknowns, exclusions, guardrails and evid
   runToCheckpoint(changeCase, { actor: 'orchestrator', idempotencyKey: 'context-manifest-seal' });
 
   const context = changeCase.artifacts.context;
-  assert.equal(context.manifestVersion, 3);
+  assert.equal(context.manifestVersion, 4);
   assert.equal(Object.hasOwn(context, 'savedProjectPin'), true);
   assert.equal(context.savedProjectPin, null, 'synthetic-only cases explicitly carry a null saved-project pin');
   assert.equal(context.savedProjectCoverage, null, 'synthetic-only cases do not claim saved-project coverage');
   const creationEvidence = changeCase.evidenceLedger.find((entry) => entry.id === context.contextCreationEvidenceRef);
   assert.equal(creationEvidence.sourceType, 'sdlc-context-manifest-created');
-  assert.deepEqual(creationEvidence.content, { manifestVersion: 3, sourceBindingHash: null,
-    savedProjectPinHash: digest(null), savedProjectCoverageHash: digest(null) });
+  assert.deepEqual(creationEvidence.content, { manifestVersion: 4, sourceBindingHash: null,
+    savedProjectPinHash: digest(null), savedProjectCoverageHash: digest(null), classificationHash: null,
+    candidateUniverseHash: null, sourcePinsHash: null });
   assert.equal(context.enterpriseContext.version, 1);
   assert.equal(context.guardrails.intentRef, changeCase.intent.id);
   assert.ok(context.guardrails.constraints.length);
@@ -110,6 +111,25 @@ test('context manifest seals coverage, unknowns, exclusions, guardrails and evid
   assert.equal(verifyContextManifest(changeCase).valid, true);
   changeCase.evidenceLedger[0].contentHash = '0'.repeat(64);
   assert.equal(verifyContextManifest(changeCase).valid, false);
+});
+
+test('v4 saved-project classifications pin guardrails and scope exclusions without claiming project-wide exclusion', () => {
+  const sourceBinding = { bindingSchemaVersion: 1, projectId: 'project-v4-test', projectVersion: 3,
+    blueprintId: 'blueprint-v4-test', blueprintVersion: 2, blueprintSchemaVersion: 1,
+    objectId: 'process-v4-test', objectType: 'process', sourceHash: 'a'.repeat(64), bindingHash: 'b'.repeat(64),
+    snapshot: { id: 'process-v4-test', type: 'process', name: 'Selected process', detail: 'Test fixture' } };
+  const changeCase = createChangeCase({ mode: 'golden', createdBy: 'owner', accountableOwner: 'owner' }, { sourceBinding });
+  changeCase.intent.constraints = ['Require an authorized reviewer.'];
+  changeCase.intent.nonGoals = ['No live financial effects.'];
+  runToCheckpoint(changeCase, { actor: 'orchestrator', idempotencyKey: 'v4-guardrail-classification' });
+  const coverage = changeCase.artifacts.context.savedProjectCoverage;
+  assert.ok(coverage.classifications.some((entry) => entry.status === 'REPRESENTED'
+    && entry.domain === 'case-intent-guardrail' && entry.reason.includes('not as independently verified policy')));
+  const exclusion = coverage.classifications.find((entry) => entry.status === 'EXCLUDED' && entry.domain === 'case-intent-non-goal');
+  assert.ok(exclusion);
+  assert.match(exclusion.reason, /does not exclude the item from the saved project or enterprise/);
+  assert.equal(coverage.excludedDependencies.status, 'SCOPED_ONLY');
+  assert.equal(verifyContextManifest(changeCase).valid, false, 'the incomplete test source binding is not promoted to verified evidence');
 });
 
 test('historical context manifest v2 retains its original source-pin digest recipe', () => {
@@ -130,6 +150,27 @@ test('historical context manifest v2 retains its original source-pin digest reci
   delete context.provenanceManifestHash;
   context.provenanceManifestHash = digest(context);
   assert.equal(verifyContextManifest(changeCase).valid, true, 'unmodified historical v2 verifies using its original recipe');
+});
+
+test('historical context manifest v3 retains its exact coverage and creation-evidence recipe', () => {
+  const changeCase = createChangeCase({ mutation: 'missing_aml' });
+  runToCheckpoint(changeCase, { actor: 'orchestrator', idempotencyKey: 'historical-context-v3-fixture' });
+  const context = changeCase.artifacts.context;
+  context.manifestVersion = 3;
+  const creation = changeCase.evidenceLedger.find((entry) => entry.id === context.contextCreationEvidenceRef);
+  creation.sourceId = `sdlc:case:${changeCase.id}:context-manifest-created:v3`;
+  creation.content = { manifestVersion: 3, sourceBindingHash: null, savedProjectPinHash: digest(null), savedProjectCoverageHash: digest(null) };
+  creation.contentHash = digest(creation.content);
+  creation.provenanceChain = [`case:${changeCase.id}`, 'context-manifest-version:3', `saved-project-pin:sha256:${digest(null)}`,
+    `saved-project-coverage:sha256:${digest(null)}`];
+  context.evidenceManifest = changeCase.evidenceLedger.filter((entry) => context.evidenceRefs.includes(entry.id)).map((entry) => ({
+    evidenceRef: entry.id, contentHash: entry.contentHash, sourceId: entry.sourceId, sourceType: entry.sourceType,
+    objectRef: entry.objectRef, authority: entry.authority, freshness: entry.freshness,
+  }));
+  delete context.provenanceManifestHash;
+  context.provenanceManifestHash = digest(context);
+  assert.equal(verifyContextManifest(changeCase).valid, true, 'v3 remains readable with its original coverage digest recipe');
+  assert.equal(context.savedProjectCoverage, null);
 });
 
 test('historical context manifest v1 keeps its original digest recipe without a saved-project pin', () => {

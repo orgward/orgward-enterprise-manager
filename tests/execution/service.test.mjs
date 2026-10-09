@@ -10,7 +10,44 @@ import { digest } from '../../src/sdlc/contracts.mjs';
 import { CommandExecutionAdapter } from '../../src/sdlc/execution-adapter.mjs';
 import { approveExecutionRun, createExecutionRun } from '../../src/execution/contracts.mjs';
 import { linkedRunOutcomeCategory } from '../../src/execution/linked-run-outcome-category.mjs';
-import { ExecutionService } from '../../src/execution/service.mjs';
+import { classifyReviewedScenarioTap, ExecutionService, reviewedScenarioTestNamePattern } from '../../src/execution/service.mjs';
+
+test('reviewed scenario TAP classification selects one named assertion after skipped TAP records', () => {
+  const passedAfterSkip = classifyReviewedScenarioTap({ status: 'COMPLETED', exitCode: 0, stdout: [
+    'TAP version 13',
+    'ok 1 - unrelated fixture case # SKIP test name does not match pattern',
+    'ok 2 - exact reviewed scenario',
+    '1..2',
+    '# tests 2', '# pass 1', '# fail 0', '# cancelled 0', '# skipped 1', '# todo 0', '# duration_ms 3',
+  ].join('\n') }, 'exact reviewed scenario');
+  assert.equal(passedAfterSkip.result, 'PASS');
+  assert.equal(passedAfterSkip.tests, 2);
+  assert.equal(passedAfterSkip.assertionLine, 'ok 2 - exact reviewed scenario');
+
+  const duplicateSelectedName = classifyReviewedScenarioTap({ status: 'COMPLETED', exitCode: 0, stdout: [
+    'TAP version 13', 'ok 1 - exact reviewed scenario', 'ok 2 - exact reviewed scenario', '1..2',
+    '# tests 2', '# pass 2', '# fail 0', '# cancelled 0', '# skipped 0', '# todo 0', '# duration_ms 3',
+  ].join('\n') }, 'exact reviewed scenario');
+  assert.equal(duplicateSelectedName.result, 'INCONCLUSIVE', 'duplicate matching test names cannot produce a single-case PASS');
+});
+
+test('reviewed scenario dispatch anchors overlapping saved test names', () => {
+  const pattern = new RegExp(reviewedScenarioTestNamePattern('Demand'));
+  assert.equal(pattern.test('Demand'), true);
+  assert.equal(pattern.test('Demand recovery'), false,
+    'the saved Demand assertion filter does not select a longer Demand recovery test');
+  const exactOnly = classifyReviewedScenarioTap({ status: 'COMPLETED', exitCode: 0, stdout: [
+    'TAP version 13', 'ok 1 - Demand recovery # SKIP test name does not match pattern', 'ok 2 - Demand', '1..2',
+    '# tests 2', '# pass 1', '# fail 0', '# cancelled 0', '# skipped 1', '# todo 0', '# duration_ms 3',
+  ].join('\n') }, 'Demand');
+  assert.equal(exactOnly.result, 'PASS');
+  const unanchoredSelection = classifyReviewedScenarioTap({ status: 'COMPLETED', exitCode: 0, stdout: [
+    'TAP version 13', 'ok 1 - Demand', 'ok 2 - Demand recovery', '1..2',
+    '# tests 2', '# pass 2', '# fail 0', '# cancelled 0', '# skipped 0', '# todo 0', '# duration_ms 3',
+  ].join('\n') }, 'Demand');
+  assert.equal(unanchoredSelection.result, 'INCONCLUSIVE',
+    'if an overlapping name executes alongside the selected assertion, the receipt cannot PASS');
+});
 
 test('linked terminal failure guidance persists only stable allowlisted categories', () => {
   const linkedCommand = { processTaskRef: { taskId: 'task-one' }, profile: { kind: 'command' } };
@@ -26,6 +63,7 @@ test('linked terminal failure guidance persists only stable allowlisted categori
   assert.equal(linkedRunOutcomeCategory(linkedCommand, { status: 'INTERRUPTED', reason: 'authorization_revoked' }), 'authorization_changed');
   assert.equal(linkedRunOutcomeCategory(linkedCommand, { status: 'INTERRUPTED', reason: 'credential_generation_changed' }), 'credential_changed');
   assert.equal(linkedRunOutcomeCategory(linkedCommand, { status: 'INTERRUPTED', reason: 'execution_approval_stale' }), 'approval_stale');
+  assert.equal(linkedRunOutcomeCategory(linkedCommand, { status: 'INTERRUPTED', reason: 'process_plan_blueprint_stale' }), 'source_stale');
   assert.equal(linkedRunOutcomeCategory(linkedCommand, { status: 'INTERRUPTED', reason: 'worker_lease_unavailable' }), 'outcome_unverified');
   assert.equal(linkedRunOutcomeCategory(linkedCommand, { status: 'INTERRUPTED', reason: 'future_unknown_reason_secret' }), null);
   assert.equal(linkedRunOutcomeCategory({ profile: { kind: 'command' } }, { status: 'FAILED', errorCode: 'SECRET_CODE' }), null);

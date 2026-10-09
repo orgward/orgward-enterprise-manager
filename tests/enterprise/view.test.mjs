@@ -26,12 +26,15 @@ import { digest } from '../../src/sdlc/contracts.mjs';
 import { isValidEnterpriseIntegrityAssessment, projectEnterpriseIntegrity } from '../../src/enterprise/integrity.mjs';
 import { projectPortfolioIntegritySummary } from '../../src/platform/postgres-stores.mjs';
 import { decodeStudioRoute, encodeStudioRoute } from '../../public/shared-interactions.mjs';
-import { contextManifestPresentation, savedProjectPinSummary, sentinelAssessmentChoices } from '../../public/sdlc-view.mjs';
+import { contextManifestPresentation, processEvidenceReviewPresentation, savedProjectPinSummary, sentinelAssessmentChoices } from '../../public/sdlc-view.mjs';
 import { renderOutcomeInbox } from '../../public/outcomes.mjs';
 import { renderProtectedRelease } from '../../public/protected-release.mjs';
 import { renderBlueprintImpactPreview } from '../../public/blueprint-impact-preview.mjs';
-import { renderBlueprintPublicationWatermark } from '../../public/blueprint-publication.mjs';
+import { renderBlueprintPublicationConsistency, renderBlueprintPublicationStatus, renderBlueprintPublicationWatermark } from '../../public/blueprint-publication.mjs';
+import { renderBlueprintPublicationImpact } from '../../public/blueprint-publication-impact.mjs';
+import { renderRiskProcessScopePicker } from '../../public/risk-process-scope.mjs';
 import { renderChatBlueprintEdit } from '../../public/chat-blueprint-edit.mjs';
+import { blueprintPublicationConsistency, blueprintSnapshotHash } from '../../src/model.mjs';
 
 class NodeListFixture extends Array {
   constructor(entries) { super(...entries); this.at = undefined; }
@@ -141,6 +144,35 @@ test('blueprint impact preview shows exact pins, direct changes and explicit unk
   assert.match(branchPreview.textContent, /Proposed branch revision 7/);
 });
 
+test('impact preview labels layout-only process changes as view-only with no dependent paths', () => {
+  const preview = renderBlueprintImpactPreview({ status: 'INCOMPLETE',
+    source: { kind: 'MAIN_DESIGN', projectId: 'project-one', projectVersion: 4, blueprintId: 'blueprint-one',
+      blueprintVersion: 8, snapshotHash: 'a'.repeat(64) }, proposedBlueprintVersion: 9,
+    changedFields: [], fieldSensitivity: { classification: 'VIEW_ONLY',
+      reason: 'Step array order is presentation only; the runtime follows startStepId and explicit transition IDs.',
+      fields: [], materialFieldPaths: [], viewOnlyFieldPaths: [], layoutOnly: true },
+    directlyAffectedObjects: [{ objectId: 'process-deliver', name: 'Deliver requests', type: 'process', edited: true,
+      source: { blueprintVersion: 8 } }], dependencyTraversal: { status: 'COMPUTED', visitedCount: 0, budget: 256, paths: [] },
+    unknownAreas: ['Operational work remains outside this preview.'], limitation: 'Preview only.' }, el);
+  assert.match(preview.textContent, /Declared field sensitivity · VIEW_ONLY/);
+  assert.match(preview.textContent, /Step array order is presentation only/);
+  assert.match(preview.textContent, /0 design records visited/);
+  assert.doesNotMatch(preview.textContent, /via processFlow\./);
+});
+
+test('risk editor exposes only explicit same-blueprint process scope selections', () => {
+  const picker = renderRiskProcessScopePicker({ riskId: 'risk-demand', processes: [
+    { id: 'process-learn', type: 'process', name: 'Discover demand' },
+    { id: 'risk-other', type: 'risk', name: 'Not a process' },
+  ], selectedIds: ['process-learn', 'process-foreign'], el });
+  assert.match(picker.textContent, /owner declares are in this risk’s scope.*does not accept the risk or verify behavior/);
+  const checkboxes = picker.querySelectorAll('input');
+  assert.deepEqual(Array.from(checkboxes, (input) => ({ value: input.attrs.value, checked: input.checked })), [
+    { value: 'process-learn', checked: true },
+  ]);
+  assert.equal(picker.querySelectorAll('label').length, 1);
+});
+
 test('internal baseline watermark shows exact v2 pins and leaves historical pins unavailable', () => {
   const watermark = renderBlueprintPublicationWatermark({ publicationSchemaVersion: 2,
     publishedProjectVersion: 24, blueprintId: 'blueprint-published', blueprintVersion: 8,
@@ -149,10 +181,89 @@ test('internal baseline watermark shows exact v2 pins and leaves historical pins
   assert.match(watermark.textContent, /project aggregate v24/);
   assert.match(watermark.textContent, /source blueprint blueprint-published v8/);
   assert.match(watermark.textContent, /snapshot SHA-256 a{64}/);
+  const impactWatermark = renderBlueprintPublicationWatermark({ publicationSchemaVersion: 3,
+    publishedProjectVersion: 25, blueprintId: 'blueprint-published', blueprintVersion: 8,
+    sourceSnapshotHash: 'a'.repeat(64), publicationHash: 'b'.repeat(64), impactHash: 'c'.repeat(64),
+    impactManifest: { impactHash: 'c'.repeat(64) } }, el);
+  assert.equal(impactWatermark.attrs['data-publication-watermark'], 'available');
+  assert.match(impactWatermark.textContent, /declared flow impact SHA-256 c{64}/);
   const historical = renderBlueprintPublicationWatermark({ blueprintId: 'blueprint-old', blueprintVersion: 3 }, el);
   assert.equal(historical.attrs['data-publication-watermark'], 'unavailable');
   assert.match(historical.textContent, /unavailable for this historical baseline/);
   assert.doesNotMatch(historical.textContent, /project aggregate v/);
+});
+
+test('publication impact preview exposes exact pins and limits its claim to declared design-flow impact', () => {
+  const preview = renderBlueprintPublicationImpact({ schemaVersion: 1, projectId: 'project-1', projectVersion: 9,
+    blueprintId: 'blueprint-1', blueprintVersion: 4, sourceSnapshotHash: 'a'.repeat(64), status: 'COMPUTED',
+    budget: 256, flows: [{ processId: 'process-1', status: 'COMPUTED', visitedCount: 3, budget: 256,
+      visitedObjectIds: ['process-1', 'role-1', 'decision-1'] }], impactHash: 'b'.repeat(64) }, el);
+  assert.match(preview.textContent, /Declared flow impact · COMPUTED/);
+  assert.match(preview.textContent, /blueprint-1 v4 · project v9/);
+  assert.match(preview.textContent, /Impact manifest SHA-256 b{64}/);
+  assert.match(preview.textContent, /process-1 · COMPUTED · 3\/256/);
+  assert.match(preview.textContent, /does not establish downstream operational currentness or approval status/);
+});
+
+test('publication status distinguishes current saved design from stale and unknown historical pins', () => {
+  const current = renderBlueprintPublicationStatus({ status: 'CURRENT_FOR_SAVED_BLUEPRINT', currentBlueprintVersion: 4 }, el);
+  assert.equal(current.attrs['data-publication-currentness'], 'CURRENT_FOR_SAVED_BLUEPRINT');
+  assert.match(current.textContent, /CURRENT FOR SAVED BLUEPRINT/);
+  assert.match(current.textContent, /nothing about operational currentness or approval/);
+  const stale = renderBlueprintPublicationStatus({ status: 'STALE', publishedBlueprintVersion: 3, currentBlueprintVersion: 4 }, el);
+  assert.equal(stale.attrs['data-publication-currentness'], 'STALE');
+  assert.match(stale.textContent, /pins blueprint v3; current saved blueprint is v4/);
+  assert.match(stale.textContent, /prior publication remains historical/);
+  const unknown = renderBlueprintPublicationStatus({ status: 'UNKNOWN' }, el);
+  assert.equal(unknown.attrs['data-publication-currentness'], 'UNKNOWN');
+  assert.match(unknown.textContent, /do not treat it as current/);
+});
+
+test('project and baseline consistency pins matching aggregate and blueprint generations', () => {
+  const blueprint = { id: 'blueprint-current', version: 4 };
+  const sourceSnapshotHash = blueprintSnapshotHash(blueprint);
+  const publication = { id: 'publication-current', publicationSchemaVersion: 3,
+    publishedProjectVersion: 9, blueprintId: blueprint.id, blueprintVersion: blueprint.version,
+    sourceSnapshotHash, publicationHash: 'b'.repeat(64) };
+  const project = { id: 'project-one', version: 9, blueprintVersions: [blueprint], blueprintPublications: [publication] };
+  const consistent = blueprintPublicationConsistency(project);
+  assert.equal(consistent.status, 'CONSISTENT');
+  assert.deepEqual(consistent.projectLens, { projectVersion: 9 });
+  assert.equal(consistent.baselineLens.projectVersion, 9);
+  assert.deepEqual(consistent.currentBlueprint, { id: blueprint.id, version: 4, sourceSnapshotHash });
+
+  const advancedProject = blueprintPublicationConsistency({ ...project, version: 10 });
+  assert.equal(advancedProject.status, 'STALE');
+  assert.equal(advancedProject.reason, 'PROJECT_VERSION_MISMATCH');
+  assert.equal(advancedProject.baselineLens.projectVersion, 9,
+    'the view exposes both pinned versions rather than presenting mixed generations as current');
+
+  const unpublished = blueprintPublicationConsistency({ ...project, blueprintPublications: [] });
+  assert.equal(unpublished.status, 'PENDING');
+  assert.equal(unpublished.reason, 'BASELINE_NOT_PUBLISHED');
+  const unwatermarked = blueprintPublicationConsistency({ ...project,
+    blueprintPublications: [{ id: 'legacy-publication', blueprintId: blueprint.id, blueprintVersion: 4 }] });
+  assert.equal(unwatermarked.status, 'PENDING');
+  assert.equal(unwatermarked.reason, 'CONSISTENCY_WATERMARK_UNAVAILABLE');
+});
+
+test('project and baseline consistency renderer never presents pending or stale lenses as consistent', () => {
+  const pending = renderBlueprintPublicationConsistency({ status: 'PENDING', reason: 'BASELINE_NOT_PUBLISHED',
+    projectLens: { projectVersion: 5 } }, el);
+  assert.equal(pending.attrs['data-publication-consistency'], 'PENDING');
+  assert.match(pending.textContent, /project v5 has no published baseline watermark/);
+
+  const stale = renderBlueprintPublicationConsistency({ status: 'STALE', projectLens: { projectVersion: 8 },
+    baselineLens: { projectVersion: 7 } }, el);
+  assert.equal(stale.attrs['data-publication-consistency'], 'STALE');
+  assert.match(stale.textContent, /project lens v8 and baseline lens v7 differ/);
+  assert.match(stale.textContent, /baseline remains historical/);
+
+  const consistent = renderBlueprintPublicationConsistency({ status: 'CONSISTENT', projectLens: { projectVersion: 8 },
+    baselineLens: { projectVersion: 8 } }, el);
+  assert.equal(consistent.attrs['data-publication-consistency'], 'CONSISTENT');
+  assert.match(consistent.textContent, /both lenses use project v8/);
+  assert.match(consistent.textContent, /does not establish operational currentness or approval/);
 });
 
 test('chat blueprint edit previews one exact customer replacement and only applies the unchanged current draft', async () => {
@@ -1188,7 +1299,8 @@ test('portfolio import round trip previews, applies one reviewed record and pers
     api: async (path) => { requestedPath = path; return { data: preview }; }, onCommand: (command) => { applied = command; } });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(requestedPath, `/api/v1/projects/${projectId}/enterprise/import-preview`);
-  assert.match(detail.textContent, /Current destination: blueprint blueprint-current v8/);
+  assert.match(detail.textContent, /Current destination: workspace version unavailable · blueprint blueprint-current v8/);
+  assert.doesNotMatch(detail.textContent, /workspace vundefined/);
   const applyForm = detail.querySelectorAll('form').find((form) => form.attrs['data-enterprise-action'] === 'bulk-edit-objects');
   assert.ok(applyForm, 'the current-source review exposes the deliberate apply action');
   const checkboxes = applyForm.querySelectorAll('input');
@@ -1882,6 +1994,116 @@ test('decision-table authoring previews exact impact before saving and invalidat
   assert.equal(editedSave.decisionTable.defaultOutcome, 'APPROVE');
 });
 
+test('process-flow authoring previews reverse dependency paths before saving', async () => {
+  const process = { id: 'process-deliver', type: 'process', name: 'Deliver request', detail: 'Complete a request.', owner: 'role-operations' };
+  const role = { id: 'role-operations', type: 'role', name: 'Operations' };
+  const input = { id: 'information-signal', type: 'information', name: 'Request signal' };
+  const output = { id: 'information-result', type: 'information', name: 'Request result' };
+  const blueprint = { id: 'blueprint-main', version: 7, areas: {
+    capabilitiesProcesses: { items: [process] }, responsibilityAuthority: { items: [role] },
+    informationTechnology: { items: [input, output] },
+  } };
+  const modelValue = { permissions: { processWrite: true, simulate: true }, blueprint,
+    context: { projectId: 'project-one', projectVersion: 3, blueprintId: blueprint.id, blueprintVersion: 7,
+      snapshotHash: 'a'.repeat(64), isCurrent: true } };
+  const saved = []; let previewCalls = 0;
+  const root = renderEnterpriseProcess({ model: modelValue, object: process, el, ui: branchUi, onCommand: (command) => saved.push(command),
+    onPreviewCommand: async (payload) => {
+      previewCalls += 1; assert.equal(payload.kind, 'define-process-flow');
+      return { status: 'INCOMPLETE', source: { kind: 'MAIN_DESIGN', projectId: 'project-one', projectVersion: 3,
+        blueprintId: blueprint.id, blueprintVersion: 7, snapshotHash: 'a'.repeat(64) }, proposedBlueprintVersion: 8,
+        changedFields: [{ field: 'processFlow.steps[step-1].roleId', before: null, after: 'role-operations' }],
+        fieldSensitivity: { classification: 'MATERIAL', fields: [{ field: 'processFlow.steps[step-1].roleId', kind: 'MATERIAL',
+          reason: 'This field can change the saved flow definition or its references.' }], materialFieldPaths: ['processFlow.steps[step-1].roleId'],
+          viewOnlyFieldPaths: [], layoutOnly: false },
+        directlyAffectedObjects: [{ objectId: 'role-operations', name: 'Operations', type: 'role',
+          source: { blueprintId: blueprint.id, blueprintVersion: 7, snapshotHash: 'a'.repeat(64) } }],
+        dependencyTraversal: { status: 'COMPUTED', visitedCount: 2, budget: 256,
+          paths: [{ objectId: 'role-operations', name: 'Operations', type: 'role', path: [
+            { objectId: process.id, field: 'processFlow.steps[step-1].roleId' },
+            { objectId: role.id, field: 'processFlow.steps[step-1].roleId', relation: 'process-flow-reference' },
+          ] }] }, unknownAreas: ['Approvals and queued work'],
+        limitation: 'Reverse project relationship paths are bounded; downstream runtime effects remain UNKNOWN.' };
+    } });
+  const form = root.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === 'define-process-flow');
+  const submitButton = form.querySelectorAll('button').find((button) => button.text === 'Preview process-flow impact');
+  assert.ok(form); assert.ok(submitButton);
+  const submit = () => form.listeners.get('submit')?.({ preventDefault() {} });
+  submit();
+  assert.equal(submitButton.disabled, true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(previewCalls, 1); assert.equal(saved.length, 0);
+  assert.match(form.textContent, /Reverse dependency paths · COMPUTED/);
+  assert.match(form.textContent, /Declared field sensitivity · MATERIAL/);
+  assert.match(form.textContent, /MATERIAL: processFlow\.steps\[step-1\]\.roleId/);
+  assert.match(form.textContent, /process-deliver via processFlow\.steps\[step-1\]\.roleId/);
+  assert.match(form.textContent, /operational and downstream impact is UNKNOWN|Approvals and queued work/);
+  assert.equal(submitButton.text, 'Save typed process flow');
+  submit();
+  assert.equal(saved.length, 1); assert.equal(saved[0].kind, 'define-process-flow');
+
+  let incompleteTraversalSaved = false;
+  const incompleteTraversalRoot = renderEnterpriseProcess({ model: modelValue, object: process, el, ui: branchUi,
+    onCommand: () => { incompleteTraversalSaved = true; }, onPreviewCommand: async () => ({
+      status: 'INCOMPLETE', source: { kind: 'MAIN_DESIGN', projectId: 'project-one', projectVersion: 3,
+        blueprintId: blueprint.id, blueprintVersion: 7, snapshotHash: 'a'.repeat(64) },
+      dependencyTraversal: { status: 'INCOMPLETE', visitedCount: 256, budget: 256, visitedObjectIds: [], paths: [] },
+    }) });
+  const incompleteTraversalForm = incompleteTraversalRoot.querySelectorAll('form')
+    .find((entry) => entry.attrs['data-enterprise-action'] === 'define-process-flow');
+  const incompleteTraversalSubmit = incompleteTraversalForm.querySelectorAll('button')
+    .find((button) => button.text === 'Preview process-flow impact');
+  incompleteTraversalForm.listeners.get('submit')?.({ preventDefault() {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(incompleteTraversalSaved, false, 'the protected save is not called for an incomplete dependency traversal');
+  assert.equal(incompleteTraversalSubmit.text, 'Preview process-flow impact');
+  assert.match(incompleteTraversalForm.textContent, /Reverse dependency traversal is incomplete; saving this process flow is blocked/);
+
+  let missingPreviewSaved = false;
+  const missingRoot = renderEnterpriseProcess({ model: modelValue, object: process, el, ui: branchUi,
+    onCommand: () => { missingPreviewSaved = true; }, onPreviewCommand: async () => null });
+  const missing = missingRoot.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === 'define-process-flow');
+  missing.listeners.get('submit')?.({ preventDefault() {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(missingPreviewSaved, false);
+  assert.match(missing.textContent, /exact current design could not be verified/);
+
+  const pendingCalls = []; const pendingSaves = [];
+  const pendingRoot = renderEnterpriseProcess({ model: modelValue, object: process, el, ui: branchUi,
+    onCommand: (command) => pendingSaves.push(command),
+    onPreviewCommand: (payload) => new Promise((resolve) => pendingCalls.push({ payload, resolve })) });
+  const pendingForm = pendingRoot.querySelectorAll('form').find((entry) => entry.attrs['data-enterprise-action'] === 'define-process-flow');
+  const pendingSubmit = pendingForm.querySelectorAll('button').find((button) => button.text === 'Preview process-flow impact');
+  const addStep = pendingForm.querySelectorAll('button').find((button) => button.text === 'Add step');
+  const pendingSubmitEvent = () => pendingForm.listeners.get('submit')?.({ preventDefault() {} });
+  pendingSubmitEvent();
+  assert.equal(pendingCalls.length, 1);
+  assert.equal(pendingSubmit.disabled, true);
+  addStep.listeners.get('click')?.();
+  assert.equal(pendingSubmit.disabled, false);
+  assert.equal(pendingSubmit.text, 'Preview process-flow impact', 'structural edits clear the preview and restore Preview');
+  assert.doesNotMatch(pendingForm.textContent, /Impact preview · INCOMPLETE/);
+  pendingCalls[0].resolve({ status: 'INCOMPLETE', source: { kind: 'MAIN_DESIGN', projectId: 'project-one', projectVersion: 3,
+    blueprintId: blueprint.id, blueprintVersion: 7, snapshotHash: 'a'.repeat(64) }, proposedBlueprintVersion: 8,
+    changedFields: [], directlyAffectedObjects: [], unknownAreas: [], limitation: 'Pending preview result.' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.doesNotMatch(pendingForm.textContent, /Pending preview result|Impact preview · INCOMPLETE/,
+    'the response for a structurally stale form is suppressed');
+  assert.equal(pendingSubmit.text, 'Preview process-flow impact');
+  assert.equal(pendingSaves.length, 0);
+  pendingSubmitEvent();
+  assert.equal(pendingCalls.length, 2, 'the edited structure requires a fresh preview');
+  assert.equal(pendingCalls[1].payload.processFlow.steps.length, pendingCalls[0].payload.processFlow.steps.length + 1);
+  pendingCalls[1].resolve({ status: 'INCOMPLETE', source: { kind: 'MAIN_DESIGN', projectId: 'project-one', projectVersion: 3,
+    blueprintId: blueprint.id, blueprintVersion: 7, snapshotHash: 'a'.repeat(64) }, proposedBlueprintVersion: 8,
+    changedFields: [], directlyAffectedObjects: [], unknownAreas: [], limitation: 'Fresh preview.',
+    dependencyTraversal: { status: 'COMPUTED', visitedCount: 2, budget: 256, visitedObjectIds: ['process-deliver', 'information-signal'], paths: [] } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(pendingSubmit.text, 'Save typed process flow');
+  pendingSubmitEvent();
+  assert.equal(pendingSaves.length, 1);
+});
+
 test('enterprise staffing UI submits source-bound assumptions and renders accessible worker comparisons', () => {
   const process = { id: 'process-service', type: 'process', name: 'Serve requests', detail: 'Provide support.' };
   const blueprint = { id: 'blueprint-main', areas: { capabilitiesProcesses: { items: [process] } } };
@@ -2495,6 +2717,8 @@ test('saved economics UI explains each allocation with its process identity and 
   assert.match(panel.textContent, /allocation-staffing/);
   assert.match(panel.textContent, /Deliver the core offering/);
   assert.match(panel.textContent, /Human staffing forecast/);
+  assert.match(panel.textContent, /Derived-result inputs: UNTRACKED/);
+  assert.match(panel.textContent, /not eligible as mandatory evaluation or approval evidence/);
 });
 
 test('refinement UI names both reverse trace directions and saves selected existing records', () => {
@@ -2827,11 +3051,59 @@ test('context manifest presentation keeps synthetic source, saved-project partia
   assert.match(context.requirements.summary, /No accepted requirements baseline is pinned/);
   assert.deepEqual(context.unknownDependencies, [{ domain: 'sentinel', description: 'Cross-project relationships are outside scope.' }]);
   assert.deepEqual(context.excludedDependencies, [{ objectRef: 'external-file', sourceId: 'upload-1', status: 'EXCLUDED', reason: 'UNTRUSTED_SOURCE_NOT_USED_FOR_AUTHORITATIVE_COVERAGE' }]);
-  assert.deepEqual(context.savedProjectCoverage, { status: 'PARTIAL', sourcePinHash: 'c'.repeat(64), processTraceHash: 'e'.repeat(64),
+  assert.deepEqual(context.savedProjectCoverage, { schemaVersion: 1, status: 'PARTIAL', sourcePinHash: 'c'.repeat(64), processTraceHash: 'e'.repeat(64),
+    sourcePins: null, candidateUniverse: null, contextRequirements: [], classifications: [], classificationHash: null,
     represented: [{ domain: 'selected-source', objectRef: 'process-one', objectType: 'process', contentHash: 'd'.repeat(64) }],
     unknownDependencies: [{ domain: 'external-systems', description: 'No exact external source pin is selected.' }],
     excludedDependencies: { status: 'NOT_ENUMERATED', reason: 'Unselected dependencies remain unknown.' } });
   const accepted = contextManifestPresentation({ relevantRequirements: { baselineVersion: 2, contentHash: 'b'.repeat(64), evidenceRef: 'evidence-1', requirements: [{ id: 'REQ-1' }] } });
   assert.equal(accepted.requirements.status, 'PINNED_ACCEPTED');
   assert.deepEqual(accepted.requirements.entries, [{ id: 'REQ-1' }]);
+});
+
+test('v4 saved-project coverage presents pinned scoped classifications and unknown domains separately from synthetic context', () => {
+  const pin = { projectId: 'project-v4', projectVersion: 9, blueprintId: 'blueprint-v4', blueprintVersion: 3,
+    blueprintSchemaVersion: 2, sourceObjectId: 'process-a', sourceObjectType: 'process', sourceHash: 'a'.repeat(64),
+    bindingHash: 'b'.repeat(64), blueprintSnapshotHash: 'c'.repeat(64), blueprintSnapshotStatus: 'PINNED' };
+  const coverage = { schemaVersion: 2, status: 'PARTIAL', sourcePinHash: 'd'.repeat(64), processTraceHash: 'e'.repeat(64),
+    sourcePins: { projectPinHash: 'd'.repeat(64), blueprintSnapshotHash: 'c'.repeat(64), sentinel: {
+      assessmentId: 'assessment-1', reportHash: 'f'.repeat(64), profileId: 'sentinel-v1', profileVersion: 1,
+      profileHash: '1'.repeat(64), evaluatorRevision: 'sentinel-evaluator-v1', state: 'ASSESSED', contextHash: '2'.repeat(64),
+      availableProfile: { id: 'sentinel-current', version: '1.0.0', hash: '3'.repeat(64), evaluatorRevision: 'eval-1' },
+    } },
+    candidateUniverse: { kind: 'DECLARED_SELECTED_PROCESS_AND_CASE_GUARDRAILS', exhaustive: true,
+      description: 'Selected process only; not a project-wide or enterprise-wide inventory.' },
+    classifications: [
+      { candidateId: 'selected', domain: 'selected-source', objectRef: 'process-a', status: 'REPRESENTED',
+        contentHash: 'a'.repeat(64), reason: 'Pinned source.', provenance: { kind: 'PINNED_SAVED_PROJECT_TRACE' } },
+      { candidateId: 'unknown', domain: 'external-and-uninspected-sources', objectRef: null, status: 'UNKNOWN',
+        contentHash: null, reason: 'Not retrieved.', provenance: { kind: 'NOT_ENUMERATED' } },
+      { candidateId: 'excluded', domain: 'case-intent-non-goal', objectRef: 'intent:x:non-goal:0', status: 'EXCLUDED',
+        contentHash: '3'.repeat(64), reason: 'Out of case scope only.', provenance: { kind: 'CASE_INTENT' } },
+    ], classificationHash: '4'.repeat(64), represented: [], unknownDependencies: [],
+    excludedDependencies: { status: 'SCOPED_ONLY', reason: 'Case non-goals only.' } };
+  const context = contextManifestPresentation({ manifestVersion: 4, manifestRevision: 1, provenanceManifestHash: '5'.repeat(64),
+    enterpriseContext: { version: 1, sourceKind: 'synthetic-reference-model', sourceLabel: 'Synthetic reference organization' },
+    savedProjectPin: pin, savedProjectCoverage: coverage });
+  assert.equal(context.manifest, `Context manifest v4 · revision 1 · SHA-256 ${'5'.repeat(64)}`);
+  assert.match(savedProjectPinSummary({ manifestVersion: 4, savedProjectPin: pin }), /Project project-v4 v9/);
+  assert.equal(context.enterpriseStatus, 'Synthetic reference context only; it is not authoritative evidence about the selected business or saved project.');
+  assert.equal(context.savedProjectCoverage.schemaVersion, 2);
+  assert.equal(context.savedProjectCoverage.candidateUniverse.exhaustive, true);
+  assert.deepEqual(context.savedProjectCoverage.classifications.map((entry) => entry.status), ['REPRESENTED', 'UNKNOWN', 'EXCLUDED']);
+  assert.equal(context.savedProjectCoverage.sourcePins.sentinel.assessmentId, 'assessment-1');
+});
+
+test('process evidence review presentation keeps reviewer attestation separate from behavior verification', () => {
+  const presentation = processEvidenceReviewPresentation({ id: 'process-evidence-review-1', status: 'HUMAN_REVIEWED',
+    disposition: 'INCONCLUSIVE', applicability: 'CURRENT', integrityStatus: 'VALID', linkId: 'process-run-link-1',
+    reviewerPrincipal: 'oidc:carol', reviewHash: 'a'.repeat(64), source: { processId: 'process-review',
+      blueprintId: 'blueprint-1', blueprintVersion: 4 }, verificationStatus: 'NOT_EXECUTED', truthStatus: 'UNVERIFIED',
+    criteria: [{ disposition: 'INCONCLUSIVE', criterion: 'The saved process produces its declared outputs.', note: 'The output is self-reported.' }] });
+  assert.match(presentation.heading, /HUMAN_REVIEWED · INCONCLUSIVE · CURRENT · integrity VALID/);
+  assert.match(presentation.identity, /process-review.*blueprint-1 v4/);
+  assert.match(presentation.status, /verification NOT_EXECUTED · truth UNVERIFIED/);
+  assert.match(presentation.status, /does not establish external truth/);
+  assert.deepEqual(presentation.criteria, ['INCONCLUSIVE: The saved process produces its declared outputs. · The output is self-reported.']);
+  assert.equal(processEvidenceReviewPresentation({ ...presentation, status: 'UNVERIFIED' }), null);
 });

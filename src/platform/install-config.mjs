@@ -52,7 +52,7 @@ function protectedFileValue(env, inlineName, fileName, issues, { maxBytes }) {
 }
 
 export function readProtectedDatabaseUrlFile(filePath, variableName = 'ORGWARD_DATABASE_URL_FILE') {
-  if (!['ORGWARD_DATABASE_URL_FILE', 'ORGWARD_RESTORE_DATABASE_URL_FILE'].includes(variableName)) {
+  if (!['ORGWARD_DATABASE_URL_FILE', 'ORGWARD_RESTORE_DATABASE_URL_FILE', 'ORGWARD_T91_N2_FIXTURE_ADMIN_DATABASE_URL_FILE'].includes(variableName)) {
     throw new Error('A supported protected database URL file variable is required.');
   }
   const issues = [];
@@ -137,6 +137,30 @@ export function parseInstallConfig(env = process.env, nodeVersion = process.vers
       if (!['postgres:', 'postgresql:'].includes(url.protocol) || !url.hostname || url.pathname.length < 2) throw new Error();
     } catch { add(issues, 'database-url', 'ORGWARD_DATABASE_URL is not a valid PostgreSQL URL.', 'Use postgresql://user@host:5432/database; do not include the URL in support logs.'); }
   }
+  const fixtureConfigIssueStart = issues.length;
+  const t91N2FixtureAdminConfigured = [
+    ['ORGWARD_T91_N2_FIXTURE_ADMIN_DATABASE_URL', env.ORGWARD_T91_N2_FIXTURE_ADMIN_DATABASE_URL],
+    ['ORGWARD_T91_N2_FIXTURE_ADMIN_DATABASE_URL_FILE', env.ORGWARD_T91_N2_FIXTURE_ADMIN_DATABASE_URL_FILE],
+  ].some(([key, value]) => Object.hasOwn(env, key) && value !== undefined);
+  let t91N2FixtureAdminDatabaseUrl = protectedFileValue(env, 'ORGWARD_T91_N2_FIXTURE_ADMIN_DATABASE_URL',
+    'ORGWARD_T91_N2_FIXTURE_ADMIN_DATABASE_URL_FILE', issues, { maxBytes: 16_384 }) || null;
+  if (Object.hasOwn(env, 'ORGWARD_T91_N2_FIXTURE_ADMIN_DATABASE_URL') && env.ORGWARD_T91_N2_FIXTURE_ADMIN_DATABASE_URL !== undefined) {
+    add(issues, 't91-n2-fixture-database-source', 'The isolated T-91 N2 fixture administrator URL must use a protected file.',
+      'Set ORGWARD_T91_N2_FIXTURE_ADMIN_DATABASE_URL_FILE to an owner-only file on a dedicated fixture cluster.', 'notice');
+    t91N2FixtureAdminDatabaseUrl = null;
+  }
+  if (t91N2FixtureAdminDatabaseUrl) {
+    try {
+      const url = new URL(t91N2FixtureAdminDatabaseUrl);
+      if (!['postgres:', 'postgresql:'].includes(url.protocol) || !url.hostname || url.pathname.length < 2) throw new Error();
+      if (databaseUrl && url.toString() === new URL(databaseUrl).toString()) throw new Error();
+    } catch {
+      t91N2FixtureAdminDatabaseUrl = null;
+      add(issues, 't91-n2-fixture-database-url', 'The isolated T-91 N2 fixture administrator URL is invalid or duplicates the application URL.',
+        'Use an owner-only protected URL file for a dedicated fixture cluster; do not point it at the application database.', 'notice');
+    }
+  }
+  for (const issue of issues.slice(fixtureConfigIssueStart)) issue.severity = 'notice';
   let secretEncryptionKey = null;
   const secretEncryptionKeyInput = protectedFileValue(env, 'ORGWARD_SECRET_ENCRYPTION_KEY', 'ORGWARD_SECRET_ENCRYPTION_KEY_FILE', issues, { maxBytes: 1024 });
   if (secretEncryptionKeyInput !== null) {
@@ -262,7 +286,8 @@ export function parseInstallConfig(env = process.env, nodeVersion = process.vers
 
   const allowLegacyJson = !databaseUrl && env.ORGWARD_ALLOW_LEGACY_JSON === 'true';
   const config = {
-    host, port, authMode, databaseUrl, secretEncryptionKey, allowLegacyJson,
+    host, port, authMode, databaseUrl, secretEncryptionKey, allowLegacyJson, t91N2FixtureAdminDatabaseUrl,
+    t91N2FixtureAdminConfigured,
     dataDirectory: path.resolve(env.ORGWARD_DATA_DIR || path.join(ROOT, 'data', 'projects')),
     sdlcDirectory: path.resolve(env.ORGWARD_SDLC_DATA_DIR || path.join(ROOT, 'data', 'sdlc')),
     executionDirectory: path.resolve(env.ORGWARD_EXECUTION_DATA_DIR || path.join(ROOT, 'data', 'execution-runs')),

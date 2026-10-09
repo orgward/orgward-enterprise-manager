@@ -249,6 +249,12 @@ export function renderEnterpriseEconomics({ model, object, pending = null, loadi
   const result = evaluation ?? model.economics?.evaluation;
   if (!result || result.economicsId !== object.id) return root;
   root.append(el('h5', { text: `Saved scenario: ${result.status} · SCENARIO_ONLY` }), el('p', { text: `${result.createdAt} · ${result.createdBy} · ${result.reason}` }));
+  const inputProvenance = result.inputProvenance ?? { status: 'UNTRACKED', resultStatus: 'UNKNOWN',
+    mandatoryEvaluationEligible: false, approvalEligible: false,
+    reason: 'This historical result has no immutable input manifest.' };
+  root.append(el('p', { attrs: { 'data-economic-input-provenance': inputProvenance.status },
+    text: `Derived-result inputs: ${inputProvenance.status} · ${inputProvenance.reason}` }),
+  el('p', { text: 'This scenario result is not eligible as mandatory evaluation or approval evidence. It uses declared scenario inputs only; it does not establish observed business truth.' }));
   if (!enterpriseEconomicEvaluationMatches(model, object, result)) {
     root.append(el('p', { text: 'This evaluation belongs to a different exact source or falls after the selected recording cutoff. Its captured result does not apply to the selected design.' }));
     if (onInspectEconomicEvaluation) root.append(action(el, 'Inspect evaluation at its saved source', () => onInspectEconomicEvaluation(result), loading || Boolean(pending)));

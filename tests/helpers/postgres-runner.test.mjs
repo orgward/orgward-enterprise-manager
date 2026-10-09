@@ -3,10 +3,20 @@ import test from 'node:test';
 import {
   createTestDatabaseName,
   createTestWorkerEnvironment,
+  readTestConcurrency,
   readTestPostgresConfiguration,
   testFilesRequirePostgres,
   withRunnerOwnedCluster,
 } from './postgres-runner.mjs';
+
+test('test runner concurrency defaults to two and accepts only one or two workers', () => {
+  assert.equal(readTestConcurrency({}), 2);
+  assert.equal(readTestConcurrency({ ORGWARD_TEST_CONCURRENCY: '1' }), 1);
+  assert.equal(readTestConcurrency({ ORGWARD_TEST_CONCURRENCY: '2' }), 2);
+  for (const value of ['', '0', '3', '01', '1.0', 'true']) {
+    assert.throws(() => readTestConcurrency({ ORGWARD_TEST_CONCURRENCY: value }), /must be exactly 1 or 2/);
+  }
+});
 
 test('test worker environment drops caller URLs and receives only the runner-owned local cluster', () => {
   const env = createTestWorkerEnvironment({

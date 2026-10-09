@@ -442,9 +442,11 @@ export function renderEnterpriseInterchange({ projectId, model, object = null, d
       previewRegion.append(apply);
       return;
     }
+    const destinationVersion = Number.isSafeInteger(preview.currentSource.projectVersion)
+      ? `workspace v${preview.currentSource.projectVersion}` : 'workspace version unavailable';
     previewRegion.append(el('h5', { text: 'Import preview' }),
       el('p', { text: `Source project ${preview.source.projectId} · blueprint ${preview.source.blueprintId} v${preview.source.blueprintVersion} · hash ${preview.source.snapshotHash}` }),
-      el('p', { text: `Current destination: workspace v${preview.currentSource.projectVersion} · blueprint ${preview.currentSource.blueprintId} v${preview.currentSource.blueprintVersion} · hash ${preview.currentSource.snapshotHash}` }),
+      el('p', { text: `Current destination: ${destinationVersion} · blueprint ${preview.currentSource.blueprintId} v${preview.currentSource.blueprintVersion} · hash ${preview.currentSource.snapshotHash}` }),
       el('p', { text: `${preview.recordCount} records · ${preview.recognizedFields} recognized fields · ${preview.readyRecordIds.length} ready to apply. Preview hash ${preview.previewHash}.` }),
       fieldSummary('Unknown fields (not applied)', preview.unknownFields, el),
       ...(preview.unsupportedExtensions ?? []).map((extension) => el('p', { text: `${extension.field} is preserved in the export but cannot be imported here: ${extension.reason}` })),

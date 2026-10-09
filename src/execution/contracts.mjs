@@ -63,6 +63,7 @@ export function createExecutionRun({ tenantId, projectId = null, profile, reques
         blueprintVersion: run.processTaskRef.blueprintVersion,
         ...(run.processTaskRef.flowBinding ? { flowBinding: structuredClone(run.processTaskRef.flowBinding) } : {}),
         ...(run.processTaskRef.delegation ? { delegation: structuredClone(run.processTaskRef.delegation) } : {}),
+        ...(run.processTaskRef.behaviorTestPlan ? { behaviorTestPlan: structuredClone(run.processTaskRef.behaviorTestPlan) } : {}),
         ...(run.processTaskRef.repository ? { repository: structuredClone(run.processTaskRef.repository) } : {}),
       },
     } : {}),

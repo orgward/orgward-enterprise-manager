@@ -91,8 +91,9 @@ function referenceChecks(el, objects, selected, name, label) {
   return { node: el('fieldset', { className: 'enterprise-reference-choices' }, [el('legend', { text: label }), ...controls.map(({ node }) => node)]), values: () => controls.filter(({ control }) => control.checked).map(({ control }) => control.value) };
 }
 
-function flowEditor({ model, object, el, ui, onCommand, disabled, reasonValue = '' }) {
+function flowEditor({ model, object, el, ui, onCommand, onPreviewCommand, disabled, reasonValue = '' }) {
   const { field, form } = ui; const objects = allObjects(model);
+  let invalidatePreview = () => {};
   const byType = (type) => objects.filter((entry) => entry.type === type);
   const reference = (name, label, type, value, optional = false) => field(name, label, { entries: [['', optional ? 'None specified' : 'Choose a saved record'], ...byType(type).map((entry) => [entry.id, entry.name])], value, required: !optional });
   const saved = object.processFlow;
@@ -116,9 +117,9 @@ function flowEditor({ model, object, el, ui, onCommand, disabled, reasonValue = 
     const kind = field('kind', 'Step kind', { entries: STEP_KINDS, value: step.kind ?? 'manual' });
     const body = el('div', { className: 'enterprise-step-fields' });
     const row = { id: step.id, title, kind, node: el('section', { className: 'enterprise-editor-row', attrs: { 'data-enterprise-flow-step': step.id } }, [title.node, kind.node, body]), read: () => ({}) };
-    const move = (direction) => { const index = rows.indexOf(row); const next = index + direction; if (next < 0 || next >= rows.length) return; rows.splice(index, 1); rows.splice(next, 0, row); refresh(); row.title.control.focus?.(); };
+    const move = (direction) => { const index = rows.indexOf(row); const next = index + direction; if (next < 0 || next >= rows.length) return; invalidatePreview(); rows.splice(index, 1); rows.splice(next, 0, row); refresh(); row.title.control.focus?.(); };
     row.up = action(el, 'Move step earlier', () => move(-1), disabled); row.down = action(el, 'Move step later', () => move(1), disabled);
-    const remove = action(el, 'Remove step', () => { const index = rows.indexOf(row); rows.splice(index, 1); refresh(); (rows[index]?.title.control ?? rows[index - 1]?.title.control ?? starts.control).focus?.(); }, disabled);
+    const remove = action(el, 'Remove step', () => { invalidatePreview(); const index = rows.indexOf(row); rows.splice(index, 1); refresh(); (rows[index]?.title.control ?? rows[index - 1]?.title.control ?? starts.control).focus?.(); }, disabled);
     row.node.append(el('div', { className: 'enterprise-row-actions' }, [row.up, row.down, remove]), el('details', {}, [el('summary', { text: 'Stable step identity' }), el('p', { text: step.id })]));
     function renderKind(value) {
       // Drop references owned by the replaced row body before rebuilding its typed fields.
@@ -141,18 +142,18 @@ function flowEditor({ model, object, el, ui, onCommand, disabled, reasonValue = 
           const outcome = field('outcome', 'Decision outcome', { entries: choices(), value: savedRoute.outcome });
           const destination = target('targetStepId', 'Route to step', savedRoute.targetStepId);
           const node = el('div', { className: 'enterprise-editor-row' }, [outcome.node, destination.node]); const route = { outcome, destination, node };
-          node.append(action(el, 'Remove route', () => { routes.splice(routes.indexOf(route), 1); node.remove(); }, disabled)); routes.push(route); routeList.append(node); disable(node, disabled);
+          node.append(action(el, 'Remove route', () => { invalidatePreview(); routes.splice(routes.indexOf(route), 1); node.remove(); }, disabled)); routes.push(route); routeList.append(node); disable(node, disabled);
         };
         for (const route of value.routes ?? [{}]) addRoute(route);
         decision.control.addEventListener('change', () => routes.forEach((route) => replaceOptions(el, route.outcome, choices())));
-        body.append(decision.node, routeList, action(el, 'Add outcome route', () => { if (routes.length < 20) addRoute(); }, disabled));
+        body.append(decision.node, routeList, action(el, 'Add outcome route', () => { if (routes.length < 20) { invalidatePreview(); addRoute(); } }, disabled));
         row.read = () => ({ decisionId: decision.control.value, routes: routes.map(({ outcome, destination }) => ({ outcome: outcome.control.value, targetStepId: destination.control.value })) });
       } else if (selectedKind === 'fork') {
         const branches = []; const branchList = el('div', { className: 'enterprise-editor-rows' });
-        const addBranch = (id = '') => { const entry = target('branchStepIds', 'Parallel branch starts at', id); const node = el('div', {}, [entry.node]); node.append(action(el, 'Remove parallel branch', () => { branches.splice(branches.indexOf(entry), 1); node.remove(); }, disabled)); branches.push(entry); branchList.append(node); disable(node, disabled); };
+        const addBranch = (id = '') => { const entry = target('branchStepIds', 'Parallel branch starts at', id); const node = el('div', {}, [entry.node]); node.append(action(el, 'Remove parallel branch', () => { invalidatePreview(); branches.splice(branches.indexOf(entry), 1); node.remove(); }, disabled)); branches.push(entry); branchList.append(node); disable(node, disabled); };
         for (const id of value.branchStepIds ?? ['', '']) addBranch(id);
         const join = target('joinStepId', 'Matching join step', value.joinStepId, false, (entry) => entry.kind.control.value === 'join');
-        body.append(branchList, action(el, 'Add parallel branch (up to four)', () => { if (branches.length < 4) addBranch(); }, disabled), join.node);
+        body.append(branchList, action(el, 'Add parallel branch (up to four)', () => { if (branches.length < 4) { invalidatePreview(); addBranch(); } }, disabled), join.node);
         row.read = () => ({ branchStepIds: branches.map((entry) => entry.control.value), joinStepId: join.control.value });
       } else if (selectedKind === 'join') {
         const fork = target('forkStepId', 'Matching fork step', value.forkStepId, false, (entry) => entry.kind.control.value === 'fork');
@@ -200,11 +201,54 @@ function flowEditor({ model, object, el, ui, onCommand, disabled, reasonValue = 
   for (const descriptor of targets) descriptor.field.control.value = descriptor.initialValue ?? '';
   starts.control.value = saved?.startStepId ?? rows[0]?.id ?? '';
   const reason = field('reason', 'Reason for this flow design', { multiline: true, maximum: 500, value: reasonValue });
-  return form('define-process-flow', 'Save typed process flow', [el('p', { text: 'Activities, decision routes, exceptions, paired parallel forks and joins, one bounded loop, and local sandbox procurement test effects are proposed design. Sandbox effects require an exact committed capacity allocation and explicit project-owner approval; no external provider is contacted. Every step must be reachable. Local step identities stay stable across revisions.' }), starts.node, list,
-    action(el, 'Add step', () => { if (rows.length < 32) addStep({ id: nextId('step', rows.map((row) => row.id)), kind: 'manual', title: '' }); }, disabled), reason.node], () => {
+  let previewKey = null; let previewPanel = null; let previewRequestId = 0; let previewPending = false;
+  const editor = form('define-process-flow', 'Preview process-flow impact', [el('p', { text: 'Activities, decision routes, exceptions, paired parallel forks and joins, one bounded loop, and local sandbox procurement test effects are proposed design. Sandbox effects require an exact committed capacity allocation and explicit project-owner approval; no external provider is contacted. Every step must be reachable. Local step identities stay stable across revisions.' }), starts.node, list,
+    action(el, 'Add step', () => { if (rows.length < 32) { invalidatePreview(); addStep({ id: nextId('step', rows.map((row) => row.id)), kind: 'manual', title: '' }); } }, disabled), reason.node], () => {
       if (!rows.length) throw new Error('Add at least one step.');
-      onCommand({ kind: 'define-process-flow', objectId: object.id, processFlow: { schemaVersion: '1.0', startStepId: starts.control.value, steps: rows.map((row) => ({ id: row.id, kind: row.kind.control.value, title: row.title.control.value.trim(), ...row.read() })) }, reason: reason.control.value.trim() });
+      const payload = { kind: 'define-process-flow', objectId: object.id,
+        processFlow: { schemaVersion: '1.0', startStepId: starts.control.value,
+          steps: rows.map((row) => ({ id: row.id, kind: row.kind.control.value, title: row.title.control.value.trim(), ...row.read() })) },
+        reason: reason.control.value.trim() };
+      const key = JSON.stringify(payload);
+      if (previewKey === key) { onCommand(payload); return; }
+      if (previewPending) return;
+      previewPanel?.remove(); previewPanel = null; previewKey = null;
+      const submit = [...editor.querySelectorAll('button')].find((button) => (button.getAttribute?.('type') ?? button.attrs?.type) === 'submit');
+      const error = editor.querySelectorAll('[role]')[0];
+      const requestId = ++previewRequestId; previewPending = true; submit.disabled = true;
+      void Promise.resolve(onPreviewCommand?.(payload)).then((preview) => {
+        if (requestId !== previewRequestId) return;
+        const source = preview?.source; const context = model.context;
+        if (preview?.status !== 'INCOMPLETE' || source?.projectVersion !== context.projectVersion
+          || source?.blueprintId !== context.blueprintId || source?.blueprintVersion !== context.blueprintVersion
+          || source?.snapshotHash !== context.snapshotHash
+          || (context.branchId ? (source?.kind !== 'BRANCH_DRAFT' || source.branchId !== context.branchId || source.branchRevision !== context.branchRevision)
+            : source?.kind !== 'MAIN_DESIGN')) {
+          throw new Error('The exact current design could not be verified for this preview. Reload and try again.');
+        }
+        if (preview.dependencyTraversal?.status !== 'COMPUTED') {
+          throw new Error('Reverse dependency traversal is incomplete; saving this process flow is blocked until the impact path is complete.');
+        }
+        previewKey = key; previewPanel = renderBlueprintImpactPreview(preview, el); editor.append(previewPanel);
+        submit.textContent = 'Save typed process flow';
+      }).catch((failure) => {
+        if (requestId !== previewRequestId) return;
+        error.textContent = failure?.message ?? 'Impact preview failed.'; error.hidden = false;
+      }).finally(() => {
+        if (requestId !== previewRequestId) return;
+        previewPending = false; submit.disabled = Boolean(disabled);
+      });
     }, disabled);
+  const invalidate = () => {
+    previewRequestId += 1; previewPending = false; previewPanel?.remove(); previewPanel = null; previewKey = null;
+    const submit = [...editor.querySelectorAll('button')].find((button) => (button.getAttribute?.('type') ?? button.attrs?.type) === 'submit');
+    if (submit) { submit.textContent = 'Preview process-flow impact'; submit.disabled = Boolean(disabled); }
+    const error = editor.querySelectorAll('[role]')[0];
+    if (error) { error.hidden = true; error.textContent = ''; }
+  };
+  invalidatePreview = invalidate;
+  editor.addEventListener('input', invalidate); editor.addEventListener('change', invalidate);
+  return editor;
 }
 
 function decisionEditor({ model, object, el, ui, onCommand, onPreviewCommand, disabled, reasonValue = '' }) {
@@ -447,7 +491,7 @@ export function renderEnterpriseProcess({ model, object, pending = null, loading
   const edited = retained?.kind === 'define-process-flow' ? { ...object, processFlow: retained.processFlow } : retained?.kind === 'define-decision-table' ? { ...object, decisionTable: retained.decisionTable } : object;
   if (object.type === 'decision') root.append(el('details', { attrs: retained?.kind === 'define-decision-table' ? { open: '' } : {} }, [el('summary', { text: 'Author a typed decision table' }), decisionEditor({ model, object: edited, el, ui, onCommand, onPreviewCommand, disabled, reasonValue: retained?.kind === 'define-decision-table' ? retained.reason : '' })]));
   else {
-    root.append(el('details', { attrs: retained?.kind === 'define-process-flow' ? { open: '' } : {} }, [el('summary', { text: 'Author a typed process flow' }), flowEditor({ model, object: edited, el, ui, onCommand, disabled, reasonValue: retained?.kind === 'define-process-flow' ? retained.reason : '' })]));
+    root.append(el('details', { attrs: retained?.kind === 'define-process-flow' ? { open: '' } : {} }, [el('summary', { text: 'Author a typed process flow' }), flowEditor({ model, object: edited, el, ui, onCommand, onPreviewCommand, disabled, reasonValue: retained?.kind === 'define-process-flow' ? retained.reason : '' })]));
     if (!object.processFlow) root.append(el('p', { text: 'Save a typed process flow before simulating it. Existing simple planning graphs remain available in Execution.' }));
     root.append(el('details', { attrs: retained?.kind === 'simulate-process' ? { open: '' } : {} }, [el('summary', { text: 'Simulate this exact saved flow' }), simulationEditor({ model, object, el, ui, onCommand, disabled: loading || Boolean(pending) || !model.permissions?.simulate, scenario: retained?.kind === 'simulate-process' ? retained.scenario : null, reasonValue: retained?.kind === 'simulate-process' ? retained.reason : '' })]));
     root.append(el('details', { attrs: retained?.kind === 'simulate-staffing' ? { open: '' } : {} }, [el('summary', { text: 'Simulate staffing capacity' }), staffingSimulationEditor({ model, object, el, ui, onCommand, disabled: loading || Boolean(pending), scenario: retained?.kind === 'simulate-staffing' ? retained.scenario : null, reasonValue: retained?.kind === 'simulate-staffing' ? retained.reason : '' })]));

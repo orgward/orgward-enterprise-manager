@@ -11,6 +11,7 @@ import { digest, persistedDigest } from '../../src/sdlc/contracts.mjs';
 import { createLocalSandboxTestAdapter } from '../../src/enterprise/sandbox-adapter-contract.mjs';
 import { createLocalSandboxProviderService } from '../../src/enterprise/local-sandbox-provider-service.mjs';
 import { createLoopbackSandboxHttpAdapter } from '../../src/enterprise/loopback-sandbox-http-adapter.mjs';
+import { assessEnterprisePublicationImpact, previewEnterpriseEditImpact } from '../../src/enterprise/impact-preview.mjs';
 import { verifySourceBinding } from '../../src/sdlc/engine.mjs';
 import { startPostgres } from '../helpers/postgres.mjs';
 
@@ -436,12 +437,29 @@ test('Sentinel assessment is human-authorized, aggregate-versioned, replayable a
   assert.equal(contextRun.artifacts.context.coverage.find((entry) => entry.domain === 'sentinel').status, 'PASSED');
   assert.match(contextRun.artifacts.context.coverage.find((entry) => entry.domain === 'sentinel').unknowns.join(' '), /outside Sentinel v1 coverage/);
   const context = contextRun.artifacts.context;
-  assert.equal(context.manifestVersion, 3);
+  assert.equal(context.manifestVersion, 4);
   assert.equal(context.savedProjectPin.projectVersion, 2, 'context selection pins current aggregate version N+1');
   assert.equal(context.savedProjectPin.blueprintId, sourceBlueprint.id);
   assert.equal(context.savedProjectPin.blueprintVersion, sourceBlueprint.version);
   assert.equal(context.savedProjectCoverage.status, 'PARTIAL');
+  assert.equal(context.savedProjectCoverage.schemaVersion, 2);
   assert.equal(context.savedProjectCoverage.sourcePinHash, digest(context.savedProjectPin));
+  assert.equal(context.savedProjectCoverage.sourcePins.enterpriseContext.version, context.enterpriseContext.version);
+  assert.equal(context.savedProjectCoverage.sourcePins.enterpriseContext.authorityStatus, 'SYNTHETIC_REFERENCE_ONLY');
+  assert.equal(context.savedProjectCoverage.sourcePins.sentinel.assessmentId, report.id);
+  assert.equal(context.savedProjectCoverage.sourcePins.sentinel.reportHash, report.reportHash);
+  assert.equal(context.savedProjectCoverage.sourcePins.sentinel.profileId, report.profile.id);
+  assert.equal(context.savedProjectCoverage.sourcePins.sentinel.profileVersion, report.profile.version);
+  assert.equal(context.savedProjectCoverage.sourcePins.sentinel.profileHash, report.profile.hash);
+  assert.equal(context.savedProjectCoverage.sourcePins.sentinel.evaluatorRevision, report.profile.evaluatorRevision);
+  assert.ok(context.savedProjectCoverage.classifications.some((entry) => entry.domain === 'sentinel-assessment'
+    && entry.status === 'REPRESENTED' && entry.objectRef === report.id && entry.contentHash === report.reportHash));
+  assert.ok(context.savedProjectCoverage.classifications.some((entry) => entry.domain === 'context-requirement'
+    && entry.status === 'REPRESENTED' && entry.provenance.kind === 'CONTEXT_PLAN_REQUIREMENT'));
+  assert.ok(context.savedProjectCoverage.classifications.some((entry) => entry.domain === 'case-intent-guardrail'
+    && entry.status === 'REPRESENTED' && entry.provenance.kind === 'CASE_INTENT'));
+  assert.ok(context.savedProjectCoverage.classifications.some((entry) => entry.domain === 'enterprise-context-authority'
+    && entry.status === 'UNKNOWN'));
   assert.equal(context.savedProjectCoverage.processTraceHash, selected.processRequirementTrace.traceHash);
   assert.ok(context.savedProjectCoverage.represented.some((entry) => entry.domain === 'process-risk'
     && entry.objectType === 'risk' && entry.objectRef === selected.processRequirementTrace.risk.refs[0]?.id));
@@ -454,7 +472,7 @@ test('Sentinel assessment is human-authorized, aggregate-versioned, replayable a
     assert.ok(context.savedProjectCoverage.unknownDependencies.some((entry) => entry.domain === domain),
       `${domain} remains explicitly unknown for this partial source context`);
   }
-  assert.equal(context.savedProjectCoverage.excludedDependencies.status, 'NOT_ENUMERATED');
+  assert.equal(context.savedProjectCoverage.excludedDependencies.status, 'SCOPED_ONLY');
   assert.equal(context.enterpriseContext.sourceKind, 'synthetic-reference-model');
   assert.ok(Array.isArray(context.guardrails.constraints));
   assert.ok(Array.isArray(context.guardrails.nonGoals));
@@ -664,9 +682,9 @@ test('enterprise scopes retain design identity across sixteen lenses, commands, 
   const ownerView = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'process-deliver' });
   const editorView = await currentView(instance.base, 'editor', project.id);
   const readerView = await currentView(instance.base, 'reader', project.id);
-  assert.deepEqual(ownerView.data.permissions, { write: true, scopeAdmin: true, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, simulate: true, economicWrite: true, economicEvaluate: true, integrityRun: true, integrityException: true, governanceRequest: true, governanceDecide: true, governanceReviewAppeal: true, stewardAssign: true, stewardReview: true });
-  assert.deepEqual(editorView.data.permissions, { write: true, scopeAdmin: false, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, simulate: true, economicWrite: true, economicEvaluate: true, integrityRun: true, integrityException: true, governanceRequest: true, governanceDecide: false, governanceReviewAppeal: false, stewardAssign: false, stewardReview: true });
-  assert.deepEqual(readerView.data.permissions, { write: false, scopeAdmin: false, branchCreate: false, branchWrite: false, branchAdmin: false, processWrite: false, simulate: false, economicWrite: false, economicEvaluate: false, integrityRun: false, integrityException: false, governanceRequest: false, governanceDecide: false, governanceReviewAppeal: false, stewardAssign: false, stewardReview: false });
+  assert.deepEqual(ownerView.data.permissions, { write: true, scopeAdmin: true, sourceAttestationAdmin: true, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, sandboxExecute: true, simulate: true, economicWrite: true, economicEvaluate: true, integrityRun: true, integrityException: true, governanceRequest: true, governanceDecide: true, governanceReviewAppeal: true, stewardAssign: true, stewardReview: true });
+  assert.deepEqual(editorView.data.permissions, { write: true, scopeAdmin: false, sourceAttestationAdmin: false, branchCreate: true, branchWrite: false, branchAdmin: false, processWrite: true, sandboxExecute: false, simulate: true, economicWrite: true, economicEvaluate: true, integrityRun: true, integrityException: true, governanceRequest: true, governanceDecide: false, governanceReviewAppeal: false, stewardAssign: false, stewardReview: true });
+  assert.deepEqual(readerView.data.permissions, { write: false, scopeAdmin: false, sourceAttestationAdmin: false, branchCreate: false, branchWrite: false, branchAdmin: false, processWrite: false, sandboxExecute: false, simulate: false, economicWrite: false, economicEvaluate: false, integrityRun: false, integrityException: false, governanceRequest: false, governanceDecide: false, governanceReviewAppeal: false, stewardAssign: false, stewardReview: false });
   assert.equal(ownerView.data.selection.object.id, 'process-deliver');
   assert.equal(ownerView.data.selection.object.enterpriseScope, undefined);
   assert.equal(ownerView.data.selection.visible, true);
@@ -776,7 +794,8 @@ test('enterprise scopes retain design identity across sixteen lenses, commands, 
 
   const publicationResult = await request(instance.base, 'owner', `/api/v1/projects/${project.id}/blueprint/publications`, { method: 'POST', body: {
     schemaVersion: '1.0', commandId: 'internally-publish-scoped-enterprise-design', expectedVersion: editResult.data.version,
-    payload: { blueprintId: editResult.data.latestBlueprint.id, blueprintVersion: editResult.data.latestBlueprint.version, acknowledgeDisclosures: true },
+    payload: { blueprintId: editResult.data.latestBlueprint.id, blueprintVersion: editResult.data.latestBlueprint.version, acknowledgeDisclosures: true,
+      impactHash: editResult.data.blueprintPublicationImpact.impactHash },
   } });
   assert.equal(publicationResult.data.blueprintPublications.at(-1).blueprintId, editedEnterprise.data.context.blueprintId);
   const readerPublished = await request(instance.base, 'reader', `/api/v1/projects/${project.id}`);
@@ -995,7 +1014,8 @@ test('enterprise state and time views keep human reports independent and future 
   assert.notEqual(plan.source.blueprintId, staleProposalView.data.context.blueprintId);
   const publicationResult = await request(instance.base, 'owner', `/api/v1/projects/${project.id}/blueprint/publications`, { method: 'POST', body: {
     schemaVersion: '1.0', commandId: 'publish-main-not-proposal', expectedVersion: planResult.data.version,
-    payload: { blueprintId: planResult.data.latestBlueprint.id, blueprintVersion: planResult.data.latestBlueprint.version, acknowledgeDisclosures: true },
+    payload: { blueprintId: planResult.data.latestBlueprint.id, blueprintVersion: planResult.data.latestBlueprint.version, acknowledgeDisclosures: true,
+      impactHash: planResult.data.blueprintPublicationImpact.impactHash },
   } });
   assert.equal(publicationResult.data.blueprintPublications.at(-1).blueprintId, planResult.data.latestBlueprint.id);
 
@@ -1142,15 +1162,112 @@ test('enterprise process definitions and simulations stay typed, bounded, source
   };
   const flowCommand = commandBody(view, 'process-define-delivery-flow', {
     kind: 'define-process-flow', objectId: 'process-deliver', processFlow: flow, reason: 'Save bounded delivery and exception paths.' });
+  const previewRoute = `/api/v1/projects/${project.id}/enterprise/impact-preview`;
+  const flowPreview = await request(instance.base, 'editor', previewRoute, { method: 'POST', body: {
+    expectedVersion: view.data.context.projectVersion, command: flowCommand.payload,
+  } });
+  assert.equal(flowPreview.data.status, 'INCOMPLETE');
+  assert.deepEqual(flowPreview.data.source, { projectId: project.id, projectVersion: view.data.context.projectVersion,
+    blueprintId: view.data.context.blueprintId, blueprintVersion: view.data.context.blueprintVersion,
+    snapshotHash: view.data.context.snapshotHash, kind: 'MAIN_DESIGN' });
+  assert.ok(flowPreview.data.changedFields.some((change) => change.field === 'processFlow.steps[intake].roleId'
+    && change.after === 'role-operations'));
+  assert.ok(flowPreview.data.changedFields.some((change) => change.field === 'processFlow.steps[intake].inputIds[0]'
+    && change.after === 'information-customer-signal'));
+  assert.ok(flowPreview.data.changedFields.some((change) => change.field === 'processFlow.steps[gate].decisionId'
+    && change.after === 'decision-priority'));
+  assert.ok(flowPreview.data.dependencyTraversal.paths.some((entry) => entry.objectId === 'process-learn'
+    && entry.path.some((step) => step.relation === 'input-to')),
+  'a changed information reference traces through the reverse dependency relation to its consuming process');
+  assert.ok(flowPreview.data.dependencyTraversal.paths.some((entry) => entry.objectId === 'metric-demand'
+    && entry.path.some((step) => step.relation === 'read-by')));
+  assert.equal(flowPreview.data.coverage.operationalAndDownstreamImpact, 'UNKNOWN');
+  assert.equal(flowPreview.data.dependencyTraversal.status, 'COMPUTED');
+  const staleFlowPreview = await request(instance.base, 'editor', previewRoute, { method: 'POST', body: {
+    expectedVersion: view.data.context.projectVersion + 1, command: flowCommand.payload,
+  } }, 409);
+  assert.equal(staleFlowPreview.error.code, 'VERSION_CONFLICT');
+  const staleFlowBlueprintPreview = await request(instance.base, 'editor', previewRoute, { method: 'POST', body: {
+    expectedVersion: view.data.context.projectVersion,
+    command: { ...flowCommand.payload, blueprintVersion: view.data.context.blueprintVersion + 1 },
+  } }, 409);
+  assert.equal(staleFlowBlueprintPreview.error.code, 'ENTERPRISE_BLUEPRINT_STALE');
+  const beforeFlowSave = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  assert.equal(beforeFlowSave.data.version, view.data.context.projectVersion, 'process-flow preview is read only');
+  assert.equal(items(beforeFlowSave.data.latestBlueprint).find((entry) => entry.id === 'process-deliver').processFlow, undefined);
   const flowResult = await postCommand(instance.base, 'editor', project.id, flowCommand);
   assert.equal(flowResult.data.affectedObjectId, 'process-deliver');
+  let sensitivityProject = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  const protectedPlanResponse = await request(instance.base, 'owner', `/api/v1/projects/${project.id}/process-plans`, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'plan-before-view-only-flow-preview', expectedVersion: sensitivityProject.data.version,
+    payload: { mode: 'manual-flow', processId: 'process-deliver', blueprintId: sensitivityProject.data.latestBlueprint.id,
+      blueprintVersion: sensitivityProject.data.latestBlueprint.version },
+  } }, 201);
+  const protectedPlan = protectedPlanResponse.data.processPlans.at(-1);
+  sensitivityProject = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  const sensitivityView = await currentView(instance.base, 'editor', project.id, { selectedId: 'process-deliver' });
+  const reorderedFlow = structuredClone(flow);
+  reorderedFlow.steps.reverse();
+  const layoutPreviewCommand = commandBody(sensitivityView, 'process-flow-layout-only-preview', {
+    kind: 'define-process-flow', objectId: 'process-deliver', processFlow: reorderedFlow,
+    reason: 'Preview a display-order change only.' });
+  const layoutPreview = await request(instance.base, 'editor', previewRoute, { method: 'POST', body: {
+    expectedVersion: sensitivityView.data.context.projectVersion, command: layoutPreviewCommand.payload,
+  } });
+  assert.deepEqual(layoutPreview.data.changedFields, [], 'step-array order is not execution order; explicit IDs/transitions determine flow');
+  assert.deepEqual(layoutPreview.data.fieldSensitivity, { classification: 'VIEW_ONLY',
+    reason: 'Step array order is presentation only; the runtime follows startStepId and explicit transition IDs.',
+    fields: [], materialFieldPaths: [], viewOnlyFieldPaths: [], layoutOnly: true });
+  assert.equal(layoutPreview.data.dependencyTraversal.status, 'COMPUTED');
+  assert.deepEqual(layoutPreview.data.dependencyTraversal.paths, []);
+  assert.deepEqual(layoutPreview.data.directlyAffectedObjects.map((entry) => entry.objectId), ['process-deliver']);
+
+  const relabelledFlow = structuredClone(flow);
+  relabelledFlow.steps.find((step) => step.id === 'intake').title = 'Review a qualified request';
+  const labelPreviewCommand = commandBody(sensitivityView, 'process-flow-label-only-preview', {
+    kind: 'define-process-flow', objectId: 'process-deliver', processFlow: relabelledFlow,
+    reason: 'Preview a step display-label change only.' });
+  const labelPreview = await request(instance.base, 'editor', previewRoute, { method: 'POST', body: {
+    expectedVersion: sensitivityView.data.context.projectVersion, command: labelPreviewCommand.payload,
+  } });
+  assert.deepEqual(labelPreview.data.fieldSensitivity.viewOnlyFieldPaths, ['processFlow.steps[intake].title']);
+  assert.deepEqual(labelPreview.data.fieldSensitivity.materialFieldPaths, []);
+  assert.deepEqual(labelPreview.data.dependencyTraversal.paths, []);
+  assert.deepEqual(labelPreview.data.directlyAffectedObjects.map((entry) => entry.objectId), ['process-deliver']);
+  const afterViewOnlyPreviews = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  assert.equal(afterViewOnlyPreviews.data.version, sensitivityProject.data.version, 'view-only previews do not mutate the aggregate');
+  assert.equal(afterViewOnlyPreviews.data.latestBlueprint.id, sensitivityProject.data.latestBlueprint.id);
+  assert.equal(afterViewOnlyPreviews.data.latestBlueprint.version, sensitivityProject.data.latestBlueprint.version);
+  const retainedPlan = afterViewOnlyPreviews.data.processPlans.find((entry) => entry.id === protectedPlan.id);
+  assert.deepEqual(retainedPlan.source, protectedPlan.source, 'the current plan source pin is unchanged by a read-only preview');
+  assert.equal(retainedPlan.source.blueprintId, afterViewOnlyPreviews.data.latestBlueprint.id);
+  assert.equal(retainedPlan.source.blueprintVersion, afterViewOnlyPreviews.data.latestBlueprint.version);
+  const routingOnlyView = await currentView(instance.base, 'editor', project.id, { selectedId: 'process-deliver' });
+  const routingOnlyFlow = structuredClone(flow);
+  routingOnlyFlow.steps.find((step) => step.id === 'loop').maxIterations = 3;
+  const routingOnlyCommand = commandBody(routingOnlyView, 'process-flow-routing-only-preview', {
+    kind: 'define-process-flow', objectId: 'process-deliver', processFlow: routingOnlyFlow,
+    reason: 'Preview a loop-bound change without changing any references.' });
+  const routingOnlyPreview = await request(instance.base, 'editor', previewRoute, { method: 'POST', body: {
+    expectedVersion: routingOnlyView.data.context.projectVersion, command: routingOnlyCommand.payload,
+  } });
+  assert.ok(routingOnlyPreview.data.changedFields.some((change) => change.field === 'processFlow.steps[loop].maxIterations'));
+  assert.ok(routingOnlyPreview.data.fieldSensitivity.materialFieldPaths.includes('processFlow.steps[loop].maxIterations'));
+  assert.equal(routingOnlyPreview.data.fieldSensitivity.classification, 'MATERIAL');
+  assert.ok(!routingOnlyPreview.data.changedFields.some((change) => /(?:processId|roleId|decisionId|resourceId|inputIds|outputIds)/.test(change.field)));
+  assert.ok(routingOnlyPreview.data.dependencyTraversal.paths.some((entry) => entry.path.some((step) => step.relation === 'realises')),
+  'routing-only edits seed traversal at the edited process and reach saved capability realisers');
+  assert.ok(routingOnlyPreview.data.dependencyTraversal.paths.some((entry) => entry.path.some((step) => step.relation === 'flow-writes')),
+  'routing-only edits also reach saved process-flow output relations');
+  assert.equal(routingOnlyPreview.data.status, 'INCOMPLETE');
+  assert.equal(routingOnlyPreview.data.coverage.operationalAndDownstreamImpact, 'UNKNOWN');
   const impactView = await currentView(instance.base, 'editor', project.id, { selectedId: 'decision-priority' });
   const revisedTable = structuredClone(decisionTable);
   revisedTable.defaultOutcome = 'REVIEW';
   const tablePreviewCommand = commandBody(impactView, 'process-decision-table-impact-preview', {
     kind: 'define-decision-table', objectId: 'decision-priority', decisionTable: revisedTable,
     reason: 'Preview the effect of a changed fallback outcome.' });
-  const impactPreviewRoute = `/api/v1/projects/${project.id}/enterprise/impact-preview`;
+  const impactPreviewRoute = previewRoute;
   const tablePreview = await request(instance.base, 'editor', impactPreviewRoute, { method: 'POST', body: {
     expectedVersion: impactView.data.context.projectVersion, command: tablePreviewCommand.payload,
   } });
@@ -1178,6 +1295,71 @@ test('enterprise process definitions and simulations stay typed, bounded, source
   assert.equal(afterTablePreview.data.version, impactView.data.context.projectVersion, 'preview does not advance the project aggregate');
   assert.deepEqual(items(afterTablePreview.data.latestBlueprint).find((entry) => entry.id === 'decision-priority').decisionTable,
     decisionTable, 'preview does not persist the proposed table');
+
+  let planProject = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  const bindingRoute = `/api/v1/projects/${project.id}/actor-bindings/proposals`;
+  const processBinding = { actorId: 'actor-founder', roleId: 'role-founder',
+    targetPrincipal: identities.get('editor').principal, blueprintVersion: planProject.data.latestBlueprint.version };
+  planProject = await request(instance.base, 'owner', bindingRoute, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'view-compatible-flow-binding', expectedVersion: planProject.data.version,
+    payload: processBinding,
+  } });
+  planProject = await request(instance.base, 'owner', `${bindingRoute}/enable`, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'view-compatible-flow-binding-enable', expectedVersion: planProject.data.version,
+    payload: { actorId: processBinding.actorId, roleId: processBinding.roleId, blueprintVersion: processBinding.blueprintVersion },
+  } });
+  planProject = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  const compatiblePlanResponse = await request(instance.base, 'owner', `/api/v1/projects/${project.id}/process-plans`, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'compile-view-compatible-flow-plan', expectedVersion: planProject.data.version,
+    payload: { mode: 'manual-flow', processId: 'process-deliver', blueprintId: planProject.data.latestBlueprint.id,
+      blueprintVersion: planProject.data.latestBlueprint.version },
+  } }, 201);
+  const compatiblePlan = compatiblePlanResponse.data.processPlans.at(-1);
+  const assignment = await request(instance.base, 'owner', `/api/v1/projects/${project.id}/process-plans/${compatiblePlan.id}/revisions`, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'assign-view-compatible-flow-plan', expectedVersion: compatiblePlanResponse.data.version,
+    payload: { tasks: compatiblePlan.tasks.map((task) => ({ taskId: task.id, title: task.title, detail: task.detail,
+      dependencies: task.dependencies, roleId: 'role-founder', actorId: 'actor-founder' })) },
+  } });
+  const assignedCompatiblePlan = assignment.data.processPlans.filter((entry) => entry.id === compatiblePlan.id).at(-1);
+  const immutableSourcePin = structuredClone(assignedCompatiblePlan.source);
+  let compatibleEditView = await currentView(instance.base, 'editor', project.id, { selectedId: 'process-deliver' });
+  const harmlessSavedFlow = structuredClone(flow);
+  harmlessSavedFlow.steps.reverse();
+  harmlessSavedFlow.steps.find((step) => step.id === 'intake').title = 'Updated display title';
+  await postCommand(instance.base, 'editor', project.id, commandBody(compatibleEditView, 'save-view-only-flow-edit', {
+    kind: 'define-process-flow', objectId: 'process-deliver', processFlow: harmlessSavedFlow,
+    reason: 'Change presentation labels and layout order without changing the flow.',
+  }));
+  let compatiblePlanProject = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  const projectedPlan = compatiblePlanProject.data.processPlans.find((entry) => entry.id === compatiblePlan.id);
+  assert.equal(projectedPlan.blueprintApplicability.status, 'CURRENT_VIEW_ONLY_COMPATIBLE');
+  assert.deepEqual(projectedPlan.source, immutableSourcePin, 'compatibility never rewrites the plan’s original source pin');
+  const rootTask = assignedCompatiblePlan.tasks.find((task) => task.flowRef.stepId === 'intake');
+  assert.ok(rootTask);
+  const compatibleStart = await request(instance.base, 'editor', '/api/execution/process-task-instances/start', { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'start-view-compatible-flow-plan', payload: { projectId: project.id,
+      planId: compatiblePlan.id, revision: assignedCompatiblePlan.revision, planInstanceId: null, taskId: rootTask.id },
+  } }, 201);
+  assert.equal(compatibleStart.blueprintId, immutableSourcePin.blueprintId);
+  assert.equal(compatibleStart.blueprintVersion, immutableSourcePin.blueprintVersion);
+  compatiblePlanProject = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  assert.deepEqual(compatiblePlanProject.data.processPlans.find((entry) => entry.id === compatiblePlan.id).source, immutableSourcePin);
+
+  compatibleEditView = await currentView(instance.base, 'editor', project.id, { selectedId: 'process-deliver' });
+  const materialAfterCompatibleFlow = structuredClone(harmlessSavedFlow);
+  materialAfterCompatibleFlow.steps.find((step) => step.id === 'loop').maxIterations = 3;
+  await postCommand(instance.base, 'editor', project.id, commandBody(compatibleEditView, 'save-material-flow-edit', {
+    kind: 'define-process-flow', objectId: 'process-deliver', processFlow: materialAfterCompatibleFlow,
+    reason: 'Change the bounded correction route.',
+  }));
+  const stalePlanProject = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  assert.equal(stalePlanProject.data.processPlans.find((entry) => entry.id === compatiblePlan.id).blueprintApplicability.status, 'STALE');
+  const materialStart = await request(instance.base, 'editor', '/api/execution/process-task-instances/start', { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'start-materially-stale-flow-plan', payload: { projectId: project.id,
+      planId: compatiblePlan.id, revision: assignedCompatiblePlan.revision, planInstanceId: null, taskId: rootTask.id },
+  } }, 409);
+  assert.equal(materialStart.error.code, 'PROCESS_PLAN_BLUEPRINT_STALE');
+
   const invalidReferenceView = await currentView(instance.base, 'owner', project.id);
   const badFlow = structuredClone(flow);
   badFlow.steps[0].roleId = 'decision-priority';
@@ -1208,7 +1390,7 @@ test('enterprise process definitions and simulations stay typed, bounded, source
   const firstSimulation = await simulate('editor', 'process-simulate-complete', { selectedId: 'process-deliver' });
   const simSource = firstSimulation.view;
   const saved = firstSimulation.result.data.simulation;
-  assert.deepEqual(simSource.data.selection.object.processFlow, flow);
+  assert.deepEqual(simSource.data.selection.object.processFlow, materialAfterCompatibleFlow);
   assert.deepEqual(simSource.data.blueprint.areas.governanceRiskControls.items.find((object) => object.id === 'decision-priority').decisionTable, decisionTable);
   assert.ok(simSource.data.graph.links.some((link) => link.source === 'process-deliver' && link.target === 'decision-priority' && link.type === 'flow-uses-decision'));
   assert.equal(saved.status, 'COMPLETED');
@@ -1320,9 +1502,11 @@ test('enterprise process definitions and simulations stay typed, bounded, source
   assert.equal(explicitUnknownChoice.result.data.simulation.status, 'BLOCKED');
   assert.equal(explicitUnknownChoice.result.data.simulation.trace.find((entry) => entry.stepId === 'gate').status, 'UNKNOWN');
   assert.equal(explicitUnknownChoice.result.data.simulation.unresolved.find((entry) => entry.stepId === 'gate').status, 'UNKNOWN');
-  const projectWithoutPlans = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
-  assert.equal((projectWithoutPlans.data.processPlans ?? []).length, 0,
-    'simulation history remains separate from actual process plans');
+  const projectWithProtectedPlan = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  assert.equal((projectWithProtectedPlan.data.processPlans ?? []).length, 3,
+    'simulation history remains separate from the protected plan and the added plan revision history');
+  assert.ok(projectWithProtectedPlan.data.processPlans.some((entry) => entry.id === protectedPlan.id),
+    'the original protected plan remains retained');
 
   const projectReadBeforeRestart = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
   const mainBeforeRestart = projectReadBeforeRestart.data.latestBlueprint.id;
@@ -1343,6 +1527,107 @@ test('enterprise process definitions and simulations stay typed, bounded, source
   assert.equal(simulationReplayAfterRestart.data.simulation.id, saved.id);
   assert.equal(simulationReplayAfterRestart.data.simulation.resultHash, saved.resultHash);
   assert.ok(flowResult.data.blueprintVersion < ambiguousResult.data.blueprintVersion);
+});
+
+test('process-flow impact traversal terminates cycles and blocks incomplete saves without mutation', async (t) => {
+  const postgres = await startPostgres(); let root; let instance;
+  t.after(async () => { await closeApp(instance); if (root) await rm(root, { recursive: true, force: true }); await postgres.close(); });
+  root = await mkdtemp(path.join(tmpdir(), 'orgward-process-impact-cycle-'));
+  instance = await startApp(postgres, root);
+  for (const identity of identities.values()) await postgres.query(`insert into orgward.oidc_principals
+    (principal,issuer,tenant_id,actor_type,display_name,roles) values ($1,$2,$3,$4,$5,$6::text[])`,
+  [identity.principal, identity.issuer, identity.tenantId, identity.actorType, identity.displayName, identity.roles]);
+  const chainSize = 300;
+  const project = await seedProject(postgres, 'Cyclic process impact traversal', { mutate(value) {
+    const blueprint = value.blueprintVersions.at(-1);
+    const area = blueprint.areas.capabilitiesProcesses;
+    for (let index = 0; index < chainSize; index += 1) {
+      const id = `process-impact-${String(index).padStart(3, '0')}`;
+      const nextId = index === chainSize - 1 ? 'process-deliver'
+        : `process-impact-${String(index + 1).padStart(3, '0')}`;
+      area.items.push({ id, type: 'process', name: `Impact process ${index}`, detail: 'Synthetic dependency-chain test node.',
+        status: 'designed', confidence: 'medium', owner: 'role-founder',
+        provenance: [{ source: 'test:synthetic-impact-chain', note: 'Synthetic cycle fixture only.' }],
+        processFlow: { schemaVersion: '1.0', startStepId: 'work', steps: [
+          { id: 'work', kind: 'manual', title: `Work ${index}`, processId: nextId, roleId: 'role-founder',
+            inputIds: [], outputIds: [], nextStepId: 'end', exceptionStepId: null },
+          { id: 'end', kind: 'end', title: 'End' },
+        ] },
+      });
+    }
+    blueprint.relations = buildRelations(blueprint.areas);
+    const allItems = items(blueprint);
+    blueprint.summary.objectCount = allItems.length;
+    blueprint.summary.relationCount = blueprint.relations.length;
+    blueprint.integrity = validateBlueprint(blueprint);
+  } });
+  const sourceBlueprint = project.blueprintVersions.at(-1);
+  const processFlow = { schemaVersion: '1.0', startStepId: 'work', steps: [
+    { id: 'work', kind: 'manual', title: 'Root work', processId: 'process-impact-000', roleId: 'role-founder',
+      inputIds: [], outputIds: [], nextStepId: 'end', exceptionStepId: null },
+    { id: 'end', kind: 'end', title: 'End' },
+  ] };
+  const command = { kind: 'define-process-flow', objectId: 'process-deliver', processFlow,
+    blueprintId: sourceBlueprint.id, blueprintVersion: sourceBlueprint.version,
+    reason: 'Synthetic cycle traversal budget test.' };
+
+  const complete = previewEnterpriseEditImpact(project, command, { traversalBudget: 512 }).dependencyTraversal;
+  const completeAgain = previewEnterpriseEditImpact(project, command, { traversalBudget: 512 }).dependencyTraversal;
+  assert.equal(complete.status, 'COMPUTED', 'a cycle terminates when all unique reachable records are visited');
+  assert.equal(complete.visitedCount, complete.visitedObjectIds.length);
+  assert.equal(new Set(complete.visitedObjectIds).size, complete.visitedCount);
+  assert.ok(complete.visitedObjectIds.includes('process-deliver'));
+  assert.ok(complete.visitedObjectIds.includes(`process-impact-${String(chainSize - 1).padStart(3, '0')}`));
+  assert.deepEqual(completeAgain, complete, 'the cycle produces stable sorted visited state and paths');
+
+  const limited = previewEnterpriseEditImpact(project, command).dependencyTraversal;
+  assert.equal(limited.status, 'INCOMPLETE');
+  assert.equal(limited.budget, 256);
+  assert.equal(limited.visitedCount, 256);
+  assert.ok(limited.visitedObjectIds.length < complete.visitedObjectIds.length);
+  const publicationImpact = assessEnterprisePublicationImpact(project);
+  assert.equal(publicationImpact.status, 'INCOMPLETE');
+  assert.ok(publicationImpact.flows.some((entry) => entry.processId === 'process-impact-000' && entry.status === 'INCOMPLETE'),
+    'publication traversal seeds the flow’s role reference and reaches its high-fanout consumers');
+
+  const previewRoute = `/api/v1/projects/${project.id}/enterprise/impact-preview`;
+  const apiPreview = await request(instance.base, 'editor', previewRoute, { method: 'POST', body: {
+    expectedVersion: project.version, command,
+  } });
+  assert.equal(apiPreview.data.status, 'INCOMPLETE', 'other operational impact remains unknown independently of traversal');
+  assert.equal(apiPreview.data.dependencyTraversal.status, 'INCOMPLETE');
+  const before = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  const save = await postCommand(instance.base, 'editor', project.id, {
+    schemaVersion: '1.0', commandId: 'blocked-incomplete-process-impact-save', expectedVersion: before.data.version,
+    payload: command,
+  }, 409);
+  assert.equal(save.error.code, 'ENTERPRISE_IMPACT_TRAVERSAL_INCOMPLETE');
+  const after = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  assert.equal(after.data.version, before.data.version);
+  assert.equal(digest(after.data.latestBlueprint), digest(before.data.latestBlueprint));
+  assert.equal(after.data.events.length, before.data.events.length);
+  assert.equal(after.data.audit.length, before.data.audit.length);
+
+  const beforePublication = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  const publicationState = async () => {
+    const row = (await postgres.query('select state from orgward.aggregates where tenant_id=$1 and aggregate_kind=$2 and aggregate_id=$3',
+      [tenantId, 'project', project.id])).rows[0].state;
+    return typeof row === 'string' ? JSON.parse(row) : row;
+  };
+  const publicationStateBefore = await publicationState();
+  const blockedPublication = await request(instance.base, 'owner', `/api/v1/projects/${project.id}/blueprint/publications`, { method: 'POST', body: {
+    schemaVersion: '1.0', commandId: 'blocked-incomplete-process-impact-publication', expectedVersion: beforePublication.data.version,
+    payload: { blueprintId: beforePublication.data.latestBlueprint.id, blueprintVersion: beforePublication.data.latestBlueprint.version,
+      acknowledgeDisclosures: true, impactHash: beforePublication.data.blueprintPublicationImpact.impactHash },
+  } }, 409);
+  assert.equal(blockedPublication.error.code, 'BLUEPRINT_PUBLICATION_IMPACT_INCOMPLETE');
+  const afterPublication = await request(instance.base, 'owner', `/api/v1/projects/${project.id}`);
+  const publicationStateAfter = await publicationState();
+  assert.equal(afterPublication.data.version, beforePublication.data.version);
+  assert.equal(digest(afterPublication.data.latestBlueprint), digest(beforePublication.data.latestBlueprint));
+  assert.equal(afterPublication.data.events.length, beforePublication.data.events.length);
+  assert.equal(afterPublication.data.audit.length, beforePublication.data.audit.length);
+  assert.equal(publicationStateAfter.blueprintPublications?.length ?? 0, publicationStateBefore.blueprintPublications?.length ?? 0);
 });
 
 test('enterprise staffing simulations compare exact-source capacity, deny readers and survive restart without starting work', async (t) => {
@@ -2309,10 +2594,23 @@ test('enterprise economics save typed capacity, evaluate exact sources and keep 
   assert.ok(evaluation.warnings.some((warning) => warning.code === 'RESOURCE_DEMAND_UNKNOWN'
     && warning.processId === 'process-deliver' && warning.resourceId === 'resource-operating-capacity'));
   assert.equal(evaluation.sourceLabels.records['process-deliver'], 'Deliver the core offering');
+  assert.equal(evaluation.inputProvenance.status, 'TRACKED');
+  assert.equal(evaluation.inputProvenance.manifest.source.snapshotHash, evaluation.source.snapshotHash);
+  assert.ok(evaluation.inputProvenance.manifest.records.some((entry) => entry.id === 'economics-launch'));
   const exact = await currentView(instance.base, 'owner', project.id, { lensId: 'all', selectedId: 'economics-launch', economicEvaluationId: evaluation.id });
   assert.equal(exact.data.economics.evaluation.id, evaluation.id);
   assert.equal(exact.data.economics.evaluation.matchesSelectedSource, true);
+  assert.equal(exact.data.economics.evaluation.inputProvenance.status, 'TRACKED');
   assert.equal(exact.data.economics.evaluations.length, 1);
+  const beforeUndisclosedAttempt = exact.data.context.projectVersion;
+  await request(instance.base, 'owner', `/api/v1/projects/${project.id}/enterprise/commands`, { method: 'POST',
+    body: commandBody(exact, 'enterprise-economics-undisclosed-input', { kind: 'evaluate-economic-scenario', objectId: 'economics-launch',
+      reason: 'Attempt an untracked dynamic input.', dynamicInputs: [{ source: 'unresolved-live-feed' }] }) }, 400);
+  const afterUndisclosedAttempt = await currentView(instance.base, 'owner', project.id,
+    { lensId: 'all', selectedId: 'economics-launch', economicEvaluationId: evaluation.id });
+  assert.equal(afterUndisclosedAttempt.data.context.projectVersion, beforeUndisclosedAttempt);
+  assert.equal(afterUndisclosedAttempt.data.economics.evaluations.length, 1);
+  assert.equal(afterUndisclosedAttempt.data.economics.evaluation.id, evaluation.id);
   const createBranchBody = branchCommandBody(view, 'enterprise-economics-create-branch', { kind: 'create-branch',
     title: 'Capacity alternative', reason: 'Review an isolated capacity assumption.' });
   const createdBranch = await postCommand(instance.base, 'owner', project.id, createBranchBody);
@@ -2353,6 +2651,23 @@ test('enterprise economics save typed capacity, evaluate exact sources and keep 
   assert.equal(restored.data.economics.evaluation.id, evaluation.id);
   assert.equal(restored.data.economics.evaluation.resultHash, evaluation.resultHash);
   assert.equal(restored.data.economics.evaluation.matchesSelectedSource, true);
+  const aggregateRow = (await postgres.query('select state from orgward.aggregates where tenant_id=$1 and aggregate_kind=$2 and aggregate_id=$3',
+    [tenantId, 'project', project.id])).rows[0];
+  const persistedProject = typeof aggregateRow.state === 'string' ? JSON.parse(aggregateRow.state) : structuredClone(aggregateRow.state);
+  const legacyCore = structuredClone(evaluation);
+  for (const key of ['id', 'createdAt', 'createdBy', 'reason', 'resultHash', 'inputProvenance']) delete legacyCore[key];
+  const legacyEvaluation = { ...legacyCore, resultHash: digest(legacyCore), id: `economic-evaluation-${randomUUID()}`,
+    createdAt: evaluation.createdAt, createdBy: evaluation.createdBy, reason: 'Historical result predating input manifests.' };
+  persistedProject.enterpriseEconomicEvaluations.push(legacyEvaluation);
+  await postgres.query('update orgward.aggregates set state=$2::jsonb,state_hash=$3 where tenant_id=$1 and aggregate_kind=$4 and aggregate_id=$5',
+    [tenantId, JSON.stringify(persistedProject), contentHash(persistedProject), 'project', project.id]);
+  const legacyRead = await currentView(instance.base, 'owner', project.id,
+    { lensId: 'all', selectedId: 'economics-launch', economicEvaluationId: legacyEvaluation.id });
+  assert.equal(legacyRead.data.economics.evaluation.id, legacyEvaluation.id);
+  assert.equal(legacyRead.data.economics.evaluation.inputProvenance.status, 'UNTRACKED');
+  assert.equal(legacyRead.data.economics.evaluation.inputProvenance.resultStatus, 'UNKNOWN');
+  assert.equal(legacyRead.data.economics.evaluation.inputProvenance.mandatoryEvaluationEligible, false);
+  assert.equal(legacyRead.data.economics.evaluation.inputProvenance.approvalEligible, false);
 });
 
 test('enterprise interchange export, preview and bulk apply enforce source, type, version, replay and writer boundaries', async (t) => {
@@ -3782,7 +4097,8 @@ test('enterprise branches merge exact typed changes only after a current owner r
   assert.equal(planBeforeMerge.data.processPlans.at(-1).source.blueprintId, mainScopeChange.data.blueprintId);
   const publicationBeforeMerge = await request(instance.base, 'owner', `/api/v1/projects/${project.id}/blueprint/publications`, { method: 'POST', body: {
     schemaVersion: '1.0', commandId: 'publish-main-while-draft-open', expectedVersion: planBeforeMerge.data.version,
-    payload: { blueprintId: planBeforeMerge.data.latestBlueprint.id, blueprintVersion: planBeforeMerge.data.latestBlueprint.version, acknowledgeDisclosures: true },
+    payload: { blueprintId: planBeforeMerge.data.latestBlueprint.id, blueprintVersion: planBeforeMerge.data.latestBlueprint.version, acknowledgeDisclosures: true,
+      impactHash: planBeforeMerge.data.blueprintPublicationImpact.impactHash },
   } });
   assert.equal(publicationBeforeMerge.data.blueprintPublications.at(-1).blueprintId, mainScopeChange.data.blueprintId);
 

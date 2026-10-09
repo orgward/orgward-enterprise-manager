@@ -2,6 +2,14 @@ import { randomUUID } from 'node:crypto';
 
 export const TEST_POSTGRES_BASE_URL_ENV = 'ORGWARD_TEST_POSTGRES_BASE_URL';
 export const TEST_POSTGRES_RUN_ID_ENV = 'ORGWARD_TEST_POSTGRES_RUN_ID';
+export const TEST_CONCURRENCY_ENV = 'ORGWARD_TEST_CONCURRENCY';
+
+export function readTestConcurrency(env = process.env) {
+  const value = env[TEST_CONCURRENCY_ENV];
+  if (value === undefined) return 2;
+  if (value === '1' || value === '2') return Number(value);
+  throw new Error(`${TEST_CONCURRENCY_ENV} must be exactly 1 or 2.`);
+}
 
 export function testFilesRequirePostgres(files, readSource) {
   return files.some((file) => {

@@ -1,9 +1,9 @@
-import { caseUiModel, contextManifestPresentation, createSourceSelectionGuard, eligibleActorBindings, processRunEvidencePresentation, savedProjectPinSummary, sentinelAssessmentChoices, sourceBindingDesignRoute } from './sdlc-view.mjs';
+import { canAcceptIntentEvaluation, caseUiModel, contextManifestPresentation, createSourceSelectionGuard, eligibleActorBindings, intentEvaluationAcceptancePresentation, n3StageStatusCopy, processBehaviorScenarioExecutionPresentation, processBehaviorTestPlanPresentation, processEvidenceReviewPresentation, processRunEvidencePresentation, productHarnessEligiblePlanGroups, productHarnessRequestFormVisibility, repositoryCheckObservationPresentation, savedProjectPinSummary, sentinelAssessmentChoices, sourceBindingDesignRoute } from './sdlc-view.mjs';
 import { encodeExecutionRoute, encodeStudioRoute } from './shared-interactions.mjs';
 import { clearPendingSoftwareStart, createSoftwareStartFlightGuard, pendingSoftwareStartKey } from './software-runtime-start.mjs';
 import { openInitialCase, sourceObjectPreview } from './sdlc-routing.mjs';
 
-const state = { meta: null, projects: [], sourceProject: null, activeSourceProject: null, sourceSelectionGuard: createSourceSelectionGuard(), cases: [], changeCase: null, softwareDeliveryPlans: [], actorBindings: [], tab: 'overview', authenticated: false, principal: null, tenantId: '', sessionId: '' };
+const state = { meta: null, projects: [], sourceProject: null, activeSourceProject: null, behaviorRepositories: [], sourceSelectionGuard: createSourceSelectionGuard(), cases: [], changeCase: null, softwareDeliveryPlans: [], actorBindings: [], tab: 'overview', authenticated: false, principal: null, tenantId: '', sessionId: '' };
 const softwareStartFlights = createSoftwareStartFlightGuard();
 let caseSelectionId = 0;
 function syncCaseRoute(id = null) {
@@ -27,7 +27,14 @@ function el(tag, options = {}, children = []) {
 async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { 'content-type': 'application/json', ...(options.headers ?? {}) } });
   const result = await response.json();
-  if (!response.ok) throw new Error(typeof result.error === 'string' ? result.error : result.error?.message || 'Request failed.');
+  if (!response.ok) {
+    const error = new Error(typeof result.error === 'string' ? result.error : result.error?.message || 'Request failed.');
+    error.status = response.status;
+    error.code = typeof result.error === 'object' ? result.error?.code ?? null : null;
+    error.details = typeof result.error === 'object' ? result.error?.details ?? null : null;
+    error.currentVersion = typeof result.error === 'object' ? result.error?.currentVersion ?? null : null;
+    throw error;
+  }
   return result;
 }
 
@@ -187,7 +194,7 @@ async function loadCase(id) {
   try {
     const [changeCase, projectResult] = await Promise.all([api(`/api/sdlc/cases/${id}`), api('/api/v1/projects')]);
     if (selectionId !== caseSelectionId) return;
-    let activeSourceProject = null; let softwareDeliveryPlans = []; let actorBindings = [];
+    let activeSourceProject = null; let softwareDeliveryPlans = []; let actorBindings = []; let behaviorRepositories = [];
     if (changeCase.sourceBinding) {
       try {
         const detail = await api(`/api/v1/projects/${encodeURIComponent(changeCase.projectId)}`);
@@ -202,8 +209,12 @@ async function loadCase(id) {
         actorBindings = eligibleActorBindings(bindings, changeCase.sourceBinding.blueprintVersion);
       } catch { actorBindings = []; }
     }
+    if (state.authenticated && changeCase.sourceBinding) {
+      try { behaviorRepositories = ((await api(`/api/execution/local-repositories?projectId=${encodeURIComponent(changeCase.projectId)}`)).repositories ?? [])
+        .filter((entry) => entry.kind === 'github'); } catch { behaviorRepositories = []; }
+    }
     if (selectionId !== caseSelectionId) return;
-    state.changeCase = changeCase; state.projects = projectResult.data; state.activeSourceProject = activeSourceProject; state.softwareDeliveryPlans = softwareDeliveryPlans; state.actorBindings = actorBindings; state.tab = 'overview';
+    state.changeCase = changeCase; state.projects = projectResult.data; state.activeSourceProject = activeSourceProject; state.behaviorRepositories = behaviorRepositories; state.softwareDeliveryPlans = softwareDeliveryPlans; state.actorBindings = actorBindings; state.tab = 'overview';
     syncCaseRoute(id);
     renderCase(); renderCaseList();
   }
@@ -216,10 +227,10 @@ async function compileSoftwarePlan(button) {
   if (!changeCase || !project || !state.authenticated || state.principal !== changeCase.accountableOwner) return;
   button.disabled = true;
   try {
-    const result = await api(`/api/sdlc/cases/${changeCase.id}/compile-software-plan`, {
+    await api(`/api/sdlc/cases/${changeCase.id}/compile-software-plan`, {
       method: 'POST', body: JSON.stringify({ version: changeCase.version, expectedProjectVersion: project.version, idempotencyKey: uid('compile-software-plan') }),
     });
-    state.softwareDeliveryPlans = [{ plan: result.plan, valid: true, assignmentReview: null }];
+    state.softwareDeliveryPlans = (await api(`/api/sdlc/cases/${changeCase.id}/software-delivery-plans`)).plans;
     renderCase(); notify('Inert software delivery draft compiled and saved.');
   } catch (error) { notify(error.message); await loadCase(changeCase.id); }
 }
@@ -520,6 +531,17 @@ function renderContext(content) {
     const projectCoverage = manifest.savedProjectCoverage;
     content.append(section('Saved-project source coverage · PARTIAL', [
       el('p', { attrs: { role: 'status' }, text: `Exact saved-source pin SHA-256 ${projectCoverage.sourcePinHash}${projectCoverage.processTraceHash ? ` · process trace SHA-256 ${projectCoverage.processTraceHash}` : ''} · coverage ${projectCoverage.status}. Only listed source records are represented.` }),
+      ...(projectCoverage.schemaVersion >= 2 ? [
+        el('h4', { text: 'Declared candidate universe' }),
+        el('p', { attrs: { role: 'status' }, text: `${projectCoverage.candidateUniverse?.kind ?? 'Unavailable'} · exhaustive only within this declared scope: ${projectCoverage.candidateUniverse?.exhaustive === true ? 'yes' : 'no'}. ${projectCoverage.candidateUniverse?.description ?? 'Candidate scope unavailable.'}` }),
+        el('p', { text: `Classification SHA-256 ${projectCoverage.classificationHash ?? 'unavailable'} · project pin SHA-256 ${projectCoverage.sourcePins?.projectPinHash ?? 'unavailable'} · blueprint snapshot ${projectCoverage.sourcePins?.blueprintSnapshotHash ?? 'unavailable'} · enterprise context v${projectCoverage.sourcePins?.enterpriseContext?.version ?? 'unavailable'} (${projectCoverage.sourcePins?.enterpriseContext?.authorityStatus ?? 'authority unavailable'}) · Sentinel profile ${projectCoverage.sourcePins?.sentinel?.availableProfile?.id ?? 'unavailable'}@${projectCoverage.sourcePins?.sentinel?.availableProfile?.version ?? 'unavailable'} (${projectCoverage.sourcePins?.sentinel?.availableProfile?.hash ?? 'hash unavailable'}) · evaluator ${projectCoverage.sourcePins?.sentinel?.availableProfile?.evaluatorRevision ?? 'unavailable'} · assessment ${projectCoverage.sourcePins?.sentinel?.assessmentId ?? 'not selected'} · report ${projectCoverage.sourcePins?.sentinel?.reportHash ?? 'unavailable'} · assessed profile ${projectCoverage.sourcePins?.sentinel?.profileId ?? 'unavailable'}@${projectCoverage.sourcePins?.sentinel?.profileVersion ?? 'unavailable'} (${projectCoverage.sourcePins?.sentinel?.profileHash ?? 'hash unavailable'})` }),
+        el('h4', { text: 'Relevant context requirements' }),
+        projectCoverage.contextRequirements.length ? el('ul', {}, projectCoverage.contextRequirements.map((entry) => el('li', { text: `${entry.domain} · ${entry.criticality} · authority ${entry.authorityRequirement} · freshness ${entry.freshnessRequirement}` })))
+          : el('p', { attrs: { role: 'status' }, text: 'No context requirements are pinned in this project coverage record.' }),
+        el('h4', { text: 'Saved-project candidate classifications' }),
+        projectCoverage.classifications.length ? el('ul', {}, projectCoverage.classifications.map((entry) => el('li', { text: `${entry.status} · ${entry.domain} · ${entry.objectRef ?? 'unidentified'} · ${entry.reason} · content ${entry.contentHash ?? 'unavailable'} · source ${entry.provenance?.kind ?? 'unavailable'}` })))
+          : el('p', { attrs: { role: 'status' }, text: 'No candidate classifications are recorded.' }),
+      ] : []),
       el('h4', { text: 'Represented from the selected saved source' }),
       projectCoverage.represented.length ? el('ul', {}, projectCoverage.represented.map((entry) => el('li', { text: `${entry.domain} · ${entry.objectType} ${entry.objectRef} · content SHA-256 ${entry.contentHash}${entry.snapshotHash ? ` · snapshot SHA-256 ${entry.snapshotHash}` : ''}` })))
         : el('p', { attrs: { role: 'status' }, text: 'No source records are represented.' }),
@@ -591,6 +613,619 @@ function table(headers, rows) {
   return value;
 }
 
+function renderCriterionContractEditor(card, requirement) {
+  const changeCase = state.changeCase;
+  const owner = state.authenticated && state.principal === changeCase.accountableOwner;
+  if (!owner || !requirement.processTrace || changeCase.currentStage !== 'S4'
+    || changeCase.artifacts.requirements.acceptedBaseline) return;
+  const prior = requirement.criterionContract ?? null;
+  const sourceOptions = requirement.criterionSources ?? [];
+  const scopeOptions = sourceOptions.filter((entry) => ['process', 'capability', 'system', 'resource'].includes(entry.type));
+  const form = el('form', { className: 'criterion-contract-form' });
+  form.append(el('p', { text: prior
+    ? `Version ${prior.version} is current. Legacy strings remain UNKNOWN; prior mandatory criteria cannot be removed or downgraded in this increment.`
+    : 'Legacy string criteria are UNKNOWN until the accountable owner explicitly versions their type, mandatory status, source and scope. No classification is inferred.' }));
+  const rows = [];
+  requirement.acceptanceCriteria.forEach((text, index) => {
+    const previous = prior?.criteria?.[index];
+    const row = el('fieldset', { className: 'criterion-contract-row' });
+    row.append(el('legend', { text: `Criterion ${index + 1}: ${text}` }));
+    const id = el('input', { attrs: { required: 'required', maxlength: '80', 'aria-label': `Criterion ${index + 1} stable ID` } });
+    id.value = previous?.id ?? `criterion-${index + 1}`;
+    const type = el('select', { attrs: { required: 'required', 'aria-label': `Criterion ${index + 1} type` } });
+    type.append(el('option', { text: 'Choose criterion type', attrs: { value: '' } }));
+    for (const value of ['BUSINESS', 'TECHNICAL', 'GUARDRAIL']) type.append(el('option', { text: value, attrs: { value } }));
+    type.value = previous?.type ?? '';
+    const mandatory = el('input', { attrs: { type: 'checkbox', 'aria-label': `Criterion ${index + 1} is mandatory` } });
+    mandatory.checked = previous?.mandatory === true || requirement.priority === 'MUST';
+    mandatory.disabled = requirement.priority === 'MUST' || prior?.mandatoryFloor?.includes(previous?.id);
+    const source = el('select', { attrs: { required: 'required', 'aria-label': `Criterion ${index + 1} source pin` } });
+    source.append(el('option', { text: 'Choose exact source', attrs: { value: '' } }));
+    sourceOptions.forEach((entry) => source.append(el('option', { text: `${entry.type} · ${entry.id} · ${entry.snapshotHash.slice(0, 12)}`, attrs: { value: entry.id } })));
+    source.value = previous?.source?.id ?? '';
+    const scope = el('select', { attrs: { required: 'required', 'aria-label': `Criterion ${index + 1} scope pin` } });
+    scope.append(el('option', { text: 'Choose exact scope', attrs: { value: '' } }));
+    scopeOptions.forEach((entry) => scope.append(el('option', { text: `${entry.type} · ${entry.id} · ${entry.snapshotHash.slice(0, 12)}`, attrs: { value: entry.id } })));
+    scope.value = previous?.scope?.id ?? '';
+    row.append(el('label', { text: 'Stable criterion ID' }, id), el('label', { text: 'Criterion type' }, type),
+      el('label', { text: 'Mandatory obligation' }, mandatory), el('label', { text: 'Source' }, source), el('label', { text: 'Scope' }, scope));
+    type.addEventListener('change', () => { if (type.value === 'GUARDRAIL') mandatory.checked = true; });
+    form.append(row); rows.push({ id, type, mandatory, source, scope, text });
+  });
+  form.append(el('p', { className: 'muted', text: 'MUST requirements force all criteria mandatory; guardrails cannot be optional. Superseding or removing an obligation is unavailable here and fails closed.' }));
+  const save = el('button', { className: 'button primary', text: `Save criterion baseline v${(prior?.version ?? 0) + 1}`, attrs: { type: 'submit' } });
+  form.append(save);
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (rows.some((row) => !row.id.value.trim() || !row.type.value || !row.source.value || !row.scope.value
+      || ((row.type.value === 'GUARDRAIL' || requirement.priority === 'MUST') && !row.mandatory.checked))) return;
+    try {
+      state.changeCase = await api(`/api/sdlc/cases/${changeCase.id}/edit-requirements`, { method: 'POST', body: JSON.stringify({
+        version: changeCase.version, expectedDraftRevision: changeCase.artifacts.requirements.draftRevision,
+        requirementId: requirement.id, idempotencyKey: uid('criterion-baseline'), changes: { criterionContract: {
+          schemaVersion: 1, version: (prior?.version ?? 0) + 1,
+          criteria: rows.map((row) => ({ id: row.id.value.trim(), text: row.text, type: row.type.value,
+            mandatory: row.mandatory.checked, sourceRefId: row.source.value, scopeRefId: row.scope.value })),
+        } },
+      }) });
+      await refreshCases(); renderCase(); notify('Versioned requirement criteria saved with exact source and scope pins.');
+    } catch (error) { notify(error.message); await loadCase(changeCase.id); }
+  });
+  card.append(section('Version requirement criteria', form));
+}
+
+function renderBehaviorTestPlanForm(card, requirement, artifact) {
+  const changeCase = state.changeCase;
+  const trace = requirement.processTrace;
+  const check = state.meta?.behaviorTestCheck;
+  const owner = state.authenticated && state.principal === changeCase.accountableOwner;
+  if (!owner || artifact.acceptedBaseline || changeCase.currentStage !== 'S4') return;
+  if (!requirement.criterionContract) {
+    card.append(section('Behavior tests unavailable', el('p', { text: 'Legacy string criteria are UNKNOWN. The accountable owner must create a versioned obligation baseline before authorizing checks.' })));
+    return;
+  }
+  const plans = (state.activeSourceProject?.processPlans ?? []).filter((plan) => plan.source?.blueprintId === trace.source.blueprintId
+    && Number(plan.source?.blueprintVersion) === Number(trace.source.blueprintVersion));
+  const tasks = plans.flatMap((plan) => (plan.tasks ?? []).filter((task) => task.sourceProcessId === trace.process.id)
+    .map((task) => ({ plan, task })));
+  const savedPlans = requirement.processBehaviorTestPlans ?? [];
+  const stalePlan = savedPlans.find((plan) => plan.regenerationStatus === 'REGENERATION_REQUIRED');
+  const currentCriterionVersion = requirement.criterionContract.version;
+  if (savedPlans.length) card.append(section('Authorized behavior test plans', savedPlans.map((plan) => {
+    const view = processBehaviorTestPlanPresentation(plan);
+    const assertions = (plan.assertions ?? []).map((assertion) => `${assertion.testName} → criterion ${assertion.criterionIndex + 1}`).join(' · ');
+    const link = el('a', { className: 'button secondary', text: 'Open exact task to request the pinned check', attrs: {
+      href: encodeExecutionRoute(changeCase.projectId, null, null, null, { projectId: changeCase.projectId, caseId: changeCase.id, planId: plan.id }),
+    } });
+    return el('article', { className: 'checkpoint-callout' }, [
+      el('strong', { text: view?.heading ?? `Pre-run plan ${plan.id} · applicability unknown` }),
+      el('p', { attrs: { role: 'status' }, text: view?.status ?? 'Plan applicability is unavailable; do not treat as current.' }),
+      el('p', { text: view?.pins ?? `Plan SHA-256 ${plan.planHash}` }),
+      el('p', { text: `Process plan ${plan.processPlan?.id} v${plan.processPlan?.revision} · task ${plan.processPlan?.taskId} · plan SHA-256 ${plan.planHash}` }),
+      el('p', { text: `Repository snapshot ${view?.repositorySnapshotId ?? 'unavailable'} · tree SHA-256 ${plan.repository?.treeDigest} · selected files ${plan.repository?.selectedFiles?.map((entry) => entry.path).join(', ')}` }),
+      ...(view?.contextPins ? [el('p', { text: `Context pins · ${view.contextPins}` })] : []),
+      ...(view?.scenarioCases?.length ? [el('ul', { className: 'evaluation-case-definitions' }, view.scenarioCases.map((entry) => el('li', { text: entry }))),
+        el('p', { attrs: { role: 'status' }, text: `Scenario mappings ${view.scenarioMappingsStatus ?? 'INCOMPLETE'}. OWNER_PROPOSED_UNVERIFIED mappings require a repository-check run; all scenarios remain NOT_EXECUTED and have not been independently reviewed.` })] : []),
+      el('p', { text: `Assertions: ${assertions}. This authorizes a check before execution; it does not authorize effects or state business truth.` }),
+      link,
+    ]);
+  })));
+  const form = el('form', { className: 'process-behavior-plan-form', attrs: { 'aria-label': `Authorize behavior tests for ${requirement.id}` } });
+  form.append(el('h4', { text: stalePlan ? `Regenerate v${currentCriterionVersion} plan` : 'Authorize pre-run behavior checks' }),
+    el('p', { text: stalePlan
+      ? `The old plan remains readable and pinned to criterion baseline v${stalePlan.criterionContractVersion}; its linked evidence is STALE. Create a new immutable plan for current baseline v${currentCriterionVersion}. The old plan cannot authorize execution. Business truth stays UNVERIFIED.`
+      : 'This immutable plan maps every draft criterion to one named test and pins an exact saved process task, repository snapshot, selected files, and configured check before execution. Results remain code-check evidence; business truth stays UNVERIFIED.' }));
+  if (!check?.available) return card.append(section('Behavior test plan unavailable', [form,
+    el('p', { text: 'No single fixed repository check is configured for assertion evaluation.' })]));
+  if (!tasks.length) return card.append(section('Behavior test plan unavailable', [form,
+    el('p', { text: 'No saved process task matches this exact blueprint and process.' })]));
+  if (!state.behaviorRepositories.length) return card.append(section('Behavior test plan unavailable', [form,
+    el('p', { text: 'No saved GitHub repository snapshot is available in this project.' })]));
+  const planSelect = el('select', { attrs: { required: 'required', 'aria-label': 'Saved process task for behavior assertions' } });
+  planSelect.append(el('option', { text: 'Choose a saved process task', attrs: { value: '' } }));
+  tasks.forEach(({ plan, task }, index) => planSelect.append(el('option', { text: `${plan.name ?? plan.id} v${plan.revision} · ${task.title} (${task.id})`, attrs: { value: String(index) } })));
+  const repositorySelect = el('select', { attrs: { required: 'required', 'aria-label': 'Pinned GitHub snapshot for behavior assertions' } });
+  repositorySelect.append(el('option', { text: 'Choose a saved GitHub snapshot', attrs: { value: '' } }));
+  state.behaviorRepositories.forEach((repository, index) => repositorySelect.append(el('option', {
+    text: `${repository.repositoryName ?? repository.label} · ${repository.branchRef ?? ''} @ ${(repository.commitOid ?? '').slice(0, 12)} · ${repository.fileCount} files`, attrs: { value: String(index) },
+  })));
+  const paths = el('textarea', { attrs: { required: 'required', rows: '2', maxlength: '8192', 'aria-label': 'Exact repository file paths to pin', placeholder: 'tests/example.test.mjs, src/example.mjs' } });
+  const pathMappings = el('textarea', { attrs: { required: 'required', rows: '3', maxlength: '8192', 'aria-label': 'Candidate file to criterion mapping', placeholder: 'src/example.mjs | IMPLEMENTATION | criterion-1' } });
+  const effectiveAt = el('input', { attrs: { required: 'required', maxlength: '24', 'aria-label': 'Effective time context (UTC)', placeholder: '2026-10-07T12:00:00.000Z' } });
+  const effectiveTimeSource = el('select', { attrs: { required: 'required', 'aria-label': 'Effective time source process input' } });
+  effectiveTimeSource.append(el('option', { text: 'Choose exact process input', attrs: { value: '' } }));
+  trace.process.inputs.forEach((entry) => effectiveTimeSource.append(el('option', { text: `${entry.name} (${entry.id}) · ${entry.snapshotHash}`, attrs: { value: entry.id } })));
+  const caseRows = {};
+  const caseDefinitions = el('div', { className: 'intent-evaluation-case-form' });
+  for (const type of ['positive', 'negative', 'recovery']) {
+    const fieldset = el('fieldset', { className: 'intent-evaluation-case-row' }, [el('legend', { text: `${type[0].toUpperCase()}${type.slice(1)} case definition` })]);
+    const definition = el('textarea', { attrs: { required: 'required', minlength: '12', maxlength: '600', rows: '2', 'aria-label': `${type} case definition` } });
+    const sourceRef = el('select', { attrs: { required: 'required', 'aria-label': `${type} case exact source` } });
+    sourceRef.append(el('option', { text: 'Choose exact source pin', attrs: { value: '' } }));
+    const refs = type === 'positive' ? trace.outcome.outputRefs.concat(trace.outcome.metricRefs)
+      : type === 'negative' ? trace.risk.refs
+        : [{ id: trace.process.id, name: trace.process.name, snapshotHash: trace.source.processSnapshotHash }, ...trace.process.inputs, ...trace.process.outputs];
+    refs.forEach((entry) => sourceRef.append(el('option', { text: `${entry.name ?? entry.id} (${entry.id}) · ${entry.snapshotHash}`, attrs: { value: entry.id } })));
+    const criterion = el('select', { attrs: { required: 'required', 'aria-label': `${type} case criterion` } });
+    criterion.append(el('option', { text: 'Choose exact criterion', attrs: { value: '' } }));
+    requirement.criterionContract.criteria.forEach((entry) => criterion.append(el('option', { text: `${entry.id} · ${entry.text}`, attrs: { value: entry.id } })));
+    const dataset = el('textarea', { attrs: { rows: '3', maxlength: '4096',
+      'aria-label': `${type} typed dataset JSON`, placeholder: 'Enter owner-authored JSON object' } });
+    const expectedOutput = el('textarea', { attrs: { rows: '3', maxlength: '4096',
+      'aria-label': `${type} expected output oracle JSON`, placeholder: 'Enter owner-authored expected output JSON object' } });
+    const testPath = el('input', { attrs: { maxlength: '512',
+      'aria-label': `${type} exact pinned test file path`, placeholder: 'Exact selected repository test path' } });
+    const assertion = el('select', { attrs: { 'aria-label': `${type} exact executable assertion` } });
+    assertion.append(el('option', { text: 'Choose exact assertion', attrs: { value: '' } }));
+    fieldset.append(el('label', { text: 'Owner-authored case definition' }, definition),
+      el('label', { text: 'Saved process source' }, sourceRef), el('label', { text: 'Criterion' }, criterion),
+      el('label', { text: 'Typed dataset (JSON object)' }, dataset),
+      el('label', { text: 'Expected output / oracle (JSON object)' }, expectedOutput),
+      el('label', { text: 'Exact test file in selected repository snapshot' }, testPath),
+      el('label', { text: 'Exact executable assertion' }, assertion),
+      el('p', { className: 'muted', attrs: { 'data-case-mapping-status': type },
+        text: 'Mapping INCOMPLETE · enter dataset and oracle together; exact test mapping can be added later · case NOT_EXECUTED.' }));
+    const caseRow = { definition, sourceRef, criterion, dataset, expectedOutput, testPath, assertion };
+    const updateMappingStatus = () => {
+      const hasDataset = Boolean(dataset.value.trim());
+      const hasOracle = Boolean(expectedOutput.value.trim());
+      const hasTestPath = Boolean(testPath.value.trim());
+      const hasAssertion = Boolean(assertion.value);
+      const status = hasDataset && hasOracle && hasTestPath && hasAssertion ? 'OWNER_PROPOSED_UNVERIFIED'
+        : hasDataset !== hasOracle ? 'INCOMPLETE · enter dataset and oracle together'
+          : hasDataset && hasOracle && !hasTestPath && !hasAssertion
+            ? 'INCOMPLETE · dataset/oracle captured; exact test mapping is a later step'
+            : hasDataset && hasOracle && hasTestPath !== hasAssertion
+              ? 'INCOMPLETE · complete the exact test path and assertion together'
+              : 'INCOMPLETE · capture the dataset/oracle pair first';
+      fieldset.querySelector(`[data-case-mapping-status="${type}"]`).textContent = `Mapping ${status} · case NOT_EXECUTED.`;
+    };
+    [dataset, expectedOutput, testPath, assertion].forEach((control) => control.addEventListener('input', updateMappingStatus));
+    assertion.addEventListener('change', updateMappingStatus);
+    caseRow.updateMappingStatus = updateMappingStatus;
+    caseRows[type] = caseRow;
+    caseDefinitions.append(fieldset);
+  }
+  form.append(el('label', { text: 'Exact saved process task' }, planSelect),
+    el('label', { text: 'Repository snapshot' }, repositorySelect),
+    el('label', { text: 'Selected file paths (comma or newline separated)' }, paths),
+    el('label', { text: 'Map each changed candidate path (path | role | criterion IDs)' }, pathMappings),
+    el('fieldset', { className: 'evaluation-context-form' }, [el('legend', { text: 'Evaluation context pins' }),
+      el('label', { text: 'Effective time (UTC, owner asserted)' }, effectiveAt),
+      el('label', { text: 'Effective time source' }, effectiveTimeSource),
+      el('p', { className: 'muted', text: 'Workspace and branch/commit pins are resolved from the selected saved project and repository snapshot. Effective time and the three case definitions are author assertions, not execution results.' })]),
+    caseDefinitions,
+    el('p', { className: 'muted', text: 'Map every selected path. Changed, deleted or renamed paths without a pre-run criterion mapping are rejected before checks execute.' }),
+    el('p', { className: 'muted', text: 'Capture a complete dataset/oracle pair now if its exact test mapping is not ready. The pair is saved with mapping INCOMPLETE; add the exact selected test path and assertion together later. The scenario remains NOT_EXECUTED until reviewed and run.' }),
+    el('p', { className: 'muted', text: `Configured check ${check.id} v${check.version} · command SHA-256 ${check.commandHash} · plan SHA-256 ${check.planHash}` }));
+  const scopeOptions = [{ id: trace.process.id, name: trace.process.name, type: 'process' },
+    ...trace.scope.capabilityRefs, ...trace.scope.systemRefs, ...trace.scope.resourceRefs];
+  for (const [criterionIndex, criterion] of requirement.criterionContract.criteria.entries()) {
+    const fieldset = el('fieldset', { className: 'behavior-assertion-row' }, [
+      el('legend', { text: `${criterion.mandatory ? 'Mandatory' : 'Optional'} ${criterion.type} · ${criterion.id}: ${criterion.text}` }),
+    ]);
+    const testName = el('input', { attrs: { required: 'required', maxlength: '240', 'aria-label': `Exact TAP test name for criterion ${criterionIndex + 1}` } });
+    const outcome = el('select', { attrs: { required: 'required', 'aria-label': `Business outcome reference for criterion ${criterionIndex + 1}` } });
+    outcome.append(el('option', { text: 'Choose outcome', attrs: { value: '' } }));
+    trace.outcome.outputRefs.forEach((entry) => outcome.append(el('option', { text: `${entry.type} · ${entry.name} (${entry.id})`, attrs: { value: entry.id } })));
+    const scope = el('select', { attrs: { required: 'required', 'aria-label': `Process scope for criterion ${criterionIndex + 1}` } });
+    const pinnedScope = scopeOptions.find((entry) => entry.id === criterion.scope.id);
+    scope.append(el('option', { text: `${criterion.scope.type} · ${pinnedScope?.name ?? criterion.scope.id} (${criterion.scope.id})`, attrs: { value: criterion.scope.id } }));
+    const risk = el('select', { attrs: { required: 'required', 'aria-label': `Risk reference for criterion ${criterionIndex + 1}` } });
+    risk.append(el('option', { text: 'Choose linked risk', attrs: { value: '' } }));
+    trace.risk.refs.forEach((entry) => risk.append(el('option', { text: `${entry.id} · SHA-256 ${entry.snapshotHash}`, attrs: { value: entry.id } })));
+    if (trace.risk.status === 'UNKNOWN' && trace.risk.refs.length === 0) risk.append(el('option', {
+      text: 'Risk state UNKNOWN · no linked risk was present in the pinned process', attrs: { value: 'UNKNOWN' },
+    }));
+    fieldset.append(el('label', { text: 'Exact test name in check output' }, testName),
+      el('label', { text: 'Declared outcome' }, outcome), el('label', { text: 'Declared process scope' }, scope),
+      el('label', { text: 'Linked risk' }, risk));
+    form.append(fieldset);
+    const assertionId = uid('assertion');
+    fieldset.dataset.assertionId = assertionId;
+    for (const row of Object.values(caseRows)) {
+      const option = el('option', { text: `${assertionId} · enter exact test name below`, attrs: { value: assertionId } });
+      row.assertion.append(option);
+      testName.addEventListener('input', () => { option.textContent = `${assertionId} · ${testName.value.trim() || 'enter exact test name below'}`; });
+    }
+  }
+  const submit = el('button', { className: 'button primary', text: stalePlan ? `Create v${currentCriterionVersion} plan` : 'Authorize immutable pre-run plan', attrs: { type: 'submit' } });
+  form.append(submit);
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const current = state.changeCase;
+    const selectedTask = tasks[Number(planSelect.value)];
+    const selectedRepository = state.behaviorRepositories[Number(repositorySelect.value)];
+    if (!selectedTask || !selectedRepository || state.principal !== current.accountableOwner) return;
+    const assertionRows = [...form.querySelectorAll('.behavior-assertion-row')];
+    const assertions = assertionRows.map((row, criterionIndex) => ({
+      id: row.dataset.assertionId, testName: row.querySelector('input[aria-label^="Exact TAP"]')?.value.trim(),
+      criterionIndex, criterionId: requirement.criterionContract.criteria[criterionIndex].id,
+      outcomeRefId: row.querySelector('select[aria-label^="Business outcome"]')?.value,
+      scopeRefId: row.querySelector('select[aria-label^="Process scope"]')?.value,
+      riskRefId: row.querySelector('select[aria-label^="Risk reference"]')?.value, checkId: check.id,
+    }));
+    const selectedPaths = [...new Set(paths.value.split(/[\n,]/).map((value) => value.trim()).filter(Boolean))];
+    const fileMappings = pathMappings.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
+      const [filePath, role, rawCriteria] = line.split('|').map((value) => value.trim());
+      return { path: filePath, role, criterionIds: (rawCriteria ?? '').split(',').map((value) => value.trim()).filter(Boolean) };
+    });
+    let caseDefinitionInput;
+    try {
+      caseDefinitionInput = Object.fromEntries(Object.entries(caseRows).map(([type, row]) => {
+        const entry = { definition: row.definition.value.trim(), sourceRefId: row.sourceRef.value, criterionId: row.criterion.value };
+        const hasDataset = Boolean(row.dataset.value.trim());
+        const hasOracle = Boolean(row.expectedOutput.value.trim());
+        const hasTestPath = Boolean(row.testPath.value.trim());
+        const hasAssertion = Boolean(row.assertion.value);
+        if (hasDataset !== hasOracle) throw new Error('Enter both the dataset and expected output oracle together.');
+        if (hasTestPath !== hasAssertion) throw new Error('Enter the exact test path and assertion together.');
+        if ((hasTestPath || hasAssertion) && !(hasDataset && hasOracle)) {
+          throw new Error('Capture the dataset and expected output oracle before adding the test mapping.');
+        }
+        if (hasDataset && hasOracle) {
+          Object.assign(entry, { dataset: JSON.parse(row.dataset.value), expectedOutput: JSON.parse(row.expectedOutput.value) });
+          if (hasTestPath && hasAssertion) Object.assign(entry, { testPath: row.testPath.value.trim(), assertionId: row.assertion.value });
+        }
+        return [type, entry];
+      }));
+    } catch {
+      notify('Enter valid JSON objects; dataset and expected output oracle must be paired, and test path and assertion must be paired.');
+      return;
+    }
+    submit.disabled = true;
+    try {
+      state.changeCase = await api(`/api/sdlc/cases/${current.id}/process-behavior-test-plans`, { method: 'POST', body: JSON.stringify({
+        version: current.version, draftRevision: artifact.draftRevision, requirementId: requirement.id,
+        planId: selectedTask.plan.id, revision: selectedTask.plan.revision, taskId: selectedTask.task.id,
+        assertions, fileMappings, githubSnapshotId: selectedRepository.snapshotId, githubSelectedPaths: selectedPaths,
+        evaluationContext: { effectiveAt: effectiveAt.value.trim(), effectiveTimeSourceRefId: effectiveTimeSource.value },
+        caseDefinitions: caseDefinitionInput,
+        idempotencyKey: uid('authorize-behavior-plan'),
+      }) });
+      await refreshCases(); renderCase();
+      notify('Immutable pre-run behavior test plan saved with exact process and repository pins. No test was run; business truth remains UNVERIFIED.');
+    } catch (error) { submit.disabled = false; notify(error.message); await loadCase(current.id); }
+  });
+  card.append(section('Behavior test plan', form));
+}
+
+function renderProductHarnessMappings(card, requirement) {
+  const current = state.changeCase;
+  const { plans, r1Plans, r2Plans } = productHarnessEligiblePlanGroups(requirement);
+  const mappings = (current.artifacts?.processBehaviorProductHarnessMappings ?? [])
+    .filter((entry) => entry.requirementId === requirement.id);
+  const authorizationMappings = mappings.filter((entry) => entry.subcaseId === 'N2.AUTHORIZATION');
+  const missingAssertionMappings = mappings.filter((entry) => entry.subcaseId === 'N2.MISSING_ASSERTION');
+  const deletedFailingTestMappings = mappings.filter((entry) => entry.subcaseId === 'N3');
+  const reviews = current.artifacts?.processBehaviorProductHarnessMappingReviews ?? [];
+  const executions = (current.artifacts?.processBehaviorProductHarnessExecutions ?? [])
+    .filter((entry) => entry.mappingId && mappings.some((mapping) => mapping.id === entry.mappingId));
+  const owner = state.authenticated && state.principal === current.accountableOwner;
+  const requestFormVisibility = productHarnessRequestFormVisibility({ owner, plans, r1Plans, r2Plans });
+  const controls = [];
+  const fixtureStatus = current.productHarnessCapabilities?.n2AuthorizationFixture ?? 'NOT_CONFIGURED';
+  const orphanPathFixtureStatus = current.productHarnessCapabilities?.n1OrphanPathFixture ?? 'NOT_CONFIGURED';
+  const missingAssertionFixtureStatus = current.productHarnessCapabilities?.n2MissingAssertionFixture ?? 'NOT_CONFIGURED';
+  const deletedFailingTestFixtureStatus = current.productHarnessCapabilities?.n3DeletedFailingTestFixture ?? 'UNAVAILABLE';
+  const r1RecoveryFixtureStatus = current.productHarnessCapabilities?.r1RecoveryFixture ?? 'NOT_CONFIGURED';
+  const r2RecoveryFixtureStatus = current.productHarnessCapabilities?.r2RecoveryFixture ?? 'NOT_CONFIGURED';
+  const fixtureAvailable = fixtureStatus === 'AVAILABLE';
+  const fixtureStatusCopy = fixtureStatus === 'UNAVAILABLE'
+    ? 'The isolated N2 fixture is configured but unavailable. Execution is disabled and no reservation will be created. An operator can verify the dedicated writable fixture cluster, protected administrator URL, fixture-admin CREATEDB permission, and narrow application-role permission for pg_control_system() identity checks.'
+    : 'The N2.AUTHORIZATION fixture provider is not configured. Mapping review is available, but execution is disabled and no reservation will be created. An operator can configure a dedicated writable fixture cluster, its protected administrator URL, and fixture-admin CREATEDB permission.';
+  if (owner && !fixtureAvailable) controls.push(el('p', { attrs: { role: 'status' }, text: fixtureStatusCopy }));
+  if (owner && orphanPathFixtureStatus !== 'AVAILABLE') controls.push(el('p', { attrs: { role: 'status' }, text: `N1 orphan-path fixture status: ${orphanPathFixtureStatus}. The fixed ${'src/unmapped.mjs'} candidate check is disabled until its isolated provider is available; no reservation will be created.` }));
+  if (requestFormVisibility.subcaseForms) {
+    const planSelect = el('select', { attrs: { required: 'required', 'aria-label': 'Saved plan for fixed N2 authorization harness' } }, [
+      el('option', { text: 'Choose saved plan', attrs: { value: '' } }),
+      ...plans.map((plan) => el('option', { text: `${plan.id} · ${plan.planHash}`, attrs: { value: plan.id } })),
+    ]);
+    const submit = el('button', { className: 'button secondary', text: 'Request independent review of N2.AUTHORIZATION mapping', attrs: { type: 'submit' } });
+    const form = el('form', { className: 'product-harness-mapping-request-form' }, [
+      el('label', { text: 'Fixed subcase' }, el('select', { attrs: { disabled: 'disabled', 'aria-label': 'Fixed product subcase' } }, [
+        el('option', { text: 'N2.AUTHORIZATION · fixed local API denial check', attrs: { value: 'N2.AUTHORIZATION', selected: 'selected' } }),
+      ])),
+      el('label', { text: 'Saved plan' }, planSelect), submit,
+    ]);
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      try {
+        submit.disabled = true;
+        state.changeCase = await api(`/api/sdlc/cases/${current.id}/product-behavior-harness-mappings`, { method: 'POST', body: JSON.stringify({
+          version: current.version, planId: planSelect.value, subcaseId: 'N2.AUTHORIZATION', idempotencyKey: uid('n2-product-harness-map'),
+        }) });
+        await refreshCases(); renderCase(); notify('Fixed N2.AUTHORIZATION mapping saved for independent review; scenario remains NOT EXECUTED.');
+      } catch (error) { submit.disabled = false; notify(error.message); await loadCase(current.id); }
+    });
+    controls.push(form);
+
+    const orphanPlanSelect = el('select', { attrs: { required: 'required', 'aria-label': 'Saved plan for N1 orphan path safeguard' } }, [
+      el('option', { text: 'Choose saved plan', attrs: { value: '' } }),
+      ...plans.map((plan) => el('option', { text: `${plan.id} · ${plan.planHash}`, attrs: { value: plan.id } })),
+    ]);
+    const orphanSubmit = el('button', { className: 'button secondary', text: 'Request independent review of N1 orphan-path mapping', attrs: { type: 'submit' } });
+    const orphanForm = el('form', { className: 'product-harness-n1-request-form' }, [
+      el('label', { text: 'Fixed subcase' }, el('select', { attrs: { disabled: 'disabled', 'aria-label': 'Fixed N1 product subcase' } }, [
+        el('option', { text: 'N1 · add exactly src/unmapped.mjs and reject before verifier dispatch', attrs: { value: 'N1', selected: 'selected' } }),
+      ])),
+      el('label', { text: 'Saved plan' }, orphanPlanSelect), orphanSubmit,
+    ]);
+    orphanForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      try {
+        orphanSubmit.disabled = true;
+        state.changeCase = await api(`/api/sdlc/cases/${current.id}/product-behavior-harness-mappings`, { method: 'POST', body: JSON.stringify({
+          version: current.version, planId: orphanPlanSelect.value, subcaseId: 'N1', idempotencyKey: uid('n1-product-harness-map'),
+        }) });
+        await refreshCases(); renderCase(); notify('N1 mapping saved for independent review; candidate execution remains NOT EXECUTED.');
+      } catch (error) { orphanSubmit.disabled = false; notify(error.message); await loadCase(current.id); }
+    });
+    controls.push(orphanForm);
+
+    const missingPlanSelect = el('select', { attrs: { required: 'required', 'aria-label': 'Saved plan for N2 missing assertion safeguard' } }, [
+      el('option', { text: 'Choose saved plan', attrs: { value: '' } }),
+      ...plans.map((plan) => el('option', { text: `${plan.id} · ${plan.planHash}`, attrs: { value: plan.id } })),
+    ]);
+    const missingSubmit = el('button', { className: 'button secondary', text: 'Request independent review of N2.MISSING_ASSERTION mapping', attrs: { type: 'submit' } });
+    const missingForm = el('form', { className: 'product-harness-missing-assertion-request-form' }, [
+      el('label', { text: 'Fixed subcase' }, el('select', { attrs: { disabled: 'disabled', 'aria-label': 'Fixed missing assertion subcase' } }, [
+        el('option', { text: 'N2.MISSING_ASSERTION · omitted named assertion link denial', attrs: { value: 'N2.MISSING_ASSERTION', selected: 'selected' } }),
+      ])),
+      el('label', { text: 'Saved plan' }, missingPlanSelect), missingSubmit,
+    ]);
+    missingForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      try {
+        missingSubmit.disabled = true;
+        state.changeCase = await api(`/api/sdlc/cases/${current.id}/product-behavior-harness-mappings`, { method: 'POST', body: JSON.stringify({
+          version: state.changeCase.version, planId: missingPlanSelect.value, subcaseId: 'N2.MISSING_ASSERTION',
+          idempotencyKey: uid('n2-missing-assertion-map'),
+        }) });
+        await refreshCases(); renderCase(); notify('N2.MISSING_ASSERTION mapping saved for independent review; no run or evidence-link attempt has occurred.');
+      } catch (error) { missingSubmit.disabled = false; notify(error.message); await loadCase(current.id); }
+    });
+    controls.push(missingForm);
+
+    const n3PlanSelect = el('select', { attrs: { required: 'required', 'aria-label': 'Saved plan for N3 deleted failing test safeguard' } }, [
+      el('option', { text: 'Choose saved plan', attrs: { value: '' } }),
+      ...plans.map((plan) => el('option', { text: `${plan.id} · ${plan.planHash}`, attrs: { value: plan.id } })),
+    ]);
+    const n3Submit = el('button', { className: 'button secondary', text: 'Request independent review of N3 deleted-test mapping', attrs: { type: 'submit' } });
+    const n3Form = el('form', { className: 'product-harness-n3-request-form' }, [
+      el('p', { text: 'N3 has two stages: Original test fails on the pinned source bytes; then Unauthorized deletion is rejected for exactly tests/learning.test.js. Execution remains disabled until the fixed isolated N3 runner is available.' }),
+      el('label', { text: 'Fixed subcase' }, el('select', { attrs: { disabled: 'disabled', 'aria-label': 'Fixed N3 product subcase' } }, [
+        el('option', { text: 'N3 · prove the source test fails, then reject deleting that exact test', attrs: { value: 'N3', selected: 'selected' } }),
+      ])),
+      el('label', { text: 'Saved plan' }, n3PlanSelect), n3Submit,
+    ]);
+    n3Form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      try {
+        n3Submit.disabled = true;
+        state.changeCase = await api(`/api/sdlc/cases/${current.id}/product-behavior-harness-mappings`, { method: 'POST', body: JSON.stringify({
+          version: state.changeCase.version, planId: n3PlanSelect.value, subcaseId: 'N3', idempotencyKey: uid('n3-deleted-test-map'),
+        }) });
+        await refreshCases(); renderCase(); notify('N3 source-failure/deletion mapping saved for independent review; neither stage has executed.');
+      } catch (error) { n3Submit.disabled = false; notify(error.message); await loadCase(current.id); }
+    });
+    controls.push(n3Form);
+
+  }
+  if (requestFormVisibility.r1RecoveryForm) {
+    const r1PlanSelect = el('select', { attrs: { required: 'required', 'aria-label': 'Saved v1 plan with linked evidence for R1 recovery' } }, [
+      el('option', { text: 'Choose historical v1 plan and passing link', attrs: { value: '' } }),
+      ...r1Plans.map((plan) => el('option', { text: `${plan.id} · criterion v${plan.criterionContractVersion} · ${plan.planHash}`,
+        attrs: { value: plan.id } })),
+    ]);
+    const r1Submit = el('button', { className: 'button secondary', text: 'Request independent review of R1 v1→v2 recovery', attrs: { type: 'submit' } });
+    const r1Form = el('form', { className: 'product-harness-r1-request-form' }, [
+      el('p', { text: 'R1 binds an existing v1 plan and its passing evidence link. The fixed recovery check will prove stale v1 denial and distinct v2 evidence; no recovery stage has run yet.' }),
+      el('label', { text: 'Historical v1 plan and linked passing evidence' }, r1PlanSelect), r1Submit,
+    ]);
+    r1Form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      try {
+        r1Submit.disabled = true;
+        state.changeCase = await api(`/api/sdlc/cases/${current.id}/product-behavior-harness-mappings`, { method: 'POST', body: JSON.stringify({
+          version: state.changeCase.version, planId: r1PlanSelect.value, subcaseId: 'R1', idempotencyKey: uid('r1-recovery-map'),
+        }) });
+        await refreshCases(); renderCase(); notify('R1 mapping saved with the v1 plan/link pins for independent review; recovery has not executed.');
+      } catch (error) { r1Submit.disabled = false; notify(error.message); await loadCase(current.id); }
+    });
+    controls.push(r1Form);
+  }
+  if (requestFormVisibility.r2RecoveryForm) {
+    const r2PlanSelect = el('select', { attrs: { required: 'required', 'aria-label': 'Saved passing plan with linked evidence for R2 shared draft recovery' } }, [
+      el('option', { text: 'Choose saved plan with passing evidence', attrs: { value: '' } }),
+      ...r2Plans.map((plan) => el('option', { text: `${plan.id} · draft revision ${plan.draftRevision} · ${plan.planHash}`,
+        attrs: { value: plan.id } })),
+    ]);
+    const r2Submit = el('button', { className: 'button secondary', text: 'Request independent review of R2 shared-draft recovery', attrs: { type: 'submit' } });
+    const r2Form = el('form', { className: 'product-harness-r2-request-form' }, [
+      el('p', { text: 'R2 edits only the rationale of a different requirement after the selected requirement has a passing linked plan. The saved plan must become REGENERATION_REQUIRED for SHARED_REQUIREMENTS_DRAFT_CHANGED; stale execution is denied, then a separately reviewed plan, run, and link are created. The selected requirement and old evidence remain pinned.' }),
+      el('label', { text: 'Saved plan for selected requirement A' }, r2PlanSelect), r2Submit,
+    ]);
+    r2Form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      try {
+        r2Submit.disabled = true;
+        state.changeCase = await api(`/api/sdlc/cases/${current.id}/product-behavior-harness-mappings`, { method: 'POST', body: JSON.stringify({
+          version: state.changeCase.version, planId: r2PlanSelect.value, subcaseId: 'R2', idempotencyKey: uid('r2-shared-draft-map'),
+        }) });
+        await refreshCases(); renderCase(); notify('R2 mapping saved with the selected and unrelated requirement pins for independent review; recovery has not executed.');
+      } catch (error) { r2Submit.disabled = false; notify(error.message); await loadCase(current.id); }
+    });
+    controls.push(r2Form);
+  }
+  const saved = mappings.map((mapping) => {
+    const review = reviews.find((entry) => entry.mappingId === mapping.id);
+    const execution = executions.find((entry) => entry.mappingId === mapping.id);
+    const article = el('article', { className: 'checkpoint-callout' }, [
+      el('strong', { text: `Fixed product-path mapping · ${mapping.subcaseId}` }),
+      el('p', { text: `Mapping SHA-256 ${mapping.mappingHash} · parent plan SHA-256 ${mapping.planHash} · definition SHA-256 ${mapping.parentDefinitionHash}` }),
+      el('p', { text: `Dataset SHA-256 ${mapping.datasetHash} · oracle SHA-256 ${mapping.oracleHash} · harness ${mapping.harnessId} v${mapping.harnessVersion} · assertion ${mapping.assertionId}` }),
+      ...(mapping.subcaseId === 'N2.MISSING_ASSERTION' ? [el('p', { text: `Required plan assertion ${mapping.requiredPlanAssertionId}: “${mapping.requiredPlanAssertionName}” · SHA-256 ${mapping.requiredPlanAssertionHash}. Expected real link attempt: 409 BEHAVIOR_CANDIDATE_REJECTED with UNKNOWN / ASSERTION_RESULT_NOT_FOUND and no saved link or case mutation.` })] : []),
+      ...(mapping.subcaseId === 'R1' ? [el('p', { text: `R1 historical v1 pins · plan ${mapping.oldPlanId} SHA-256 ${mapping.oldPlanHash} · passing link ${mapping.oldLinkId} SHA-256 ${mapping.oldLinkHash} · prior run ${mapping.oldRunId}. Expected recovery: criterion v2 makes this plan REGENERATION_REQUIRED and its link STALE; old execution returns 409 BEHAVIOR_TEST_PLAN_STALE without mutation; a distinct v2 plan, run, and link preserve the old plan hash.${execution ? ` Separate recovery receipt ${execution.id} is ${execution.status}.` : ' The separate recovery check is NOT_EXECUTED.'}` })] : []),
+      ...(mapping.subcaseId === 'R2' ? [el('p', { text: `R2 pins selected requirement ${mapping.requirementId} hash ${mapping.selectedRequirementHash} and unrelated requirement ${mapping.otherRequirementId} hash ${mapping.otherRequirementHash}; old plan ${mapping.oldPlanId} hash ${mapping.oldPlanHash}, link ${mapping.oldLinkId} hash ${mapping.oldLinkHash}. Expected edit changes only the unrelated rationale, preserving selected requirement A while its plan becomes REGENERATION_REQUIRED / SHARED_REQUIREMENTS_DRAFT_CHANGED. Old execution returns 409 BEHAVIOR_TEST_PLAN_STALE without mutation; a distinct fresh plan, run, and link are required.${execution ? ` Separate recovery receipt ${execution.id} is ${execution.status}.` : ' The separate recovery check is NOT_EXECUTED.'}` })] : []),
+      el('p', { attrs: { role: 'status' }, text: `${review?.status ?? 'AWAITING_INDEPENDENT_REVIEW'} · ${mapping.subcaseId} ${execution?.status ?? 'NOT_EXECUTED'} · other negative/recovery cases NOT_EXECUTED · business truth UNVERIFIED` }),
+    ]);
+    if (mapping.subcaseId === 'R1' && execution) {
+      article.append(el('p', { attrs: { role: 'status' }, text: execution.statement ?? `R1 ${execution.status}; business truth remains UNVERIFIED.` }));
+      if (execution.status === 'PASS') article.append(el('p', { attrs: { role: 'note' }, text:
+        `R1 receipt · old v1 plan ${execution.oldPlanId} ${execution.oldPlanHash}; old link ${execution.oldLinkId} ${execution.oldLinkHash}; new v2 plan ${execution.recovery?.fresh?.planId} ${execution.recovery?.fresh?.planHash}; new run ${execution.recovery?.fresh?.runId}; new link ${execution.recovery?.fresh?.linkId} ${execution.recovery?.fresh?.linkHash}.` }));
+    }
+    if (mapping.subcaseId === 'R2' && execution) {
+      article.append(el('p', { attrs: { role: 'status' }, text: execution.statement ?? `R2 ${execution.status}; business truth remains UNVERIFIED.` }));
+      if (execution.status === 'PASS') article.append(el('p', { attrs: { role: 'note' }, text:
+        `R2 receipt · old plan ${execution.oldPlanId} ${execution.oldPlanHash}; old link ${execution.oldLinkId} ${execution.oldLinkHash}; selected requirement SHA-256 ${execution.selectedRequirementHash}; new plan ${execution.recovery?.fresh?.planHash}; new run ${execution.recovery?.fresh?.runId}; new link ${execution.recovery?.fresh?.linkHash}.` }));
+    }
+    const subcaseStatus = mapping.subcaseId === 'R2' ? r2RecoveryFixtureStatus
+      : mapping.subcaseId === 'R1' ? r1RecoveryFixtureStatus
+      : mapping.subcaseId === 'N1' ? orphanPathFixtureStatus
+      : mapping.subcaseId === 'N2.MISSING_ASSERTION' ? missingAssertionFixtureStatus
+      : mapping.subcaseId === 'N3' ? deletedFailingTestFixtureStatus : fixtureStatus;
+    if (subcaseStatus !== 'AVAILABLE') {
+      article.append(el('p', { attrs: { role: 'status' }, text: `${mapping.subcaseId} fixture status: ${subcaseStatus}. Execution is disabled and no reservation will be created.` }));
+    }
+    if (mapping.subcaseId === 'N2.AUTHORIZATION' && owner && current.productHarnessCapabilities?.n2AuthorizationFixture === 'AVAILABLE'
+      && review?.integrityStatus === 'VALID' && review.decision === 'APPROVE_FOR_TEST_EXECUTION' && !execution) {
+      const run = el('button', { className: 'button secondary', text: 'Run fixed N2.AUTHORIZATION product-path check', attrs: { type: 'button' } });
+      run.addEventListener('click', async () => {
+        try {
+          run.disabled = true;
+          state.changeCase = await api(`/api/sdlc/cases/${current.id}/product-behavior-harness-executions`, { method: 'POST', body: JSON.stringify({
+            version: state.changeCase.version, mappingId: mapping.id, mappingHash: mapping.mappingHash,
+            subcaseId: 'N2.AUTHORIZATION', idempotencyKey: uid('n2-product-harness-execute'),
+          }) });
+          await refreshCases(); renderCase(); notify('N2.AUTHORIZATION product-path result saved; remaining cases and business truth stay unverified.');
+        } catch (error) { run.disabled = false; notify(error.message); await loadCase(current.id); }
+      });
+      article.append(run);
+    }
+    if (mapping.subcaseId === 'R1' && owner && subcaseStatus === 'AVAILABLE'
+      && review?.integrityStatus === 'VALID' && review.decision === 'APPROVE_FOR_TEST_EXECUTION' && !execution) {
+      const run = el('button', { className: 'button secondary', text: 'Run R1 v1-to-v2 recovery check', attrs: { type: 'button' } });
+      run.addEventListener('click', async () => {
+        try {
+          run.disabled = true;
+          state.changeCase = await api(`/api/sdlc/cases/${current.id}/product-behavior-harness-executions`, { method: 'POST', body: JSON.stringify({
+            version: state.changeCase.version, mappingId: mapping.id, mappingHash: mapping.mappingHash,
+            subcaseId: 'R1', idempotencyKey: uid('r1-recovery-execute'),
+          }) });
+          const receipt = state.changeCase.productBehaviorHarnessExecution;
+          await refreshCases(); renderCase();
+          notify(receipt?.statement ?? `R1 ${receipt?.status ?? 'INCONCLUSIVE'}; inspect the immutable recovery receipt.`);
+        } catch (error) { run.disabled = false; notify(error.message); await loadCase(current.id); }
+      });
+      article.append(run);
+    }
+    if (mapping.subcaseId === 'R2' && owner && subcaseStatus === 'AVAILABLE'
+      && review?.integrityStatus === 'VALID' && review.decision === 'APPROVE_FOR_TEST_EXECUTION' && !execution) {
+      const run = el('button', { className: 'button secondary', text: 'Run R2 shared-draft recovery check', attrs: { type: 'button' } });
+      run.addEventListener('click', async () => {
+        try {
+          run.disabled = true;
+          state.changeCase = await api(`/api/sdlc/cases/${current.id}/product-behavior-harness-executions`, { method: 'POST', body: JSON.stringify({
+            version: state.changeCase.version, mappingId: mapping.id, mappingHash: mapping.mappingHash,
+            subcaseId: 'R2', idempotencyKey: uid('r2-shared-draft-execute'),
+          }) });
+          const receipt = state.changeCase.productBehaviorHarnessExecution;
+          await refreshCases(); renderCase(); notify(receipt?.statement ?? `R2 ${receipt?.status ?? 'INCONCLUSIVE'}; inspect the immutable recovery receipt.`);
+        } catch (error) { run.disabled = false; notify(error.message); await loadCase(current.id); }
+      });
+      article.append(run);
+    }
+    if (mapping.subcaseId === 'N1') article.append(el('p', { attrs: { role: 'note' }, text: `Fixed candidate mutation: add exactly ${mapping.candidatePath ?? 'src/unmapped.mjs'}. Mapping hash ${mapping.mappingHash}; source tree ${mapping.repositoryTreeDigest}. Expected result: FAILED / BEHAVIOR_CANDIDATE_ORPHAN_PATH before verifier dispatch; the separate N1 receipt retains source and candidate tree hashes and the actual added-path metadata.` }));
+    if (mapping.subcaseId === 'N3') article.append(el('p', { attrs: { role: 'note' }, text: n3StageStatusCopy(mapping, execution) }));
+    if (mapping.subcaseId === 'N1' && owner && subcaseStatus === 'AVAILABLE'
+      && review?.integrityStatus === 'VALID' && review.decision === 'APPROVE_FOR_TEST_EXECUTION' && !execution) {
+      const run = el('button', { className: 'button secondary', text: 'Run N1 orphan-path rejection check', attrs: { type: 'button' } });
+      run.addEventListener('click', async () => {
+        try {
+          run.disabled = true;
+          state.changeCase = await api(`/api/sdlc/cases/${current.id}/product-behavior-harness-executions`, { method: 'POST', body: JSON.stringify({
+            version: state.changeCase.version, mappingId: mapping.id, mappingHash: mapping.mappingHash,
+            subcaseId: 'N1', idempotencyKey: uid('n1-product-harness-execute'),
+          }) });
+          const receipt = state.changeCase.productBehaviorHarnessExecution;
+          await refreshCases(); renderCase();
+          notify(receipt?.status === 'PASS'
+            ? 'PASS — src/unmapped.mjs was rejected before verifier dispatch.'
+            : `N1 ${receipt?.status ?? 'INCONCLUSIVE'}; no broader negative-suite or business-truth conclusion was established.`);
+        } catch (error) { run.disabled = false; notify(error.message); await loadCase(current.id); }
+      });
+      article.append(run);
+    }
+    if (mapping.subcaseId === 'N3' && owner && subcaseStatus === 'AVAILABLE'
+      && review?.integrityStatus === 'VALID' && review.decision === 'APPROVE_FOR_TEST_EXECUTION' && !execution) {
+      const run = el('button', { className: 'button secondary', text: 'Run N3 failing-source/deletion safeguard check', attrs: { type: 'button' } });
+      run.addEventListener('click', async () => {
+        try {
+          run.disabled = true;
+          state.changeCase = await api(`/api/sdlc/cases/${current.id}/product-behavior-harness-executions`, { method: 'POST', body: JSON.stringify({
+            version: state.changeCase.version, mappingId: mapping.id, mappingHash: mapping.mappingHash,
+            subcaseId: 'N3', idempotencyKey: uid('n3-deleted-test-execute'),
+          }) });
+          const receipt = state.changeCase.productBehaviorHarnessExecution;
+          await refreshCases(); renderCase();
+          notify(receipt?.status === 'PASS'
+            ? 'PASS — the pinned source test failed as expected, and deletion of tests/learning.test.js was rejected.'
+            : `N3 ${receipt?.status ?? 'INCONCLUSIVE'}; inspect both source and deletion evidence. No broader suite or business-truth conclusion was established.`);
+        } catch (error) { run.disabled = false; notify(error.message); await loadCase(current.id); }
+      });
+      article.append(run);
+    }
+    if (mapping.subcaseId === 'N2.MISSING_ASSERTION' && owner && subcaseStatus === 'AVAILABLE'
+      && review?.integrityStatus === 'VALID' && review.decision === 'APPROVE_FOR_TEST_EXECUTION' && !execution) {
+      const run = el('button', { className: 'button secondary', text: 'Run missing-assertion safeguard check', attrs: { type: 'button' } });
+      run.addEventListener('click', async () => {
+        try {
+          run.disabled = true;
+          state.changeCase = await api(`/api/sdlc/cases/${current.id}/product-behavior-harness-executions`, { method: 'POST', body: JSON.stringify({
+            version: state.changeCase.version, mappingId: mapping.id, mappingHash: mapping.mappingHash,
+            subcaseId: 'N2.MISSING_ASSERTION', idempotencyKey: uid('n2-missing-assertion-execute'),
+          }) });
+          const receipt = state.changeCase.productBehaviorHarnessExecution;
+          await refreshCases(); renderCase();
+          notify(receipt?.status === 'PASS'
+            ? 'PASS — the required assertion was absent, and no evidence link was saved.'
+            : `N2.MISSING_ASSERTION ${receipt?.status ?? 'INCONCLUSIVE'}; no broader negative-suite or business-truth conclusion was established.`);
+        } catch (error) { run.disabled = false; notify(error.message); await loadCase(current.id); }
+      });
+      article.append(run);
+    }
+    if (!review && state.authenticated && state.principal !== mapping.requestedBy && mapping.integrityStatus === 'VALID') {
+      const decision = el('select', { attrs: { required: 'required', 'aria-label': mapping.subcaseId === 'R2'
+        ? 'R2 product mapping review decision' : mapping.subcaseId === 'R1'
+        ? 'R1 product mapping review decision' : mapping.subcaseId === 'N1'
+        ? 'N1 product mapping review decision' : mapping.subcaseId === 'N3'
+        ? 'N3 product mapping review decision' : 'N2 product mapping review decision' } }, [
+        el('option', { text: 'Choose mapping review decision', attrs: { value: '' } }),
+        el('option', { text: 'Approve fixed mapping for harness execution', attrs: { value: 'APPROVE_FOR_TEST_EXECUTION' } }),
+        el('option', { text: 'Request changes to fixed mapping', attrs: { value: 'REQUEST_CHANGES' } }),
+      ]);
+      const submit = el('button', { className: 'button secondary', text: 'Record independent mapping review', attrs: { type: 'button' } });
+      submit.addEventListener('click', async () => {
+        try {
+          submit.disabled = true;
+          state.changeCase = await api(`/api/sdlc/cases/${current.id}/product-behavior-harness-mapping-reviews`, { method: 'POST', body: JSON.stringify({
+            version: state.changeCase.version, mappingId: mapping.id, mappingHash: mapping.mappingHash,
+            decision: decision.value, idempotencyKey: uid('n2-product-harness-review'),
+          }) });
+          await refreshCases(); renderCase(); notify(`Independent ${mapping.subcaseId} mapping review recorded; stages remain NOT EXECUTED.`);
+        } catch (error) { submit.disabled = false; notify(error.message); await loadCase(current.id); }
+      });
+      article.append(el('label', { text: 'Independent decision' }, decision), submit);
+    }
+    return article;
+  });
+  if (controls.length || saved.length) card.append(section('Fixed product-path harness mappings', [
+    el('p', { text: `N1 orphan-path fixture status: ${orphanPathFixtureStatus}; N2.AUTHORIZATION fixture status: ${fixtureStatus}; N2.MISSING_ASSERTION fixture status: ${missingAssertionFixtureStatus}; N3 deleted-test fixture status: ${deletedFailingTestFixtureStatus}; R1 criterion-recovery fixture status: ${r1RecoveryFixtureStatus}; R2 shared-draft recovery fixture status: ${r2RecoveryFixtureStatus}. Each registered mapping has a separate review and receipt.` }),
+    ...controls, ...saved,
+  ]));
+}
+
 function renderRequirements(content) {
   const artifact = state.changeCase.artifacts.requirements;
   if (!artifact) return content.append(empty('Requirements are generated only after context, impact, and governance gates pass.'));
@@ -606,6 +1241,7 @@ function renderRequirements(content) {
       el('p', { text: requirement.statement }),
       el('small', { text: `Owner ${requirement.owner} · ${requirement.priority} · ${requirement.status} · Links: ${(requirement.sourceLinks ?? []).map((link) => link.ref).join(' · ') || requirement.derivedFrom.join(' · ')}` }),
     ]);
+    card.dataset.requirementId = requirement.id;
     if (requirement.processTrace && requirement.verificationContract) {
       const trace = requirement.processTrace;
       const contract = requirement.verificationContract;
@@ -620,27 +1256,299 @@ function renderRequirements(content) {
         el('p', { text: `Verification: ${contract.type} · ${contract.evidenceKind} · ${contract.status}. ${contract.reason} Simulation results and caller-supplied records do not count as verified execution.` }),
       ]));
       const links = requirement.processRunEvidenceLinks ?? [];
+      const reviews = requirement.processRunEvidenceReviews ?? [];
       card.append(section('Persisted process runs', [
         el('p', { text: 'Linked runtime records preserve exact task and source identity. A link is provenance only; it does not verify outputs, approve this draft, or authorize effects.' }),
         ...(links.length ? links.map((link) => {
           const view = processRunEvidencePresentation(link);
+          const behaviorPlan = (state.changeCase.artifacts.processBehaviorTestPlans ?? [])
+            .find((entry) => entry.id === link.behaviorEvaluation?.planId);
+          const behaviorPlanStatus = (requirement.processBehaviorTestPlans ?? [])
+            .find((entry) => entry.id === behaviorPlan?.id);
+          const savedScenarioExecutions = (state.changeCase.artifacts.processBehaviorScenarioExecutions ?? [])
+            .filter((entry) => entry.linkId === link.id);
+          const scenarioTypes = ['POSITIVE', 'NEGATIVE', 'RECOVERY'];
+          const currentPlan = behaviorPlanStatus?.regenerationStatus === 'CURRENT'
+            && behaviorPlanStatus?.draftRevision === state.changeCase.artifacts.requirements.draftRevision;
+          const currentIndependentReviews = reviews.filter((review) => review.schemaVersion === 4
+            && review.linkId === link.id && review.behaviorPlanId === behaviorPlan?.id
+            && review.behaviorPlanHash === link.behaviorEvaluation?.planHash
+            && review.integrityStatus === 'VALID' && review.applicability === 'CURRENT'
+            && review.reviewerPrincipal !== state.changeCase.accountableOwner)
+            .sort((left, right) => Number(left.recordedVersion ?? 0) - Number(right.recordedVersion ?? 0)
+              || String(left.reviewedAt ?? '').localeCompare(String(right.reviewedAt ?? ''))
+              || String(left.id).localeCompare(String(right.id)));
+          const scenarioActions = scenarioTypes.map((caseType) => {
+            const definition = behaviorPlan?.caseDefinitions?.cases?.find((entry) => entry.type === caseType);
+            const latestReview = currentIndependentReviews.at(-1);
+            const caseReview = latestReview?.scenarioCases?.find((entry) => entry.type === caseType);
+            const approvedReview = caseReview?.executionReviewStatus === 'REVIEWED_FOR_TEST_EXECUTION'
+              && caseReview.executionDecision === 'APPROVE_FOR_TEST_EXECUTION';
+            const alreadyExecuted = savedScenarioExecutions.some((entry) => entry.caseType === caseType);
+            const canExecute = !baseline && state.authenticated && state.principal === state.changeCase.accountableOwner
+              && link.applicability === 'CURRENT' && currentPlan && definition?.executionMapping?.status === 'OWNER_PROPOSED_UNVERIFIED'
+              && approvedReview && !alreadyExecuted;
+            if (!canExecute) return null;
+            const button = el('button', { className: 'button secondary', text: `Run reviewed ${caseType.toLowerCase()} case`, attrs: { type: 'button' } });
+            button.addEventListener('click', async () => {
+              const current = state.changeCase;
+              try {
+                button.disabled = true;
+                const result = await api(`/api/sdlc/cases/${current.id}/process-behavior-scenario-executions`, { method: 'POST', body: JSON.stringify({
+                  version: current.version, draftRevision: current.artifacts.requirements.draftRevision,
+                  requirementId: requirement.id, linkId: link.id, planId: behaviorPlan.id,
+                  caseType, idempotencyKey: uid('scenario-execution'),
+                }) });
+                state.changeCase = result;
+                await refreshCases(); renderCase();
+                notify(`${caseType} saved assertion ${result.processBehaviorScenarioExecution.result} against its pinned dataset and oracle; this one case does not establish suite or business PASS.`);
+              } catch (error) { button.disabled = false; notify(error.message); await loadCase(current.id); }
+            });
+            return button;
+          }).filter(Boolean);
+          const scenarioReviewNotes = currentPlan && link.applicability === 'CURRENT'
+            ? scenarioTypes.flatMap((caseType) => {
+              const definition = behaviorPlan?.caseDefinitions?.cases?.find((entry) => entry.type === caseType);
+              const latestReview = currentIndependentReviews.at(-1);
+              const decision = latestReview?.scenarioCases?.find((entry) => entry.type === caseType);
+              if (!definition || definition.executionMapping?.status !== 'OWNER_PROPOSED_UNVERIFIED'
+                || savedScenarioExecutions.some((entry) => entry.caseType === caseType)
+                || (decision?.executionDecision === 'APPROVE_FOR_TEST_EXECUTION'
+                  && decision.executionReviewStatus === 'REVIEWED_FOR_TEST_EXECUTION')) return [];
+              const reason = decision?.executionDecision === 'REQUEST_CHANGES'
+                ? `The latest independent review requests changes for ${caseType.toLowerCase()}. Submit a new independent review of this saved case before execution.`
+                : `No current independent approval covers the ${caseType.toLowerCase()} case. Submit an independent review of this saved case before execution.`;
+              return [reason];
+            }) : [];
+          const currentRevision = state.changeCase.artifacts.requirements.draftRevision;
+          const executionViews = savedScenarioExecutions.map((entry) => processBehaviorScenarioExecutionPresentation(entry, {
+            current: link.applicability === 'CURRENT' && behaviorPlan?.planHash === entry.planHash
+              && behaviorPlanStatus?.draftRevision === currentRevision && behaviorPlanStatus?.regenerationStatus === 'CURRENT',
+          })).filter(Boolean);
+          const observeButton = !baseline && state.authenticated && link.applicability === 'CURRENT' && link.repositoryCheckEvidenceStatus === 'AVAILABLE'
+            ? el('button', { className: 'button secondary', text: 'Record code-check observation and proposal', attrs: { type: 'button' } }) : null;
+          observeButton?.addEventListener('click', async () => {
+            const current = state.changeCase;
+            try {
+              observeButton.disabled = true;
+              state.changeCase = await api(`/api/sdlc/cases/${current.id}/repository-check-observations`, { method: 'POST', body: JSON.stringify({
+                version: current.version, draftRevision: current.artifacts.requirements.draftRevision,
+                requirementId: requirement.id, linkId: link.id, idempotencyKey: uid('repository-check-observation'),
+              }) });
+              await refreshCases(); renderCase(); notify('Code-check observation and non-authorizing proposal recorded; business truth remains UNVERIFIED and behavior NOT EXECUTED.');
+            } catch (error) { observeButton.disabled = false; notify(error.message); await loadCase(current.id); }
+          });
           return view ? el('article', { className: 'checkpoint-callout' }, [
             el('strong', { text: view.heading }), el('p', { text: view.identity }), el('p', { text: view.hashes }),
             el('p', { text: `${link.reason} ${view.applicability}` }),
             el('p', { text: `Repository-check evidence state: ${view.repositoryCheckStatus}. Checks are separate repository evidence and do not verify process business behavior; verification remains ${link.verificationStatus}.` }),
             ...(view.outputs ?? []).map((output) => el('p', { text: output })),
             ...(view.repositoryChecks ?? []).map((receipt) => el('p', { text: `Repository-check receipt · ${receipt}` })),
+            ...(view.behaviorEvaluation ? [el('p', { attrs: { role: 'status' }, text: view.behaviorEvaluation.status }),
+              el('ul', {}, view.behaviorEvaluation.assertions.map((assertion) => el('li', { text: assertion })))] : []),
+            ...scenarioReviewNotes.map((note) => el('p', { attrs: { role: 'status' }, text: note })),
+            ...scenarioActions,
+            ...(executionViews.length ? [el('section', { className: 'scenario-execution-receipts' }, executionViews.flatMap((entry) => [
+              el('strong', { text: entry.heading }), el('p', { text: entry.pins }), el('p', { text: entry.assertion }),
+              el('p', { text: entry.tap }), el('p', { attrs: { role: 'status' }, text: entry.status }),
+            ]))] : []),
+            ...(observeButton ? [observeButton] : []),
           ]) : empty('A linked process run has incomplete displayable identity.');
         }) : [empty('No persisted process run is linked to this draft.')]),
       ]));
+      const codeObservations = (state.changeCase.artifacts.repositoryCheckObservations ?? [])
+        .filter((entry) => entry.requirementId === requirement.id);
+      const codeProposals = state.changeCase.artifacts.repositoryCheckProposals ?? [];
+      if (codeObservations.length) card.append(section('Repository-check observations and proposals', codeObservations.map((entry) => {
+        const proposal = codeProposals.find((candidate) => candidate.evidence?.observationId === entry.id);
+        const view = repositoryCheckObservationPresentation(entry, proposal);
+        return view ? el('article', { className: 'checkpoint-callout' }, [el('strong', { text: view.heading }),
+          el('p', { text: view.pins }), el('p', { text: view.outcome }), el('p', { text: view.status }), el('ul', {}, view.checks.map((text) => el('li', { text }))),
+          el('p', { text: view.proposal })]) : empty('A repository-check observation has invalid display identity.');
+      })));
+      card.append(section('Independent evidence reviews', [
+        el('p', { text: 'A reviewer records an attestation against each declared criterion and the exact linked evidence. HUMAN_REVIEWED is a human judgment, not external truth or executed behavior; verification remains NOT EXECUTED.' }),
+        ...(reviews.length ? reviews.map((review) => {
+          const view = processEvidenceReviewPresentation(review);
+          return view ? el('article', { className: 'checkpoint-callout' }, [
+            el('strong', { text: view.heading }), el('p', { text: view.identity }), el('p', { text: view.status }),
+            el('ul', {}, view.criteria.map((entry) => el('li', { text: entry }))),
+            ...(view.scenarios?.length ? [el('strong', { text: `Independent scenario-definition review · plan ${review.behaviorPlanHash} · NOT EXECUTED` }),
+              el('ul', {}, view.scenarios.map((entry) => el('li', { text: entry })))] : []),
+            ...(view.resolution ? [el('p', { attrs: { role: 'status' }, text: view.resolution })] : []),
+          ]) : empty('A saved review record has incomplete or invalid display identity.');
+        }) : [empty('No independent evidence review is recorded for this requirement.')]),
+      ]));
+      const acceptances = requirement.processIntentEvaluationAcceptances ?? [];
+      if (acceptances.length) card.append(section('Intent evaluation acceptance', acceptances.map((acceptance) => {
+        const view = intentEvaluationAcceptancePresentation(acceptance);
+        return view ? el('article', { className: 'checkpoint-callout' }, [el('strong', { text: view.heading }),
+          el('p', { text: view.pins }), el('p', { attrs: { role: 'status' }, text: view.status }), el('p', { text: `Reason: ${view.reason}` })])
+          : empty('A saved intent evaluation acceptance has incomplete or invalid display identity.');
+      })));
       if (!baseline && state.authenticated) {
-        const form = el('form', { className: 'requirement-edit-form' }, [
+        for (const link of links.filter((entry) => canAcceptIntentEvaluation({ authenticated: state.authenticated,
+          principal: state.principal, accountableOwner: state.changeCase.accountableOwner, baseline,
+          requirement, draftRevision: state.changeCase.artifacts.requirements.draftRevision, link: entry, reviews,
+          acceptances }))) {
+          const latestReview = reviews.filter((review) => review.linkId === link.id
+            && review.behaviorPlanId === link.behaviorEvaluation.planId
+            && review.behaviorPlanHash === link.behaviorEvaluation.planHash
+            && review.integrityStatus === 'VALID' && review.applicability === 'CURRENT'
+            && review.reviewerPrincipal !== state.principal)
+            .sort((left, right) => Number(left.recordedVersion ?? 0) - Number(right.recordedVersion ?? 0)
+              || String(left.reviewedAt ?? '').localeCompare(String(right.reviewedAt ?? ''))
+              || String(left.id).localeCompare(String(right.id))).at(-1);
+          const supportedReview = latestReview?.acceptanceStatus === 'REVIEW_ONLY_NOT_ACCEPTED'
+            && !latestReview.conflictResolution
+            && latestReview.criteria?.length === (requirement.reviewCriteria ?? []).length
+            && latestReview.criteria.every((entry) => entry.disposition === 'SUPPORTED') ? latestReview : null;
+          if (!supportedReview) continue;
+          const form = el('form', { className: 'intent-evaluation-acceptance-form' }, [
+            el('p', { text: `Accept the scoped evaluation for link ${link.id} after review ${supportedReview.id}. This does not verify external business truth or runtime behavior.` }),
+            el('label', {}, [el('span', { text: 'Acceptance reason' }), el('textarea', { attrs: { name: 'reason', required: 'required', maxlength: '1000' } })]),
+            el('button', { className: 'button', text: 'Accept intent evaluation', attrs: { type: 'submit' } }),
+          ]);
+          form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const reason = form.elements.reason.value.trim();
+            if (!reason) { notify('Enter a reason for accepting this scoped evaluation.'); return; }
+            const current = state.changeCase;
+            const submit = form.querySelector('button[type="submit"]');
+            submit.disabled = true;
+            try {
+              state.changeCase = await api(`/api/sdlc/cases/${current.id}/intent-evaluation-acceptances`, { method: 'POST', body: JSON.stringify({
+                version: current.version, draftRevision: current.artifacts.requirements.draftRevision,
+                requirementId: requirement.id, linkId: link.id, reviewId: supportedReview.id,
+                reason, idempotencyKey: uid('accept-intent-evaluation'),
+              }) });
+              await refreshCases(); renderCase();
+              notify('Scoped intent evaluation accepted. Business truth remains UNVERIFIED and runtime verification remains NOT EXECUTED.');
+            } catch (error) { submit.disabled = false; notify(error.message); await loadCase(state.changeCase.id); }
+          });
+          card.append(form);
+        }
+      }
+      if (!baseline && state.authenticated) {
+        for (const link of links.filter((entry) => entry.applicability === 'CURRENT' && entry.status === 'UNVERIFIED'
+          && entry.verificationStatus === 'NOT_EXECUTED')) {
+          const reviewForm = el('form', { className: 'process-evidence-review-form' }, [
+            el('p', { text: `Review exact link ${link.id}. Select a decision and record a reason for every acceptance criterion.` }),
+          ]);
+          const conflictStatus = el('p', { attrs: { role: 'status', 'data-review-conflict': 'true' },
+            text: 'If business and technical judgments conflict, an explicit resolution is required. It preserves every criterion result and cannot override a failed mandatory criterion.' });
+          const conflictRationale = el('textarea', { attrs: { maxlength: '1000', 'data-review-conflict-rationale': 'true',
+            'aria-label': 'Conflict resolution rationale' } });
+          reviewForm.append(el('fieldset', { className: 'review-conflict-resolution' }, [
+            el('legend', { text: 'Explicit reviewer resolution when required' }), conflictStatus,
+            el('label', {}, [el('span', { text: 'Rationale (required when the review conflicts or a mandatory criterion fails)' }), conflictRationale]),
+          ]));
+          for (const criterion of requirement.reviewCriteria ?? []) {
+            const decision = el('select', { attrs: { 'data-criterion-hash': criterion.criterionHash, 'aria-label': `Decision for criterion ${criterion.index + 1}` } }, [
+              el('option', { text: 'Choose a review decision', attrs: { value: '' } }),
+              el('option', { text: 'Evidence supports criterion', attrs: { value: 'SUPPORTED' } }),
+              el('option', { text: 'Evidence contradicts criterion', attrs: { value: 'CONTRADICTED' } }),
+              el('option', { text: 'Evidence is inconclusive', attrs: { value: 'INCONCLUSIVE' } }),
+            ]);
+            const note = el('textarea', { attrs: { required: 'required', maxlength: '1000', 'data-criterion-note': criterion.criterionHash,
+              'aria-label': `Reason for criterion ${criterion.index + 1}` } });
+            reviewForm.append(el('fieldset', {}, [el('legend', { text: `Criterion ${criterion.index + 1}: ${criterion.criterion}` }),
+              el('label', {}, [el('span', { text: 'Decision' }), decision]),
+              el('label', {}, [el('span', { text: 'Review note' }), note]) ]));
+            decision.addEventListener('change', () => {
+              const declarations = requirement.reviewCriteria ?? [];
+              const decisions = [...reviewForm.querySelectorAll('select[data-criterion-hash]')];
+              const rows = declarations.map((decl, index) => ({ ...decl, disposition: decisions[index]?.value ?? '' }));
+              const businessSupported = rows.some((row) => row.type === 'BUSINESS' && row.disposition === 'SUPPORTED');
+              const businessContradicted = rows.some((row) => row.type === 'BUSINESS' && row.disposition === 'CONTRADICTED');
+              const technicalSupported = rows.some((row) => row.type === 'TECHNICAL' && row.disposition === 'SUPPORTED');
+              const technicalContradicted = rows.some((row) => row.type === 'TECHNICAL' && row.disposition === 'CONTRADICTED');
+              const mandatoryFailure = rows.some((row) => row.mandatory && row.disposition === 'CONTRADICTED');
+              const conflict = (businessSupported && technicalContradicted) || (businessContradicted && technicalSupported);
+              conflictStatus.textContent = conflict
+                ? 'Conflict detected between typed business and technical criteria. Record a rationale to preserve these exact outcomes; this does not accept or verify the requirement.'
+                : mandatoryFailure
+                  ? 'A mandatory criterion is failed. Record a rationale; the failure remains failed and acceptance stays blocked.'
+                  : 'If business and technical judgments conflict, an explicit resolution is required. It preserves every criterion result and cannot override a failed mandatory criterion.';
+              conflictRationale.required = conflict || mandatoryFailure;
+            });
+          }
+          const behaviorPlan = (requirement.processBehaviorTestPlans ?? []).find((entry) => entry.id === link.behaviorEvaluation?.planId);
+          const scenarioInputs = [];
+          for (const definition of behaviorPlan?.caseDefinitions?.cases ?? []) {
+            const decision = el('select', { attrs: { 'data-scenario-type': definition.type, required: 'required', 'aria-label': `Decision for ${definition.type.toLowerCase()} scenario` } }, [
+              el('option', { text: 'Choose a review decision', attrs: { value: '' } }),
+              el('option', { text: 'Definition is supported', attrs: { value: 'SUPPORTED' } }),
+              el('option', { text: 'Definition is contradicted', attrs: { value: 'CONTRADICTED' } }),
+              el('option', { text: 'Definition is inconclusive', attrs: { value: 'INCONCLUSIVE' } }),
+            ]);
+            const executionDecision = el('select', { attrs: { 'data-execution-decision': definition.type, required: 'required',
+              'aria-label': `Test execution review decision for ${definition.type.toLowerCase()} scenario` } }, [
+              el('option', { text: 'Choose test execution review decision', attrs: { value: '' } }),
+              el('option', { text: 'Approve for test execution', attrs: { value: 'APPROVE_FOR_TEST_EXECUTION' } }),
+              el('option', { text: 'Request changes', attrs: { value: 'REQUEST_CHANGES' } }),
+            ]);
+            const note = el('textarea', { attrs: { required: 'required', maxlength: '1000', 'data-scenario-note': definition.type,
+              'aria-label': `Review note for ${definition.type.toLowerCase()} scenario` } });
+            scenarioInputs.push({ definition, decision, executionDecision, note });
+            reviewForm.append(el('fieldset', {}, [el('legend', { text: `Captured ${definition.type.toLowerCase()} scenario · NOT EXECUTED` }),
+              el('p', { text: `${definition.definition} · source ${definition.sourceRef.id} · criterion ${definition.criterionId} · dataset ${JSON.stringify(definition.dataset ?? 'INCOMPLETE')} · expected output ${JSON.stringify(definition.expectedOutput ?? 'INCOMPLETE')} · assertion ${definition.executionMapping?.assertionId ?? 'INCOMPLETE'} / ${definition.executionMapping?.testName ?? 'INCOMPLETE'} · test file ${definition.executionMapping?.testPath ?? 'INCOMPLETE'} · mapping ${definition.executionMapping?.status ?? 'INCOMPLETE'}` }),
+              el('label', {}, [el('span', { text: 'Independent definition review' }), decision]),
+              el('label', {}, [el('span', { text: 'Test execution review · does not execute behavior' }), executionDecision]),
+              el('label', {}, [el('span', { text: 'Review note' }), note])]));
+          }
+          const submit = el('button', { className: 'button secondary', text: 'Record independent review', attrs: { type: 'submit' } });
+          reviewForm.append(submit);
+          reviewForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const current = state.changeCase;
+            const criteria = [...reviewForm.querySelectorAll('select[data-criterion-hash]')].map((decision) => ({
+              criterionHash: decision.getAttribute('data-criterion-hash'), disposition: decision.value,
+              note: reviewForm.querySelector(`[data-criterion-note="${decision.getAttribute('data-criterion-hash')}"]`)?.value ?? '',
+            }));
+            if (criteria.some((entry) => !entry.disposition || !entry.note.trim())) { notify('Choose a decision and enter a note for every criterion.'); return; }
+            const scenarioCases = scenarioInputs.map(({ definition, decision, executionDecision, note }) => ({ type: definition.type,
+              definition: Object.fromEntries(Object.entries(definition).filter(([key]) => key !== 'definitionHash')),
+              disposition: decision.value, executionDecision: executionDecision.value, note: note.value.trim() }));
+            if (scenarioCases.some((entry) => !entry.disposition || !entry.executionDecision || !entry.note)) { notify('Review each captured positive, negative, and recovery definition and its test-execution decision.'); return; }
+            const declarations = requirement.reviewCriteria ?? [];
+            const rows = declarations.map((decl, index) => ({ ...decl, disposition: criteria[index]?.disposition ?? '' }));
+            const businessSupported = rows.some((row) => row.type === 'BUSINESS' && row.disposition === 'SUPPORTED');
+            const businessContradicted = rows.some((row) => row.type === 'BUSINESS' && row.disposition === 'CONTRADICTED');
+            const technicalSupported = rows.some((row) => row.type === 'TECHNICAL' && row.disposition === 'SUPPORTED');
+            const technicalContradicted = rows.some((row) => row.type === 'TECHNICAL' && row.disposition === 'CONTRADICTED');
+            const mandatoryFailure = rows.some((row) => row.mandatory && row.disposition === 'CONTRADICTED');
+            const resolutionRequired = (businessSupported && technicalContradicted)
+              || (businessContradicted && technicalSupported) || mandatoryFailure;
+            const rationale = conflictRationale.value.trim();
+            if (resolutionRequired && !rationale) { notify('Record a rationale for the conflict or mandatory failure.'); return; }
+            submit.disabled = true;
+            try {
+              state.changeCase = await api(`/api/sdlc/cases/${current.id}/process-run-evidence-reviews`, { method: 'POST', body: JSON.stringify({
+                version: current.version, draftRevision: current.artifacts.requirements.draftRevision,
+                requirementId: requirement.id, linkId: link.id, criteria, idempotencyKey: uid('process-evidence-review'),
+                ...(scenarioCases.length ? { scenarioCases } : {}),
+                ...(resolutionRequired ? { conflictResolution: { decision: 'PRESERVE_CRITERION_OUTCOMES', rationale } } : {}),
+              }) });
+              await refreshCases(); renderCase();
+              notify('Human review recorded. This does not verify truth or execute behavior; status remains NOT EXECUTED.');
+            } catch (error) { submit.disabled = false; notify(error.message); await loadCase(state.changeCase.id); }
+          });
+          card.append(reviewForm);
+        }
+      }
+      if (!baseline && state.authenticated) {
+        const form = el('form', { className: 'requirement-edit-form process-run-evidence-link-form' }, [
           el('label', {}, [el('span', { text: 'Persisted execution run ID (workload)' }), el('input', { attrs: { name: 'runId', placeholder: 'execution-run-…' } })]),
           el('p', { text: 'Or select a completed human task; reported values remain HUMAN_REPORTED and NOT EXECUTED.' }),
           el('label', {}, [el('span', { text: 'Human task instance ID' }), el('input', { attrs: { name: 'planInstanceId', placeholder: 'UUID' } })]),
           el('label', {}, [el('span', { text: 'Human task ID' }), el('input', { attrs: { name: 'taskId', placeholder: 'task-…' } })]),
           el('button', { className: 'button secondary', text: 'Link runtime provenance', attrs: { type: 'submit' } }),
         ]);
+        const linkFeedback = el('p', { className: 'process-run-evidence-feedback', attrs: {
+          role: 'status', 'aria-live': 'polite', hidden: 'hidden',
+        } });
+        form.append(linkFeedback);
         form.addEventListener('submit', async (event) => {
           event.preventDefault();
           try {
@@ -656,10 +1564,20 @@ function renderRequirements(content) {
               ...(runMode ? { runId } : { planInstanceId, taskId }), idempotencyKey: uid('process-run-evidence'),
             }) });
             await refreshCases(); renderCase(); notify('Run provenance linked. Verification remains NOT EXECUTED.');
-          } catch (error) { notify(error.message); await loadCase(state.changeCase.id); }
+          } catch (error) {
+            if (error.code === 'BEHAVIOR_CANDIDATE_REJECTED') {
+              linkFeedback.textContent = `${error.message} Update the exact test so the named assertion passes, rerun the check, then link the new run.`;
+              linkFeedback.hidden = false;
+            } else {
+              notify(error.message); await loadCase(state.changeCase.id);
+            }
+          }
         });
         card.append(form);
       }
+      renderCriterionContractEditor(card, requirement);
+      renderBehaviorTestPlanForm(card, requirement, artifact);
+      renderProductHarnessMappings(card, requirement);
     }
     if (!baseline) {
       const disclosure = el('details', { className: 'requirement-edit-disclosure' });
@@ -703,6 +1621,69 @@ function renderRequirements(content) {
     draft.append(card);
   }
   content.append(section('Traced requirements', draft));
+  if (state.changeCase.sourceBinding && state.changeCase.processRequirementTrace && !baseline
+    && state.changeCase.currentStage === 'S4' && state.authenticated
+    && state.principal === state.changeCase.accountableOwner) {
+    const trace = state.changeCase.processRequirementTrace;
+    const traceReferences = [
+      { id: trace.process.id, name: trace.process.name, kind: 'Process' },
+      ...trace.process.inputs.map((entry) => ({ id: entry.id, name: entry.name, kind: 'Input' })),
+      ...trace.process.outputs.map((entry) => ({ id: entry.id, name: entry.name, kind: 'Output' })),
+      ...trace.scope.capabilityRefs.map((entry) => ({ id: entry.id, name: entry.name, kind: 'Capability' })),
+      ...trace.scope.systemRefs.map((entry) => ({ id: entry.id, name: entry.name, kind: 'System' })),
+      ...trace.scope.resourceRefs.map((entry) => ({ id: entry.id, name: entry.name, kind: 'Resource' })),
+      ...trace.risk.refs.map((entry) => ({ id: entry.id, name: entry.name, kind: 'Risk' })),
+      ...trace.outcome.metricRefs.map((entry) => ({ id: entry.id, name: entry.name, kind: 'Outcome metric' })),
+    ].filter((entry, index, rows) => entry.id && rows.findIndex((candidate) => candidate.id === entry.id) === index);
+    const defaultTraceRefIds = new Set([trace.process.id, ...trace.process.outputs.map((entry) => entry.id)]);
+    const traceRefControls = traceReferences.map((entry) => el('label', { className: 'trace-reference-choice' }, [
+      el('input', { attrs: { type: 'checkbox', name: 'traceRefIds', value: entry.id,
+        checked: defaultTraceRefIds.has(entry.id) ? 'checked' : undefined } }),
+      document.createTextNode(`${entry.kind}: ${entry.name} (${entry.id})`),
+    ]));
+    const addRequirementStatus = el('p', { attrs: { role: 'status', 'aria-live': 'polite', class: 'form-status' }, text: '' });
+    const form = el('form', { className: 'add-saved-process-requirement-form' }, [
+      el('p', { text: `Add another requirement from the pinned process ${trace.process.name} (${trace.source.processId}) at blueprint ${trace.source.blueprintId} v${trace.source.blueprintVersion}, source hash ${trace.source.processSnapshotHash}. Select relevant references from its saved trace. The server supplies the trace, source links, and verification contract; this owner-authored requirement starts DRAFT. Adding it advances the shared draft and makes existing plans require regeneration.` }),
+      el('label', { text: 'Distinct requirement statement' }, el('textarea', { attrs: { name: 'statement', required: 'required', maxlength: '500' } })),
+      el('label', { text: 'Rationale' }, el('textarea', { attrs: { name: 'rationale', required: 'required', maxlength: '500' } })),
+      el('label', { text: 'Acceptance criteria, one per line' }, el('textarea', { attrs: { name: 'acceptanceCriteria', required: 'required', maxlength: '4000' } })),
+      el('fieldset', { className: 'saved-process-trace-reference-list' }, [el('legend', { text: 'Relevant saved-process references' }), ...traceRefControls]),
+      addRequirementStatus,
+      el('button', { className: 'button secondary', text: 'Add requirement from this saved process', attrs: { type: 'submit' } }),
+    ]);
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const current = state.changeCase;
+      const formData = new FormData(form);
+      const statement = String(formData.get('statement') ?? '').trim();
+      const rationale = String(formData.get('rationale') ?? '').trim();
+      const acceptanceCriteria = String(formData.get('acceptanceCriteria') ?? '').split('\n')
+        .map((value) => value.trim()).filter(Boolean);
+      const traceRefIds = formData.getAll('traceRefIds').map((value) => String(value));
+      if (!statement || !rationale || !acceptanceCriteria.length || !traceRefIds.length) {
+        addRequirementStatus.textContent = 'Enter a statement, rationale, one or more acceptance criteria, and select at least one saved-process reference.';
+        return;
+      }
+      const submit = form.querySelector('button[type="submit"]');
+      submit.disabled = true;
+      try {
+        const result = await api(`/api/sdlc/cases/${current.id}/add-requirement`, { method: 'POST', body: JSON.stringify({
+          version: current.version, expectedDraftRevision: artifact.draftRevision,
+          statement, rationale, acceptanceCriteria, traceRefIds, idempotencyKey: uid('add-saved-process-requirement'),
+        }) });
+        state.changeCase = result;
+        await refreshCases(); renderCase();
+        document.querySelector(`[data-requirement-id="${CSS.escape(result.command?.requirementId ?? result.events?.at(-1)?.data?.requirementId ?? '')}"]`)
+          ?.scrollIntoView({ block: 'center' });
+        notify('Requirement added from the pinned process trace as DRAFT. The shared draft advanced; older plans need regeneration.');
+      } catch (error) {
+        submit.disabled = false;
+        addRequirementStatus.textContent = `${error.message} Your entries and selected references remain in the form. If the draft version changed, reload the case to review the new draft before retrying.`;
+        notify(error.message);
+      }
+    });
+    content.append(section('Add a requirement', form));
+  }
   if (state.changeCase.sourceBinding && !baseline && state.changeCase.currentStage === 'S4') {
     const accept = el('button', { className: 'button button-primary', text: 'Accept requirements and pass G4', attrs: { type: 'button' } });
     accept.addEventListener('click', () => command('accept-requirements', { expectedDraftRevision: artifact.draftRevision, actor: state.authenticated ? undefined : state.changeCase.accountableOwner }));
@@ -918,19 +1899,24 @@ function renderDelivery(content) {
   const currentDraft = draftEntry?.plan;
   if (changeCase.sourceBinding && state.authenticated && state.principal === changeCase.accountableOwner) {
     if (currentDraft) {
+      const sourceIsCurrent = draftEntry.sourceCurrentness?.status === 'CURRENT';
       const review = draftEntry.assignmentReview;
       const humanAssignments = Boolean(review?.assignments?.length === currentDraft.tasks.length
         && review.assignments.every((item) => item.assignee?.actorType === 'human' && item.assignee?.principal
           && Number.isSafeInteger(item.assignee.membershipGeneration) && Number.isSafeInteger(item.assignee.authzGeneration)));
       const promotedCurrentReview = draftEntry.promotion?.reviewRevision === review?.revision;
       content.append(section('Owner review of software delivery draft', [
+      ...(!sourceIsCurrent ? [el('p', { className: 'draft-state source-stale', attrs: { role: 'status', 'data-source-currentness': draftEntry.sourceCurrentness?.status ?? 'UNKNOWN' },
+        text: draftEntry.sourceCurrentness?.status === 'STALE'
+          ? `SOURCE STALE · This saved draft remains available as history, pinned to project v${draftEntry.sourceCurrentness.pinnedProjectVersion} and blueprint ${draftEntry.sourceCurrentness.pinnedBlueprintId} v${draftEntry.sourceCurrentness.pinnedBlueprintVersion}; current project v${draftEntry.sourceCurrentness.currentProjectVersion}, blueprint ${draftEntry.sourceCurrentness.currentBlueprintId ?? 'unavailable'} v${draftEntry.sourceCurrentness.currentBlueprintVersion ?? 'unavailable'}. Create a new governed case from the current design before assigning or promoting work.`
+          : 'SOURCE CURRENTNESS UNKNOWN · This saved draft is read-only until its exact saved-design source can be verified.' })] : []),
       el('p', { className: 'draft-state', text: draftEntry.promotion
         ? `OWNER PROMOTED · Immutable human checkpoint revision ${draftEntry.promotion.runtimeRevision} · snapshot ${draftEntry.promotion.snapshotHash}. Starting a separate instance creates planned checkpoints only.`
         : review
           ? `OWNER REVIEWED · Revision ${review.revision} · Snapshot only; not executable until promoted.`
         : 'PROPOSED DRAFT · No owner-reviewed assignment snapshot yet. This work is not executable; no plan promotion, approval, runtime, or dispatch.' }),
       el('p', { text: `Plan ${currentDraft.id} · compiler ${currentDraft.compilerVersion} · source ${currentDraft.binding.sourceHash} · G4 ${currentDraft.binding.requirementsBaselineHash} · G5 ${currentDraft.binding.architectureBaselineHash} · G6 ${currentDraft.binding.g6PlanHash}` }),
-      ...[(() => {
+      ...(sourceIsCurrent ? [(() => {
         const form = el('form', { className: 'assignment-review-form' });
         const hasHumanBinding = state.actorBindings.some((binding) => binding.targetType === 'human');
         form.append(el('p', { text: draftEntry.assignmentReview
@@ -963,13 +1949,13 @@ function renderDelivery(content) {
           el('a', { text: 'Open Administration: Identity access and Project access', attrs: { href: '/platform.html#administration' } }),
         ]));
         return form;
-      })()],
+      })()] : []),
       ...(review && !humanAssignments ? [el('p', { className: 'muted', text: 'Promotion is unavailable: every task must have an exact, current human assignee. Agent tasks need the separate PR-08 software output contract.' })] : []),
-      ...(review && humanAssignments && !promotedCurrentReview ? [(() => {
+      ...(sourceIsCurrent && review && humanAssignments && !promotedCurrentReview ? [(() => {
         const button = el('button', { className: 'button primary', text: draftEntry.promotion ? 'Promote revised human plan' : 'Promote human checkpoint plan', attrs: { type: 'button' } });
         button.addEventListener('click', () => promoteSoftwarePlan(button, draftEntry)); return button;
       })()] : []),
-      ...(draftEntry.promotion ? [(() => {
+      ...(sourceIsCurrent && draftEntry.promotion ? [(() => {
         const button = el('button', { className: 'button', text: `Start human checkpoint instance · revision ${draftEntry.promotion.runtimeRevision}`, attrs: { type: 'button' } });
         button.addEventListener('click', () => startSoftwarePlanInstance(button, draftEntry)); return button;
       })()] : []),

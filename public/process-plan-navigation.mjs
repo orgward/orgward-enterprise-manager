@@ -81,15 +81,24 @@ export function processPlanFreshness(plan, project) {
     || !Number.isSafeInteger(latestVersion) || latestVersion < 1) {
     return { historical: false, link: null };
   }
-  const historical = source.blueprintVersion < latestVersion;
+  if (plan.blueprintApplicability?.status === 'CURRENT_VIEW_ONLY_COMPATIBLE'
+    && plan.blueprintApplicability.pinnedBlueprintId === source.blueprintId
+    && plan.blueprintApplicability.pinnedBlueprintVersion === source.blueprintVersion
+    && plan.kind === 'manual_process_flow_plan') {
+    return { historical: false, compatible: true, link: null,
+      explanation: 'Only process-step titles or display order changed; this plan remains pinned to its original blueprint.' };
+  }
+  const serverStale = plan.blueprintApplicability?.status === 'STALE';
+  const historical = serverStale || source.blueprintVersion < latestVersion;
   if (!historical || !/^[a-z0-9][a-z0-9_-]{0,119}$/i.test(source.processId ?? '')) {
-    return { historical, link: null };
+    return { historical, ...(serverStale ? { compatible: false } : {}), link: null };
   }
   const currentProcessExists = Object.values(project.latestBlueprint?.areas ?? {}).some((area) =>
     (area.items ?? []).some((item) => item.id === source.processId && item.type === 'process'))
     && (project.graph?.nodes ?? []).some((node) => node.id === source.processId && node.type === 'process');
   return {
     historical,
+    ...(serverStale ? { compatible: false } : {}),
     link: currentProcessExists ? {
       label: `Plan current ${source.processName} in Execution`,
       href: encodeExecutionRoute(project.id, { projectId: project.id, processId: source.processId }),

@@ -593,8 +593,8 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
     'completion and shared escalation/resolution handlers use the same safe retry control flow');
   assert.equal((executionSource.match(/if \(!saved\) button\.disabled = false;/g) ?? []).length, 2,
     'a saved completion or owner action stays disabled if the follow-up refresh fails');
-  assert.equal((executionSource.match(/saved = true;\s*await refresh\(\);/g) ?? []).length, 2,
-    'both wrappers mark a saved mutation before awaiting its follow-up refresh');
+  assert.equal((executionSource.match(/if \(submission\.kind === 'saved'\) \{[\s\S]*?saved = true;[\s\S]*?await refresh\(\);/g) ?? []).length, 2,
+    'both wrappers mark a saved mutation before awaiting its follow-up refresh, allowing draft cleanup between them');
   assert.match(executionSource, /role: 'status', 'aria-live': 'polite'/);
   const humanTaskCommandUiClient = await fetch(`${base}/human-task-command-ui.mjs`);
   assert.equal(humanTaskCommandUiClient.status, 200);
@@ -697,6 +697,8 @@ test('execution HTTP surface enforces approval and exposes generated artifacts',
   assert.match(executionSource, /sourceProcessDesignLink\(plan, project\)/);
   assert.match(executionSource, /processPlanFreshness\(plan, project\)/);
   assert.match(executionSource, /Historical plan · pinned to blueprint v/);
+  assert.match(executionSource, /Current for this plan · \$\{freshness\.explanation\} Original blueprint v/,
+    'compatible plans are visibly usable while retaining their original blueprint pin');
   assert.match(executionSource, /const canStartNewInstances = !softwareDeliveryPlan && allowNewInstances && !freshness\.historical/);
   assert.match(executionSource, /text: canStartNewInstances \? 'Start a new instance'/);
   assert.match(executionSource, /Owner-promoted human checkpoint snapshot/);

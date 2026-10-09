@@ -58,10 +58,13 @@ test('protected file inputs enforce source exclusivity, file safety, bounds, and
   const databaseFile = path.join(directory, 'database-url');
   const keyFile = path.join(directory, 'secret-key');
   const adminFile = path.join(directory, 'openai-admin-key');
+  const fixtureDatabaseFile = path.join(directory, 't91-fixture-database-url');
   const expectedDatabaseUrl = 'postgresql://orgward:private-canary@localhost/orgward';
   await writeFile(databaseFile, `${expectedDatabaseUrl}\n`, { mode: 0o600 });
   await writeFile(keyFile, `${KEY}\n`, { mode: 0o600 });
   await writeFile(adminFile, 'sk-admin-fixture-secret\n', { mode: 0o600 });
+  const fixtureDatabaseUrl = 'postgresql://fixture_admin:fixture-secret@fixture-db.example.test/orgward_fixture_admin';
+  await writeFile(fixtureDatabaseFile, `${fixtureDatabaseUrl}\n`, { mode: 0o600 });
   await chmod(databaseFile, 0o600);
   await chmod(keyFile, 0o600);
   const fileEnv = () => env(undefined, {
@@ -73,7 +76,21 @@ test('protected file inputs enforce source exclusivity, file safety, bounds, and
   const valid = parseInstallConfig(fileEnv());
   assert.deepEqual(valid.issues, []);
   assert.equal(valid.config.databaseUrl, expectedDatabaseUrl);
+  assert.equal(valid.config.t91N2FixtureAdminConfigured, false);
   assert.deepEqual(valid.config.secretEncryptionKey, Buffer.from(KEY, 'base64'));
+  const fixtureConfigured = parseInstallConfig({ ...fileEnv(), ORGWARD_T91_N2_FIXTURE_ADMIN_DATABASE_URL_FILE: fixtureDatabaseFile });
+  assert.deepEqual(fixtureConfigured.issues, []);
+  assert.equal(fixtureConfigured.config.t91N2FixtureAdminDatabaseUrl, fixtureDatabaseUrl);
+  const inlineFixture = parseInstallConfig({ ...fileEnv(), ORGWARD_T91_N2_FIXTURE_ADMIN_DATABASE_URL: fixtureDatabaseUrl });
+  assert.ok(inlineFixture.issues.some((issue) => issue.check === 't91-n2-fixture-database-source'));
+  assert.ok(inlineFixture.issues.filter((issue) => issue.check.startsWith('t91-n2-')).every((issue) => issue.severity === 'notice'));
+  assert.equal(inlineFixture.config.t91N2FixtureAdminDatabaseUrl, null);
+  assert.equal(inlineFixture.config.t91N2FixtureAdminConfigured, true);
+  assert.ok(!JSON.stringify(inlineFixture.issues).includes('fixture-secret'));
+  const duplicateFixture = parseInstallConfig({ ...fileEnv(), ORGWARD_T91_N2_FIXTURE_ADMIN_DATABASE_URL_FILE: databaseFile });
+  assert.ok(duplicateFixture.issues.some((issue) => issue.check === 't91-n2-fixture-database-url'));
+  assert.ok(duplicateFixture.issues.filter((issue) => issue.check.startsWith('t91-n2-')).every((issue) => issue.severity === 'notice'));
+  assert.equal(duplicateFixture.config.t91N2FixtureAdminConfigured, true);
 
   const managed = parseInstallConfig({ ...fileEnv(), ORGWARD_OPENAI_ADMIN_API_KEY_FILE: adminFile,
     ORGWARD_OPENAI_ORGANIZATION_ID: 'org_fixture', ORGWARD_OPENAI_TENANT_PROJECTS: '{"tenant-a":"proj_a","tenant-b":"proj_b"}' });

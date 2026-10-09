@@ -4,6 +4,8 @@ import { executionApprovalRequestHash } from '../execution/contracts.mjs';
 import { allowlistedProviderTransportFailureClass } from '../execution/provider-transport-diagnostic.mjs';
 import { OpenAiManagedProvisioner } from './openai-managed-provisioning.mjs';
 import { revokeOrgwardCreatedOpenAiServiceAccount } from './openai-admin-revocation.mjs';
+import { verifyManualFlowPlan } from '../enterprise/process-runtime.mjs';
+import { processPlanBlueprintApplicability } from '../enterprise/process-flow-sensitivity.mjs';
 
 function failure(statusCode, code, message) {
   return Object.assign(new Error(message), { statusCode, code });
@@ -907,6 +909,31 @@ export class PostgresSecretStore {
     return { ...secret.rows[0], processTaskRef: processTaskRef ?? null, run };
   }
 
+  async #lockCurrentManualProcessSource(client, { tenantId, projectId, processTaskRef }) {
+    if (!processTaskRef?.processPlanId || !Number.isSafeInteger(Number(processTaskRef.revision))) return;
+    const projectRow = await client.query(`select * from orgward.aggregates
+      where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2 for share`, [tenantId, projectId]);
+    if (!projectRow.rowCount) throw failure(403, 'WORKER_LEASE_INVALID', 'The worker lease is no longer authorized.');
+    const project = verifyAggregateRow(projectRow.rows[0]);
+    const plan = (project.processPlans ?? []).find((entry) => entry.id === processTaskRef.processPlanId
+      && Number(entry.revision ?? 1) === Number(processTaskRef.revision));
+    if (plan?.kind !== 'manual_process_flow_plan') {
+      if (processTaskRef.flowBinding) {
+        throw failure(409, 'PROCESS_PLAN_BLUEPRINT_STALE',
+          'The linked manual process plan is unavailable for source verification; start a new instance from a current plan.');
+      }
+      return;
+    }
+    const sourceBlueprint = (project.blueprintVersions ?? []).find((entry) => entry.id === plan.source.blueprintId
+      && Number(entry.version) === Number(plan.source.blueprintVersion));
+    verifyManualFlowPlan(plan, sourceBlueprint);
+    const applicability = processPlanBlueprintApplicability(plan, project);
+    if (!['CURRENT', 'CURRENT_VIEW_ONLY_COMPATIBLE'].includes(applicability.status)) {
+      throw failure(409, 'PROCESS_PLAN_BLUEPRINT_STALE',
+        'The linked process plan is stale against the current saved blueprint; start a new instance from a current plan.');
+    }
+  }
+
   async #cancelBoundLeases(client, { tenantId, reference, reason }) {
     await client.query(`
       update orgward.execution_worker_leases l
@@ -1228,7 +1255,7 @@ export class PostgresSecretStore {
       decipher.setAAD(associatedData(tenantId, reference, row.version));
       decipher.setAuthTag(row.auth_tag);
       return { credential: Buffer.concat([decipher.update(row.ciphertext), decipher.final()]).toString('utf8'),
-        expiresAt: row.expires_at, modelBudgetEnvelope };
+        expiresAt: row.expires_at, modelBudgetEnvelope, processTaskRef: row.processTaskRef };
     });
     await this.persistence.faults?.afterProviderDispatchReservation?.({ tenantId, runId, attemptId });
     const expiryMs = new Date(reservation.expiresAt).getTime();
@@ -1273,7 +1300,19 @@ export class PostgresSecretStore {
       transportStarted = true;
       transport.result.catch(() => {});
       await this.persistence.faults?.afterProviderDispatchHandoff?.({ tenantId, runId, attemptId });
-      transport.send();
+      await this.persistence.transaction(async (client) => {
+        await this.#lockCurrentManualProcessSource(client, {
+          tenantId, projectId, processTaskRef: reservation.processTaskRef,
+        });
+        const activeAttempt = await client.query(`select status from orgward.provider_dispatch_attempts
+          where tenant_id=$1 and run_id=$2 and attempt_id=$3 for update`, [tenantId, runId, attemptId]);
+        if (!activeAttempt.rowCount || activeAttempt.rows[0].status !== 'handed_off') {
+          throw failure(409, 'PROVIDER_ATTEMPT_CANCELLED', 'The provider dispatch reservation is no longer available.');
+        }
+        // Keep the source aggregate's share lock through the synchronous handoff
+        // call so a blueprint edit cannot commit between validation and send.
+        transport.send();
+      });
       output = await transport.result;
       if (Date.now() >= expiryMs) throw failure(409, 'SECRET_CREDENTIAL_EXPIRED', 'The approved credential expired during provider use.');
       if (containsSecret(output, reservation.credential)) throw failure(502, 'PROVIDER_OUTPUT_QUARANTINED', 'Provider output was quarantined by secret-leak detection.');
@@ -1299,7 +1338,14 @@ export class PostgresSecretStore {
       await this.persistence.transaction(async (client) => {
         await client.query(`select 1 from orgward.execution_worker_leases
           where tenant_id=$1 and run_id=$2 and worker_id=$3 for update`, [tenantId, runId, workerId]);
-        if (transportStarted) {
+        if (error?.code === 'PROCESS_PLAN_BLUEPRINT_STALE') {
+          transportStarted = false;
+          await client.query(`update orgward.provider_dispatch_attempts
+            set status='cancelled',handed_off_at=null,finished_at=now(),updated_at=now(),
+              usage_status=case when model_provider is null then null else 'dispatch_not_started' end,
+              usage_input_tokens=null,usage_output_tokens=null,usage_total_tokens=null,usage_reason=null
+            where tenant_id=$1 and run_id=$2 and attempt_id=$3 and status='handed_off'`, [tenantId, runId, attemptId]);
+        } else if (transportStarted) {
           if (error?.code === 'PROVIDER_OUTPUT_QUARANTINED' && reservation.modelBudgetEnvelope && output) {
             const usage = boundedAttemptUsage(output?.modelUsage, reservation.modelBudgetEnvelope.requestedOutputTokens);
             await client.query(`update orgward.provider_dispatch_attempts
@@ -1322,7 +1368,8 @@ export class PostgresSecretStore {
       }).catch(() => {});
       if (Date.now() >= expiryMs) throw failure(409, 'SECRET_CREDENTIAL_EXPIRED', 'The approved credential expired during provider use.');
       if (['PROVIDER_OUTPUT_QUARANTINED', 'SECRET_CREDENTIAL_EXPIRED'].includes(error?.code)) throw error;
-      if (['PROVIDER_ATTEMPT_CANCELLED', 'PROCESS_INSTANCE_PAUSED', 'WORKER_LEASE_INVALID', 'SECRET_REFERENCE_INACTIVE', 'SECRET_CREDENTIAL_EXPIRED', 'SECRET_GENERATION_STALE', 'SECRET_BINDING_STALE'].includes(error?.code)) throw error;
+      if (['PROVIDER_ATTEMPT_CANCELLED', 'PROCESS_INSTANCE_PAUSED', 'PROCESS_PLAN_BLUEPRINT_STALE',
+        'WORKER_LEASE_INVALID', 'SECRET_REFERENCE_INACTIVE', 'SECRET_CREDENTIAL_EXPIRED', 'SECRET_GENERATION_STALE', 'SECRET_BINDING_STALE'].includes(error?.code)) throw error;
       const upstreamHttpStatus = transportStarted && Number.isInteger(error?.upstreamHttpStatus)
         && error.upstreamHttpStatus >= 100 && error.upstreamHttpStatus <= 599
         ? error.upstreamHttpStatus : (transportStarted ? transport?.diagnostic?.()?.httpStatus ?? null : null);

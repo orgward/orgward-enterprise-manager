@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -6,9 +7,9 @@ import test from 'node:test';
 import { createApp } from '../../server.mjs';
 import { addConversationTurn, createProject, editBlueprintObject, latestBlueprint } from '../../src/model.mjs';
 import { digest } from '../../src/sdlc/contracts.mjs';
-import { evaluateProcessVerificationContract } from '../../src/sdlc/engine.mjs';
+import { evaluateProcessVerificationContract, verifyContextManifest } from '../../src/sdlc/engine.mjs';
 import { applyEnterpriseIntegrityCommand } from '../../src/enterprise/integrity.mjs';
-import { caseUiModel, eligibleActorBindings, processRunEvidencePresentation } from '../../public/sdlc-view.mjs';
+import { canAcceptIntentEvaluation, caseUiModel, eligibleActorBindings, intentEvaluationAcceptancePresentation, n3StageStatusCopy, processBehaviorTestPlanPresentation, processEvidenceReviewPresentation, processRunEvidencePresentation, productHarnessEligiblePlanGroups, productHarnessRequestFormVisibility, repositoryCheckObservationPresentation } from '../../public/sdlc-view.mjs';
 
 async function start(root) {
   const app = createApp({ dataDirectory: path.join(root, 'blueprints'), sdlcDirectory: path.join(root, 'sdlc') });
@@ -37,6 +38,226 @@ test('SDLC client selects and renders eligible actor bindings from the API data 
   assert.deepEqual(renderedBindings.map((binding) => binding.id), ['human-current', 'agent-current']);
 });
 
+test('criterion editor and behavior plan form expose typed obligations and exact path mappings', () => {
+  const client = readFileSync(new URL('../../public/sdlc.js', import.meta.url), 'utf8');
+  assert.match(client, /function renderCriterionContractEditor\(card, requirement\)/);
+  assert.match(client, /Legacy string criteria are UNKNOWN/);
+  assert.match(client, /MUST requirements force all criteria mandatory; guardrails cannot be optional/);
+  assert.ok(client.includes("'aria-label': `Criterion ${index + 1} source pin`"));
+  assert.ok(client.includes("'aria-label': `Criterion ${index + 1} scope pin`"));
+  assert.match(client, /Map each changed candidate path \(path \| role \| criterion IDs\)/);
+  assert.match(client, /Changed, deleted or renamed paths without a pre-run criterion mapping are rejected before checks execute/);
+  assert.match(client, /criterionId: requirement\.criterionContract\.criteria\[criterionIndex\]\.id/);
+  assert.match(client, /const savedPlans = requirement\.processBehaviorTestPlans \?\? \[\]/,
+    'the UI renders server-derived plan applicability instead of raw immutable rows');
+  assert.match(client, /processBehaviorTestPlanPresentation\(plan\)/);
+  assert.match(client, /aria-label': 'Effective time context \(UTC\)'/);
+  assert.match(client, /\$\{type\[0\]\.toUpperCase\(\)\}\$\{type\.slice\(1\)\} case definition/);
+  assert.match(client, /typed dataset JSON/);
+  assert.match(client, /expected output oracle JSON/);
+  assert.match(client, /Capture a complete dataset\/oracle pair now.*mapping INCOMPLETE.*exact selected test path and assertion together later/);
+  assert.match(client, /enter dataset and oracle together/);
+  assert.match(client, /dataset\/oracle captured; exact test mapping is a later step/);
+  assert.match(client, /case NOT_EXECUTED/);
+  assert.match(client, /exact pinned test file path/);
+  assert.match(client, /exact executable assertion/);
+  assert.match(client, /OWNER_PROPOSED_UNVERIFIED mappings require a repository-check run/);
+  assert.match(client, /view\?\.repositorySnapshotId/,
+    'the plan card renders the sanitized repository.snapshotId pin');
+  assert.match(client, /Regenerate v\$\{currentCriterionVersion\} plan/);
+  assert.match(client, /Create v\$\{currentCriterionVersion\} plan/);
+  assert.match(client, /linked evidence is STALE/);
+});
+
+test('behavior plan recovery presentation retains old revision pins and calls for regeneration', () => {
+  const stale = processBehaviorTestPlanPresentation({ id: 'behavior-plan-v1', planHash: 'a'.repeat(64),
+    requirementHash: 'b'.repeat(64), criterionContractVersion: 1, criterionContractHash: 'c'.repeat(64),
+    draftRevision: 4, currentDraftRevision: 5, repository: { snapshotId: 'snapshot-exact-v1' },
+    regenerationStatus: 'REGENERATION_REQUIRED', regenerationReason: 'CRITERION_BASELINE_CHANGED',
+    currentCriterionContractVersion: 2 });
+  assert.match(stale.heading, /REGENERATION_REQUIRED/);
+  assert.match(stale.pins, /criterion baseline v1 SHA-256 c{64}/);
+  assert.match(stale.status, /Old plan and results remain immutably bound.*baseline v1.*Current baseline v2.*require a newly authorized plan/);
+  assert.match(stale.pins, /repository snapshot snapshot-exact-v1/);
+  assert.match(stale.status, /shared requirements draft r4.*Current baseline v2.*shared draft r5/);
+  assert.equal(stale.regenerationAction, 'Regenerate v2 plan');
+  assert.equal(stale.repositorySnapshotId, 'snapshot-exact-v1');
+  const current = processBehaviorTestPlanPresentation({ id: 'behavior-plan-v2', planHash: 'd'.repeat(64),
+    requirementHash: 'e'.repeat(64), criterionContractVersion: 2, criterionContractHash: 'f'.repeat(64),
+    draftRevision: 5, currentDraftRevision: 5, repository: { snapshotId: 'snapshot-exact-v2' },
+    regenerationStatus: 'CURRENT', currentCriterionContractVersion: 2,
+    evaluationContext: { workspace: { projectId: 'project-exact' }, branch: { branchRef: 'refs/heads/main', commitOid: 'a'.repeat(40) },
+      effectiveTime: { value: '2026-10-07T00:00:00.000Z', sourceRef: { id: 'information-effective-date' } } },
+    caseDefinitions: { mappingStatus: 'INCOMPLETE', cases: [{ type: 'POSITIVE', definition: 'Produce the declared output.', sourceRef: { id: 'output-1' },
+      dataset: { ownerInput: 1 }, expectedOutput: { ownerOutput: 'ready' }, status: 'NOT_EXECUTED',
+      executionMapping: { status: 'OWNER_PROPOSED_UNVERIFIED', assertionId: 'assertion-1', testName: 'positive exact test',
+        testPath: 'test/positive.test.mjs', testFileHash: 'a'.repeat(64) } },
+      { type: 'NEGATIVE', definition: 'Reject the unsafe case.', sourceRef: { id: 'risk-1' },
+        dataset: { criterionId: 'C1', mandatory: true, assertions: [] },
+        expectedOutput: { status: 400, planSaved: false }, status: 'NOT_EXECUTED',
+        executionMapping: { status: 'INCOMPLETE' } },
+      { type: 'RECOVERY', definition: 'Regenerate after revision.', sourceRef: { id: 'process-1' }, status: 'NOT_EXECUTED' }] } });
+  assert.match(current.heading, /CURRENT/);
+  assert.match(current.status, /does not assert business truth/);
+  assert.equal(current.repositorySnapshotId, 'snapshot-exact-v2');
+  assert.equal(current.regenerationAction, null);
+  assert.match(current.contextPins, /project-exact.*refs\/heads\/main.*2026-10-07T00:00:00.000Z.*information-effective-date/);
+  assert.equal(current.scenarioCases.length, 3);
+  assert.ok(current.scenarioCases.every((entry) => entry.includes('NOT_EXECUTED')));
+  assert.equal(current.scenarioMappingsStatus, 'INCOMPLETE');
+  assert.match(current.scenarioCases[0], /dataset \{"ownerInput":1\}.*expected \{"ownerOutput":"ready"\}.*assertion assertion-1.*TEST test\/positive.test.mjs.*OWNER_PROPOSED_UNVERIFIED/);
+  assert.match(current.scenarioCases[1], /dataset \{"criterionId":"C1","mandatory":true,"assertions":\[\]\}.*expected \{"status":400,"planSaved":false\}.*dataset\/oracle captured · execution mapping INCOMPLETE/);
+});
+
+test('R1 recovery mapping remains available when N2 and N3 definitions are absent', () => {
+  const plan = { id: 'plan-r1-v1', planHash: 'a'.repeat(64), criterionContractVersion: 1,
+    caseDefinitions: { cases: [{ type: 'RECOVERY', dataset: { cases: [{ id: 'R1' }] },
+      expectedOutput: { cases: [{ id: 'R1' }] } }] } };
+  const requirement = { processBehaviorTestPlans: [plan], processRunEvidenceLinks: [{
+    behaviorEvaluation: { planId: plan.id, planHash: plan.planHash, result: 'TEST_PASS' },
+  }] };
+  const eligible = productHarnessEligiblePlanGroups(requirement);
+  assert.deepEqual(eligible.plans, [], 'N2/N3 request forms have no eligible definitions');
+  assert.deepEqual(eligible.r1Plans, [plan], 'the linked v1 recovery plan remains eligible on its own');
+  assert.deepEqual(productHarnessRequestFormVisibility({ owner: true, ...eligible }), {
+    subcaseForms: false, r1RecoveryForm: true,
+  });
+  assert.deepEqual(productHarnessRequestFormVisibility({ owner: false, ...eligible }), {
+    subcaseForms: false, r1RecoveryForm: false,
+  });
+  const client = readFileSync(new URL('../../public/sdlc.js', import.meta.url), 'utf8');
+  assert.match(client, /if \(requestFormVisibility\.r1RecoveryForm\)/,
+    'the R1 form renders outside the N2/N3 form gate');
+  assert.match(client, /product-harness-r1-request-form/);
+});
+
+test('R2 shared-draft recovery mapping is independently selectable from a passing linked plan', () => {
+  const plan = { id: 'plan-r2-shared-draft', planHash: 'b'.repeat(64), criterionContractVersion: 1,
+    caseDefinitions: { cases: [{ type: 'RECOVERY', dataset: { cases: [{ id: 'R2' }] },
+      expectedOutput: { cases: [{ id: 'R2' }] } }] } };
+  const requirement = { processBehaviorTestPlans: [plan], processRunEvidenceLinks: [{
+    behaviorEvaluation: { planId: plan.id, planHash: plan.planHash, result: 'TEST_PASS' },
+  }] };
+  const eligible = productHarnessEligiblePlanGroups(requirement);
+  assert.deepEqual(eligible.plans, []);
+  assert.deepEqual(eligible.r2Plans, [plan]);
+  assert.deepEqual(productHarnessRequestFormVisibility({ owner: true, ...eligible }), {
+    subcaseForms: false, r1RecoveryForm: false, r2RecoveryForm: true,
+  });
+  assert.deepEqual(productHarnessRequestFormVisibility({ owner: false, ...eligible }), {
+    subcaseForms: false, r1RecoveryForm: false, r2RecoveryForm: false,
+  });
+  const client = readFileSync(new URL('../../public/sdlc.js', import.meta.url), 'utf8');
+  assert.match(client, /if \(requestFormVisibility\.r2RecoveryForm\)/,
+    'the R2 request form renders independently from N2/N3 definitions');
+  assert.match(client, /product-harness-r2-request-form/);
+  assert.match(client, /SHARED_REQUIREMENTS_DRAFT_CHANGED/);
+});
+
+test('N3 stage copy follows saved receipt evidence instead of claiming both stages are pending', () => {
+  const mapping = { candidatePath: 'tests/learning.test.js', sourceTestBytesHash: 'a'.repeat(64) };
+  const pending = n3StageStatusCopy(mapping, null);
+  assert.match(pending, /Neither stage has executed yet/);
+  assert.match(pending, /tests\/learning\.test\.js/);
+
+  const passed = n3StageStatusCopy(mapping, { status: 'PASS', sourceStage: {
+    path: mapping.candidatePath, bytesHash: mapping.sourceTestBytesHash, exitCode: 1,
+    tap: '# tests 1\n# pass 0\n# fail 1\n',
+  }, candidate: { deletedPath: mapping.candidatePath, deletedPathHash: mapping.sourceTestBytesHash,
+    changes: [{ path: mapping.candidatePath, change: 'deleted' }] },
+  run: { errorCode: 'BEHAVIOR_CANDIDATE_ORPHAN_PATH' }, verifierDispatchCount: 0 });
+  assert.match(passed, /pinned source bytes.*exited 1.*one failure/);
+  assert.match(passed, /rejected deletion of that same pinned path before verifier dispatch/);
+  assert.doesNotMatch(passed, /Neither stage has executed yet/);
+
+  const inconclusive = n3StageStatusCopy(mapping, { status: 'INCONCLUSIVE' });
+  assert.match(inconclusive, /could not both be confirmed/);
+  assert.match(inconclusive, /No stage result is claimed/);
+  assert.doesNotMatch(inconclusive, /Original test fails:/);
+  assert.doesNotMatch(inconclusive, /Unauthorized deletion is rejected:/);
+});
+
+test('evidence review presentation preserves explicit conflict resolution and mandatory failure', () => {
+  const view = processEvidenceReviewPresentation({ id: 'review-ac4', linkId: 'link-ac4', reviewerPrincipal: 'oidc:reviewer',
+    reviewHash: 'a'.repeat(64), status: 'HUMAN_REVIEWED', disposition: 'CONTRADICTED', applicability: 'CURRENT',
+    integrityStatus: 'VALID', verificationStatus: 'NOT_EXECUTED', truthStatus: 'UNVERIFIED',
+    acceptanceStatus: 'BLOCKED_MANDATORY_FAILURE', failedMandatoryCriterionIds: ['TECH-BOUNDARY'],
+    conflictResolution: { decision: 'PRESERVE_CRITERION_OUTCOMES', rationale: 'Keep both findings.',
+      recordedBy: 'oidc:reviewer', businessCriterionIds: ['BUSINESS-OUTCOME'],
+      technicalCriterionIds: ['TECH-BOUNDARY'], failedMandatoryCriterionIds: ['TECH-BOUNDARY'] },
+    criteria: [{ disposition: 'SUPPORTED', criterion: 'Business outcome', note: 'Supported.' },
+      { disposition: 'CONTRADICTED', criterion: 'Technical boundary', note: 'Failed.' }],
+    scenarioCases: [{ type: 'POSITIVE', executionReviewStatus: 'REVIEWED_FOR_TEST_EXECUTION',
+      executionDecision: 'APPROVE_FOR_TEST_EXECUTION', note: 'Pinned positive case is ready for test execution.' },
+    { type: 'NEGATIVE', executionReviewStatus: 'CHANGES_REQUESTED', executionDecision: 'REQUEST_CHANGES',
+      note: 'Complete the negative mapping before execution.' }] });
+  assert.match(view.status, /acceptance BLOCKED_MANDATORY_FAILURE/);
+  assert.match(view.status, /truth UNVERIFIED/);
+  assert.match(view.resolution, /Explicit resolution by oidc:reviewer: PRESERVE_CRITERION_OUTCOMES/);
+  assert.match(view.resolution, /failed mandatory criteria TECH-BOUNDARY/);
+  assert.deepEqual(view.criteria.map((entry) => entry.split(':')[0]), ['SUPPORTED', 'CONTRADICTED']);
+  assert.match(view.scenarios[0], /POSITIVE definition.*REVIEWED_FOR_TEST_EXECUTION.*APPROVE_FOR_TEST_EXECUTION/);
+  assert.match(view.scenarios[1], /NEGATIVE definition.*CHANGES_REQUESTED.*REQUEST_CHANGES/);
+  assert.doesNotMatch(view.scenarios[0], /ACCEPTED|EXECUTED|VERIFIED/,
+    'scenario review status does not imply acceptance, execution or verification');
+});
+
+test('intent evaluation acceptance presentation stays scoped and does not claim truth or verification', () => {
+  const view = intentEvaluationAcceptancePresentation({ id: 'intent-evaluation-acceptance-123e4567-e89b-12d3-a456-426614174000',
+    status: 'ACCEPTED', applicability: 'CURRENT', integrityStatus: 'VALID', requirementId: 'REQ-PROC-abc123def456',
+    draftRevision: 2, source: { processId: 'process-a', blueprintId: 'blueprint-a', blueprintVersion: 4 },
+    evaluationHash: 'a'.repeat(64), reviewHash: 'b'.repeat(64), acceptanceHash: 'c'.repeat(64),
+    acceptedBy: 'oidc:owner', verificationStatus: 'NOT_EXECUTED', truthStatus: 'UNVERIFIED', reason: 'Evidence was reviewed.',
+    statement: 'This accepts the current scoped intent evaluation record only.' });
+  assert.match(view.heading, /ACCEPTED · CURRENT · integrity VALID/);
+  assert.match(view.pins, /blueprint-a v4.*evaluation SHA-256 a{64}.*review SHA-256 b{64}/);
+  assert.match(view.status, /accepted by oidc:owner.*verification remains NOT_EXECUTED.*business truth remains UNVERIFIED/);
+});
+
+test('intent evaluation acceptance action is reachable from the reviewed process evidence card', () => {
+  const client = readFileSync(new URL('../../public/sdlc.js', import.meta.url), 'utf8');
+  assert.match(client, /intent-evaluation-acceptances/);
+  assert.match(client, /Accept intent evaluation/);
+  assert.match(client, /canAcceptIntentEvaluation\(\{ authenticated: state\.authenticated/);
+  assert.match(client, /accountableOwner: state\.changeCase\.accountableOwner/);
+  assert.match(client, /review\.reviewerPrincipal !== state\.principal/);
+  assert.match(client, /review\.criteria\.every\(\(entry\) => entry\.disposition === 'SUPPORTED'\)/);
+  assert.match(client, /Business truth remains UNVERIFIED and runtime verification remains NOT EXECUTED/);
+});
+
+test('intent evaluation acceptance action requires owner, independent current review and unaccepted current revision', () => {
+  const input = { authenticated: true, principal: 'owner-1', accountableOwner: 'owner-1', draftRevision: 3,
+    requirement: { id: 'REQ-PROC-abc123def456', reviewCriteria: [{ criterionId: 'C1' }] },
+    link: { id: 'link-1', applicability: 'CURRENT', status: 'UNVERIFIED', verificationStatus: 'NOT_EXECUTED', behaviorEvaluation: {
+      status: 'CHECKED_BEHAVIOR', result: 'TEST_PASS', businessTruthStatus: 'UNVERIFIED' } },
+    reviews: [{ linkId: 'link-1', integrityStatus: 'VALID', applicability: 'CURRENT',
+      acceptanceStatus: 'REVIEW_ONLY_NOT_ACCEPTED', reviewerPrincipal: 'reviewer-1',
+      criteria: [{ disposition: 'SUPPORTED' }] }], acceptances: [] };
+  assert.equal(canAcceptIntentEvaluation(input), true);
+  assert.equal(canAcceptIntentEvaluation({ ...input, principal: 'reviewer-1' }), false,
+    'the reviewer cannot accept their own review');
+  assert.equal(canAcceptIntentEvaluation({ ...input, principal: 'other-1' }), false,
+    'a non-owner cannot accept');
+  assert.equal(canAcceptIntentEvaluation({ ...input, reviews: [{ ...input.reviews[0], reviewerPrincipal: 'owner-1' }] }), false);
+  assert.equal(canAcceptIntentEvaluation({ ...input, link: { ...input.link, applicability: 'STALE' } }), false);
+  assert.equal(canAcceptIntentEvaluation({ ...input, acceptances: [{ status: 'ACCEPTED', integrityStatus: 'VALID',
+    applicability: 'CURRENT', requirementId: input.requirement.id, draftRevision: 3 }] }), false,
+  'a valid acceptance for the current revision hides the action');
+  assert.equal(canAcceptIntentEvaluation({ ...input, acceptances: [{ status: 'ACCEPTED', integrityStatus: 'VALID',
+    applicability: 'STALE', requirementId: input.requirement.id, draftRevision: 2 }] }), true,
+  'a historical stale acceptance does not suppress a new current-revision action');
+});
+
+test('evidence review UI surfaces conflict resolution and preserves criterion outcomes', () => {
+  const client = readFileSync(new URL('../../public/sdlc.js', import.meta.url), 'utf8');
+  assert.match(client, /Explicit reviewer resolution when required/);
+  assert.match(client, /data-review-conflict-rationale/);
+  assert.match(client, /Conflict detected between typed business and technical criteria/);
+  assert.match(client, /A mandatory criterion is failed\. Record a rationale; the failure remains failed and acceptance stays blocked/);
+  assert.match(client, /decision: 'PRESERVE_CRITERION_OUTCOMES'/);
+  assert.match(client, /cannot override a failed mandatory criterion/);
+});
+
 test('SDLC API persists and resumes a golden case across process restart', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'orgward-sdlc-api-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -58,6 +279,58 @@ test('SDLC API persists and resumes a golden case across process restart', async
   assert.ok(changeCase.evidenceIntegrity.every((entry) => entry.valid));
 });
 
+test('runtime observations persist a non-authorizing design correction proposal across restart', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'orgward-sdlc-observation-proposal-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let app = await start(root);
+  t.after(async () => { if (app.server.listening) await close(app.server); });
+  let changeCase = await request(app.base, '/api/sdlc/cases', {
+    method: 'POST', body: JSON.stringify({ mode: 'golden' }),
+  }, 201);
+  changeCase = await request(app.base, `/api/sdlc/cases/${changeCase.id}/run`, {
+    method: 'POST', body: JSON.stringify({ version: changeCase.version, actor: 'orchestrator', idempotencyKey: 'ac4-run' }),
+  });
+  assert.equal(changeCase.currentStage, 'S9');
+  const approved = await request(app.base, `/api/sdlc/cases/${changeCase.id}/approve`, {
+    method: 'POST', body: JSON.stringify({ version: changeCase.version, idempotencyKey: 'ac4-approve',
+      principal: 'independent-release-owner', roles: ['release-approver', 'control-owner'] }),
+  });
+  const released = await request(app.base, `/api/sdlc/cases/${changeCase.id}/advance`, {
+    method: 'POST', body: JSON.stringify({ version: approved.version, actor: 'release-stage', idempotencyKey: 'ac4-release' }),
+  });
+  assert.equal(released.artifacts.release.status, 'RELEASED');
+  const releaseBeforeObservation = structuredClone(released.artifacts.release);
+  const observation = await request(app.base, `/api/sdlc/cases/${changeCase.id}/observe`, {
+    method: 'POST', body: JSON.stringify({ version: released.version, actor: 'operations-observer',
+      idempotencyKey: 'ac4-observe', signals: { technicalHealthy: false, controlExceptions: 2, manualWorkReduction: 60 } }),
+  });
+  assert.equal(observation.artifacts.observation.window, 'synthetic:first-30-days');
+  const outcome = await request(app.base, `/api/sdlc/cases/${changeCase.id}/advance`, {
+    method: 'POST', body: JSON.stringify({ version: observation.version, actor: 'outcome-stage', idempotencyKey: 'ac4-outcome' }),
+  });
+  const learned = await request(app.base, `/api/sdlc/cases/${changeCase.id}/advance`, {
+    method: 'POST', body: JSON.stringify({ version: outcome.version, actor: 'learning-stage', idempotencyKey: 'ac4-learning' }),
+  });
+  const proposal = learned.artifacts.learning.proposals.find((entry) => entry.type === 'DESIGN_CORRECTION_CLAIM');
+  assert.ok(proposal);
+  assert.equal(proposal.status, 'PROPOSED_NOT_APPLIED');
+  assert.equal(proposal.authorityRequired, true);
+  assert.deepEqual(proposal.derivedFrom, [learned.artifacts.observation.id, learned.artifacts.observation.contentHash,
+    learned.artifacts.observation.releaseRef, learned.artifacts.outcome.id]);
+  assert.equal(learned.artifacts.learning.authoritativeModelMutated, false);
+  assert.equal(learned.artifacts.release.contentHash, releaseBeforeObservation.contentHash);
+  assert.equal(learned.approvals.length, 1, 'observation and correction proposal add no release approval');
+  const caseId = learned.id;
+  await close(app.server);
+  app = await start(root);
+  const restored = await request(app.base, `/api/sdlc/cases/${caseId}`);
+  assert.deepEqual(restored.artifacts.learning.proposals, learned.artifacts.learning.proposals);
+  assert.equal(restored.artifacts.observation.window, 'synthetic:first-30-days');
+  assert.equal(restored.artifacts.release.contentHash, releaseBeforeObservation.contentHash);
+  assert.equal(restored.approvals.length, 1);
+  assert.ok(restored.evidenceIntegrity.every((entry) => entry.valid));
+});
+
 test('SDLC actions block when a sealed context manifest no longer verifies', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'orgward-sdlc-context-integrity-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -70,6 +343,8 @@ test('SDLC actions block when a sealed context manifest no longer verifies', asy
     method: 'POST', body: JSON.stringify({ version: changeCase.version, actor: 'orchestrator', idempotencyKey: 'context-pin-run' }),
   });
   assert.equal(changeCase.contextManifestIntegrity.valid, true);
+  assert.equal(changeCase.artifacts.context.manifestVersion, 4);
+  assert.equal(changeCase.artifacts.context.savedProjectCoverage, null);
   const tampered = await app.sdlcStore.get(changeCase.id);
   tampered.artifacts.context.coverage[0].rationale = 'Tampered coverage';
   await app.sdlcStore.save(tampered);
@@ -284,6 +559,54 @@ test('SDLC case pins a saved design source, rejects stale or unresolved selectio
   assert.equal(changeCase.evidenceLedger.find((entry) => entry.id === changeCase.artifacts.context.sourceBindingEvidenceRef).authority, 'SAVED_PROJECT_DESIGN');
   assert.equal(changeCase.artifacts.context.integrityContext.state, 'NOT_ASSESSED');
   assert.equal(changeCase.contextManifestIntegrity.valid, true);
+  assert.equal(changeCase.artifacts.context.manifestVersion, 4);
+  const savedCoverage = changeCase.artifacts.context.savedProjectCoverage;
+  assert.equal(savedCoverage.status, 'PARTIAL');
+  assert.equal(savedCoverage.candidateUniverse.exhaustive, true);
+  assert.match(savedCoverage.candidateUniverse.description, /not a project-wide or enterprise-wide inventory/);
+  assert.ok(savedCoverage.classifications.some((entry) => entry.status === 'REPRESENTED' && entry.objectRef === source.id));
+  assert.ok(savedCoverage.classifications.some((entry) => entry.status === 'UNKNOWN' && /external/.test(entry.domain)));
+  assert.equal(savedCoverage.sourcePins.projectPinHash, digest(changeCase.artifacts.context.savedProjectPin));
+  assert.equal(savedCoverage.sourcePins.blueprintSnapshotHash, changeCase.sourceBinding.sentinelContext.blueprintSnapshotHash);
+  assert.equal(savedCoverage.sourcePins.sentinel.availableProfile.id, 'orgward-sentinel-operational-accountability');
+  assert.equal(savedCoverage.sourcePins.sentinel.availableProfile.hash.length, 64);
+  assert.ok(savedCoverage.classifications.some((entry) => entry.domain === 'sentinel-profile' && entry.status === 'REPRESENTED'));
+  assert.equal(savedCoverage.classificationHash, digest(savedCoverage.classifications));
+  const historicalV3 = structuredClone(changeCase);
+  const oldCoverage = historicalV3.artifacts.context.savedProjectCoverage;
+  historicalV3.artifacts.context.manifestVersion = 3;
+  historicalV3.artifacts.context.savedProjectCoverage = { schemaVersion: 1, status: 'PARTIAL',
+    sourcePinHash: oldCoverage.sourcePinHash, processTraceHash: oldCoverage.processTraceHash,
+    represented: oldCoverage.represented, unknownDependencies: oldCoverage.unknownDependencies.slice(0, 4)
+      .map((entry) => ({ domain: entry.domain, description: entry.reason })),
+    excludedDependencies: { status: 'NOT_ENUMERATED', reason: 'The source adapter does not retrieve a complete project inventory; unselected project dependencies remain unknown rather than being declared excluded.' } };
+  const v3Creation = historicalV3.evidenceLedger.find((entry) => entry.id === historicalV3.artifacts.context.contextCreationEvidenceRef);
+  v3Creation.sourceId = `sdlc:case:${historicalV3.id}:context-manifest-created:v3`;
+  v3Creation.content = { manifestVersion: 3, sourceBindingHash: historicalV3.sourceBinding.bindingHash,
+    savedProjectPinHash: digest(historicalV3.artifacts.context.savedProjectPin),
+    savedProjectCoverageHash: digest(historicalV3.artifacts.context.savedProjectCoverage) };
+  v3Creation.contentHash = digest(v3Creation.content);
+  v3Creation.provenanceChain = [`case:${historicalV3.id}`, 'context-manifest-version:3',
+    `saved-project-pin:sha256:${digest(historicalV3.artifacts.context.savedProjectPin)}`,
+    `saved-project-coverage:sha256:${digest(historicalV3.artifacts.context.savedProjectCoverage)}`];
+  historicalV3.artifacts.context.evidenceManifest = historicalV3.evidenceLedger
+    .filter((entry) => historicalV3.artifacts.context.evidenceRefs.includes(entry.id)).map((entry) => ({
+      evidenceRef: entry.id, contentHash: entry.contentHash, sourceId: entry.sourceId, sourceType: entry.sourceType,
+      objectRef: entry.objectRef, authority: entry.authority, freshness: entry.freshness,
+    }));
+  const { provenanceManifestHash: _v4Hash, ...v3Manifest } = historicalV3.artifacts.context;
+  historicalV3.artifacts.context.provenanceManifestHash = digest(v3Manifest);
+  assert.equal(verifyContextManifest(historicalV3).valid, true, 'historical source-bound v3 coverage still verifies under its original recipe');
+  const changedIntent = structuredClone(changeCase);
+  changedIntent.intent.nonGoals = [...changedIntent.intent.nonGoals, 'No unrelated source reuse.'];
+  const { provenanceManifestHash: _changedIntentHash, ...changedIntentManifest } = changedIntent.artifacts.context;
+  changedIntent.artifacts.context.provenanceManifestHash = digest(changedIntentManifest);
+  assert.equal(verifyContextManifest(changedIntent).valid, false, 'a changed intent cannot reuse the original classifications even if the manifest is resealed');
+  const changedSource = structuredClone(changeCase);
+  changedSource.sourceBinding.sourceHash = 'f'.repeat(64);
+  const { provenanceManifestHash: _changedSourceHash, ...changedSourceManifest } = changedSource.artifacts.context;
+  changedSource.artifacts.context.provenanceManifestHash = digest(changedSourceManifest);
+  assert.equal(verifyContextManifest(changedSource).valid, false, 'a changed source cannot reuse the original classifications even if the manifest is resealed');
   const requestedImpact = changeCase.artifacts.impact.impacts.find((entry) => entry.isRequestedSource);
   assert.equal(requestedImpact.objectRef, source.id);
   assert.equal(requestedImpact.sourceHash, changeCase.sourceBinding.sourceHash);
@@ -329,6 +652,19 @@ test('SDLC case pins a saved design source, rejects stale or unresolved selectio
   assert.equal(changeCase.artifacts.context.sourceBindingHash, originalPin.sourceHash);
   assert.deepEqual(changeCase.artifacts.context.integrityContext, originalPin.integrityContext);
   assert.equal(changeCase.contextManifestIntegrity.valid, true);
+  assert.deepEqual(changeCase.artifacts.context.savedProjectCoverage.classifications,
+    savedCoverage.classifications, 'the exact classification set survives persisted readback and restart');
+  const beforeCoverageTamper = await app.sdlcStore.get(caseId);
+  const tamperedCoverage = structuredClone(beforeCoverageTamper);
+  tamperedCoverage.artifacts.context.savedProjectCoverage.classifications[0].reason = 'resealed altered classification';
+  const { provenanceManifestHash: _oldCoverageSeal, ...coverageManifest } = tamperedCoverage.artifacts.context;
+  tamperedCoverage.artifacts.context.provenanceManifestHash = digest(coverageManifest);
+  await app.sdlcStore.save(tamperedCoverage);
+  changeCase = await request(app.base, `/api/sdlc/cases/${caseId}`);
+  assert.equal(changeCase.contextManifestIntegrity.valid, false, 'creation evidence pins the v4 classification set independently of the manifest seal');
+  await app.sdlcStore.save(beforeCoverageTamper);
+  changeCase = await request(app.base, `/api/sdlc/cases/${caseId}`);
+  assert.equal(changeCase.contextManifestIntegrity.valid, true);
   assert.ok(changeCase.artifacts.context.evidenceRefs.includes(changeCase.artifacts.context.sourceBindingEvidenceRef));
   assert.equal(changeCase.artifacts.impact.impacts.find((entry) => entry.isRequestedSource).sourceHash, originalPin.sourceHash);
 
@@ -350,7 +686,8 @@ test('SDLC case pins a saved design source, rejects stale or unresolved selectio
   const invalidAction = await request(app.base, `/api/sdlc/cases/${caseId}/advance`, {
     method: 'POST', body: JSON.stringify({ version: changeCase.version, actor: 'orchestrator', idempotencyKey: 'invalid-pin-advance' }),
   }, 409);
-  assert.match(invalidAction.error, /integrity check/);
+  assert.equal(invalidAction.error.code, 'CONTEXT_MANIFEST_INTEGRITY_INVALID');
+  assert.match(invalidAction.error.message, /saved context manifest or its evidence references failed verification/);
   const unchangedTampered = await request(app.base, `/api/sdlc/cases/${caseId}`);
   assert.equal(unchangedTampered.version, changeCase.version);
   assert.deepEqual(unchangedTampered.events, changeCase.events);
@@ -488,9 +825,10 @@ test('source-bound requirements are revisioned, validated, owner-accepted and in
   assert.equal(baseline.requirements[0].status, 'ACCEPTED');
   assert.equal(accepted.artifacts.requirements.requirements[0].status, 'ACCEPTED');
   assert.equal(accepted.contextManifestIntegrity.valid, true);
-  assert.equal(accepted.artifacts.context.manifestVersion, 3);
+  assert.equal(accepted.artifacts.context.manifestVersion, 4);
   assert.equal(accepted.artifacts.context.manifestRevision, 2);
   assert.equal(accepted.artifacts.context.savedProjectCoverage.status, 'PARTIAL');
+  assert.equal(accepted.artifacts.context.savedProjectCoverage.schemaVersion, 2);
   assert.equal(accepted.artifacts.context.savedProjectCoverage.sourcePinHash,
     digest(accepted.artifacts.context.savedProjectPin));
   assert.equal(accepted.artifacts.context.relevantRequirements.contentHash, baseline.contentHash);
@@ -584,6 +922,94 @@ test('source-bound requirements are revisioned, validated, owner-accepted and in
   assert.equal(blockedArchitecture.currentStage, 'S6');
   assert.equal(blockedArchitecture.status, 'BLOCKED');
   assert.ok(blockedArchitecture.gateHistory.at(-1).findings.some((entry) => entry.code === 'ACCEPTED_ARCHITECTURE_INVALID'));
+});
+
+test('owner can append a requirement from the saved process trace with exact replay and preserved history', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'orgward-sdlc-add-process-requirement-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const app = await start(root);
+  t.after(async () => { if (app.server.listening) await close(app.server); });
+  const project = createProject('Append process requirement');
+  for (const answer of [
+    'A membership that reduces restaurant equipment downtime.',
+    'Independent restaurant owners need clear maintenance records.',
+    'Monthly membership funds preventive service.',
+    'Owners approve safety critical work.',
+  ]) addConversationTurn(project, answer);
+  project.version = 1;
+  project.tenantId = 'tenant-reference-bank';
+  await app.store.save(project);
+  const blueprint = latestBlueprint(project);
+  const process = Object.values(blueprint.areas).flatMap((area) => area.items).find((item) => item.type === 'process');
+  assert.ok(process);
+  let current = await request(app.base, '/api/sdlc/cases', { method: 'POST', body: JSON.stringify({
+    mode: 'golden', projectId: project.id, sourceObjectId: process.id, expectedProjectVersion: project.version,
+    expectedBlueprintId: blueprint.id, expectedBlueprintVersion: blueprint.version,
+  }) }, 201);
+  current = await request(app.base, `/api/sdlc/cases/${current.id}/run`, { method: 'POST',
+    body: JSON.stringify({ version: current.version, idempotencyKey: 'append-process-req-to-s4' }) });
+  assert.equal(current.currentStage, 'S4');
+  const before = structuredClone(current);
+  const originalRequirement = structuredClone(before.artifacts.requirements.requirements[0]);
+  const requestBody = { version: before.version, expectedDraftRevision: before.artifacts.requirements.draftRevision,
+    statement: 'The owner records a distinct exception outcome for each process execution.',
+    rationale: 'This separate concern follows from the exact saved process and preserves the original requirement.',
+    acceptanceCriteria: ['Each exception is linked to the process trace.', 'The exception outcome remains reviewable.'],
+    traceRefIds: [before.processRequirementTrace.process.id, before.processRequirementTrace.outcome.outputRefs[0].id],
+    idempotencyKey: 'append-process-requirement-owner-command' };
+  const invalid = await fetch(`${app.base}/api/sdlc/cases/${before.id}/add-requirement`, { method: 'POST',
+    body: JSON.stringify({ ...requestBody, processTrace: { traceHash: 'caller-forgery' } }) });
+  assert.equal(invalid.status, 400, 'clients cannot supply trace or source pin fields');
+  const deniedState = await request(app.base, `/api/sdlc/cases/${before.id}`);
+  assert.equal(deniedState.version, before.version);
+  assert.deepEqual(deniedState.events, before.events);
+  const invalidReference = await fetch(`${app.base}/api/sdlc/cases/${before.id}/add-requirement`, { method: 'POST',
+    body: JSON.stringify({ ...requestBody, traceRefIds: ['caller-invented-reference'], idempotencyKey: 'append-process-requirement-invalid-ref' }) });
+  assert.equal(invalidReference.status, 400, 'trace references must be selected from the saved case trace');
+  const afterInvalidReference = await request(app.base, `/api/sdlc/cases/${before.id}`);
+  assert.equal(afterInvalidReference.version, before.version);
+  assert.deepEqual(afterInvalidReference.events, before.events);
+  const duplicateStatement = await fetch(`${app.base}/api/sdlc/cases/${before.id}/add-requirement`, { method: 'POST',
+    body: JSON.stringify({ ...requestBody,
+      statement: originalRequirement.statement.toUpperCase().replace(/\s+/g, '   '),
+      idempotencyKey: 'append-process-requirement-duplicate' }) });
+  assert.equal(duplicateStatement.status, 409, 'a case- and whitespace-normalized duplicate statement is rejected before append');
+  const afterDuplicateStatement = await request(app.base, `/api/sdlc/cases/${before.id}`);
+  assert.equal(afterDuplicateStatement.version, before.version);
+  assert.deepEqual(afterDuplicateStatement.events, before.events);
+
+  const added = await request(app.base, `/api/sdlc/cases/${before.id}/add-requirement`, {
+    method: 'POST', body: JSON.stringify(requestBody),
+  });
+  const requirement = added.artifacts.requirements.requirements.find((entry) => entry.id === added.events.at(-1).data.requirementId);
+  assert.ok(requirement);
+  assert.equal(added.version, before.version + 1);
+  assert.equal(added.artifacts.requirements.draftRevision, before.artifacts.requirements.draftRevision + 1);
+  assert.equal(requirement.status, 'DRAFT');
+  assert.equal(requirement.criterionContract, undefined);
+  assert.deepEqual(requirement.processTrace, before.processRequirementTrace);
+  assert.deepEqual(requirement.verificationContract, originalRequirement.verificationContract);
+  assert.deepEqual(requirement.sourceLinks, originalRequirement.sourceLinks);
+  assert.deepEqual(requirement.derivedFrom, requestBody.traceRefIds);
+  assert.deepEqual(requirement.affectedObjects, requestBody.traceRefIds);
+  assert.deepEqual(added.artifacts.requirements.requirements[0], originalRequirement,
+    'existing requirement content, criterion history and evidence remain byte-for-byte unchanged');
+  assert.equal(added.events.at(-1).type, 'RequirementAddedFromSavedProcess');
+  assert.equal(added.events.at(-1).data.processTraceHash, before.processRequirementTrace.traceHash);
+  const replay = await request(app.base, `/api/sdlc/cases/${before.id}/add-requirement`, {
+    method: 'POST', body: JSON.stringify(requestBody),
+  });
+  assert.equal(replay.command.replayed, true);
+  assert.equal(replay.version, added.version);
+  assert.equal(replay.artifacts.requirements.requirements.length, added.artifacts.requirements.requirements.length);
+  assert.deepEqual(replay.events, added.events);
+
+  const client = readFileSync(new URL('../../public/sdlc.js', import.meta.url), 'utf8');
+  assert.match(client, /add-saved-process-requirement-form/);
+  assert.match(client, /Add requirement from this saved process/);
+  assert.match(client, /The server supplies the trace, source links, and verification contract/);
+  assert.match(client, /saved-process-trace-reference-list/);
+  assert.match(client, /Your entries and selected references remain in the form/);
 });
 
 test('process-bound requirement draft traces the exact selected process and stays explicitly unexecuted across restart', async (t) => {
@@ -714,6 +1140,7 @@ test('process-run evidence links require verified human identity and never accep
     runId: `execution-run-${'1'.repeat(8)}-${'1'.repeat(4)}-${'1'.repeat(4)}-${'1'.repeat(4)}-${'1'.repeat(12)}`,
     idempotencyKey: 'unauthenticated-run-link', status: 'SUCCEEDED', outputHash: 'forged',
   }) }, 401);
+  await request(app.base, `/api/sdlc/cases/${created.id}/process-run-evidence-reviews`, { method: 'POST', body: JSON.stringify({}) }, 401);
   const unchanged = await request(app.base, `/api/sdlc/cases/${created.id}`);
   assert.equal(unchanged.version, created.version);
   assert.equal(unchanged.events.length, created.events.length);
@@ -730,7 +1157,7 @@ test('process-run evidence presentation shows exact runtime identity, hashes, an
   assert.match(presentation.identity, /task-process-learn.*process-plan-.*r3.*instance 00000000/);
   assert.match(presentation.hashes, new RegExp(`Run aggregate SHA-256 ${'a'.repeat(64)} · plan SHA-256`));
   assert.match(presentation.hashes, new RegExp(`task SHA-256 ${'b'.repeat(64)}`));
-  assert.equal(presentation.applicability, 'STALE: the requirement draft changed after this link was created.');
+  assert.match(presentation.applicability, /^STALE · REGENERATION_REQUIRED: this immutable evidence remains pinned to its original requirement and criterion revision\.$/);
 });
 
 test('human output evidence presentation separates reported values from execution verification', () => {
@@ -775,6 +1202,38 @@ test('repository check receipts remain a separate evidence category', () => {
     verificationStatus: 'NOT_EXECUTED', applicability: 'CURRENT', repositoryCheckEvidenceStatus: 'PENDING',
   });
   assert.equal(pending.repositoryCheckStatus, 'PENDING');
+});
+
+test('repository-check observation presentation keeps code scope and proposal authority explicit', () => {
+  const view = repositoryCheckObservationPresentation({ id: 'repository-check-observation-1', category: 'REPOSITORY_CHECK',
+    runId: 'execution-run-1', planId: 'plan-1', planRevision: 4, taskId: 'task-1',
+    runOutcome: 'SUCCEEDED', verifierResult: { id: 'verifier-1', version: '3', status: 'PASSED', outputHash: 'e'.repeat(64) },
+    candidateEvidenceHash: 'a'.repeat(64), contentHash: 'b'.repeat(64), causality: 'HYPOTHESIS',
+    businessTruthStatus: 'UNVERIFIED', verificationStatus: 'NOT_EXECUTED',
+    checks: [{ id: 'unit-check', version: '1', status: 'FAILED', commandHash: 'c'.repeat(64), outputHash: 'd'.repeat(64) }] },
+  { title: 'Review failed check', status: 'PROPOSED_NOT_APPLIED', proposedClaim: 'Review pinned candidate code.', authorityRequired: true });
+  assert.match(view.heading, /Repository-check observation/);
+  assert.match(view.pins, /execution-run-1.*plan-1 r4.*task-1.*candidate evidence SHA-256/);
+  assert.match(view.outcome, /Execution run SUCCEEDED.*verifier verifier-1 v3: PASSED.*output SHA-256/);
+  assert.match(view.checks[0], /unit-check v1: FAILED.*command SHA-256.*output SHA-256/);
+  assert.match(view.status, /causality HYPOTHESIS.*business truth UNVERIFIED.*verification NOT_EXECUTED/);
+  assert.match(view.proposal, /PROPOSED_NOT_APPLIED.*authority required.*Review pinned candidate code/);
+  assert.equal(repositoryCheckObservationPresentation({ ...{ id: 'bad', category: 'HUMAN_REPORTED', contentHash: 'x' } }), null);
+});
+
+test('behavior evaluation presentation keeps checked scope separate from unknown risk and business truth', () => {
+  const presentation = processRunEvidencePresentation({
+    run: { id: 'execution-run-1', status: 'SUCCEEDED', aggregateHash: 'a'.repeat(64) },
+    plan: { id: 'process-plan-1', revision: 3, taskId: 'task-check', taskHash: 'b'.repeat(64) },
+    instance: { id: 'instance-1', status: 'SUCCEEDED' }, verificationStatus: 'NOT_EXECUTED',
+    applicability: 'CURRENT', behaviorEvaluation: { status: 'CHECKED_BEHAVIOR', result: 'UNKNOWN',
+      riskCoverage: 'UNKNOWN', businessTruthStatus: 'UNVERIFIED', assertions: [{ testName: 'named criterion check',
+        status: 'TEST_PASS', outputHash: 'c'.repeat(64) }], scenarioMappings: [{ type: 'POSITIVE',
+        status: 'VERIFIED_TO_PASSING_ASSERTION', scope: 'ASSERTION_LINKAGE_ONLY', caseStatus: 'NOT_EXECUTED' }] },
+  });
+  assert.match(presentation.behaviorEvaluation.status, /CHECKED_BEHAVIOR.*result UNKNOWN.*risk coverage UNKNOWN.*business truth UNVERIFIED.*verification remains NOT_EXECUTED/);
+  assert.match(presentation.behaviorEvaluation.assertions[0], /named criterion check: TEST_PASS.*output SHA-256/);
+  assert.match(presentation.behaviorEvaluation.scenarioMappings[0], /POSITIVE: mapping VERIFIED_TO_PASSING_ASSERTION.*ASSERTION_LINKAGE_ONLY.*case remains NOT_EXECUTED/);
 });
 
 test('authenticated SDLC routes fail closed when principal-scoped store methods are unavailable', async (t) => {
@@ -869,6 +1328,16 @@ test('served SDLC product surface and meta contract expose stages and mutation l
   assert.match(script, /attrs: \{ role: 'status' \}/);
   assert.match(script, /requirement-edit-disclosure/);
   assert.match(script, /Pinned process requirement trace · DRAFT · NOT EXECUTED/);
+  assert.match(script, /Independent evidence reviews/);
+  assert.match(script, /Record independent review/);
+  assert.match(script, /processEvidenceReviewPresentation\(review\)/);
+  assert.match(script, /This does not verify truth or execute behavior; status remains NOT EXECUTED/);
+  assert.match(script, /section\('Proposed design corrections', learningProposals\.map/,
+    'runtime observations are surfaced in the SDLC case UI as proposed corrections');
+  assert.match(script, /proposal\.status\.replaceAll\('_', ' '\)/,
+    'the rendered proposal exposes the explicit unapplied status');
+  assert.match(script, /This proposal does not change the saved design or authorize another release\./,
+    'the UI states that the observation grants no design or release authority');
   assert.match(script, /\$\{contract\.type\}/);
   assert.match(script, /Simulation results and caller-supplied records do not count as verified execution/);
   assert.match(script, /text: `Edit \$\{requirement\.id\}`/);
@@ -881,6 +1350,12 @@ test('served SDLC product surface and meta contract expose stages and mutation l
   assert.match(script, /Engine task ID \$\{task\.id\}/);
   assert.match(script, /taskById\.get\(dependencyId\)\?\.g6WorkItemId/);
   assert.match(script, /PROPOSED DRAFT · No owner-reviewed assignment snapshot yet/);
+  assert.match(script, /SOURCE STALE · This saved draft remains available as history/,
+    'stale software delivery drafts remain visible with their immutable source pins');
+  assert.match(script, /sourceIsCurrent && review && humanAssignments/,
+    'stale source status hides promotion controls');
+  assert.match(script, /\.\.\.\(sourceIsCurrent \? \[\(\(\) => \{/,
+    'stale source status hides assignment editing while keeping the saved draft visible');
   assert.match(script, /OWNER REVIEWED · Revision/);
   assert.match(script, /Save owner review snapshot/);
   assert.match(script, /assignment-review/);

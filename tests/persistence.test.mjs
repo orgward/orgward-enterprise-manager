@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { createHash, generateKeyPairSync, randomUUID } from 'node:crypto';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, watch, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import http from 'node:http';
@@ -18,14 +18,21 @@ import { deriveBlueprintProposalReviewState } from '../public/proposal-review-st
 import { processTaskSourceReview } from '../public/process-task-source-review.mjs';
 import { processTaskHumanInputReview } from '../public/human-task-input-review.mjs';
 import { humanTaskOutputApplicationState } from '../public/human-task-output-application.mjs';
+import { canAcceptIntentEvaluation, processBehaviorTestPlanPresentation } from '../public/sdlc-view.mjs';
 import { createChangeCase } from '../src/sdlc/engine.mjs';
 import { digest } from '../src/sdlc/contracts.mjs';
+import { verifyProcessBehaviorTestPlan } from '../src/sdlc/behavior-test-evidence.mjs';
+import { T91_N2_PRODUCT_FIXTURE_TEMPLATE_HASH, T91_N3_PRODUCT_FIXTURE_TEMPLATE_HASH,
+  t91N2AuthorizationFixtureHash } from '../src/sdlc/product-harness.mjs';
+import { annotateT91FixtureDispatchError, T91N2FixtureDatabaseProvider } from '../src/platform/t91-n2-fixture-provider.mjs';
+import { runT91N2AuthorizationProductFixture } from '../src/platform/t91-n2-product-fixture.mjs';
 import { createExecutionRun, executionApprovalRequestHash, executionEvent } from '../src/execution/contracts.mjs';
 import { buildBlueprintProposalPrompt } from '../src/execution/proposals.mjs';
 import { parseGitHubCheckPlan } from '../src/execution/github-verifier-profile.mjs';
 import { parseGitHubBuildPlan } from '../src/execution/github-build-plan.mjs';
+import { T91_DELETED_FAILING_TEST_SOURCE } from './fixtures/t91-deleted-failing-test-source.mjs';
 import { PostgresOidcSessionStore } from '../src/platform/oidc-sessions.mjs';
-import { contentHash } from '../src/platform/postgres.mjs';
+import { contentHash, recordEvent } from '../src/platform/postgres.mjs';
 import {
   compileSoftwareDeliveryDraft,
   LEGACY_SOFTWARE_PLAN_COMPILER_VERSION,
@@ -34,6 +41,8 @@ import {
 } from '../src/sdlc/software-plan-compiler.mjs';
 import { startPostgres } from './helpers/postgres.mjs';
 import { currentMigrationVersion } from './helpers/migration-registry.mjs';
+import { withHeadlessChromium } from './helpers/chromium-cdp.mjs';
+import { startTestPostgresCluster, stopTestPostgresCluster } from './helpers/postgres-cluster.mjs';
 
 const tenantHeaders = { 'content-type': 'application/json', authorization: 'Bearer alice' };
 
@@ -1808,6 +1817,38 @@ test('risk mitigating-control selection updates both references atomically and s
     method: 'POST', headers: { authorization: `Bearer ${subject}` },
     body: command(commandId, payload, expectedVersion),
   }, expected);
+  const processRisk = project.latestBlueprint.areas.governanceRiskControls.items.find((item) => item.id === 'risk-unvalidated-demand');
+  const processRiskEdit = { objectId: processRisk.id, name: processRisk.name, detail: processRisk.detail, processIds: ['process-learn'] };
+  const processRiskInitialVersion = project.version;
+  const processRiskReader = await sendEdit('readonly', 'risk-process-reader', processRiskEdit, project.version, 403);
+  assert.equal(processRiskReader.error.code, 'ACTION_FORBIDDEN');
+  const processRiskCrossTenant = await sendEdit('tenant-b-admin', 'risk-process-cross-tenant', processRiskEdit, project.version, 404);
+  assert.equal(processRiskCrossTenant.error.code, 'PROJECT_NOT_FOUND');
+  const processRiskWrongTarget = await sendEdit('alice', 'risk-process-wrong-target', {
+    ...processRiskEdit, processIds: ['risk-unsafe-automation'],
+  }, project.version, 400);
+  assert.equal(processRiskWrongTarget.error.code, 'INVALID_BLUEPRINT_RELATION');
+  const processRiskForeignOnly = await sendEdit('alice', 'risk-process-foreign-only', {
+    objectId: 'risk-only-in-other-project', name: processRisk.name, detail: processRisk.detail, processIds: ['process-learn'],
+  }, project.version, 404);
+  assert.equal(processRiskForeignOnly.error.code, 'BLUEPRINT_OBJECT_NOT_FOUND');
+  const linkedProcessRisk = await sendEdit('alice', 'risk-process-link', processRiskEdit, project.version);
+  project = linkedProcessRisk.data;
+  const linkedProcessRiskRecord = project.latestBlueprint.areas.governanceRiskControls.items.find((item) => item.id === processRisk.id);
+  assert.deepEqual(linkedProcessRiskRecord.processIds, ['process-learn'], 'owner explicitly declares the existing risk applies to the selected process');
+  const processRiskReplay = await sendEdit('alice', 'risk-process-link', processRiskEdit, processRiskInitialVersion);
+  assert.equal(processRiskReplay.meta.replayed, true);
+  const processRiskConflict = await sendEdit('alice', 'risk-process-link', { ...processRiskEdit, processIds: [] }, processRiskInitialVersion, 409);
+  assert.equal(processRiskConflict.error.code, 'IDEMPOTENCY_CONFLICT');
+  const processRiskStale = await sendEdit('alice', 'risk-process-stale-version', processRiskEdit, processRiskInitialVersion, 409);
+  assert.ok(processRiskStale.error, 'a different command cannot apply against the stale project/blueprint version');
+  const beforeRiskLinkRestartVersion = project.version;
+  await close(app);
+  app = await start(postgres.databaseUrl);
+  project = (await request(app.base, `/api/v1/projects/${project.id}`)).data;
+  assert.equal(project.version, beforeRiskLinkRestartVersion);
+  assert.deepEqual(project.latestBlueprint.areas.governanceRiskControls.items.find((item) => item.id === processRisk.id).processIds,
+    ['process-learn'], 'the exact process-risk relationship persists across restart');
   const risk = project.latestBlueprint.areas.governanceRiskControls.items.find((item) => item.id === 'risk-unsafe-automation');
   const editBase = { objectId: risk.id, name: risk.name, detail: risk.detail };
   const initialVersion = project.version;
@@ -2301,6 +2342,9 @@ test('owner-only internal blueprint publication snapshots disclosures immutably 
     method: 'POST', body: command('internal-publication-project', { name: 'Internal publication test' }),
   }, 201);
   let project = created.data;
+  assert.equal(project.blueprintPublicationStatus.status, 'NOT_PUBLISHED');
+  assert.equal(project.blueprintPublicationConsistency.status, 'PENDING');
+  assert.equal(project.blueprintPublicationConsistency.reason, 'BASELINE_NOT_PUBLISHED');
   for (const [index, content] of [
     'A repair service for independent restaurants.',
     'Restaurants need dependable repairs and clear service records.',
@@ -2321,6 +2365,7 @@ test('owner-only internal blueprint publication snapshots disclosures immutably 
     blueprintId: project.latestBlueprint.id,
     blueprintVersion: project.latestBlueprint.version,
     acknowledgeDisclosures: true,
+    impactHash: project.blueprintPublicationImpact.impactHash,
   };
   const publish = (subject, commandId, payload = publishPayload, expectedVersion = project.version, expected = 200) => request(app.base, route, {
     method: 'POST', headers: { authorization: `Bearer ${subject}` },
@@ -2367,7 +2412,10 @@ test('owner-only internal blueprint publication snapshots disclosures immutably 
   await app.persistence.query(`update orgward.aggregates set state=$1::jsonb,state_hash=$2
     where tenant_id='tenant-a' and aggregate_kind='project' and aggregate_id=$3`,
   [JSON.stringify(persisted), contentHash(persisted), project.id]);
-  const invalid = await publish('alice', 'internal-publication-invalid-schema', publishPayload, project.version, 409);
+  const invalidView = (await request(app.base, `/api/v1/projects/${project.id}`)).data;
+  const invalid = await publish('alice', 'internal-publication-invalid-schema', {
+    ...publishPayload, impactHash: invalidView.blueprintPublicationImpact.impactHash,
+  }, project.version, 409);
   assert.equal(invalid.error.code, 'BLUEPRINT_PUBLICATION_INVALID');
   blueprint.areas.purposeStrategy.status = priorStatus;
   blueprint.areas.customersOfferingsValueEconomics.status = 'unknown';
@@ -2397,7 +2445,16 @@ test('owner-only internal blueprint publication snapshots disclosures immutably 
     blueprintId: project.latestBlueprint.id,
     blueprintVersion: project.latestBlueprint.version,
     acknowledgeDisclosures: true,
+    impactHash: project.blueprintPublicationImpact.impactHash,
   }, publishExpectedVersion);
+  const staleImpact = await publish('alice', 'internal-publication-stale-impact', {
+    ...publishPayload, impactHash: '0'.repeat(64),
+  }, publishExpectedVersion, 409);
+  assert.equal(staleImpact.error.code, 'BLUEPRINT_PUBLICATION_IMPACT_STALE');
+  const afterStaleImpact = (await request(app.base, `/api/v1/projects/${project.id}`)).data;
+  assert.equal(afterStaleImpact.version, publishExpectedVersion);
+  assert.equal(afterStaleImpact.blueprintPublications?.length ?? 0, beforePublicationCount,
+    'a stale impact manifest does not publish or mutate the aggregate');
   const publicationRollbackVersion = project.version;
   const publicationRollbackCount = project.blueprintPublications?.length ?? 0;
   await app.persistence.query(`create function orgward.reject_internal_publication_audit() returns trigger language plpgsql as $$
@@ -2427,11 +2484,17 @@ test('owner-only internal blueprint publication snapshots disclosures immutably 
   assert.equal(project.blueprintPublications.length, beforePublicationCount + 1);
   assert.deepEqual(project.blueprintVersions, beforeBlueprints, 'publication must not mutate or add a blueprint version');
   assert.equal(project.latestBlueprint.epistemicStatus, 'proposed-design');
+  assert.equal(project.blueprintPublicationStatus.status, 'CURRENT_FOR_SAVED_BLUEPRINT');
   const publication = project.blueprintPublications.at(-1);
+  assert.equal(project.blueprintPublicationConsistency.status, 'CONSISTENT');
+  assert.equal(project.blueprintPublicationConsistency.projectLens.projectVersion, project.version);
+  assert.equal(project.blueprintPublicationConsistency.baselineLens.projectVersion, publication.publishedProjectVersion);
   assert.equal(publication.blueprintId, project.latestBlueprint.id);
   assert.equal(publication.blueprintVersion, project.latestBlueprint.version);
-  assert.equal(publication.publicationSchemaVersion, 2);
+  assert.equal(publication.publicationSchemaVersion, 3);
   assert.equal(publication.sourceSnapshotHash, blueprintSnapshotHash(project.latestBlueprint));
+  assert.equal(publication.impactHash, afterStaleImpact.blueprintPublicationImpact.impactHash);
+  assert.deepEqual(publication.impactManifest, afterStaleImpact.blueprintPublicationImpact);
   assert.equal(publication.publishedProjectVersion, project.version);
   assert.equal(publication.publishedBy, principal('alice'));
   assert.match(publication.digest, /^[a-f0-9]{64}$/);
@@ -2443,8 +2506,9 @@ test('owner-only internal blueprint publication snapshots disclosures immutably 
   assert.equal(publicationEvent.aggregateVersion, publication.publishedProjectVersion);
   assert.deepEqual(publicationEvent.data, {
     publicationId: publication.id, blueprintId: publication.blueprintId, blueprintVersion: publication.blueprintVersion,
-    digest: publication.digest, publicationSchemaVersion: 2, sourceSnapshotHash: publication.sourceSnapshotHash,
+    digest: publication.digest, publicationSchemaVersion: 3, sourceSnapshotHash: publication.sourceSnapshotHash,
     publishedProjectVersion: publication.publishedProjectVersion, publicationHash: publication.publicationHash,
+    impactHash: publication.impactHash,
   });
   assert.ok(publication.disclosures.gaps.length > 0);
   assert.deepEqual(publication.disclosures.gaps, validateBlueprint(project.latestBlueprint).gaps);
@@ -2466,6 +2530,7 @@ test('owner-only internal blueprint publication snapshots disclosures immutably 
   assert.equal(idempotencyConflict.error.code, 'IDEMPOTENCY_CONFLICT');
   const staleAggregate = await publish('alice', 'internal-publication-stale-aggregate', {
     blueprintId: project.latestBlueprint.id, blueprintVersion: project.latestBlueprint.version, acknowledgeDisclosures: true,
+    impactHash: project.blueprintPublicationImpact.impactHash,
   }, publishExpectedVersion, 409);
   assert.equal(staleAggregate.error.code, 'VERSION_CONFLICT');
 
@@ -2489,6 +2554,7 @@ test('owner-only internal blueprint publication snapshots disclosures immutably 
   };
   const racePublicationPayload = {
     blueprintId: project.latestBlueprint.id, blueprintVersion: project.latestBlueprint.version, acknowledgeDisclosures: true,
+    impactHash: project.blueprintPublicationImpact.impactHash,
   };
   const raceResults = await Promise.all([
     fetch(`${app.base}${route}`, { method: 'POST', headers: tenantHeaders, body: command('internal-publication-race', racePublicationPayload, raceVersion) }),
@@ -2501,6 +2567,41 @@ test('owner-only internal blueprint publication snapshots disclosures immutably 
   assert.ok(racePublication.blueprintVersion <= project.latestBlueprint.version);
   if (raceBodies[0].data) assert.equal(raceBodies[0].data.blueprintPublications.at(-1).blueprintVersion, racePublication.blueprintVersion);
   if (raceBodies[1].data) assert.equal(raceBodies[1].data.latestBlueprint.version, racePublication.blueprintVersion + 1);
+  const publicationHistoryBeforeAdvance = structuredClone(project.blueprintPublications);
+  const publicationEventsBeforeAdvance = structuredClone(project.events.filter((event) => event.type === 'BlueprintInternalBaselinePublished'));
+  const postPublicationEdit = await fetch(`${app.base}/api/v1/projects/${project.id}/blueprint/edits`, {
+    method: 'POST', headers: tenantHeaders, body: command('internal-publication-mark-stale', {
+      objectId: 'goal-customer-outcome', name: 'Outcome after baseline publication',
+      detail: 'A newer proposed outcome definition after the published design snapshot.',
+      ownerRoleName: 'Founder / enterprise owner',
+    }, project.version),
+  });
+  assert.equal(postPublicationEdit.status, 200, await postPublicationEdit.clone().text());
+  project = (await postPublicationEdit.json()).data;
+  assert.equal(project.blueprintPublicationStatus.status, 'STALE');
+  assert.equal(project.blueprintPublicationStatus.reason, 'SAVED_BLUEPRINT_ADVANCED');
+  assert.equal(project.blueprintPublicationConsistency.status, 'STALE');
+  assert.equal(project.blueprintPublicationConsistency.reason, 'PROJECT_VERSION_MISMATCH');
+  assert.notEqual(project.blueprintPublicationConsistency.projectLens.projectVersion,
+    project.blueprintPublicationConsistency.baselineLens.projectVersion);
+  assert.deepEqual(project.blueprintPublications, publicationHistoryBeforeAdvance,
+    'staleness is derived without mutating immutable publication history');
+  assert.deepEqual(project.events.filter((event) => event.type === 'BlueprintInternalBaselinePublished'), publicationEventsBeforeAdvance,
+    'a later proposed edit does not rewrite the earlier publication event');
+  const replayAfterAdvance = await request(app.base, route, { method: 'POST', body: publishBody });
+  assert.equal(replayAfterAdvance.meta.replayed, true);
+  assert.equal(replayAfterAdvance.meta.commandResultProjectVersion, publication.publishedProjectVersion);
+  assert.equal(replayAfterAdvance.meta.projectedProjectVersion, project.version);
+  assert.equal(replayAfterAdvance.data.latestBlueprint.version, project.latestBlueprint.version,
+    'an idempotent replay projects the current saved blueprint');
+  assert.equal(replayAfterAdvance.data.blueprintPublicationStatus.status, 'STALE',
+    'an old publish key cannot make a later blueprint current');
+  assert.equal(replayAfterAdvance.data.blueprintPublicationConsistency.status, 'STALE',
+    'replayed baseline cannot claim consistency with the newer project version');
+  assert.deepEqual(replayAfterAdvance.data.blueprintPublications.find((entry) => entry.id === publication.id), publication,
+    'the original immutable publication result remains in the current projection');
+  assert.deepEqual(replayAfterAdvance.event, publicationEvent,
+    'replay returns the original immutable publication event');
 
   await close(app);
   app = await start(postgres.databaseUrl);
@@ -2568,12 +2669,15 @@ test('owner-only internal blueprint publication snapshots disclosures immutably 
   delete legacyPublication.sourceSnapshotHash;
   delete legacyPublication.publishedProjectVersion;
   delete legacyPublication.publicationHash;
+  delete legacyPublication.impactHash;
+  delete legacyPublication.impactManifest;
   legacyState.blueprintPublications[legacyState.blueprintPublications.findIndex((entry) => entry.id === publication.id)] = legacyPublication;
   const legacyEvent = eventForTamper(legacyState);
   delete legacyEvent.data.publicationSchemaVersion;
   delete legacyEvent.data.sourceSnapshotHash;
   delete legacyEvent.data.publishedProjectVersion;
   delete legacyEvent.data.publicationHash;
+  delete legacyEvent.data.impactHash;
   assert.equal(verifyBlueprintPublicationWatermark(legacyState, legacyPublication).historical, true);
   await app.persistence.query(`update orgward.aggregates set state=$1::jsonb,state_hash=$2
     where tenant_id='tenant-a' and aggregate_kind='project' and aggregate_id=$3`,
@@ -2583,6 +2687,8 @@ test('owner-only internal blueprint publication snapshots disclosures immutably 
       and command_id='internal-publication-owner-success'`, [JSON.stringify(legacyState), contentHash(legacyState)]);
   assert.equal(legacyCommandRow.rowCount, 1);
   const legacyRead = await request(app.base, `/api/v1/projects/${project.id}`);
+  assert.equal(legacyRead.data.blueprintPublicationStatus.status, 'UNKNOWN',
+    'the historical record is never inferred current from the latest design');
   assert.deepEqual(legacyRead.data.blueprintPublications.find((entry) => entry.id === publication.id), legacyPublication,
     'historical publication record bytes and digest remain unchanged on read');
   const legacyReplay = await request(app.base, route, { method: 'POST', body: publishBody });
@@ -3292,6 +3398,27 @@ test('change cases and execution runs use PostgreSQL compare-and-swap state acro
   }, 409);
   assert.equal(promotionConflict.error.code, 'IDEMPOTENCY_CONFLICT');
 
+  const projectStateRow = await postgres.query(`select state from orgward.aggregates
+    where tenant_id='tenant-a' and aggregate_kind='project' and aggregate_id=$1`, [project.data.id]);
+  const currentProjectState = projectStateRow.rows[0].state;
+  const advancedProjectStateForStart = { ...currentProjectState, version: currentProjectState.version + 1 };
+  await postgres.query(`update orgward.aggregates set version=$1,state=$2::jsonb,state_hash=$3
+    where tenant_id='tenant-a' and aggregate_kind='project' and aggregate_id=$4`,
+  [advancedProjectStateForStart.version, JSON.stringify(advancedProjectStateForStart), contentHash(advancedProjectStateForStart), project.data.id]);
+  const staleSourceStart = await request(app.base, `${runtimeRoute}/start-instance`, {
+    method: 'POST', body: JSON.stringify({ runtimeRevision: 3, idempotencyKey: 'pg-runtime-start-stale-source' }),
+  }, 409);
+  assert.equal(staleSourceStart.error.code, 'SOURCE_BINDING_STALE');
+  assert.equal((await postgres.query(`select count(*)::int count from orgward.process_task_instance_controls
+    where tenant_id='tenant-a' and process_plan_id=$1`, [compiled.plan.id])).rows[0].count, 0,
+  'a promoted snapshot whose project source advanced creates no instance control');
+  assert.equal((await postgres.query(`select count(*)::int count from orgward.software_delivery_runtime_commands
+    where tenant_id='tenant-a' and plan_id=$1 and idempotency_key='pg-runtime-start-stale-source'`, [compiled.plan.id])).rows[0].count, 0,
+  'stale source denial records no start command receipt');
+  await postgres.query(`update orgward.aggregates set version=$1,state=$2::jsonb,state_hash=$3
+    where tenant_id='tenant-a' and aggregate_kind='project' and aggregate_id=$4`,
+  [currentProjectState.version, JSON.stringify(currentProjectState), contentHash(currentProjectState), project.data.id]);
+
   const alicePrincipal = `oidc:${createHash('sha256').update(`${issuer}\nalice`).digest('hex')}`;
   await postgres.query(`update orgward.project_memberships set revoked_at=now(),revoked_by=$3
     where tenant_id='tenant-a' and project_id=$1 and principal=$2`, [project.data.id, bobPrincipal, alicePrincipal]);
@@ -3540,6 +3667,12 @@ test('change cases and execution runs use PostgreSQL compare-and-swap state acro
     type: 'create_new_case', label: 'Create a new case from the current saved design',
   }]);
   assert.equal((await postgres.query('select count(*)::int count from orgward.software_delivery_plans where case_id = $1', [changeCase.id])).rows[0].count, 2);
+  const staleDraftHistory = await request(app.base, `/api/sdlc/cases/${changeCase.id}/software-delivery-plans`);
+  assert.equal(staleDraftHistory.plans.length, 2, 'saved drafts remain readable after their source project advances');
+  assert.ok(staleDraftHistory.plans.every((entry) => entry.valid && entry.sourceCurrentness.status === 'STALE'),
+    'draft integrity and source currentness are reported separately for historical plans');
+  assert.equal(staleDraftHistory.plans.find((entry) => entry.plan.id === compiled.plan.id).plan.contentHash, compiled.plan.contentHash,
+    'stale readback preserves the exact immutable draft');
   const staleCompileReadback = await request(app.base, `/api/sdlc/cases/${changeCase.id}`);
   assert.equal(staleCompileReadback.sourceBinding.sourceHash, sourceHash);
   assert.equal(staleCompileReadback.artifacts.plan.contentHash, runToCheckpoint.artifacts.plan.contentHash);
@@ -3636,7 +3769,7 @@ test('change cases and execution runs use PostgreSQL compare-and-swap state acro
   const restartedDependentTask = restartedTaskRuntimes.find((runtime) => runtime.taskId === dependentTask.id);
   assert.ok(restartedRootTask, 'the completed checkpoint resolves under its exact project/plan/revision/instance/task identity after restart');
   assert.equal(restartedRootTask.status, 'SUCCEEDED');
-  assert.deepEqual(restartedRootTask.outcome, { result: 'succeeded' });
+  assert.deepEqual(restartedRootTask.outcome, { result: 'succeeded', outputSchemaVersion: 1, outputRecords: [] });
   assert.deepEqual(restartedRootTask.evidence, ['Owner-reviewed delivery checkpoint completed.']);
   assert.ok(restartedRootTask.events.some((event) => event.type === 'HumanTaskCompleted'
     && event.data.taskId === rootTask.id && event.data.processPlanId === compiled.plan.id
@@ -3644,7 +3777,7 @@ test('change cases and execution runs use PostgreSQL compare-and-swap state acro
     && event.data.result === 'succeeded' && event.data.evidence.includes('Owner-reviewed delivery checkpoint completed.')),
   'the matching HumanTaskCompleted event and evidence persist after restart');
   assert.ok(restartedDependentTask, 'the dependent outcome resolves under its own task identity after restart');
-  assert.deepEqual(restartedDependentTask.outcome, { result: 'succeeded' });
+  assert.deepEqual(restartedDependentTask.outcome, { result: 'succeeded', outputSchemaVersion: 1, outputRecords: [] });
   assert.deepEqual(restartedDependentTask.evidence, ['Prerequisite checkpoint is complete.'],
     'task evidence does not appear under a different task in the same process instance');
   const persistedCheckpoint = await postgres.query(`select project_id,process_plan_id,plan_revision,plan_instance_id,task_id,status,outcome,evidence,events
@@ -3658,10 +3791,82 @@ test('change cases and execution runs use PostgreSQL compare-and-swap state acro
   assert.equal(persistedCheckpoint.rows[0].plan_instance_id, startedSoftware.result.planInstanceId);
   assert.equal(persistedCheckpoint.rows[0].task_id, rootTask.id);
   assert.equal(persistedCheckpoint.rows[0].status, 'SUCCEEDED');
-  assert.deepEqual(persistedCheckpoint.rows[0].outcome, { result: 'succeeded' });
+  assert.deepEqual(persistedCheckpoint.rows[0].outcome, { result: 'succeeded', outputSchemaVersion: 1, outputRecords: [] });
   assert.deepEqual(persistedCheckpoint.rows[0].evidence, ['Owner-reviewed delivery checkpoint completed.']);
   assert.ok(persistedCheckpoint.rows[0].events.some((event) => event.type === 'HumanTaskCompleted'));
   assert.equal((await request(app.base, `/api/execution/runs/${run.id}`)).status, 'APPROVED');
+
+  const reviewBeforeStalePromotion = await request(app.base, assignmentReviewRoute, { method: 'POST', body: JSON.stringify({
+    ...assignmentReviewBody, expectedReviewRevision: restoredReview.review.revision,
+    idempotencyKey: 'pg-assignment-review-before-stale-promotion',
+  }) }, 201);
+  assert.equal(reviewBeforeStalePromotion.review.revision, restoredReview.review.revision + 1);
+  const currentDraftBeforeEdit = (await request(app.base, `/api/sdlc/cases/${changeCase.id}/software-delivery-plans`)).plans
+    .find((entry) => entry.plan.id === compiled.plan.id);
+  assert.equal(currentDraftBeforeEdit.assignmentReview.revision, reviewBeforeStalePromotion.review.revision);
+  assert.equal(currentDraftBeforeEdit.promotion.reviewRevision, restoredReview.review.revision);
+  assert.ok(currentDraftBeforeEdit.assignmentReview.revision > currentDraftBeforeEdit.promotion.reviewRevision,
+    'the current source now makes the revised human review eligible for a new promotion');
+
+  const beforeMaterialEdit = (await request(app.base, `/api/v1/projects/${project.data.id}`)).data;
+  const materialSourceEdit = await request(app.base, `/api/v1/projects/${project.data.id}/blueprint/edits`, {
+    method: 'POST', body: command('pg-stale-software-draft-material-edit', {
+      objectId: selection.sourceObjectId,
+      name: 'Updated membership service source',
+      detail: 'The saved source now records the revised customer-facing service boundary.',
+    }, beforeMaterialEdit.version),
+  });
+  assert.ok(materialSourceEdit.data.latestBlueprint.version > compiled.plan.binding.blueprintVersion,
+    'the owner performs a real saved-design edit after draft promotion and runtime completion');
+  const staleHistoryAfterEdit = await request(app.base, `/api/sdlc/cases/${changeCase.id}/software-delivery-plans`);
+  assert.equal(staleHistoryAfterEdit.plans.length, 2);
+  assert.ok(staleHistoryAfterEdit.plans.every((entry) => entry.sourceCurrentness.status === 'STALE'));
+  assert.equal(staleHistoryAfterEdit.plans.find((entry) => entry.plan.id === compiled.plan.id).plan.contentHash, compiled.plan.contentHash);
+  const controlCountBeforeStaleStart = (await postgres.query(`select count(*)::int count from orgward.process_task_instance_controls
+    where tenant_id='tenant-a' and process_plan_id=$1`, [compiled.plan.id])).rows[0].count;
+  const startReceiptCountBeforeStaleStart = (await postgres.query(`select count(*)::int count from orgward.software_delivery_runtime_commands
+    where tenant_id='tenant-a' and plan_id=$1 and command_kind='start-instance'`, [compiled.plan.id])).rows[0].count;
+  const staleStartAfterMaterialEdit = await request(app.base, `${runtimeRoute}/start-instance`, {
+    method: 'POST', body: JSON.stringify({ runtimeRevision: promoted.result.runtimeRevision,
+      idempotencyKey: 'pg-runtime-start-after-material-source-edit' }),
+  }, 409);
+  assert.equal(staleStartAfterMaterialEdit.error.code, 'SOURCE_BINDING_STALE');
+  assert.equal((await postgres.query(`select count(*)::int count from orgward.process_task_instance_controls
+    where tenant_id='tenant-a' and process_plan_id=$1`, [compiled.plan.id])).rows[0].count, controlCountBeforeStaleStart);
+  assert.equal((await postgres.query(`select count(*)::int count from orgward.software_delivery_runtime_commands
+    where tenant_id='tenant-a' and plan_id=$1 and command_kind='start-instance'`, [compiled.plan.id])).rows[0].count,
+  startReceiptCountBeforeStaleStart, 'the stale start leaves runtime history unchanged');
+
+  const browserSessionId = randomBytes(32).toString('base64url');
+  await app.sessionStore.create(browserSessionId, { issuer, subject: 'alice', principal: alicePrincipal,
+    displayName: 'alice', tenantId: 'tenant-a', actorType: 'human' }, Math.floor(Date.now() / 1000) + 300);
+  await withHeadlessChromium(`${app.base}/sdlc.html?case=${encodeURIComponent(changeCase.id)}`, async ({ send, evaluate, waitFor, setSession }) => {
+    await setSession(browserSessionId);
+    await send('Page.reload');
+    await waitFor(`window.__orgwardSessionResponse?.principal === ${JSON.stringify(alicePrincipal)}`, 'accountable owner session loaded');
+    await waitFor("document.querySelector('#case-tabs [data-tab=\"delivery\"]')", 'delivery tab rendered');
+    await evaluate("document.querySelector('#case-tabs [data-tab=\"delivery\"]').click(); true");
+    await waitFor("document.querySelector('#case-content [data-source-currentness=\"STALE\"]')", 'stale draft history shown');
+    const renderedStatus = await evaluate(`(() => {
+      const status = document.querySelector('#case-content [data-source-currentness="STALE"]');
+      const content = document.querySelector('#case-content');
+      return { statusText: status?.innerText ?? '', visible: Boolean(status?.getClientRects().length),
+        draftVisible: content?.innerText.includes(${JSON.stringify(compiled.plan.id)}) ?? false,
+        assignmentForm: Boolean(content?.querySelector('.assignment-review-form')),
+        promote: [...(content?.querySelectorAll('button') ?? [])].some((button) => /promote human checkpoint plan/i.test(button.innerText)),
+        promoteRevised: [...(content?.querySelectorAll('button') ?? [])].some((button) => /promote revised human plan/i.test(button.innerText)),
+        start: [...(content?.querySelectorAll('button') ?? [])].some((button) => /start human checkpoint instance/i.test(button.innerText)) };
+    })()`);
+    assert.equal(renderedStatus.visible, true);
+    assert.match(renderedStatus.statusText, /SOURCE STALE/);
+    assert.equal(renderedStatus.draftVisible, true, 'the exact saved draft remains visible in the browser');
+    assert.equal(renderedStatus.assignmentForm, false);
+    assert.equal(renderedStatus.promote, false);
+    assert.equal(renderedStatus.promoteRevised, false,
+      'stale source hides a revised promotion action that is eligible under the prior current source');
+    assert.equal(renderedStatus.start, false);
+  });
+
   const kinds = await postgres.query("select aggregate_kind, count(*)::int count from orgward.aggregates group by aggregate_kind order by aggregate_kind");
   assert.deepEqual(kinds.rows, [
     { aggregate_kind: 'change_case', count: 2 },
@@ -6365,6 +6570,12 @@ test('owner-authored human task information output is pinned, versioned, audited
   await request(app.base, membersRoute, {
     ...as('alice'), method: 'POST', body: JSON.stringify({ principal: principal('bob'), access: 'editor' }),
   });
+  await request(app.base, membersRoute, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ principal: principal('carol'), access: 'editor' }),
+  });
+  await request(app.base, membersRoute, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ principal: principal('dave'), access: 'editor' }),
+  });
   const bindingsRoute = `/api/v1/projects/${project.id}/actor-bindings/proposals`;
   project = (await request(app.base, bindingsRoute, {
     ...as('alice'), method: 'POST', body: command('human-output-binding', {
@@ -6504,7 +6715,7 @@ test('owner-authored human task information output is pinned, versioned, audited
     expectedBlueprintVersion: traceBlueprint.version,
   }) }, 201);
   const traceCase = await request(app.base, `/api/sdlc/cases/${traceCaseCreated.id}/run`, {
-    ...as('alice'), method: 'POST', body: JSON.stringify({ version: traceCaseCreated.version, idempotencyKey: 'human-output-trace-advance' }),
+    ...as('dave'), method: 'POST', body: JSON.stringify({ version: traceCaseCreated.version, idempotencyKey: 'human-output-trace-advance' }),
   });
   const traceRequirement = traceCase.artifacts.requirements.requirements.find((entry) => entry.processTrace?.process.id === traceProcess.id);
   assert.ok(traceRequirement, 'the trace selects the same saved process as the human completion');
@@ -6571,7 +6782,7 @@ test('owner-authored human task information output is pinned, versioned, audited
   const humanLinkConflict = await request(app.base, `/api/sdlc/cases/${traceCase.id}/process-run-evidence`, {
     ...as('alice'), method: 'POST', body: JSON.stringify({ ...humanLinkBody, taskId: 'task-other', idempotencyKey: humanLinkBody.idempotencyKey }),
   }, 409);
-  assert.match(humanLinkConflict.error, /already used with different input/i);
+  assert.match(humanLinkConflict.error.message, /already used with different input/i);
   const unavailableLinkStart = await request(app.base, '/api/execution/process-task-instances/start', {
     ...as('bob'), method: 'POST', body: command('human-output-trace-unavailable-start', startPayload),
   }, 201);
@@ -6588,9 +6799,161 @@ test('owner-authored human task information output is pinned, versioned, audited
   }, 201);
   assert.equal(unavailableLinkCase.processRunEvidenceLink.outputEvidence[0].status, 'UNAVAILABLE');
   assert.equal(unavailableLinkCase.processRunEvidenceLink.verificationStatus, 'NOT_EXECUTED');
+  const reviewRequirement = unavailableLinkCase.artifacts.requirements.requirements.find((entry) => entry.id === traceRequirement.id);
+  const reviewCriteria = reviewRequirement.acceptanceCriteria.map((criterion, index) => ({
+    criterionHash: digest({ index, criterion }), disposition: 'INCONCLUSIVE',
+    note: 'The linked value is human-reported; it does not independently establish the behavior.',
+  }));
+  const reviewRequest = { version: unavailableLinkCase.version, draftRevision: unavailableLinkCase.artifacts.requirements.draftRevision,
+    requirementId: reviewRequirement.id, linkId: humanLink.id, criteria: reviewCriteria, idempotencyKey: 'human-output-review-once' };
+  const performerReview = await request(app.base, `/api/sdlc/cases/${traceCase.id}/process-run-evidence-reviews`, {
+    ...as('bob'), method: 'POST', body: JSON.stringify({ ...reviewRequest, idempotencyKey: 'human-output-review-performer-denied' }),
+  }, 409);
+  assert.equal(performerReview.error.code, 'REVIEWER_NOT_INDEPENDENT');
+  assert.equal((await request(app.base, `/api/sdlc/cases/${traceCase.id}`, as('alice'))).version, unavailableLinkCase.version,
+    'performer denial leaves the case unchanged');
+  const caseAuthorReview = await request(app.base, `/api/sdlc/cases/${traceCase.id}/process-run-evidence-reviews`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ ...reviewRequest, idempotencyKey: 'human-output-review-case-author-denied' }),
+  }, 409);
+  assert.equal(caseAuthorReview.error.code, 'REVIEWER_NOT_INDEPENDENT');
+  assert.equal((await request(app.base, `/api/sdlc/cases/${traceCase.id}`, as('alice'))).version, unavailableLinkCase.version,
+    'original case author and evidence linker denial leaves the case unchanged');
+  const requirementCreatorReview = await request(app.base, `/api/sdlc/cases/${traceCase.id}/process-run-evidence-reviews`, {
+    ...as('dave'), method: 'POST', body: JSON.stringify({ ...reviewRequest, idempotencyKey: 'human-output-review-requirement-creator-denied' }),
+  }, 409);
+  assert.equal(requirementCreatorReview.error.code, 'REVIEWER_NOT_INDEPENDENT');
+  assert.equal((await request(app.base, `/api/sdlc/cases/${traceCase.id}`, as('alice'))).version, unavailableLinkCase.version,
+    'requirement creator denial leaves the case unchanged');
+  const reviewedCase = await request(app.base, `/api/sdlc/cases/${traceCase.id}/process-run-evidence-reviews`, {
+    ...as('carol'), method: 'POST', body: JSON.stringify(reviewRequest),
+  }, 201);
+  const evidenceReview = reviewedCase.processRunEvidenceReview;
+  assert.equal(evidenceReview.status, 'HUMAN_REVIEWED');
+  assert.equal(evidenceReview.disposition, 'INCONCLUSIVE');
+  assert.equal(evidenceReview.verificationStatus, 'NOT_EXECUTED');
+  assert.equal(evidenceReview.truthStatus, 'UNVERIFIED');
+  assert.equal(evidenceReview.reviewerPrincipal, principal('carol'));
+  assert.equal(evidenceReview.linkId, humanLink.id);
+  assert.equal(evidenceReview.linkHash, humanLink.linkHash);
+  assert.equal(evidenceReview.source.processId, traceProcess.id);
+  assert.equal(evidenceReview.outputEvidenceHashes[0], completed.outcome.outputRecords[0].recordHash);
+  assert.equal(evidenceReview.criteria[0].criterionHash, reviewCriteria[0].criterionHash);
+  assert.match(evidenceReview.statement, /does not establish external truth or execute behavior/);
+  const reviewEventCount = reviewedCase.events.filter((entry) => entry.type === 'ProcessRunEvidenceReviewed').length;
+  assert.equal(reviewEventCount, 1);
+  const rawReviewedRow = await app.persistence.query(`select state from orgward.aggregates
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`, [traceCase.id]);
+  const originalReviewedState = rawReviewedRow.rows[0].state;
+  const reviewAuditEvent = originalReviewedState.events.find((entry) => entry.type === 'ProcessRunEvidenceReviewed'
+    && entry.data.reviewId === evidenceReview.id);
+  const originalReviewAudit = await app.persistence.query(`select event,event_hash from orgward.audit_log
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1 and event_hash=$2`,
+  [traceCase.id, contentHash(reviewAuditEvent)]);
+  const writeTamperedReviewState = async (state) => app.persistence.query(`update orgward.aggregates
+    set state=$2::jsonb,state_hash=$3 where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`,
+  [traceCase.id, JSON.stringify(state), contentHash(state)]);
+  const reviewStateCopies = (state) => ({
+    nested: state.artifacts.requirements.requirements.find((entry) => entry.id === traceRequirement.id).processRunEvidenceReviews,
+    aggregate: state.artifacts.requirements.processRunEvidenceReviews,
+  });
+  const assertTamperedReviewIsInvalid = async (expectedReplayStatus = 503) => {
+    const readback = await request(app.base, `/api/sdlc/cases/${traceCase.id}`, as('alice'));
+    const review = readback.artifacts.requirements.requirements.find((entry) => entry.id === traceRequirement.id)
+      .processRunEvidenceReviews[0];
+    assert.equal(review.integrityStatus, 'INVALID');
+    const replay = await request(app.base, `/api/sdlc/cases/${traceCase.id}/process-run-evidence-reviews`, {
+      ...as('carol'), method: 'POST', body: JSON.stringify(reviewRequest),
+    }, expectedReplayStatus);
+    assert.ok(replay.error);
+    const after = (await app.persistence.query(`select version,state from orgward.aggregates
+      where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`, [traceCase.id])).rows[0];
+    assert.equal(Number(after.version), Number(originalReviewedState.version));
+    assert.equal(after.state.events.filter((entry) => entry.type === 'ProcessRunEvidenceReviewed').length, 1);
+  };
+  {
+    const tampered = structuredClone(originalReviewedState);
+    for (const reviews of Object.values(reviewStateCopies(tampered))) {
+      const review = reviews.find((entry) => entry.id === evidenceReview.id);
+      review.criteria[0].note = 'Resealed altered judgment.';
+      const { reviewHash: _priorHash, integrityStatus: _integrityStatus, ...core } = review;
+      review.reviewHash = contentHash(core);
+    }
+    await writeTamperedReviewState(tampered);
+    await assertTamperedReviewIsInvalid();
+    await writeTamperedReviewState(originalReviewedState);
+  }
+  {
+    const tampered = structuredClone(originalReviewedState);
+    const event = tampered.events.find((entry) => entry.type === 'ProcessRunEvidenceReviewed' && entry.data.reviewId === evidenceReview.id);
+    event.data.disposition = 'SUPPORTED';
+    event.contentHash = contentHash({ type: event.type, tenantId: tampered.tenantId, data: event.data });
+    await writeTamperedReviewState(tampered);
+    await assertTamperedReviewIsInvalid();
+    await writeTamperedReviewState(originalReviewedState);
+  }
+  {
+    const tampered = structuredClone(originalReviewedState);
+    for (const reviews of Object.values(reviewStateCopies(tampered))) {
+      const review = reviews.find((entry) => entry.id === evidenceReview.id);
+      review.outputEvidenceHashes[0] = '0'.repeat(64);
+      const { reviewHash: _priorHash, integrityStatus: _integrityStatus, ...core } = review;
+      review.reviewHash = contentHash(core);
+    }
+    await writeTamperedReviewState(tampered);
+    await assertTamperedReviewIsInvalid();
+    await writeTamperedReviewState(originalReviewedState);
+  }
+  {
+    const tampered = structuredClone(originalReviewedState);
+    const requirement = tampered.artifacts.requirements.requirements.find((entry) => entry.id === traceRequirement.id);
+    for (const links of [requirement.processRunEvidenceLinks, tampered.artifacts.requirements.processRunEvidenceLinks]) {
+      const link = links.find((entry) => entry.id === evidenceReview.linkId);
+      link.reason = 'Resealed altered linked evidence context.';
+      const { linkHash: _priorHash, ...core } = link;
+      link.linkHash = contentHash(core);
+    }
+    await writeTamperedReviewState(tampered);
+    await assertTamperedReviewIsInvalid();
+    await writeTamperedReviewState(originalReviewedState);
+  }
+  {
+    const tamperedAudit = structuredClone(originalReviewAudit.rows[0].event);
+    tamperedAudit.data.reviewerPrincipal = principal('bob');
+    await app.persistence.query(`update orgward.audit_log set event=$1::jsonb,event_hash=$2
+      where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$3 and event_hash=$4`,
+    [JSON.stringify(tamperedAudit), contentHash(tamperedAudit), traceCase.id, contentHash(reviewAuditEvent)]);
+    await assertTamperedReviewIsInvalid();
+    await app.persistence.query(`update orgward.audit_log set event=$1::jsonb,event_hash=$2
+      where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$3 and event_hash=$4`,
+    [JSON.stringify(originalReviewAudit.rows[0].event), contentHash(originalReviewAudit.rows[0].event), traceCase.id, contentHash(tamperedAudit)]);
+    await writeTamperedReviewState(originalReviewedState);
+  }
+  {
+    const tampered = structuredClone(originalReviewedState);
+    tampered.idempotency[reviewAuditEvent.causationId].requestHash = 'f'.repeat(64);
+    await writeTamperedReviewState(tampered);
+    await assertTamperedReviewIsInvalid(409);
+    await writeTamperedReviewState(originalReviewedState);
+  }
+  const reviewReplay = await request(app.base, `/api/sdlc/cases/${traceCase.id}/process-run-evidence-reviews`, {
+    ...as('carol'), method: 'POST', body: JSON.stringify(reviewRequest),
+  });
+  assert.equal(reviewReplay.command.replayed, true);
+  assert.equal(reviewReplay.artifacts.requirements.processRunEvidenceReviews.length, 1);
+  assert.equal(reviewReplay.events.filter((entry) => entry.type === 'ProcessRunEvidenceReviewed').length, 1);
+  await request(app.base, `/api/sdlc/cases/${traceCase.id}/process-run-evidence-reviews`, {
+    ...as('carol'), method: 'POST', body: JSON.stringify({ ...reviewRequest,
+      criteria: reviewCriteria.map((entry) => ({ ...entry, note: 'Changed reviewer statement.' })) }),
+  }, 409);
   await close(app); app = null;
   app = await start(postgres.databaseUrl, { oidcAuthenticator });
   const humanLinkAfterRestart = await request(app.base, `/api/sdlc/cases/${traceCase.id}`, as('alice'));
+  const persistedReview = humanLinkAfterRestart.artifacts.requirements.requirements
+    .find((entry) => entry.id === traceRequirement.id).processRunEvidenceReviews[0];
+  assert.equal(persistedReview.reviewHash, evidenceReview.reviewHash);
+  assert.equal(persistedReview.integrityStatus, 'VALID', JSON.stringify(persistedReview));
+  assert.equal(persistedReview.applicability, 'CURRENT');
+  assert.equal(persistedReview.verificationStatus, 'NOT_EXECUTED');
   const persistedHumanLink = humanLinkAfterRestart.artifacts.requirements.processRunEvidenceLinks[0];
   assert.equal(persistedHumanLink.outputEvidence[0].recordHash, completed.outcome.outputRecords[0].recordHash);
   assert.equal(persistedHumanLink.outputEvidence[0].value, reportedValue,
@@ -6601,6 +6964,20 @@ test('owner-authored human task information output is pinned, versioned, audited
     `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances
     .find((runtime) => runtime.taskId === task.id && runtime.planInstanceId === started.planInstanceId);
   assert.equal(humanRuntimeAfterRestart.outcome.outputRecords[0].recordHash, completed.outcome.outputRecords[0].recordHash);
+  const currentTraceCase = await request(app.base, `/api/sdlc/cases/${traceCase.id}`, as('alice'));
+  const staleDraft = await request(app.base, `/api/sdlc/cases/${traceCase.id}/edit-requirements`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: currentTraceCase.version,
+      expectedDraftRevision: currentTraceCase.artifacts.requirements.draftRevision, requirementId: traceRequirement.id,
+      changes: { statement: `${traceRequirement.statement} Revised after independent review.` }, idempotencyKey: 'human-output-review-stale-draft' }),
+  });
+  const staleReview = await request(app.base, `/api/sdlc/cases/${traceCase.id}/process-run-evidence-reviews`, {
+    ...as('carol'), method: 'POST', body: JSON.stringify({ ...reviewRequest, version: staleDraft.version,
+      draftRevision: staleDraft.artifacts.requirements.draftRevision, idempotencyKey: 'human-output-review-stale-denied' }),
+  }, 409);
+  assert.equal(staleReview.error.code, 'PROCESS_EVIDENCE_LINK_STALE');
+  const staleReviewReadback = await request(app.base, `/api/sdlc/cases/${traceCase.id}`, as('alice'));
+  assert.equal(staleReviewReadback.artifacts.requirements.requirements
+    .find((entry) => entry.id === traceRequirement.id).processRunEvidenceReviews[0].applicability, 'STALE');
   const completionReplay = await request(app.base, '/api/execution/process-task-instances/complete', {
     ...as('bob'), method: 'POST', body: command('human-output-complete', completionPayload),
   }, 200);
@@ -6816,6 +7193,8 @@ test('owner-authored human task information output is pinned, versioned, audited
 
 test('saved process task requests are linked, idempotent, dependency-gated, and durable', async (t) => {
   const postgres = await startPostgres();
+  const t91FixtureCluster = await startTestPostgresCluster();
+  t.after(() => stopTestPostgresCluster(t91FixtureCluster));
   const oidcAuthenticator = testOidcAuthenticator();
   oidcAuthenticator.setDisplayName('bob', 'Bob Reviewer');
   oidcAuthenticator.setDisplayName('carol', 'Carol Reviewer');
@@ -6858,7 +7237,11 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
         const githubPrompt = JSON.parse(providerRequest.body.input);
         if (Array.isArray(githubPrompt.selectedFiles)) {
           modelOutputText = JSON.stringify({ updates: githubPrompt.selectedFiles.map((file) => ({
-            path: file.path, baseContentHash: file.contentHash, content: file.text.replace('before', 'after'),
+            path: file.path, baseContentHash: file.contentHash,
+            content: file.path === 'src/process.mjs'
+              ? file.text.replace("? 'unknown' : 'routine'", behaviorCandidateVariant === 'passing'
+                ? "? 'prioritised-repair' : 'routine'" : "? 'routine' : 'routine'")
+              : file.text.replace('before', 'after'),
           })) });
         }
       } catch { /* Existing proposal fixtures use a wrapped non-JSON prompt. */ }
@@ -6938,8 +7321,10 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
       providerEndpoint: `${providerOrigin}/v1/execute`,
     },
   ];
+  let behaviorCandidateVariant = 'passing';
   const fixedGithubVerifierProfile = { id: 'github-fixture-plan', version: '1.0.0', requiredChecks: [
-    { id: 'unit-check', version: '1.0.0', executable: '/usr/bin/node', args: ['/opt/orgward/github-fixture-verifier.mjs'], timeoutMs: 5_000 },
+    { id: 'unit-check', version: '1.0.0', executable: process.execPath,
+      args: ['--test', '--test-reporter=tap', 'test/process-contract.test.mjs'], timeoutMs: 5_000 },
     { id: 'contract-check', version: '2.0.0', executable: '/usr/bin/node', args: ['/opt/orgward/github-contract-check.mjs'], timeoutMs: 5_000 },
   ] };
   const fixedGithubBuildPlan = { id: 'github-fixture-build', version: '1.0.0', executable: '/usr/bin/node',
@@ -6993,13 +7378,107 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     else throw new Error('Unexpected fixture GitHub URL.');
     return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });
   };
-  let app = await start(postgres.databaseUrl, {
-    executionProfiles: profiles, oidcAuthenticator, secretEncryptionKey: Buffer.alloc(32, 0x5c),
+  const browserOidcLoginFlow = { redirectUri: 'http://127.0.0.1', begin: () => ({}), complete: async () => ({}) };
+  let app;
+  let n2DispatchCount = 0;
+  let r1ProductHarnessDiagnostic = null;
+  let failNextN2Dispatch = false;
+  let failNextN3ProviderSetup = false;
+  let signalN1DispatchStarted;
+  const n1DispatchStarted = new Promise((resolve) => { signalN1DispatchStarted = resolve; });
+  let releaseN1Dispatch = () => {};
+  const n1DispatchGate = new Promise((resolve) => { releaseN1Dispatch = resolve; });
+  let signalN2DispatchStarted;
+  const n2DispatchStarted = new Promise((resolve) => { signalN2DispatchStarted = resolve; });
+  let releaseN2Dispatch = () => {};
+  const n2DispatchGate = new Promise((resolve) => { releaseN2Dispatch = resolve; });
+  t.after(() => { releaseN1Dispatch(); releaseN2Dispatch(); });
+  const fixedN2ProductHarnessDispatcher = async ({ harness, fixtureCaseId, request: fixtureRequest, pins }) => {
+    if (harness.subcaseId === 'N1' || harness.subcaseId === 'R1') {
+      const provider = new T91N2FixtureDatabaseProvider({ applicationDatabaseUrl: postgres.databaseUrl,
+        fixtureAdminDatabaseUrl: `${t91FixtureCluster.baseUrl}/postgres`,
+        runFixture: (input) => runT91N2AuthorizationProductFixture({ ...input, createApp,
+          fixtureTemplateHash: T91_N2_PRODUCT_FIXTURE_TEMPLATE_HASH, harness,
+          fixtureCaseId, request: fixtureRequest, pins }) });
+      assert.equal(await provider.initialize(), true);
+      try {
+        return await provider.dispatch({ harness, fixtureCaseId, request: fixtureRequest, pins });
+      } catch (error) {
+        r1ProductHarnessDiagnostic = { name: String(error?.name ?? 'Error').slice(0, 80),
+          code: String(error?.code ?? 'NO_CODE').slice(0, 100),
+          message: String(error?.message ?? '').replace(/(?:postgres(?:ql)?|https?):\/\/\S+/gi, '[redacted-url]')
+            .replace(/(?:password|token|secret|credential)\s*[=:]\s*\S+/gi, '[redacted-credential]').slice(0, 180) };
+        throw error;
+      }
+    }
+    n2DispatchCount += 1;
+    signalN2DispatchStarted();
+    await n2DispatchGate;
+    if (failNextN2Dispatch) {
+      failNextN2Dispatch = false;
+      throw Object.assign(new Error('Synthetic isolated fixture interruption.'), { code: 'FIXTURE_DISPATCH_FAILED' });
+    }
+    if (harness.subcaseId === 'N3' && failNextN3ProviderSetup) {
+      failNextN3ProviderSetup = false;
+      throw annotateT91FixtureDispatchError(Object.assign(new Error('Synthetic provider connection failure before fixture creation.'), {
+        code: 'FIXTURE_DISPATCH_FAILED',
+      }), { invocationId: 't91-n3-fixture-invocation-11111111-1111-4111-8111-111111111111',
+        fixtureTemplateHash: T91_N3_PRODUCT_FIXTURE_TEMPLATE_HASH });
+    }
+    assert.equal(fixtureRequest.fixtureProfileId, 't91-n2-authorization-local-product-path-v1');
+    assert.equal(fixtureRequest.mappingHash, pins.mappingHash);
+    const targetFixtureCaseId = missingAssertionCase.id;
+    const readCounts = async () => {
+      const state = await request(app.base, `/api/sdlc/cases/${targetFixtureCaseId}`, as('alice'));
+      const plans = state.artifacts.processBehaviorTestPlans ?? [];
+      const [audit, outbox] = await Promise.all([
+        app.persistence.query(`select count(*)::int as count from orgward.audit_log
+          where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2`, ['tenant-a', targetFixtureCaseId]),
+        app.persistence.query(`select count(*)::int as count from orgward.outbox
+          where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2`, ['tenant-a', targetFixtureCaseId]),
+      ]);
+      const snapshot = { version: state.version, events: state.events, plans,
+        auditCount: audit.rows[0].count, outboxCount: outbox.rows[0].count };
+      return { caseVersion: state.version, eventCount: state.events.length, planCount: plans.length,
+        auditCount: snapshot.auditCount, outboxCount: snapshot.outboxCount, digest: digest(snapshot) };
+    };
+    const fixtureMapping = { harnessId: harness.id, harnessVersion: harness.version, harnessHash: pins.harnessHash,
+      assertionId: harness.assertionId, assertionHash: pins.assertionHash };
+    const fixtureHash = t91N2AuthorizationFixtureHash({ mapping: fixtureMapping, requestHash: pins.fixtureRequestHash });
+    const beforeControl = await readCounts();
+    const controlRequest = { ...missingAssertionPlanRequest, version: beforeControl.caseVersion,
+      draftRevision: (await request(app.base, `/api/sdlc/cases/${targetFixtureCaseId}`, as('alice'))).artifacts.requirements.draftRevision,
+      idempotencyKey: `t91-n2-authz-control-${pins.mappingHash.slice(0, 24)}` };
+    const controlResponse = await fetch(`${app.base}/api/sdlc/cases/${targetFixtureCaseId}/process-behavior-test-plans`, { method: 'POST',
+      headers: { authorization: 'Bearer alice', 'content-type': 'application/json' }, body: JSON.stringify(controlRequest) });
+    const controlBody = await controlResponse.json();
+    const afterControl = await readCounts();
+    const beforeAttempt = afterControl;
+    const attemptRequest = { ...controlRequest, version: beforeAttempt.caseVersion,
+      draftRevision: (await request(app.base, `/api/sdlc/cases/${targetFixtureCaseId}`, as('alice'))).artifacts.requirements.draftRevision,
+      assertions: [], idempotencyKey: `t91-n2-authz-empty-${pins.mappingHash.slice(0, 24)}` };
+    const attemptResponse = await fetch(`${app.base}/api/sdlc/cases/${targetFixtureCaseId}/process-behavior-test-plans`, { method: 'POST',
+      headers: { authorization: 'Bearer alice', 'content-type': 'application/json' }, body: JSON.stringify(attemptRequest) });
+    const attemptBody = await attemptResponse.json();
+    const afterAttempt = await readCounts();
+    return { terminal: true, fixtureHash, control: { terminal: true,
+        fixtureCreated: controlResponse.status === 201 && Boolean(controlBody.processBehaviorTestPlan?.planHash),
+        acceptedPlanHash: controlBody.processBehaviorTestPlan?.planHash ?? null,
+        fixtureCaseId: targetFixtureCaseId, httpStatus: controlResponse.status, errorCode: controlBody.error?.code ?? null,
+        fixtureHash, before: beforeControl, after: afterControl },
+      attempt: { terminal: true, fixtureCaseId: targetFixtureCaseId, httpStatus: attemptResponse.status,
+        errorCode: attemptBody.error?.code ?? null, fixtureHash, before: beforeAttempt, after: afterAttempt },
+      sourceCaseId: fixtureCaseId };
+  };
+  app = await start(postgres.databaseUrl, {
+    executionProfiles: profiles, oidcAuthenticator, oidcLoginFlow: browserOidcLoginFlow, secretEncryptionKey: Buffer.alloc(32, 0x5c),
     openAiValidationEndpoint: `${providerOrigin}/v1/models`, githubVerifierProfile: fixedGithubVerifierProfile,
+    productHarnessDispatcher: fixedN2ProductHarnessDispatcher,
     githubAppConfig: { appId: '123', privateKey: githubFixturePem, appSlug: 'orgward-fixture',
       clientId: 'Iv1.fixture-client', clientSecret: 'fixture-oauth-client-secret',
       oauthRedirectUri: 'https://orgward.example/api/execution/github-installation/oauth-callback' }, githubFetchImpl,
   });
+  browserOidcLoginFlow.redirectUri = app.base;
   const as = (subject) => ({ headers: { authorization: `Bearer ${subject}` } });
   const principal = (subject) => `oidc:${createHash('sha256').update(`https://persistence-identity.example.test\n${subject}`).digest('hex')}`;
   const taskRequest = (commandId, payload, subject = 'alice', expected = 201) => request(
@@ -7013,9 +7492,9 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     });
     return { status: response.status, body: await response.json() };
   };
-  const approveAndExecute = async (run) => {
+  const approveAndExecute = async (run, reviewer = 'bob') => {
     const approved = await request(app.base, `/api/execution/runs/${run.id}/approve`, {
-      ...as('bob'), method: 'POST', body: JSON.stringify({ version: run.version }),
+      ...as(reviewer), method: 'POST', body: JSON.stringify({ version: run.version }),
     });
     return request(app.base, `/api/execution/runs/${run.id}/execute`, {
       ...as('alice'), method: 'POST', body: JSON.stringify({ version: approved.version }),
@@ -7104,7 +7583,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     })).data;
   }
   const membersRoute = `/api/v1/projects/${project.id}/members`;
-  for (const subject of ['bob', 'carol', 'servicebot']) {
+  for (const subject of ['bob', 'carol', 'dave', 'servicebot']) {
     await request(app.base, membersRoute, {
       ...as('alice'), method: 'POST', body: JSON.stringify({ principal: principal(subject), access: 'editor' }),
     });
@@ -7112,6 +7591,17 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   await request(app.base, membersRoute, {
     ...as('alice'), method: 'POST', body: JSON.stringify({ principal: principal('readonly'), access: 'reader' }),
   });
+
+  // Synthetic fixture only: the owner explicitly links this existing risk to the
+  // saved process so downstream evidence can pin the declared relationship.
+  const syntheticProcessRisk = project.latestBlueprint.areas.governanceRiskControls.items
+    .find((item) => item.id === 'risk-unvalidated-demand');
+  const processRiskLinkRoute = `/api/v1/projects/${project.id}/blueprint/edits`;
+  const syntheticProcessRiskPayload = { objectId: syntheticProcessRisk.id, name: syntheticProcessRisk.name,
+    detail: syntheticProcessRisk.detail, processIds: ['process-learn'] };
+  project = (await request(app.base, processRiskLinkRoute, { ...as('alice'), method: 'POST',
+    body: command('t91-synthetic-risk-process-link', syntheticProcessRiskPayload, project.version) })).data;
+
   const bindingRoute = `/api/v1/projects/${project.id}/actor-bindings/proposals`;
   const bindingEnableRoute = `${bindingRoute}/enable`;
   project = (await request(app.base, `/api/v1/projects/${project.id}/blueprint/edits`, {
@@ -7387,12 +7877,12 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   const linkProcess = Object.values(linkBlueprint.areas).flatMap((area) => area.items)
     .find((entry) => entry.id === 'process-learn' && entry.type === 'process');
   assert.ok(linkProcess, 'the selected source process is retained in the saved blueprint');
-  let linkCase = await request(app.base, '/api/sdlc/cases', { ...as('alice'), method: 'POST', body: JSON.stringify({
+  let linkCase = await request(app.base, '/api/sdlc/cases', { ...as('bob'), method: 'POST', body: JSON.stringify({
     mode: 'golden', projectId: project.id, sourceObjectId: linkProcess.id,
     expectedProjectVersion: linkProject.version, expectedBlueprintId: linkBlueprint.id,
     expectedBlueprintVersion: linkBlueprint.version,
   }) }, 201);
-  linkCase = await request(app.base, `/api/sdlc/cases/${linkCase.id}/run`, { ...as('alice'), method: 'POST',
+  linkCase = await request(app.base, `/api/sdlc/cases/${linkCase.id}/run`, { ...as('bob'), method: 'POST',
     body: JSON.stringify({ version: linkCase.version, idempotencyKey: 't91-process-run-link-advance' }) });
   assert.equal(linkCase.currentStage, 'S4');
   const linkRequirement = linkCase.artifacts.requirements.requirements.find((entry) => entry.processTrace?.process.id === linkProcess.id);
@@ -7448,7 +7938,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(rolledBackCase.version, linkCase.version, 'an audit failure rolls back the aggregate link and version');
   assert.equal(rolledBackCase.events.length, linkCase.events.length);
   const linkedCase = await request(app.base, `/api/sdlc/cases/${linkCase.id}/process-run-evidence`, {
-    ...as('alice'), method: 'POST', body: JSON.stringify(linkRequest),
+    ...as('bob'), method: 'POST', body: JSON.stringify(linkRequest),
   }, 201);
   const runLink = linkedCase.processRunEvidenceLink;
   assert.equal(runLink.verificationStatus, 'NOT_EXECUTED');
@@ -7462,11 +7952,24 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1 and event_type='ProcessRunEvidenceLinked'`, [linkCase.id]);
   assert.equal(firstLinkAudit.rows[0].count, 1);
   const replayedLink = await request(app.base, `/api/sdlc/cases/${linkCase.id}/process-run-evidence`, {
-    ...as('alice'), method: 'POST', body: JSON.stringify(linkRequest),
+    ...as('bob'), method: 'POST', body: JSON.stringify(linkRequest),
   });
   assert.equal(replayedLink.command.replayed, true);
   assert.equal(replayedLink.artifacts.requirements.processRunEvidenceLinks.length, 1);
   assert.equal(replayedLink.events.filter((event) => event.type === 'ProcessRunEvidenceLinked').length, 1);
+  const requesterReviewCriteria = linkRequirement.acceptanceCriteria.map((criterion, index) => ({
+    criterionHash: digest({ index, criterion }), disposition: 'INCONCLUSIVE', note: 'Workload requester cannot independently review this run.',
+  }));
+  const requesterReview = await request(app.base, `/api/sdlc/cases/${linkCase.id}/process-run-evidence-reviews`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: replayedLink.version,
+      draftRevision: replayedLink.artifacts.requirements.draftRevision, requirementId: linkRequirement.id,
+      linkId: runLink.id, criteria: requesterReviewCriteria, idempotencyKey: 't91-workload-requester-review-denied' }),
+  }, 409);
+  assert.equal(requesterReview.error.code, 'REVIEWER_NOT_INDEPENDENT');
+  const requesterDeniedReadback = await request(app.base, `/api/sdlc/cases/${linkCase.id}`, as('bob'));
+  assert.equal(requesterDeniedReadback.version, replayedLink.version,
+    'workload requester denial leaves the case and audit history unchanged');
+  assert.equal(requesterDeniedReadback.events.filter((event) => event.type === 'ProcessRunEvidenceReviewed').length, 0);
   const editedAfterLink = await request(app.base, `/api/sdlc/cases/${linkCase.id}/edit-requirements`, {
     ...as('alice'), method: 'POST', body: JSON.stringify({ version: replayedLink.version,
       expectedDraftRevision: replayedLink.artifacts.requirements.draftRevision, requirementId: linkRequirement.id,
@@ -7678,7 +8181,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   app = await start(postgres.databaseUrl, {
     executionProfiles: profiles, oidcAuthenticator, secretEncryptionKey: Buffer.alloc(32, 0x5c),
     openAiValidationEndpoint: `${providerOrigin}/v1/models`, localRepositories: [localRepositoryBinding, gitRepositoryBinding],
-    githubVerifierProfile: fixedGithubVerifierProfile,
+    githubVerifierProfile: fixedGithubVerifierProfile, productHarnessDispatcher: fixedN2ProductHarnessDispatcher,
   });
   const linkedCaseAfterRestart = await request(app.base, `/api/sdlc/cases/${linkedCaseId}`, as('alice'));
   const retainedRunLink = linkedCaseAfterRestart.artifacts.requirements.processRunEvidenceLinks[0];
@@ -8022,6 +8525,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   app = await start(postgres.databaseUrl, {
     executionProfiles: profiles, oidcAuthenticator, secretEncryptionKey: Buffer.alloc(32, 0x5c),
     openAiValidationEndpoint: `${providerOrigin}/v1/models`, githubVerifierProfile: fixedGithubVerifierProfile,
+    productHarnessDispatcher: fixedN2ProductHarnessDispatcher,
   });
   const recoveredUnknownRun = await request(app.base, `/api/execution/runs/${unresolvedAfterRestartRun.id}`, as('alice'));
   assert.equal(recoveredUnknownRun.status, 'INTERRUPTED', 'application restart recovers the persisted linked RUNNING task');
@@ -8040,6 +8544,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   app = await start(postgres.databaseUrl, {
     executionProfiles: profiles, oidcAuthenticator, secretEncryptionKey: Buffer.alloc(32, 0x5c),
     openAiValidationEndpoint: `${providerOrigin}/v1/models`, githubVerifierProfile: fixedGithubVerifierProfile,
+    productHarnessDispatcher: fixedN2ProductHarnessDispatcher,
   });
   const unknownBoundaryAfterRestart = await instanceControlForRun(unresolvedAfterRestartRun);
   assert.equal(unknownBoundaryAfterRestart.status, 'PAUSE_REQUESTED', 'unknown provider outcomes keep the pause request pending across restart');
@@ -8187,7 +8692,8 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(terminalHumanResolve.error.code, 'PROCESS_INSTANCE_ABANDONED_UNVERIFIED');
   await close(app);
   app = await start(postgres.databaseUrl, { executionProfiles: profiles, oidcAuthenticator, secretEncryptionKey: Buffer.alloc(32, 0x5c),
-    openAiValidationEndpoint: `${providerOrigin}/v1/models`, githubVerifierProfile: fixedGithubVerifierProfile });
+    openAiValidationEndpoint: `${providerOrigin}/v1/models`, githubVerifierProfile: fixedGithubVerifierProfile,
+    productHarnessDispatcher: fixedN2ProductHarnessDispatcher });
   const abandonedAfterRestart = await instanceControlForRun(unresolvedAfterRestartRun);
   assert.equal(abandonedAfterRestart.status, 'ABANDONED_UNVERIFIED');
   assert.deepEqual(abandonedAfterRestart.events.at(-1).data.evidence, abandonmentPayload.evidence);
@@ -8302,11 +8808,43 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   });
   assert.equal(deepSeekAbandonReplay.replayed, true);
   await close(app);
-  app = await start(postgres.databaseUrl, { executionProfiles: profiles, oidcAuthenticator, secretEncryptionKey: Buffer.alloc(32, 0x5c),
+  let gateNextOwnerN1Fixture = true;
+  let ownerN3DispatchError = null;
+  const ownerN1ConcurrencyProvider = new T91N2FixtureDatabaseProvider({
+    applicationDatabaseUrl: postgres.databaseUrl,
+    fixtureAdminDatabaseUrl: `${t91FixtureCluster.baseUrl}/postgres`,
+    runFixture: async (input) => {
+      if (gateNextOwnerN1Fixture && input.harness?.subcaseId === 'N1') {
+        gateNextOwnerN1Fixture = false;
+        signalN1DispatchStarted();
+        await n1DispatchGate;
+      }
+      return runT91N2AuthorizationProductFixture({ ...input, createApp,
+        fixtureTemplateHash: input.harness?.subcaseId === 'N3'
+          ? T91_N3_PRODUCT_FIXTURE_TEMPLATE_HASH : T91_N2_PRODUCT_FIXTURE_TEMPLATE_HASH });
+    },
+  });
+  const ownerProviderDispatch = ownerN1ConcurrencyProvider.dispatch.bind(ownerN1ConcurrencyProvider);
+  ownerN1ConcurrencyProvider.dispatch = async (input) => {
+    try { return await ownerProviderDispatch(input); }
+    catch (error) {
+      if (input.harness?.subcaseId === 'N3') {
+        const message = String(error?.message ?? '');
+        ownerN3DispatchError = { name: String(error?.name ?? 'Error'), code: String(error?.code ?? ''),
+          message: message.replace(/postgres(?:ql)?:\/\/[^\s]+/gi, 'postgresql://[redacted]')
+            .replace(/\b(password|token|secret)=\S+/gi, '$1=[redacted]') };
+      }
+      throw error;
+    }
+  };
+  app = await start(postgres.databaseUrl, { executionProfiles: profiles, oidcAuthenticator, oidcLoginFlow: browserOidcLoginFlow,
+    secretEncryptionKey: Buffer.alloc(32, 0x5c),
     openAiValidationEndpoint: `${providerOrigin}/v1/models`, githubVerifierProfile: fixedGithubVerifierProfile,
+    productHarnessProvider: ownerN1ConcurrencyProvider,
     githubAppConfig: { appId: '123', privateKey: githubFixturePem, appSlug: 'orgward-fixture',
       clientId: 'Iv1.fixture-client', clientSecret: 'fixture-oauth-client-secret',
       oauthRedirectUri: 'https://orgward.example/api/execution/github-installation/oauth-callback' }, githubFetchImpl });
+  browserOidcLoginFlow.redirectUri = app.base;
   const deepSeekAfterRestart = await instanceControlForRun(deepSeekUnknownRun);
   assert.equal(deepSeekAfterRestart.status, 'ABANDONED_UNVERIFIED');
   assert.deepEqual(deepSeekAfterRestart.events.at(-1).data.evidence, deepSeekAbandonPayload.evidence);
@@ -9860,7 +10398,6 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
 
   const githubSourceBytes = Buffer.from('before\n');
   const githubContentHash = createHash('sha256').update(githubSourceBytes).digest('hex');
-  const githubBlobSha = createHash('sha1').update(`blob ${githubSourceBytes.length}\0`).update(githubSourceBytes).digest('hex');
   const githubRepositoryId = '987654321';
   const githubInstallationId = '123456789';
   const githubBranchRef = 'refs/heads/main';
@@ -9986,8 +10523,100 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(JSON.stringify(installationAudit.rows[0].event).includes('fixture-installation-token'), false);
   assert.equal(JSON.stringify(installationAudit.rows[0].event).includes('fixture-user-access-token'), false);
   const githubCommitOid = 'c'.repeat(40);
-  const githubManifest = [{ path: 'README.md', mode: '100644', contentHash: githubContentHash,
-    size: githubSourceBytes.length, blobSha: githubBlobSha }];
+const processCandidateSource = Buffer.from(`export function qualifyDemand(signal) {
+  if (signal?.caseType === 'NEGATIVE' && !signal.requiredAssertion) {
+    const error = new Error('MISSING_REQUIRED_ASSERTION');
+    error.code = 'MISSING_REQUIRED_ASSERTION';
+    error.criterionId = signal.criterionId;
+    error.riskId = signal.riskId;
+    throw error;
+  }
+  const repeated = signal?.repairCount >= 2;
+  const highImpact = signal?.customerImpact === 'high';
+  const need = repeated && highImpact ? 'unknown' : 'routine';
+  return { need, repeated, highImpact };
+}
+export function recoverPlan(state) {
+  const recovered = state?.priorPlan?.status === 'REGENERATION_REQUIRED'
+    && state.priorPlan.retained === true
+    && state.priorPlan.criterionVersion < state.newPlan?.criterionVersion
+    && state.newPlan?.status === 'AUTHORIZED_BEFORE_EXECUTION'
+    && state.newPlan.draftRevision === state.currentDraftRevision;
+  if (!recovered) throw new Error('NEW_PLAN_NOT_BOUND_TO_CURRENT_CRITERION');
+  return { status: 'RECOVERED', priorPlanRetained: state.priorPlan.retained,
+    priorPlanHash: state.priorPlan.planHash, criterionVersion: state.newPlan.criterionVersion,
+    draftRevision: state.newPlan.draftRevision };
+}\n`);
+  const processOracleSource = Buffer.from(`import assert from 'node:assert/strict';
+import test from 'node:test';
+import { qualifyDemand } from '../src/process.mjs';
+
+const input = { repairCount: 2, customerImpact: 'high' };
+const expected = { need: 'prioritised-repair', repeated: true, highImpact: true };
+for (const name of [
+  'Pinned process learning check',
+  'AC3 original baseline check',
+  'AC3 regenerated baseline check',
+  'AC3 shared-draft applicability check',
+]) test(name, () => assert.deepEqual(qualifyDemand(input), expected));
+`);
+const scenarioContractSource = Buffer.from(`import assert from 'node:assert/strict';
+import { readFile, writeFile } from 'node:fs/promises';
+import test from 'node:test';
+import { qualifyDemand, recoverPlan } from '../src/process.mjs';
+
+const datasetPath = process.env.ORGWARD_SCENARIO_DATASET_FILE;
+const oraclePath = process.env.ORGWARD_SCENARIO_ORACLE_FILE;
+if (!datasetPath || !oraclePath) throw new Error('Scenario dataset and oracle paths are required.');
+const dataset = JSON.parse(await readFile(datasetPath, 'utf8'));
+const expected = JSON.parse(await readFile(oraclePath, 'utf8'));
+for (const file of [datasetPath, oraclePath]) {
+  let denied = false;
+  try { await writeFile(file, 'mutation-attempt'); }
+  catch (error) { denied = ['EROFS', 'EACCES', 'EPERM'].includes(error.code); }
+  assert.equal(denied, true, 'scenario input and oracle files must be mounted read-only');
+}
+
+test('Pinned process learning check', () => {
+  if (dataset.caseType === 'NEGATIVE') {
+    const expectRejection = (input, oracle) => assert.throws(() => qualifyDemand(input), (error) => {
+      assert.equal(error.code, oracle.code);
+      assert.equal(error.criterionId, oracle.criterionId);
+      assert.equal(error.riskId, oracle.riskId);
+      return true;
+    });
+    expectRejection(dataset, expected);
+    assert.throws(() => expectRejection({ ...dataset,
+      requiredAssertion: { criterionId: dataset.criterionId, status: 'PASS' } }, expected),
+    assert.AssertionError, 'adding a passing assertion makes this saved negative assertion fail');
+    assert.throws(() => expectRejection(dataset, { ...expected, code: 'DIFFERENT_REJECTION' }),
+      assert.AssertionError, 'changing the mounted oracle makes this saved negative assertion fail');
+    return;
+  }
+  if (dataset.caseType === 'RECOVERY') {
+    assert.deepEqual(recoverPlan(dataset), expected);
+    assert.throws(() => assert.deepEqual(recoverPlan({ ...dataset,
+      priorPlan: { ...dataset.priorPlan, planHash: 'f'.repeat(64) } }), expected),
+    assert.AssertionError, 'changing the retained old-plan hash in the mounted dataset fails the recovery assertion');
+    return;
+  }
+  assert.deepEqual(qualifyDemand(dataset), expected);
+});
+`);
+  const githubCapturedFiles = [
+    { path: 'README.md', bytes: githubSourceBytes },
+    { path: 'src/process.mjs', bytes: processCandidateSource },
+    { path: 'test/process-contract.test.mjs', bytes: processOracleSource },
+    { path: 'test/reviewed-behavior.test.mjs', bytes: scenarioContractSource },
+    { path: 'test/scenario-contract.test.mjs', bytes: scenarioContractSource },
+  ].map(({ path: filePath, bytes }) => ({ path: filePath, bytes, mode: '100644',
+    contentHash: createHash('sha256').update(bytes).digest('hex'),
+    blobSha: createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex'),
+    contentBase64: bytes.toString('base64') }));
+  const githubManifest = githubCapturedFiles.map(({ path: filePath, mode, contentHash, size }) => ({
+    path: filePath, mode, contentHash, size: size ?? githubCapturedFiles.find((entry) => entry.path === filePath).bytes.length,
+    blobSha: githubCapturedFiles.find((entry) => entry.path === filePath).blobSha,
+  }));
   const githubManifestDigest = createHash('sha256').update(JSON.stringify(githubManifest)).digest('hex');
   const githubSnapshotId = createHash('sha256').update(`${githubRepositoryId}\0${githubBranchRef}\0${githubCommitOid}\0github-read-snapshot-v1`).digest('hex');
   const githubHandoffRoute = encodeExecutionRoute(project.id, null, null, githubSnapshotId);
@@ -9995,8 +10624,10 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(handedOffSnapshotId, githubSnapshotId, 'the onboarding action preserves the exact immutable snapshot ID');
   const githubSnapshot = { id: githubSnapshotId, repositoryId: githubRepositoryId, branchRef: githubBranchRef,
     commitOid: githubCommitOid, treeOid: 'd'.repeat(40), treeDigest: githubManifestDigest,
-    manifestDigest: githubManifestDigest, policyVersion: 'github-read-snapshot-v1', fileCount: 1,
-    totalBytes: githubSourceBytes.length, files: [{ ...githubManifest[0], contentBase64: githubSourceBytes.toString('base64') }] };
+    manifestDigest: githubManifestDigest, policyVersion: 'github-read-snapshot-v1', fileCount: githubManifest.length,
+    totalBytes: githubCapturedFiles.reduce((total, entry) => total + entry.bytes.length, 0),
+    files: githubCapturedFiles.map(({ bytes, contentBase64, ...entry }) => ({ ...entry,
+      size: bytes.length, contentBase64 })) };
   await app.executionService.githubSourceStore.saveCapture({ tenantId: 'tenant-a', projectId: project.id,
     principal: principal('alice'), authzGeneration: await authzGeneration(app, 'alice'),
     binding: { tenantId: 'tenant-a', projectId: project.id, installationId: githubInstallationId,
@@ -10008,19 +10639,373 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(githubRepositoryInventory.githubExecutionAvailable, true,
     'a fixed verifier, PostgreSQL snapshot store, broker and model profile make the GitHub task selector available');
   app.executionService.githubBuildPlan = parseGitHubBuildPlan(fixedGithubBuildPlan);
+  const behaviorPlanProject = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
+  const behaviorPlanBlueprint = behaviorPlanProject.latestBlueprint;
+  const behaviorPlanProcess = behaviorPlanProject.processPlans.filter((entry) => entry.id === plan.id)
+    .sort((left, right) => Number(left.revision) - Number(right.revision)).at(-1);
+  assert.ok(behaviorPlanProcess, `the exact saved process plan is available: ${JSON.stringify(behaviorPlanProject.processPlans.map(({ id, revision, kind }) => ({ id, revision, kind })))}`);
+  assert.equal(Number(behaviorPlanProcess.revision), 3, JSON.stringify({ id: behaviorPlanProcess.id, revision: behaviorPlanProcess.revision }));
+  const behaviorPlanCase = await request(app.base, '/api/sdlc/cases', { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ mode: 'golden', projectId: project.id, sourceObjectId: 'process-learn',
+      expectedProjectVersion: behaviorPlanProject.version, expectedBlueprintId: behaviorPlanBlueprint.id,
+      expectedBlueprintVersion: behaviorPlanBlueprint.version }) }, 201);
+  let behaviorPlanReady = await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}/run`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: behaviorPlanCase.version,
+      idempotencyKey: 't91-behavior-plan-advance' }) });
+  let behaviorRequirement = behaviorPlanReady.artifacts.requirements.requirements
+    .find((entry) => entry.processTrace?.process.id === 'process-learn');
+  assert.equal(behaviorRequirement?.processTrace?.risk.status, 'LINKED', 'the fixture risk is linked only by the explicit owner command above');
+  assert.deepEqual(behaviorRequirement.processTrace.risk.refs.map((entry) => entry.id), ['risk-unvalidated-demand'],
+    'the selected process trace includes the exact explicitly linked risk and no unrelated risks');
+  const behaviorCriterionContract = { schemaVersion: 1, version: 1, criteria: [{ id: 'LEARN-OUTCOME',
+    text: behaviorRequirement.acceptanceCriteria[0], type: 'BUSINESS', mandatory: true,
+    sourceRefId: behaviorRequirement.processTrace.process.id, scopeRefId: behaviorRequirement.processTrace.process.id }] };
+  behaviorPlanReady = await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}/edit-requirements`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: behaviorPlanReady.version,
+      expectedDraftRevision: behaviorPlanReady.artifacts.requirements.draftRevision, requirementId: behaviorRequirement.id,
+      changes: { criterionContract: behaviorCriterionContract }, idempotencyKey: 't91-behavior-criterion-contract' }) });
+  behaviorRequirement = behaviorPlanReady.artifacts.requirements.requirements.find((entry) => entry.id === behaviorRequirement.id);
+  assert.equal(behaviorRequirement.criterionContract.version, 1);
+  const unauthorizedCriterionRevision = await fetch(`${app.base}/api/sdlc/cases/${behaviorPlanCase.id}/edit-requirements`, {
+    ...as('bob'), method: 'POST', body: JSON.stringify({ version: behaviorPlanReady.version,
+      expectedDraftRevision: behaviorPlanReady.artifacts.requirements.draftRevision, requirementId: behaviorRequirement.id,
+      changes: { criterionContract: { ...behaviorCriterionContract, version: 2 } },
+      idempotencyKey: 't91-behavior-criterion-unauthorized' }) });
+  assert.equal(unauthorizedCriterionRevision.status, 403, 'only the accountable owner can version mandatory obligations');
+  const mandatoryDowngrade = await fetch(`${app.base}/api/sdlc/cases/${behaviorPlanCase.id}/edit-requirements`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: behaviorPlanReady.version,
+      expectedDraftRevision: behaviorPlanReady.artifacts.requirements.draftRevision, requirementId: behaviorRequirement.id,
+      changes: { criterionContract: { ...behaviorCriterionContract, version: 2,
+        criteria: behaviorCriterionContract.criteria.map((entry) => ({ ...entry, mandatory: false })) } },
+      idempotencyKey: 't91-behavior-criterion-downgrade' }) });
+  assert.equal(mandatoryDowngrade.status, 400, 'the owner cannot downgrade an existing mandatory criterion');
+  const afterMandatoryDowngrade = await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}`, as('alice'));
+  assert.equal(afterMandatoryDowngrade.version, behaviorPlanReady.version, 'a rejected floor downgrade does not mutate the case version');
+  assert.equal(afterMandatoryDowngrade.artifacts.requirements.requirements.find((entry) => entry.id === behaviorRequirement.id)
+    .criterionContract.version, 1, 'a rejected floor downgrade does not append a contract revision');
+  const invalidCriterionScope = await fetch(`${app.base}/api/sdlc/cases/${behaviorPlanCase.id}/edit-requirements`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: behaviorPlanReady.version,
+      expectedDraftRevision: behaviorPlanReady.artifacts.requirements.draftRevision, requirementId: behaviorRequirement.id,
+      changes: { criterionContract: { ...behaviorCriterionContract, version: 2,
+        criteria: behaviorCriterionContract.criteria.map((entry) => ({ ...entry, scopeRefId: 'risk-unvalidated-demand' })) } },
+      idempotencyKey: 't91-behavior-criterion-invalid-scope' }) });
+  assert.equal(invalidCriterionScope.status, 400, 'unsupported risk scopes are rejected by the API before mutation');
+  const priorityWithoutContract = await fetch(`${app.base}/api/sdlc/cases/${behaviorPlanCase.id}/edit-requirements`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: behaviorPlanReady.version,
+      expectedDraftRevision: behaviorPlanReady.artifacts.requirements.draftRevision, requirementId: behaviorRequirement.id,
+      changes: { priority: 'COULD' }, idempotencyKey: 't91-behavior-priority-without-contract' }) });
+  assert.equal(priorityWithoutContract.status, 400, 'obligation-affecting priority cannot be changed without a new criterion revision');
+  const afterInvalidObligationEdits = await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}`, as('alice'));
+  assert.equal(afterInvalidObligationEdits.version, behaviorPlanReady.version, 'invalid scope and priority edits leave the case unchanged');
+  const behaviorMeta = await request(app.base, '/api/sdlc/meta', as('alice'));
+  assert.equal(behaviorMeta.behaviorTestCheck.available, true);
+  const behaviorPlanSelectedPaths = ['src/process.mjs', 'test/process-contract.test.mjs'];
+  const behaviorPlanRequest = { version: behaviorPlanReady.version,
+    draftRevision: behaviorPlanReady.artifacts.requirements.draftRevision, requirementId: behaviorRequirement.id,
+    planId: behaviorPlanProcess.id, revision: behaviorPlanProcess.revision, taskId: planInput.taskId,
+    assertions: [{ id: 'learning-assertion-1', testName: 'Pinned process learning check', criterionIndex: 0,
+      criterionId: 'LEARN-OUTCOME',
+      outcomeRefId: behaviorRequirement.processTrace.outcome.outputRefs[0].id,
+      scopeRefId: behaviorRequirement.processTrace.process.id, riskRefId: 'risk-unvalidated-demand',
+      checkId: behaviorMeta.behaviorTestCheck.id }], fileMappings: [
+      { path: 'src/process.mjs', role: 'IMPLEMENTATION', criterionIds: ['LEARN-OUTCOME'] },
+      { path: 'test/process-contract.test.mjs', role: 'TEST', criterionIds: ['LEARN-OUTCOME'] },
+    ],
+    githubSnapshotId: handedOffSnapshotId,
+    githubSelectedPaths: behaviorPlanSelectedPaths, idempotencyKey: 't91-behavior-plan-authorize',
+    evaluationContext: { effectiveAt: '2026-10-07T00:00:00.000Z',
+      effectiveTimeSourceRefId: behaviorRequirement.processTrace.process.inputs[0].id },
+    caseDefinitions: {
+      positive: { definition: 'The declared process produces its pinned output after the saved task check passes.',
+        sourceRefId: behaviorRequirement.processTrace.outcome.outputRefs[0].id, criterionId: 'LEARN-OUTCOME',
+        dataset: { repairCount: 2, customerImpact: 'high' },
+        expectedOutput: { need: 'prioritised-repair', repeated: true, highImpact: true },
+        assertionId: 'learning-assertion-1', testPath: 'test/process-contract.test.mjs' },
+      negative: { definition: 'Reject a candidate that lacks a passing assertion for the linked demand risk.',
+        sourceRefId: behaviorRequirement.processTrace.risk.refs[0].id, criterionId: 'LEARN-OUTCOME',
+        dataset: { cases: [
+          { id: 'N1', mutation: 'ADD_UNMAPPED_PATH', path: 'src/unmapped.mjs' },
+          { id: 'N2', criterionId: 'LEARN-OUTCOME', mandatory: true, assertions: [] },
+          { id: 'N3', mutation: 'DELETE_UNAUTHORIZED_TEST', path: 'tests/learning.test.js', sourceExpectedExitCode: 1 },
+        ] },
+        expectedOutput: { cases: [
+          { id: 'N1', status: 'FAILED', category: 'BEHAVIOR_CANDIDATE_ORPHAN_PATH', verifierDispatched: false },
+          { id: 'N2', authorizationStatus: 400, planSaved: false, missingNamedAssertionLinkStatus: 409,
+            missingNamedAssertionError: 'BEHAVIOR_CANDIDATE_REJECTED', caseVersionChanged: false, evidenceLinkCreated: false },
+          { id: 'N3', status: 'FAILED', deletedPathRejected: true, verifierDispatched: false },
+        ] } },
+      recovery: { definition: 'After a criterion revision, retain stale evidence and require a newly pinned plan.',
+        sourceRefId: behaviorRequirement.processTrace.process.id, criterionId: 'LEARN-OUTCOME',
+        dataset: { cases: [
+          { id: 'R1', fromCriterionVersion: 1, toCriterionVersion: 2, retainHistory: true },
+          { id: 'R2', editTarget: 'OTHER_REQUIREMENT', change: 'RATIONALE', selectedRequirementUnchanged: true },
+        ] },
+        expectedOutput: { cases: [
+          { id: 'R1', oldPlanStatus: 'REGENERATION_REQUIRED', oldLinkStatus: 'STALE',
+            staleExecutionStatus: 409, staleExecutionError: 'BEHAVIOR_TEST_PLAN_STALE', newPlanBindsVersion: 2,
+            oldPlanHashPreserved: true, newRunDistinct: true },
+          { id: 'R2', oldPlanStatus: 'REGENERATION_REQUIRED', reason: 'SHARED_REQUIREMENTS_DRAFT_CHANGED',
+            staleExecutionError: 'BEHAVIOR_TEST_PLAN_STALE', selectedRequirementHashPreserved: true,
+            newPlanAppended: true },
+        ] } },
+    } };
+  await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}/process-behavior-test-plans`, {
+    ...as('tenant-b-admin'), method: 'POST', body: JSON.stringify(behaviorPlanRequest) }, 404);
+  assert.equal((await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}`, as('alice')))
+    .artifacts.processBehaviorTestPlans?.length ?? 0, 0, 'cross-tenant plan authorization leaves no saved plan');
+  const n2AuthorizationBefore = await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}`, as('alice'));
+  const incompleteBehaviorPlanResponse = await fetch(`${app.base}/api/sdlc/cases/${behaviorPlanCase.id}/process-behavior-test-plans`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ ...behaviorPlanRequest, assertions: [], idempotencyKey: 't91-behavior-plan-untested-criterion' }) });
+  assert.equal(incompleteBehaviorPlanResponse.status, 400, 'the real API rejects an otherwise-valid plan with no named assertions');
+  const n2AuthorizationAfter = await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}`, as('alice'));
+  assert.equal(n2AuthorizationAfter.version, n2AuthorizationBefore.version, 'N2 authorization denial leaves the case version unchanged');
+  assert.equal(n2AuthorizationAfter.events.length, n2AuthorizationBefore.events.length, 'N2 authorization denial appends no event');
+  assert.equal(incompleteBehaviorPlanResponse.status,
+    behaviorPlanRequest.caseDefinitions.negative.expectedOutput.cases.find((entry) => entry.id === 'N2').authorizationStatus,
+    'the delegated N2 oracle is checked against the actual owner plan-authorization route result');
+  assert.equal((await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}`, as('alice')))
+    .artifacts.processBehaviorTestPlans?.length ?? 0, 0, 'an omitted criterion does not append an authorized plan');
+  const unmappedBehaviorPlanResponse = await fetch(`${app.base}/api/sdlc/cases/${behaviorPlanCase.id}/process-behavior-test-plans`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ ...behaviorPlanRequest,
+      fileMappings: [{ path: 'extra.js', role: 'IMPLEMENTATION', criterionIds: ['LEARN-OUTCOME'] }],
+      idempotencyKey: 't91-behavior-plan-unmapped-path' }) });
+  assert.equal(unmappedBehaviorPlanResponse.status, 400,
+    `a path absent from the exact selected snapshot cannot be mapped into a plan: ${JSON.stringify(await unmappedBehaviorPlanResponse.clone().json())}`);
+  assert.equal((await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}`, as('alice')))
+    .artifacts.processBehaviorTestPlans?.length ?? 0, 0, 'an unmapped-path plan is rejected before persistence');
+  const unrelatedRiskPlanRequest = { ...behaviorPlanRequest, idempotencyKey: 't91-behavior-plan-unlinked-risk',
+    assertions: behaviorPlanRequest.assertions.map((entry) => ({ ...entry, riskRefId: 'risk-unsafe-automation' })) };
+  const unrelatedRiskPlanResponse = await fetch(`${app.base}/api/sdlc/cases/${behaviorPlanCase.id}/process-behavior-test-plans`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify(unrelatedRiskPlanRequest) });
+  assert.equal(unrelatedRiskPlanResponse.status, 400, 'a risk that is not explicitly linked to this process cannot be selected');
+  assert.equal((await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}`, as('alice')))
+    .artifacts.processBehaviorTestPlans?.length ?? 0, 0, 'an unlinked risk attempt does not append a behavior plan');
+  const incompleteScenarioPlan = await fetch(`${app.base}/api/sdlc/cases/${behaviorPlanCase.id}/process-behavior-test-plans`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ ...behaviorPlanRequest,
+      caseDefinitions: { positive: behaviorPlanRequest.caseDefinitions.positive,
+        negative: behaviorPlanRequest.caseDefinitions.negative }, idempotencyKey: 't91-behavior-plan-incomplete-cases' }) });
+  assert.equal(incompleteScenarioPlan.status, 400, 'authorization requires positive, negative, and recovery case definitions');
+  const partialScenarioMapping = await fetch(`${app.base}/api/sdlc/cases/${behaviorPlanCase.id}/process-behavior-test-plans`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ ...behaviorPlanRequest,
+      caseDefinitions: { ...behaviorPlanRequest.caseDefinitions,
+        negative: { ...behaviorPlanRequest.caseDefinitions.negative, expectedOutput: undefined, dataset: { unsafe: true } } },
+      idempotencyKey: 't91-behavior-plan-partial-case-mapping' }) });
+  assert.equal(partialScenarioMapping.status, 400, 'a partial case mapping cannot be silently represented as complete');
+  const afterPartialScenarioMapping = await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}`, as('alice'));
+  assert.equal(afterPartialScenarioMapping.version, behaviorPlanReady.version, 'partial mapping denial leaves case version unchanged');
+  assert.equal(afterPartialScenarioMapping.artifacts.processBehaviorTestPlans?.length ?? 0, 0,
+    'partial mapping denial leaves the immutable plan list unchanged');
+  const untracedEffectiveTimeSource = await fetch(`${app.base}/api/sdlc/cases/${behaviorPlanCase.id}/process-behavior-test-plans`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ ...behaviorPlanRequest,
+      evaluationContext: { ...behaviorPlanRequest.evaluationContext, effectiveTimeSourceRefId: 'information-not-in-trace' },
+      idempotencyKey: 't91-behavior-plan-untraced-effective-time' }) });
+  assert.equal(untracedEffectiveTimeSource.status, 400, 'effective time cannot cite an input outside the pinned process trace');
+  let behaviorPlanAuthorized = await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}/process-behavior-test-plans`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify(behaviorPlanRequest) }, 201);
+  assert.equal(behaviorPlanAuthorized.processBehaviorTestPlan.schemaVersion, 4);
+  assert.equal(behaviorPlanAuthorized.processBehaviorTestPlan.evaluationContext.workspace.projectId, project.id);
+  assert.equal(behaviorPlanAuthorized.processBehaviorTestPlan.evaluationContext.branch.branchRef, githubBranchRef);
+  assert.equal(behaviorPlanAuthorized.processBehaviorTestPlan.evaluationContext.branch.commitOid, githubCommitOid);
+  assert.equal(behaviorPlanAuthorized.processBehaviorTestPlan.evaluationContext.effectiveTime.value, '2026-10-07T00:00:00.000Z');
+  assert.equal(behaviorPlanAuthorized.processBehaviorTestPlan.evaluationContext.effectiveTime.status, 'OWNER_ASSERTED');
+  assert.deepEqual(behaviorPlanAuthorized.processBehaviorTestPlan.caseDefinitions.cases.map(({ type, status }) => [type, status]), [
+    ['POSITIVE', 'NOT_EXECUTED'], ['NEGATIVE', 'NOT_EXECUTED'], ['RECOVERY', 'NOT_EXECUTED'],
+  ]);
+  const authoredCases = behaviorPlanAuthorized.processBehaviorTestPlan.caseDefinitions;
+  assert.equal(authoredCases.mappingStatus, 'INCOMPLETE', 'unmapped negative and recovery cases keep the aggregate mapping incomplete');
+  const positiveCase = authoredCases.cases.find((entry) => entry.type === 'POSITIVE');
+  const negativeCase = authoredCases.cases.find((entry) => entry.type === 'NEGATIVE');
+  const recoveryCase = authoredCases.cases.find((entry) => entry.type === 'RECOVERY');
+  assert.deepEqual(positiveCase.dataset, { repairCount: 2, customerImpact: 'high' });
+  assert.deepEqual(positiveCase.expectedOutput, { need: 'prioritised-repair', repeated: true, highImpact: true });
+  assert.deepEqual(negativeCase.dataset.cases.map((entry) => entry.id), ['N1', 'N2', 'N3']);
+  assert.deepEqual(negativeCase.expectedOutput.cases.find((entry) => entry.id === 'N2'), {
+    id: 'N2', authorizationStatus: 400, planSaved: false, missingNamedAssertionLinkStatus: 409,
+    missingNamedAssertionError: 'BEHAVIOR_CANDIDATE_REJECTED', caseVersionChanged: false, evidenceLinkCreated: false,
+  });
+  assert.deepEqual(recoveryCase.dataset.cases.map((entry) => entry.id), ['R1', 'R2']);
+  assert.equal(negativeCase.executionMapping.status, 'INCOMPLETE');
+  assert.equal(recoveryCase.executionMapping.status, 'INCOMPLETE');
+  assert.deepEqual(negativeCase.dataset.cases.find((entry) => entry.id === 'N2'), {
+    id: 'N2', criterionId: 'LEARN-OUTCOME', mandatory: true, assertions: [],
+  });
+  assert.equal(negativeCase.status, 'NOT_EXECUTED');
+  assert.equal(recoveryCase.status, 'NOT_EXECUTED');
+  assert.deepEqual(positiveCase.executionMapping, {
+    status: 'OWNER_PROPOSED_UNVERIFIED', assertionId: 'learning-assertion-1',
+    testName: 'Pinned process learning check', testPath: 'test/process-contract.test.mjs',
+    testFileHash: behaviorPlanAuthorized.processBehaviorTestPlan.repository.selectedFiles
+      .find((entry) => entry.path === 'test/process-contract.test.mjs').contentHash,
+    repositorySnapshotId: handedOffSnapshotId,
+    repositoryTreeDigest: behaviorPlanAuthorized.processBehaviorTestPlan.repository.treeDigest,
+    assertionHash: positiveCase.executionMapping.assertionHash,
+  });
+  for (const type of ['NEGATIVE', 'RECOVERY']) {
+    const entry = authoredCases.cases.find((candidate) => candidate.type === type);
+    assert.deepEqual(entry.executionMapping, { status: 'INCOMPLETE' });
+    assert.ok(entry.dataset && entry.expectedOutput, 'typed case inputs and oracle persist before product-path mapping');
+    assert.equal(Object.hasOwn(entry.executionMapping, 'testPath'), false);
+    assert.equal(Object.hasOwn(entry.executionMapping, 'assertionId'), false);
+  }
+  const staleBehaviorPlan = await fetch(`${app.base}/api/sdlc/cases/${behaviorPlanCase.id}/process-behavior-test-plans`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ ...behaviorPlanRequest, idempotencyKey: 't91-behavior-plan-stale' }) });
+  assert.equal(staleBehaviorPlan.status, 409, 'a plan cannot be authorized against the pre-append case version twice');
+  assert.equal((await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}`, as('alice')))
+    .artifacts.processBehaviorTestPlans.length, 1, 'stale authorization leaves the immutable plan list unchanged');
+  let behaviorPlan = behaviorPlanAuthorized.processBehaviorTestPlan;
+  assert.equal(behaviorPlan.status, 'AUTHORIZED_BEFORE_EXECUTION');
+  assert.equal(behaviorPlan.projectId, project.id);
+  assert.equal(behaviorPlan.tenantId, 'tenant-a');
+  assert.equal(behaviorPlan.assertions.length, 1);
+  assert.equal(behaviorPlan.repository.snapshotId, handedOffSnapshotId);
+  const legacyFixtureAggregateRow = await app.persistence.query(`select state from orgward.aggregates
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`, [behaviorPlanCase.id]);
+  const originalBehaviorAggregateState = structuredClone(legacyFixtureAggregateRow.rows[0].state);
+  const legacyPlan = structuredClone(originalBehaviorAggregateState.artifacts.processBehaviorTestPlans
+    .find((entry) => entry.id === behaviorPlan.id));
+  legacyPlan.id = `behavior-test-plan-${randomUUID()}`;
+  legacyPlan.schemaVersion = 3;
+  delete legacyPlan.caseDefinitions.mappingStatus;
+  for (const scenario of legacyPlan.caseDefinitions.cases) {
+    delete scenario.executionMapping;
+    delete scenario.dataset;
+    delete scenario.expectedOutput;
+  }
+  const { planHash: _oldPlanHash, ...legacyPlanCore } = legacyPlan;
+  legacyPlan.planHash = digest(legacyPlanCore);
+  assert.equal(verifyProcessBehaviorTestPlan(legacyPlan), true, 'legacy v3 plan retains its historical hash recipe');
+  const legacyAggregateState = structuredClone(originalBehaviorAggregateState);
+  legacyAggregateState.artifacts.processBehaviorTestPlans.push(legacyPlan);
+  const priorPlanEvent = legacyAggregateState.events.find((entry) => entry.type === 'ProcessBehaviorTestPlanAuthorized'
+    && entry.data?.planId === behaviorPlan.id);
+  const legacyCommandId = 'legacy-v3-behavior-plan-authorized';
+  const legacyEventData = { ...priorPlanEvent.data, planId: legacyPlan.id, planHash: legacyPlan.planHash,
+    caseDefinitionsHash: contentHash(legacyPlan.caseDefinitions) };
+  const legacyEvent = { ...priorPlanEvent, id: `event-${randomUUID()}`, causationId: legacyCommandId,
+    data: legacyEventData,
+    contentHash: contentHash({ type: 'ProcessBehaviorTestPlanAuthorized', tenantId: legacyAggregateState.tenantId,
+      data: legacyEventData }) };
+  legacyAggregateState.events.push(legacyEvent);
+  legacyAggregateState.idempotency[legacyCommandId] = { action: 'authorize-process-behavior-test-plan',
+    requestHash: legacyPlan.requestHash, planId: legacyPlan.id, version: behaviorPlanAuthorized.version,
+    at: legacyPlan.createdAt };
+  await app.persistence.transaction((client) => recordEvent(client, { tenantId: 'tenant-a', kind: 'change_case',
+    id: behaviorPlanCase.id, version: behaviorPlanAuthorized.version, commandId: legacyCommandId, event: legacyEvent }));
+  await app.persistence.query(`update orgward.aggregates set state=$2::jsonb,state_hash=$3
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`,
+  [behaviorPlanCase.id, JSON.stringify(legacyAggregateState), contentHash(legacyAggregateState)]);
+  const legacyReadbackResponse = await fetch(`${app.base}/api/sdlc/cases/${behaviorPlanCase.id}`, as('alice'));
+  const legacyReadbackBody = await legacyReadbackResponse.text();
+  assert.equal(legacyReadbackResponse.status, 200,
+    `a hashed schema-v3 plan without mapping fields remains readable: ${legacyReadbackBody}`);
+  const legacyReadback = JSON.parse(legacyReadbackBody);
+  const legacyRequirementView = legacyReadback.artifacts.requirements.requirements.find((entry) => entry.id === behaviorRequirement.id);
+  const legacyPlanView = legacyRequirementView.processBehaviorTestPlans.find((entry) => entry.id === legacyPlan.id);
+  assert.equal(legacyPlanView.planHash, legacyPlan.planHash, 'legacy plan hash is preserved exactly');
+  assert.equal(legacyPlanView.schemaVersion, 3);
+  assert.equal(legacyPlanView.caseDefinitions.mappingStatus, 'INCOMPLETE');
+  const legacyPlanPresentation = processBehaviorTestPlanPresentation(legacyPlanView);
+  assert.equal(legacyPlanPresentation.scenarioMappingsStatus, 'INCOMPLETE');
+  assert.ok(legacyPlanPresentation.scenarioCases.every((entry) => entry.includes('mapping INCOMPLETE')),
+    'the rendered legacy scenarios explicitly show their missing mappings');
+  assert.ok(legacyPlanView.caseDefinitions.cases.every((entry) => !Object.hasOwn(entry, 'executionMapping')),
+    'legacy case records remain unchanged and are not rewritten to add mapping fields');
+  assert.ok(legacyPlanView.caseDefinitions.cases.every((entry) => entry.status === 'NOT_EXECUTED'));
+  const afterLegacyReadbackRow = await app.persistence.query(`select state,version from orgward.aggregates
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`, [behaviorPlanCase.id]);
+  assert.equal(Number(afterLegacyReadbackRow.rows[0].version), Number(behaviorPlanAuthorized.version));
+  assert.equal(contentHash(afterLegacyReadbackRow.rows[0].state), contentHash(legacyAggregateState),
+    'legacy readback does not rewrite the stored immutable plan or aggregate');
+  assert.deepEqual(afterLegacyReadbackRow.rows[0].state.events, legacyAggregateState.events,
+    'legacy readback does not append an aggregate event');
+  await app.persistence.query(`update orgward.aggregates set state=$2::jsonb,state_hash=$3
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`,
+  [behaviorPlanCase.id, JSON.stringify(originalBehaviorAggregateState), contentHash(originalBehaviorAggregateState)]);
+  const beforeNewCriterionRevision = await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}`, as('alice'));
+  const beforeRevisionRequirement = beforeNewCriterionRevision.artifacts.requirements.requirements.find((entry) => entry.id === behaviorRequirement.id);
+  const revisedPriority = beforeRevisionRequirement.priority === 'MUST' ? 'SHOULD' : 'MUST';
+  const revisedCriterionCase = await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}/edit-requirements`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: beforeNewCriterionRevision.version,
+      expectedDraftRevision: beforeNewCriterionRevision.artifacts.requirements.draftRevision,
+      requirementId: behaviorRequirement.id, changes: { priority: revisedPriority,
+        criterionContract: { schemaVersion: 1, version: 2, criteria: beforeRevisionRequirement.criterionContract.criteria.map((entry) => ({
+          id: entry.id, text: entry.text, type: entry.type, mandatory: entry.mandatory,
+          sourceRefId: entry.source.id, scopeRefId: entry.scope.id,
+      })) } }, idempotencyKey: 't91-behavior-priority-revision' }) });
+  const revisedRequirement = revisedCriterionCase.artifacts.requirements.requirements.find((entry) => entry.id === behaviorRequirement.id);
+  const oldPlanAfterRevision = revisedRequirement.processBehaviorTestPlans.find((entry) => entry.id === behaviorPlan.id);
+  assert.equal(oldPlanAfterRevision.regenerationStatus, 'REGENERATION_REQUIRED',
+    'a criterion baseline revision marks the retained old plan for regeneration');
+  assert.equal(oldPlanAfterRevision.regenerationReason, 'CRITERION_BASELINE_CHANGED');
+  assert.equal(oldPlanAfterRevision.criterionContractVersion, 1);
+  assert.equal(oldPlanAfterRevision.criterionContractHash, behaviorPlan.criterionContractHash,
+    'the stale plan still displays its immutable old baseline pin');
+  assert.equal(oldPlanAfterRevision.currentCriterionContractVersion, 2);
+  assert.equal(oldPlanAfterRevision.planHash, behaviorPlan.planHash,
+    'regeneration state is derived and does not reseal or rewrite the old plan');
+  const ordinaryDraftEdit = await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}/edit-requirements`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: revisedCriterionCase.version,
+      expectedDraftRevision: revisedCriterionCase.artifacts.requirements.draftRevision, requirementId: revisedRequirement.id,
+      changes: { rationale: `${revisedRequirement.rationale} Owner clarification recorded after criterion versioning.` },
+      idempotencyKey: 't91-behavior-unrelated-draft-edit' }) });
+  behaviorPlanReady = ordinaryDraftEdit;
+  behaviorRequirement = ordinaryDraftEdit.artifacts.requirements.requirements.find((entry) => entry.id === behaviorRequirement.id);
+  const historicalPlanCaseReadback = await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}`, as('alice'));
+  assert.equal(historicalPlanCaseReadback.artifacts.processBehaviorTestPlans[0].planHash, behaviorPlan.planHash,
+    'the old plan remains verifiable against its exact historical criterion contract after unrelated draft edits');
+  assert.equal(historicalPlanCaseReadback.artifacts.requirements.draftRevision, behaviorPlanReady.artifacts.requirements.draftRevision,
+    'case GET remains valid when a contract-pinned plan and the shared requirement draft have different revisions');
+  const staleExecutionCaseBefore = await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}`, as('alice'));
+  const staleExecutionCounts = async () => (await app.persistence.query(`select
+    (select count(*)::int from orgward.aggregates where tenant_id='tenant-a' and aggregate_kind='execution_run') as runs,
+    (select count(*)::int from orgward.audit_log where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1) as audits,
+    (select count(*)::int from orgward.outbox where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1) as outbox`,
+  [behaviorPlanCase.id])).rows[0];
+  const staleExecutionCountsBefore = await staleExecutionCounts();
+  const stalePlanRunResponse = await fetch(`${app.base}/api/execution/process-task-runs`, {
+    ...as('alice'), method: 'POST', body: command('t91-behavior-plan-stale-at-execution', {
+      ...planInput, revision: behaviorPlanProcess.revision, profileId: 'process-task-openai',
+      githubSnapshotId: handedOffSnapshotId, githubSelectedPaths: behaviorPlanSelectedPaths,
+      behaviorTestCaseId: behaviorPlanCase.id, behaviorTestPlanId: behaviorPlan.id,
+    }) });
+  assert.equal(stalePlanRunResponse.status, 409, 'a retained historical plan cannot authorize execution after obligation revision');
+  assert.equal((await stalePlanRunResponse.json()).error.code, 'BEHAVIOR_TEST_PLAN_STALE');
+  const staleExecutionCaseAfter = await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}`, as('alice'));
+  assert.equal(staleExecutionCaseAfter.version, staleExecutionCaseBefore.version);
+  assert.deepEqual(staleExecutionCaseAfter.events, staleExecutionCaseBefore.events);
+  assert.deepEqual(await staleExecutionCounts(), staleExecutionCountsBefore,
+    'stale-plan denial creates no execution run, case audit, or outbox entry');
+  assert.equal(staleExecutionCaseAfter.artifacts.processBehaviorTestPlans.find((entry) => entry.id === behaviorPlan.id).planHash,
+    behaviorPlan.planHash, 'the denied historical plan hash remains unchanged');
+  assert.deepEqual(staleExecutionCaseAfter.artifacts.requirements?.processRunEvidenceLinks ?? [],
+    staleExecutionCaseBefore.artifacts.requirements?.processRunEvidenceLinks ?? [],
+  'stale-plan denial leaves all saved evidence links unchanged');
+  behaviorPlanAuthorized = await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}/process-behavior-test-plans`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ ...behaviorPlanRequest,
+      version: behaviorPlanReady.version, draftRevision: behaviorPlanReady.artifacts.requirements.draftRevision,
+      idempotencyKey: 't91-behavior-plan-authorize-v2' }) }, 201);
+  behaviorPlan = behaviorPlanAuthorized.processBehaviorTestPlan;
+  assert.equal(behaviorPlan.criterionContractVersion, 2);
+  assert.equal((await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}`, as('alice')))
+    .artifacts.processBehaviorTestPlans.length, 2, 'the new plan appends while the old revision remains retained');
   const githubRequest = await taskRequest('process-task-github-candidate-integration', {
-    ...planInput, revision: 3, profileId: 'process-task-openai', githubSnapshotId: handedOffSnapshotId, githubSelectedPaths: ['README.md'],
+    ...planInput, revision: behaviorPlanProcess.revision, profileId: 'process-task-openai', githubSnapshotId: handedOffSnapshotId, githubSelectedPaths: behaviorPlanSelectedPaths,
+    behaviorTestCaseId: behaviorPlanCase.id, behaviorTestPlanId: behaviorPlan.id,
   });
   assert.equal(githubRequest.status, 'AWAITING_APPROVAL');
   assert.equal(githubRequest.processTaskRef.repository.kind, 'github-app');
   assert.equal(githubRequest.processTaskRef.repository.snapshotId, handedOffSnapshotId,
     'the linked PostgreSQL request pins the snapshot handed off from onboarding');
   assert.equal(githubRequest.processTaskRef.repository.source.commitOid, githubCommitOid);
-  assert.deepEqual(githubRequest.processTaskRef.repository.selectedFiles.map((file) => file.path), ['README.md']);
+  assert.deepEqual(githubRequest.processTaskRef.repository.selectedFiles.map((file) => file.path), behaviorPlanSelectedPaths);
   assert.equal(Object.hasOwn(githubRequest.profile, 'credential'), false,
     'GitHub request views omit the provider credential reference');
   assert.equal(JSON.stringify(githubRequest).includes(openAiFixtureSecret), false);
   assert.equal(Object.hasOwn(githubRequest, 'repositorySnapshot'), false);
+  const pendingGithubRequest = await taskRequest('process-task-github-unplanned-pending', {
+    ...planInput, revision: behaviorPlanProcess.revision, profileId: 'process-task-openai',
+    githubSnapshotId: handedOffSnapshotId, githubSelectedPaths: behaviorPlanSelectedPaths,
+  });
   const pendingEvidenceProject = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
   const pendingEvidenceCase = await request(app.base, '/api/sdlc/cases', { ...as('alice'), method: 'POST',
     body: JSON.stringify({ mode: 'golden', projectId: project.id, sourceObjectId: 'process-learn',
@@ -10034,19 +11019,27 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   const pendingEvidenceLink = await request(app.base, `/api/sdlc/cases/${pendingEvidenceCase.id}/process-run-evidence`, {
     ...as('alice'), method: 'POST', body: JSON.stringify({ version: pendingEvidenceReady.version,
       draftRevision: pendingEvidenceReady.artifacts.requirements.draftRevision,
-      requirementId: pendingEvidenceRequirement.id, runId: githubRequest.id,
+      requirementId: pendingEvidenceRequirement.id, runId: pendingGithubRequest.id,
       idempotencyKey: 't91-repository-check-pending-link' }) }, 201);
   assert.equal(pendingEvidenceLink.processRunEvidenceLink.repositoryCheckEvidenceStatus, 'PENDING');
   assert.deepEqual(pendingEvidenceLink.processRunEvidenceLink.repositoryCheckEvidence, []);
   assert.equal(pendingEvidenceLink.processRunEvidenceLink.status, 'UNVERIFIED');
   assert.equal(pendingEvidenceLink.processRunEvidenceLink.verificationStatus, 'NOT_EXECUTED');
+  const behaviorPlanReplay = await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}/process-behavior-test-plans`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify(behaviorPlanRequest) });
+  assert.equal(behaviorPlanReplay.command.replayed, true);
+  assert.equal(behaviorPlanReplay.artifacts.processBehaviorTestPlans.length, 2,
+    'idempotent pre-run plan replay does not append another plan');
+
   const githubApproval = await request(app.base, `/api/execution/runs/${githubRequest.id}/approve`, {
     ...as('bob'), method: 'POST', body: JSON.stringify({ version: githubRequest.version }),
   });
   assert.equal(githubApproval.status, 'APPROVED');
   const verifierObservations = [];
+  const isolatedScenarioAdapterFactory = app.executionService.commandAdapterFactory;
   let verifierScenario = 'pass';
   let verifierScenarioCall = 0;
+  const realOracleCaptures = [];
   let buildObservations = 0;
   let buildScenario = 'match';
   app.executionService.commandAdapterFactory = (options) => {
@@ -10056,7 +11049,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
         assert.equal(options.sandbox.workspaceReadOnly, true, 'build commands receive the candidate through a read-only workspace mount');
         assert.deepEqual(options.sandbox.writableDirectories.map(({ target }) => target), ['/build-output']);
         assert.match(context.candidateTreeDigest, /^[a-f0-9]{64}$/);
-        assert.equal(await readFile(path.join(workspace, 'README.md'), 'utf8'), 'after\n');
+        assert.equal(await readFile(path.join(workspace, 'README.md'), 'utf8'), 'before\n');
         const outputDirectory = options.sandbox.writableDirectories[0].path;
         await mkdir(path.join(outputDirectory, 'dist'), { recursive: true });
         const output = buildScenario === 'mismatch' && buildObservations % 2 === 0 ? 'different bundle\n' : 'stable bundle\n';
@@ -10068,15 +11061,28 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     verifierObservations.push(options);
     return { execute: async (_workItem, _contextPackage, { workspace }) => {
       const names = await readdir(workspace);
-      assert.deepEqual(names, ['README.md'], 'the verifier receives only the private materialized saved repository tree');
-      const candidateContents = await readFile(path.join(workspace, 'README.md'), 'utf8');
-      assert.equal(candidateContents, 'after\n');
+      assert.deepEqual(names, ['README.md', 'src', 'test'], 'the verifier receives only the private materialized saved repository tree');
+      const candidateContents = await readFile(path.join(workspace, 'src/process.mjs'), 'utf8');
+      assert.equal(candidateContents.includes("'prioritised-repair'"), behaviorCandidateVariant === 'passing');
       assert.equal(candidateContents.includes(openAiFixtureSecret), false, 'provider credentials never enter the verifier workspace');
       assert.deepEqual(options.environment, {}, 'the isolated verifier receives an empty custom environment');
       assert.deepEqual(options.sandbox.readOnlyFiles, [], 'the verifier has no extra host-file mounts');
       assert.deepEqual(options.sandbox.allowedEnvironment, []);
       verifierScenarioCall += 1;
       if (verifierScenario === 'mutate' && verifierScenarioCall === 1) await writeFile(path.join(workspace, 'check-output.txt'), 'unexpected candidate write');
+      if (options.name === fixedGithubVerifierProfile.requiredChecks[0].id) {
+        const childEnvironment = { ...process.env };
+        delete childEnvironment.NODE_TEST_CONTEXT;
+        const result = spawnSync(options.executable, options.args, { cwd: workspace, encoding: 'utf8', timeout: options.timeoutMs,
+          env: childEnvironment });
+        realOracleCaptures.push({ args: [...options.args], cwd: workspace, status: result.status,
+          error: result.error?.message ?? null, stdout: result.stdout ?? '', stderr: result.stderr ?? '' });
+        const injectedExitCode = verifierScenario === 'fail-first' && verifierScenarioCall === 1
+          ? 1 : (result.status ?? 1);
+        return { status: 'COMPLETED', exitCode: injectedExitCode,
+          stdout: result.stdout ?? '', stderr: result.stderr ?? result.error?.message ?? '',
+          stdoutTruncated: false, stderrTruncated: false };
+      }
       return { status: 'COMPLETED', exitCode: verifierScenario === 'fail-first' && verifierScenarioCall === 1 ? 1 : 0,
         stdout: `verified pinned candidate ${options.name}`, stderr: '',
         stdoutTruncated: false, stderrTruncated: false };
@@ -10085,16 +11091,27 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   const githubCandidate = await request(app.base, `/api/execution/runs/${githubRequest.id}/execute`, {
     ...as('alice'), method: 'POST', body: JSON.stringify({ version: githubApproval.version }),
   });
+  const githubCandidateProviderRequest = structuredClone(providerRequest);
   assert.equal(githubCandidate.status, 'SUCCEEDED', JSON.stringify(githubCandidate));
   assert.equal(verifierObservations.length, 2, 'the approved GitHub run dispatched every fixed required check');
   assert.deepEqual(verifierObservations.map((observation) => observation.name), ['unit-check', 'contract-check']);
   assert.equal(verifierObservations[0].executable, fixedGithubVerifierProfile.requiredChecks[0].executable);
   assert.deepEqual(verifierObservations[0].args, fixedGithubVerifierProfile.requiredChecks[0].args);
+  const realOracleReceipt = githubCandidate.execution.repositoryCandidate.checkReceipts
+    .find((receipt) => receipt.checkId === fixedGithubVerifierProfile.requiredChecks[0].id);
+  assert.equal(realOracleReceipt.status, 'PASSED');
+  assert.equal(realOracleCaptures[0].status, 0);
+  assert.match(realOracleCaptures[0].stdout, /ok 1 - Pinned process learning check/, JSON.stringify(realOracleCaptures[0]));
+  assert.match(realOracleCaptures[0].stdout, /# tests 4/);
+  assert.match(realOracleCaptures[0].stdout, /# pass 4/);
+  assert.deepEqual(realOracleCaptures[0].args, fixedGithubVerifierProfile.requiredChecks[0].args);
+  assert.equal(realOracleReceipt.outputHash, digest({ stdout: realOracleCaptures[0].stdout, stderr: realOracleCaptures[0].stderr }),
+    'the persisted check receipt hash is derived from the actual captured local TAP output');
   assert.equal(githubCandidate.execution.repositoryCandidate.verification.status, 'COMPLETED');
   assert.equal(githubCandidate.execution.repositoryCandidate.source.snapshotId, handedOffSnapshotId,
     'the candidate remains pinned to the handed-off snapshot after approval and execution');
   assert.deepEqual(githubCandidate.execution.repositoryCandidate.changes.map((change) => [change.path, change.change]), [
-    ['README.md', 'modified'],
+    ['src/process.mjs', 'modified'],
   ]);
   const githubCandidateReceipt = githubCandidate.execution.repositoryCandidate.candidateEvidence;
   assert.equal(githubCandidateReceipt.version, 'github-candidate-evidence-v1');
@@ -10134,26 +11151,2357 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(buildObservations, 2, 'the candidate executes the fixed build twice in fresh isolated workspaces');
   assert.equal(githubCandidate.execution.evidenceHash, githubCandidateReceipt.hash,
     'execution evidence carries the candidate receipt hash');
+  behaviorCandidateVariant = 'broken';
+  const brokenBehaviorRun = await taskRequest('process-task-github-candidate-broken-oracle', {
+    ...planInput, revision: behaviorPlanProcess.revision, profileId: 'process-task-openai',
+    githubSnapshotId: handedOffSnapshotId, githubSelectedPaths: behaviorPlanSelectedPaths,
+    behaviorTestCaseId: behaviorPlanCase.id, behaviorTestPlanId: behaviorPlan.id,
+  });
+  const brokenBehaviorApproval = await request(app.base, `/api/execution/runs/${brokenBehaviorRun.id}/approve`, {
+    ...as('bob'), method: 'POST', body: JSON.stringify({ version: brokenBehaviorRun.version }),
+  });
+  const brokenBehaviorCandidate = await request(app.base, `/api/execution/runs/${brokenBehaviorRun.id}/execute`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: brokenBehaviorApproval.version }),
+  });
+  assert.equal(brokenBehaviorCandidate.status, 'FAILED');
+  const brokenBehaviorCheck = brokenBehaviorCandidate.execution.repositoryCandidate.checkReceipts
+    .find((receipt) => receipt.checkId === fixedGithubVerifierProfile.requiredChecks[0].id);
+  assert.equal(brokenBehaviorCheck.status, 'FAILED');
+  const brokenOracleCapture = realOracleCaptures.at(-1);
+  assert.ok(brokenOracleCapture.stdout.includes('not ok'), 'the same real node --test oracle emits a failing TAP result for the broken candidate');
+  assert.notEqual(brokenBehaviorCheck.exitCode, 0);
+  assert.equal(brokenBehaviorCheck.outputHash, digest({ stdout: brokenOracleCapture.stdout, stderr: brokenOracleCapture.stderr }));
+  const caseBeforeBrokenEvidenceLink = await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}`, as('alice'));
+  const brokenBehaviorLinkResponse = await fetch(`${app.base}/api/sdlc/cases/${behaviorPlanCase.id}/process-run-evidence`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: caseBeforeBrokenEvidenceLink.version,
+      draftRevision: behaviorPlanReady.artifacts.requirements.draftRevision, requirementId: behaviorRequirement.id,
+      runId: brokenBehaviorRun.id, idempotencyKey: 't91-broken-behavior-link-rejected' }) });
+  assert.equal(brokenBehaviorLinkResponse.status, 409,
+    'the failed fixed oracle cannot be linked as a passing behavior evaluation');
+  assert.equal((await brokenBehaviorLinkResponse.json()).error.code, 'BEHAVIOR_CANDIDATE_REJECTED');
+  const caseAfterBrokenEvidenceLink = await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}`, as('alice'));
+  assert.equal(caseAfterBrokenEvidenceLink.version, caseBeforeBrokenEvidenceLink.version,
+    'a failed oracle link attempt appends no case mutation');
+  const failedLinkRequirement = caseAfterBrokenEvidenceLink.artifacts.requirements.requirements
+    .find((entry) => entry.id === behaviorRequirement.id);
+  assert.equal(failedLinkRequirement.processRunEvidenceLinks.length, 0);
+  assert.equal(caseAfterBrokenEvidenceLink.events.filter((event) => event.type === 'ProcessRunEvidenceLinked').length, 0);
+  behaviorCandidateVariant = 'passing';
+  const deletionPlanCase = await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}`, as('alice'));
+  const deletionPlanAuthorization = await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}/process-behavior-test-plans`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ ...behaviorPlanRequest,
+      version: deletionPlanCase.version, draftRevision: deletionPlanCase.artifacts.requirements.draftRevision,
+      idempotencyKey: 't91-behavior-plan-deleted-test-path' }) }, 201);
+  behaviorPlanAuthorized = { ...behaviorPlanAuthorized, version: deletionPlanAuthorization.version };
+  const deletionPathRun = await taskRequest('process-task-deleted-test-path', {
+    ...planInput, revision: behaviorPlanProcess.revision, profileId: 'process-task-openai',
+    githubSnapshotId: handedOffSnapshotId, githubSelectedPaths: behaviorPlanSelectedPaths,
+    behaviorTestCaseId: behaviorPlanCase.id, behaviorTestPlanId: deletionPlanAuthorization.processBehaviorTestPlan.id,
+  });
+  const deletionPathApproval = await request(app.base, `/api/execution/runs/${deletionPathRun.id}/approve`, {
+    ...as('bob'), method: 'POST', body: JSON.stringify({ version: deletionPathRun.version }),
+  });
+  const deletedTestSource = T91_DELETED_FAILING_TEST_SOURCE;
+  const deletedTestBytes = Buffer.from(deletedTestSource);
+  assert.match(deletedTestSource, /assert\.equal\(1, 2\)/,
+    'the runtime source snapshot contains the same test source whose expected failure is proven by the focused fixture test');
+  app.executionService.githubCandidateSnapshotAdapter = async ({ phase, run, snapshot, workspace }) => {
+    if (run.processTaskRef?.behaviorTestPlan?.planId !== deletionPlanAuthorization.processBehaviorTestPlan.id) {
+      return phase === 'source' ? snapshot : undefined;
+    }
+    if (phase === 'source') {
+      const files = [...snapshot.files, { path: 'tests/learning.test.js', mode: '100644', size: deletedTestBytes.length,
+        contentHash: createHash('sha256').update(deletedTestBytes).digest('hex'), contentBase64: deletedTestBytes.toString('base64') }]
+        .sort((left, right) => left.path.localeCompare(right.path));
+      const treeDigest = createHash('sha256').update(JSON.stringify(files.map(({ path: filePath, mode, contentHash, size }) => ({
+        path: filePath, mode, contentHash, size,
+      })))).digest('hex');
+      return { ...snapshot, files, treeDigest, fileCount: files.length,
+        totalBytes: files.reduce((total, file) => total + file.size, 0) };
+    }
+    await rm(path.join(workspace, 'tests/learning.test.js'));
+  };
+  const verifierCallsBeforeDeletedPath = verifierObservations.length;
+  const deletedTestRun = await request(app.base, `/api/execution/runs/${deletionPathRun.id}/execute`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: deletionPathApproval.version }),
+  });
+  app.executionService.githubCandidateSnapshotAdapter = null;
+  assert.equal(deletedTestRun.status, 'FAILED');
+  assert.match(deletedTestRun.execution.error, /Every changed, deleted, renamed or mode-changed candidate path/);
+  assert.equal(verifierObservations.length, verifierCallsBeforeDeletedPath,
+    'the runtime rejects the real deleted test path before dispatching any configured check');
+  const missingAssertionProject = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
+  const missingAssertionCase = await request(app.base, '/api/sdlc/cases', { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ mode: 'golden', projectId: project.id, sourceObjectId: 'process-learn',
+      expectedProjectVersion: missingAssertionProject.version, expectedBlueprintId: missingAssertionProject.latestBlueprint.id,
+      expectedBlueprintVersion: missingAssertionProject.latestBlueprint.version }) }, 201);
+  let missingAssertionReady = await request(app.base, `/api/sdlc/cases/${missingAssertionCase.id}/run`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: missingAssertionCase.version,
+      idempotencyKey: 't91-missing-assertion-advance' }) });
+  let missingAssertionRequirement = missingAssertionReady.artifacts.requirements.requirements
+    .find((entry) => entry.processTrace?.process.id === 'process-learn');
+  missingAssertionReady = await request(app.base, `/api/sdlc/cases/${missingAssertionCase.id}/edit-requirements`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: missingAssertionReady.version,
+      expectedDraftRevision: missingAssertionReady.artifacts.requirements.draftRevision, requirementId: missingAssertionRequirement.id,
+      changes: { criterionContract: { schemaVersion: 1, version: 1, criteria: [{ id: 'LEARN-OUTCOME',
+        text: missingAssertionRequirement.acceptanceCriteria[0], type: 'BUSINESS', mandatory: true,
+        sourceRefId: missingAssertionRequirement.processTrace.process.id, scopeRefId: missingAssertionRequirement.processTrace.process.id }] } },
+      idempotencyKey: 't91-missing-assertion-criterion-contract' }) });
+  missingAssertionRequirement = missingAssertionReady.artifacts.requirements.requirements.find((entry) => entry.id === missingAssertionRequirement.id);
+  const missingAssertionPlanRequest = { version: missingAssertionReady.version,
+    draftRevision: missingAssertionReady.artifacts.requirements.draftRevision, requirementId: missingAssertionRequirement.id,
+    planId: behaviorPlanProcess.id, revision: behaviorPlanProcess.revision, taskId: planInput.taskId,
+    assertions: [{ id: 'missing-assertion-1', testName: 'A named test deleted before candidate execution', criterionIndex: 0,
+      criterionId: 'LEARN-OUTCOME',
+      outcomeRefId: missingAssertionRequirement.processTrace.outcome.outputRefs[0].id,
+      scopeRefId: missingAssertionRequirement.processTrace.process.id, riskRefId: 'risk-unvalidated-demand',
+      checkId: behaviorMeta.behaviorTestCheck.id }],
+    fileMappings: behaviorPlanRequest.fileMappings,
+    githubSnapshotId: handedOffSnapshotId,
+    githubSelectedPaths: behaviorPlanSelectedPaths, idempotencyKey: 't91-missing-assertion-plan-authorize',
+    evaluationContext: behaviorPlanRequest.evaluationContext, caseDefinitions: {
+      ...behaviorPlanRequest.caseDefinitions,
+      positive: { definition: behaviorPlanRequest.caseDefinitions.positive.definition,
+        sourceRefId: behaviorPlanRequest.caseDefinitions.positive.sourceRefId,
+        criterionId: behaviorPlanRequest.caseDefinitions.positive.criterionId },
+    } };
+  const missingAssertionPlanAuthorized = await request(app.base,
+    `/api/sdlc/cases/${missingAssertionCase.id}/process-behavior-test-plans`, {
+      ...as('alice'), method: 'POST', body: JSON.stringify(missingAssertionPlanRequest) }, 201);
+  const missingAssertionRun = await taskRequest('process-task-missing-assertion-candidate', {
+    ...planInput, revision: behaviorPlanProcess.revision, profileId: 'process-task-openai',
+    githubSnapshotId: handedOffSnapshotId, githubSelectedPaths: behaviorPlanSelectedPaths,
+    behaviorTestCaseId: missingAssertionCase.id, behaviorTestPlanId: missingAssertionPlanAuthorized.processBehaviorTestPlan.id,
+  });
+  const missingAssertionCompletedRun = await approveAndExecute(missingAssertionRun);
+  assert.equal(missingAssertionCompletedRun.status, 'SUCCEEDED', 'the configured repository check itself passes in this fixture');
+  const missingAssertionCaseVersion = missingAssertionPlanAuthorized.version;
+  const missingAssertionAuditBefore = await app.persistence.query(`select count(*)::int as count from orgward.audit_log
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`, [missingAssertionCase.id]);
+  const missingAssertionOutboxBefore = await app.persistence.query(`select count(*)::int as count from orgward.outbox
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`, [missingAssertionCase.id]);
+  const missingAssertionLinkResponse = await fetch(`${app.base}/api/sdlc/cases/${missingAssertionCase.id}/process-run-evidence`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: missingAssertionCaseVersion,
+      draftRevision: missingAssertionReady.artifacts.requirements.draftRevision,
+      requirementId: missingAssertionRequirement.id, runId: missingAssertionRun.id,
+      idempotencyKey: 't91-missing-assertion-link' }) });
+  assert.equal(missingAssertionLinkResponse.status, 409, 'a passing process run cannot admit a candidate whose declared assertion was absent from TAP output');
+  const missingAssertionLinkError = await missingAssertionLinkResponse.json();
+  assert.equal(missingAssertionLinkError.error.code, 'BEHAVIOR_CANDIDATE_REJECTED');
+  const rejectedAssertion = missingAssertionLinkError.error.details?.failedAssertions?.[0];
+  assert.deepEqual(rejectedAssertion, { id: 'missing-assertion-1',
+    name: 'A named test deleted before candidate execution', status: 'UNKNOWN', reason: 'ASSERTION_RESULT_NOT_FOUND' });
+  assert.match(missingAssertionLinkError.error.message, /No evidence link was saved/);
+  assert.match(missingAssertionLinkError.error.message, /A named test deleted before candidate execution \(UNKNOWN: ASSERTION_RESULT_NOT_FOUND\)/);
+  const missingAssertionOracle = negativeCase.expectedOutput.cases.find((entry) => entry.id === 'N2');
+  assert.equal(missingAssertionLinkResponse.status, missingAssertionOracle.missingNamedAssertionLinkStatus);
+  assert.equal(missingAssertionLinkError.error.code, missingAssertionOracle.missingNamedAssertionError,
+    'the delegated N2 oracle matches the real candidate-rejection route when a passing generic check omits the named assertion');
+  const missingAssertionCaseAfterRejection = await request(app.base, `/api/sdlc/cases/${missingAssertionCase.id}`, as('alice'));
+  assert.equal(missingAssertionCaseAfterRejection.version, missingAssertionCaseVersion,
+    'candidate rejection leaves the case aggregate version unchanged');
+  assert.deepEqual(missingAssertionCaseAfterRejection.events, missingAssertionPlanAuthorized.events,
+    'candidate rejection leaves the complete event history unchanged');
+  const missingAssertionRequirementAfterRejection = missingAssertionCaseAfterRejection.artifacts.requirements.requirements
+    .find((entry) => entry.id === missingAssertionRequirement.id);
+  assert.equal(missingAssertionRequirementAfterRejection.processRunEvidenceLinks.length, 0,
+    'candidate rejection appends no evidence link or evaluation');
+  assert.equal(missingAssertionCaseAfterRejection.events.filter((event) => event.type === 'ProcessRunEvidenceLinked').length, 0,
+    'candidate rejection appends no process-run link event');
+  assert.equal(missingAssertionCaseAfterRejection.artifacts.requirements.requirements
+    .find((entry) => entry.id === missingAssertionRequirement.id).processRunEvidenceReviews.length, 0,
+  'candidate rejection appends no evaluation or review');
+  const missingAssertionAuditAfter = await app.persistence.query(`select count(*)::int as count from orgward.audit_log
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`, [missingAssertionCase.id]);
+  const missingAssertionOutboxAfter = await app.persistence.query(`select count(*)::int as count from orgward.outbox
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`, [missingAssertionCase.id]);
+  assert.deepEqual(missingAssertionAuditAfter.rows, missingAssertionAuditBefore.rows,
+    'candidate rejection appends no audit row');
+  assert.deepEqual(missingAssertionOutboxAfter.rows, missingAssertionOutboxBefore.rows,
+    'candidate rejection appends no outbox row');
+
+  const behaviorLinked = await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}/process-run-evidence`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: behaviorPlanAuthorized.version,
+      draftRevision: behaviorPlanReady.artifacts.requirements.draftRevision, requirementId: behaviorRequirement.id,
+      runId: githubRequest.id, idempotencyKey: 't91-behavior-link-once' }) }, 201);
+  const behaviorEvaluation = behaviorLinked.processRunEvidenceLink.behaviorEvaluation;
+  assert.equal(behaviorLinked.processRunEvidenceLink.run.id, githubRequest.id,
+    'the persisted behavior evidence points to the exact successful execution run');
+  assert.equal(behaviorEvaluation.status, 'CHECKED_BEHAVIOR');
+  assert.equal(behaviorEvaluation.result, 'TEST_PASS', 'the exact assertion passes for the explicitly linked risk within its checked scope');
+  assert.equal(behaviorEvaluation.assertionResult, 'TEST_PASS', 'the exact named assertion result is kept within its checked scope');
+  assert.equal(behaviorEvaluation.riskCoverage, 'LINKED');
+  assert.equal(behaviorEvaluation.assertions[0].status, 'TEST_PASS');
+  assert.equal(behaviorPlan.assertions[0].criterionHash,
+    digest(behaviorRequirement.criterionContract.criteria[0]), 'the plan’s selected criterion hash is pinned to the saved criterion record');
+  assert.equal(behaviorEvaluation.planHash, behaviorPlan.planHash);
+  assert.equal(behaviorEvaluation.candidateTreeDigest, githubCandidate.execution.repositoryCandidate.treeDigest);
+  assert.equal(behaviorEvaluation.candidateEvidenceHash, githubCandidateReceipt.hash);
+  assert.equal(behaviorEvaluation.outputHash, realOracleReceipt.outputHash);
+  assert.equal(behaviorEvaluation.terminalEventHash, contentHash(githubCandidate.events.at(-1)));
+  const positiveMappingEvidence = behaviorEvaluation.scenarioMappings.find((entry) => entry.type === 'POSITIVE');
+  assert.equal(positiveMappingEvidence.status, 'VERIFIED_TO_PASSING_ASSERTION');
+  assert.equal(positiveMappingEvidence.scope, 'ASSERTION_LINKAGE_ONLY');
+  assert.equal(positiveMappingEvidence.caseStatus, 'NOT_EXECUTED');
+  assert.equal(positiveMappingEvidence.testPath, 'test/process-contract.test.mjs');
+  assert.equal(positiveMappingEvidence.assertionId, 'learning-assertion-1');
+  assert.equal(positiveMappingEvidence.criterionId, 'LEARN-OUTCOME');
+  assert.equal(positiveMappingEvidence.testFileHash, behaviorPlan.caseDefinitions.cases
+    .find((entry) => entry.type === 'POSITIVE').executionMapping.testFileHash);
+  assert.deepEqual(behaviorEvaluation.scenarioMappings.filter((entry) => entry.type !== 'POSITIVE')
+    .map((entry) => [entry.status, entry.caseStatus]), [['INCOMPLETE', 'NOT_EXECUTED'], ['INCOMPLETE', 'NOT_EXECUTED']]);
+  assert.match(behaviorEvaluation.assertions[0].outputHash, /^[a-f0-9]{64}$/);
+  assert.equal(behaviorEvaluation.businessTruthStatus, 'UNVERIFIED');
+  assert.equal(behaviorLinked.processRunEvidenceLink.status, 'UNVERIFIED');
+  assert.equal(behaviorLinked.processRunEvidenceLink.verificationStatus, 'NOT_EXECUTED');
+  const behaviorLinkReplay = await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}/process-run-evidence`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: behaviorPlanAuthorized.version,
+      draftRevision: behaviorPlanReady.artifacts.requirements.draftRevision, requirementId: behaviorRequirement.id,
+      runId: githubRequest.id, idempotencyKey: 't91-behavior-link-once' }) });
+  assert.equal(behaviorLinkReplay.command.replayed, true);
+  assert.equal(behaviorLinkReplay.processRunEvidenceLink.id, behaviorLinked.processRunEvidenceLink.id);
+  const ac3Project = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
+  const ac3Case = await request(app.base, '/api/sdlc/cases', { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ mode: 'golden', projectId: project.id, sourceObjectId: 'process-learn',
+      expectedProjectVersion: ac3Project.version, expectedBlueprintId: ac3Project.latestBlueprint.id,
+      expectedBlueprintVersion: ac3Project.latestBlueprint.version }) }, 201);
+  let ac3Ready = await request(app.base, `/api/sdlc/cases/${ac3Case.id}/run`, { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ version: ac3Case.version, idempotencyKey: 't91-ac3-advance' }) });
+  let ac3Requirement = ac3Ready.artifacts.requirements.requirements
+    .find((entry) => entry.processTrace?.process.id === 'process-learn');
+  ac3Ready = await request(app.base, `/api/sdlc/cases/${ac3Case.id}/edit-requirements`, { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ version: ac3Ready.version, expectedDraftRevision: ac3Ready.artifacts.requirements.draftRevision,
+      requirementId: ac3Requirement.id, changes: { criterionContract: { schemaVersion: 1, version: 1,
+        criteria: [{ id: 'LEARN-OUTCOME', text: ac3Requirement.acceptanceCriteria[0], type: 'BUSINESS', mandatory: true,
+          sourceRefId: ac3Requirement.processTrace.process.id, scopeRefId: ac3Requirement.processTrace.process.id }] } },
+      idempotencyKey: 't91-ac3-criterion-v1' }) });
+  ac3Requirement = ac3Ready.artifacts.requirements.requirements.find((entry) => entry.id === ac3Requirement.id);
+  const createAc3Plan = async (currentCase, requirement, version, planKey, testName,
+    { dataDriven = false, priorPlan = null } = {}) => {
+    const scenarioTestPath = dataDriven ? 'test/reviewed-behavior.test.mjs' : 'test/process-contract.test.mjs';
+    const scenarioSelectedPaths = ['src/process.mjs', scenarioTestPath];
+    const scenarioFileMappings = behaviorPlanRequest.fileMappings.map((entry) => entry.role === 'TEST'
+      ? { ...entry, path: scenarioTestPath } : entry);
+    const scenarioPositive = { ...behaviorPlanRequest.caseDefinitions.positive,
+      assertionId: `ac3-assertion-${version}`, testPath: scenarioTestPath };
+    const scenarioCases = dataDriven ? {
+      ...behaviorPlanRequest.caseDefinitions,
+      positive: scenarioPositive,
+      negative: { ...behaviorPlanRequest.caseDefinitions.negative,
+        definition: 'Reject a candidate whose mandatory LEARN-OUTCOME assertion is absent for risk-unvalidated-demand.',
+        dataset: { caseType: 'NEGATIVE', criterionId: 'LEARN-OUTCOME', riskId: 'risk-unvalidated-demand',
+          repairCount: 2, customerImpact: 'high', requiredAssertion: null },
+        expectedOutput: { rejected: true, code: 'MISSING_REQUIRED_ASSERTION', criterionId: 'LEARN-OUTCOME',
+          riskId: 'risk-unvalidated-demand' },
+        assertionId: `ac3-assertion-${version}`, testPath: scenarioTestPath },
+      recovery: { ...behaviorPlanRequest.caseDefinitions.recovery,
+        definition: 'Recover after criterion revision by retaining the stale plan and binding a newly authorized plan to the current draft.',
+        dataset: { caseType: 'RECOVERY', currentDraftRevision: currentCase.artifacts.requirements.draftRevision,
+          priorPlan: { id: priorPlan?.id ?? 'prior-plan-unavailable', planHash: priorPlan?.planHash ?? '0'.repeat(64),
+            criterionVersion: priorPlan?.criterionContractVersion ?? 1,
+            status: 'REGENERATION_REQUIRED', retained: true },
+          newPlan: { status: 'AUTHORIZED_BEFORE_EXECUTION', criterionVersion: requirement.criterionContract.version,
+            draftRevision: currentCase.artifacts.requirements.draftRevision } },
+        expectedOutput: { status: 'RECOVERED', priorPlanRetained: true,
+          priorPlanHash: priorPlan?.planHash ?? '0'.repeat(64), criterionVersion: requirement.criterionContract.version,
+          draftRevision: currentCase.artifacts.requirements.draftRevision },
+        assertionId: `ac3-assertion-${version}`, testPath: scenarioTestPath },
+    } : { ...behaviorPlanRequest.caseDefinitions, positive: scenarioPositive };
+    const planRequest = { ...behaviorPlanRequest, version: currentCase.version,
+      draftRevision: currentCase.artifacts.requirements.draftRevision, requirementId: requirement.id,
+      assertions: [{ ...behaviorPlanRequest.assertions[0], id: `ac3-assertion-${version}`,
+        testName, criterionIndex: 0, criterionId: requirement.criterionContract.criteria[0].id,
+        outcomeRefId: requirement.processTrace.outcome.outputRefs[0].id,
+        scopeRefId: requirement.processTrace.process.id, riskRefId: requirement.processTrace.risk.refs[0].id }],
+      fileMappings: scenarioFileMappings, githubSelectedPaths: scenarioSelectedPaths,
+      caseDefinitions: scenarioCases,
+      idempotencyKey: planKey };
+    return request(app.base, `/api/sdlc/cases/${ac3Case.id}/process-behavior-test-plans`, {
+      ...as('alice'), method: 'POST', body: JSON.stringify(planRequest) }, 201);
+  };
+  const ac3PlanV1Response = await createAc3Plan(ac3Ready, ac3Requirement, 1, 't91-ac3-plan-v1', 'AC3 original baseline check');
+  const ac3PlanV1 = ac3PlanV1Response.processBehaviorTestPlan;
+  const ac3RunV1 = await taskRequest('process-task-t91-ac3-run-v1', { ...planInput,
+    revision: behaviorPlanProcess.revision, profileId: 'process-task-openai', githubSnapshotId: handedOffSnapshotId,
+    githubSelectedPaths: behaviorPlanSelectedPaths, behaviorTestCaseId: ac3Case.id, behaviorTestPlanId: ac3PlanV1.id });
+  assert.equal((await approveAndExecute(ac3RunV1)).status, 'SUCCEEDED');
+  const ac3LinkV1Response = await request(app.base, `/api/sdlc/cases/${ac3Case.id}/process-run-evidence`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: ac3PlanV1Response.version,
+      draftRevision: ac3Ready.artifacts.requirements.draftRevision, requirementId: ac3Requirement.id,
+      runId: ac3RunV1.id, idempotencyKey: 't91-ac3-link-v1' }) }, 201);
+  const ac3LinkV1 = ac3LinkV1Response.processRunEvidenceLink;
+  assert.equal(ac3LinkV1.behaviorEvaluation.planId, ac3PlanV1.id);
+  assert.equal(ac3LinkV1.behaviorEvaluation.result, 'TEST_PASS');
+  const ac3R1MappingRequestState = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+  const ac3R1MappingResponse = await request(app.base, `/api/sdlc/cases/${ac3Case.id}/product-behavior-harness-mappings`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: ac3R1MappingRequestState.version,
+      planId: ac3PlanV1.id, subcaseId: 'R1', idempotencyKey: 't91-ac3-r1-recovery-map' }) }, 201);
+  const ac3R1Mapping = ac3R1MappingResponse.productBehaviorHarnessMapping;
+  assert.equal(ac3R1Mapping.oldPlanHash, ac3PlanV1.planHash);
+  assert.equal(ac3R1Mapping.oldLinkId, ac3LinkV1.id);
+  assert.equal(ac3R1Mapping.oldLinkHash, ac3LinkV1.linkHash);
+  assert.equal(ac3R1Mapping.oldRunId, ac3RunV1.id);
+  assert.equal(ac3R1Mapping.subcaseId, 'R1');
+  assert.equal(ac3R1Mapping.integrityStatus, 'VALID');
+  const ac3R1ReviewerState = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('bob'));
+  const ac3R1ReviewResponse = await fetch(`${app.base}/api/sdlc/cases/${ac3Case.id}/product-behavior-harness-mapping-reviews`, {
+    ...as('bob'), method: 'POST', body: JSON.stringify({ version: ac3R1ReviewerState.version,
+      mappingId: ac3R1Mapping.id, mappingHash: ac3R1Mapping.mappingHash,
+      decision: 'APPROVE_FOR_TEST_EXECUTION', idempotencyKey: 't91-ac3-r1-recovery-review' }) });
+  assert.equal(ac3R1ReviewResponse.status, 201);
+  const ac3R1ReviewResponseBody = await ac3R1ReviewResponse.json();
+  assert.equal(ac3R1ReviewResponseBody.productBehaviorHarnessMappingReview.mappingHash, ac3R1Mapping.mappingHash);
+  assert.equal(ac3R1ReviewResponseBody.productBehaviorHarnessMappingReview.status, 'REVIEWED_FOR_TEST_EXECUTION');
+  const ac3R1ExecutionState = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+  const ac3R1ExecutionRequest = { version: ac3R1ExecutionState.version, mappingId: ac3R1Mapping.id,
+    mappingHash: ac3R1Mapping.mappingHash, subcaseId: 'R1', idempotencyKey: 't91-ac3-r1-recovery-execute' };
+  const ac3R1ExecutionResponse = await fetch(`${app.base}/api/sdlc/cases/${ac3Case.id}/product-behavior-harness-executions`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify(ac3R1ExecutionRequest) });
+  const ac3R1ExecutionBody = await ac3R1ExecutionResponse.json();
+  assert.equal(ac3R1ExecutionResponse.status, 201, JSON.stringify(ac3R1ExecutionBody));
+  const ac3R1Receipt = ac3R1ExecutionBody.productBehaviorHarnessExecution;
+  assert.equal(ac3R1Receipt.subcaseId, 'R1');
+  assert.equal(ac3R1Receipt.status, 'PASS', JSON.stringify({ receipt: ac3R1Receipt, providerDiagnostic: r1ProductHarnessDiagnostic }));
+  assert.equal(ac3R1Receipt.oldPlanId, ac3PlanV1.id);
+  assert.equal(ac3R1Receipt.oldPlanHash, ac3PlanV1.planHash);
+  assert.equal(ac3R1Receipt.oldLinkId, ac3LinkV1.id);
+  assert.equal(ac3R1Receipt.oldLinkHash, ac3LinkV1.linkHash);
+  assert.equal(ac3R1Receipt.recovery.old.planStatusAfterRevision, 'REGENERATION_REQUIRED');
+  assert.equal(ac3R1Receipt.recovery.old.linkStatusAfterRevision, 'STALE');
+  assert.equal(ac3R1Receipt.recovery.staleAttempt.httpStatus, 409);
+  assert.equal(ac3R1Receipt.recovery.staleAttempt.errorCode, 'BEHAVIOR_TEST_PLAN_STALE');
+  assert.deepEqual(ac3R1Receipt.recovery.staleAttempt.before, ac3R1Receipt.recovery.staleAttempt.after);
+  assert.equal(ac3R1Receipt.recovery.fresh.criterionContractVersion, 2);
+  assert.equal(ac3R1Receipt.recovery.fresh.runStatus, 'SUCCEEDED');
+  assert.notEqual(ac3R1Receipt.recovery.fresh.runId, ac3R1Receipt.oldRunId);
+  assert.equal(ac3R1Receipt.recovery.fresh.oldPlanHashStillPresent,
+    ac3R1Receipt.recovery.old.oldPlanHashAfterRevision,
+    'the isolated fixture preserves its own immutable v1 plan while creating v2 evidence');
+  assert.equal(ac3R1Receipt.businessTruthStatus, 'UNVERIFIED');
+  assert.equal(ac3R1Receipt.runtimeVerificationStatus, 'NOT_EXECUTED');
+  const ac3R1Readback = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+  const ac3R1OwnerOldPlan = ac3R1Readback.artifacts.processBehaviorTestPlans.find((entry) => entry.id === ac3PlanV1.id);
+  assert.equal(ac3R1OwnerOldPlan.planHash, ac3PlanV1.planHash,
+    'the owner case retains its historical v1 plan hash after the separate fixture run');
+  const ac3R1SavedReceipt = ac3R1Readback.artifacts.processBehaviorProductHarnessExecutions
+    .find((entry) => entry.id === ac3R1Receipt.id);
+  assert.equal(ac3R1SavedReceipt.receiptHash, ac3R1Receipt.receiptHash);
+  assert.equal(ac3R1SavedReceipt.integrityStatus, 'VALID');
+  const ac3R1VersionBeforeReplay = ac3R1Readback.version;
+  const ac3R1EventsBeforeReplay = ac3R1Readback.events.length;
+  const ac3R1ReplayResponse = await fetch(`${app.base}/api/sdlc/cases/${ac3Case.id}/product-behavior-harness-executions`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify(ac3R1ExecutionRequest) });
+  const ac3R1ReplayBody = await ac3R1ReplayResponse.json();
+  assert.equal(ac3R1ReplayResponse.status, 200, JSON.stringify(ac3R1ReplayBody));
+  assert.equal(ac3R1ReplayBody.productBehaviorHarnessExecution.receiptHash, ac3R1Receipt.receiptHash);
+  const ac3R1AfterReplay = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+  assert.equal(ac3R1AfterReplay.version, ac3R1VersionBeforeReplay);
+  assert.equal(ac3R1AfterReplay.events.length, ac3R1EventsBeforeReplay);
+  assert.equal(ac3R1AfterReplay.artifacts.processBehaviorProductHarnessExecutions
+    .filter((entry) => entry.mappingId === ac3R1Mapping.id).length, 1);
+  const beforeAc3Revision = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+  ac3Requirement = beforeAc3Revision.artifacts.requirements.requirements.find((entry) => entry.id === ac3Requirement.id);
+  const ac3ReadyV2 = await request(app.base, `/api/sdlc/cases/${ac3Case.id}/edit-requirements`, { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ version: beforeAc3Revision.version, expectedDraftRevision: beforeAc3Revision.artifacts.requirements.draftRevision,
+      requirementId: ac3Requirement.id, changes: { criterionContract: { schemaVersion: 1, version: 2,
+        criteria: ac3Requirement.criterionContract.criteria.map((entry) => ({ id: entry.id, text: entry.text,
+          type: entry.type, mandatory: entry.mandatory, sourceRefId: entry.source.id, scopeRefId: entry.scope.id })) } },
+      idempotencyKey: 't91-ac3-criterion-v2' }) });
+  const ac3RequirementV2 = ac3ReadyV2.artifacts.requirements.requirements.find((entry) => entry.id === ac3Requirement.id);
+  assert.equal(ac3RequirementV2.processBehaviorTestPlans[0].regenerationStatus, 'REGENERATION_REQUIRED');
+  assert.equal(ac3RequirementV2.processBehaviorTestPlans[0].criterionContractVersion, 1);
+  assert.equal(ac3RequirementV2.processRunEvidenceLinks[0].applicability, 'STALE');
+  assert.equal(ac3RequirementV2.processRunEvidenceLinks[0].behaviorEvaluation.planHash, ac3PlanV1.planHash);
+  const ac3StaleCaseBeforeExecution = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+  const ac3StaleMutationCounts = async () => (await app.persistence.query(`select
+    (select count(*)::int from orgward.aggregates where tenant_id='tenant-a' and aggregate_kind='execution_run') as runs,
+    (select count(*)::int from orgward.audit_log where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1) as audits,
+    (select count(*)::int from orgward.outbox where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1) as outbox`,
+  [ac3Case.id])).rows[0];
+  const ac3StaleCountsBefore = await ac3StaleMutationCounts();
+  const ac3StaleExecution = await fetch(`${app.base}/api/execution/process-task-runs`, {
+    ...as('alice'), method: 'POST', body: command('t91-ac3-stale-plan-execution', { ...planInput,
+      revision: behaviorPlanProcess.revision, profileId: 'process-task-openai', githubSnapshotId: handedOffSnapshotId,
+      githubSelectedPaths: behaviorPlanSelectedPaths, behaviorTestCaseId: ac3Case.id, behaviorTestPlanId: ac3PlanV1.id }) });
+  assert.equal(ac3StaleExecution.status, 409);
+  assert.equal((await ac3StaleExecution.json()).error.code, 'BEHAVIOR_TEST_PLAN_STALE');
+  const ac3StaleCaseAfterExecution = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+  assert.equal(ac3StaleCaseAfterExecution.version, ac3StaleCaseBeforeExecution.version);
+  assert.deepEqual(ac3StaleCaseAfterExecution.events, ac3StaleCaseBeforeExecution.events);
+  assert.deepEqual(await ac3StaleMutationCounts(), ac3StaleCountsBefore,
+    'stale v1 plan execution creates no run, case audit, or outbox entry');
+  assert.equal(ac3StaleCaseAfterExecution.artifacts.processBehaviorTestPlans.find((entry) => entry.id === ac3PlanV1.id).planHash,
+    ac3PlanV1.planHash);
+  assert.equal(ac3StaleCaseAfterExecution.artifacts.requirements.requirements.find((entry) => entry.id === ac3Requirement.id)
+    .processRunEvidenceLinks[0].behaviorEvaluation.planHash, ac3PlanV1.planHash);
+  const ac3PlanV2Response = await createAc3Plan(ac3ReadyV2, ac3RequirementV2, 2, 't91-ac3-plan-v2',
+    'Pinned process learning check', { dataDriven: true, priorPlan: ac3PlanV1 });
+  const ac3PlanV2 = ac3PlanV2Response.processBehaviorTestPlan;
+  assert.equal(ac3PlanV2.criterionContractVersion, 2);
+  assert.equal(ac3PlanV2.regenerationStatus, 'CURRENT');
+  const ac3NegativeCase = ac3PlanV2.caseDefinitions.cases.find((entry) => entry.type === 'NEGATIVE');
+  const ac3RecoveryCase = ac3PlanV2.caseDefinitions.cases.find((entry) => entry.type === 'RECOVERY');
+  assert.match(ac3NegativeCase.definition, /Reject a candidate.*mandatory LEARN-OUTCOME assertion is absent/);
+  assert.equal(ac3NegativeCase.dataset.caseType, 'NEGATIVE');
+  assert.equal(ac3NegativeCase.expectedOutput.rejected, true);
+  assert.equal(ac3NegativeCase.dataset.requiredAssertion, null);
+  assert.match(ac3RecoveryCase.definition, /retaining the stale plan and binding a newly authorized plan/);
+  assert.equal(ac3RecoveryCase.dataset.priorPlan.id, ac3PlanV1.id);
+  assert.equal(ac3RecoveryCase.dataset.priorPlan.planHash, ac3PlanV1.planHash);
+  assert.equal(ac3RecoveryCase.dataset.priorPlan.status, 'REGENERATION_REQUIRED');
+  assert.equal(ac3RecoveryCase.dataset.newPlan.criterionVersion, ac3PlanV2.criterionContractVersion);
+  assert.equal(ac3RecoveryCase.dataset.newPlan.draftRevision, ac3PlanV2.draftRevision);
+  assert.equal(ac3RecoveryCase.expectedOutput.priorPlanHash, ac3PlanV1.planHash);
+  assert.notEqual(ac3PlanV2.planHash, ac3PlanV1.planHash);
+  const ac3PositiveCase = ac3PlanV2.caseDefinitions.cases.find((entry) => entry.type === 'POSITIVE');
+  assert.equal(ac3PositiveCase.executionMapping.testPath, 'test/reviewed-behavior.test.mjs');
+  assert.equal(ac3PositiveCase.executionMapping.testFileHash,
+    ac3PlanV2.repository.selectedFiles.find((entry) => entry.path === 'test/reviewed-behavior.test.mjs').contentHash,
+    'a distinct data-driven fixture path and its bytes are pinned by the immutable plan');
+  assert.deepEqual(ac3PositiveCase.dataset, behaviorPlanRequest.caseDefinitions.positive.dataset,
+    'the data-driven fixture uses the owner-authored dataset already captured in the plan');
+  assert.deepEqual(ac3PositiveCase.expectedOutput, behaviorPlanRequest.caseDefinitions.positive.expectedOutput,
+    'the data-driven fixture uses the owner-authored oracle already captured in the plan');
+  const ac3RunV2 = await taskRequest('process-task-t91-ac3-run-v2', { ...planInput,
+    revision: behaviorPlanProcess.revision, profileId: 'process-task-openai', githubSnapshotId: handedOffSnapshotId,
+    githubSelectedPaths: ac3PlanV2.repository.selectedFiles.map((entry) => entry.path),
+    behaviorTestCaseId: ac3Case.id, behaviorTestPlanId: ac3PlanV2.id });
+  assert.equal((await approveAndExecute(ac3RunV2, 'carol')).status, 'SUCCEEDED',
+    'the selected runtime run was approved by Carol so Bob can act as an independent evidence reviewer');
+  assert.notEqual(ac3RunV2.id, ac3RunV1.id, 'the data-driven plan receives its own immutable execution run');
+  assert.equal(ac3RunV2.processTaskRef.behaviorTestPlan.planHash, ac3PlanV2.planHash,
+    'the distinct runtime request carries the exact new data-driven plan hash');
+  assert.deepEqual(ac3RunV2.processTaskRef.repository.selectedFiles.map((entry) => entry.path),
+    ac3PlanV2.repository.selectedFiles.map((entry) => entry.path), 'the new run carries the exact selected fixture tree');
+  const ac3LinkV2Response = await request(app.base, `/api/sdlc/cases/${ac3Case.id}/process-run-evidence`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: ac3PlanV2Response.version,
+      draftRevision: ac3ReadyV2.artifacts.requirements.draftRevision, requirementId: ac3Requirement.id,
+      runId: ac3RunV2.id, idempotencyKey: 't91-ac3-link-v2' }) }, 201);
+  const ac3LinkV2 = ac3LinkV2Response.processRunEvidenceLink;
+  assert.equal(ac3LinkV2.behaviorEvaluation.planId, ac3PlanV2.id);
+  assert.equal(ac3LinkV2.behaviorEvaluation.planHash, ac3PlanV2.planHash);
+  assert.equal(ac3LinkV2.behaviorEvaluation.result, 'TEST_PASS');
+  assert.equal(ac3LinkV2.run.id, ac3RunV2.id, 'the evidence link selects only the distinct run for the new plan');
+  assert.equal(ac3LinkV2.verificationStatus, 'NOT_EXECUTED');
+  const beforeUnreviewedScenarioAttempt = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+  const unreviewedScenarioAttempt = await fetch(`${app.base}/api/sdlc/cases/${ac3Case.id}/process-behavior-scenario-executions`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: beforeUnreviewedScenarioAttempt.version,
+      draftRevision: beforeUnreviewedScenarioAttempt.artifacts.requirements.draftRevision, requirementId: ac3Requirement.id,
+      linkId: ac3LinkV2.id, planId: ac3PlanV2.id, caseType: 'POSITIVE', idempotencyKey: 't91-ac3-scenario-before-review' }) });
+  const unreviewedScenarioBody = await unreviewedScenarioAttempt.json();
+  assert.equal(unreviewedScenarioAttempt.status, 409, JSON.stringify(unreviewedScenarioBody));
+  assert.equal(unreviewedScenarioBody.error.code, 'SCENARIO_NOT_REVIEWED_FOR_EXECUTION');
+  const afterUnreviewedScenarioAttempt = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+  assert.equal(afterUnreviewedScenarioAttempt.version, beforeUnreviewedScenarioAttempt.version);
+  assert.deepEqual(afterUnreviewedScenarioAttempt.events, beforeUnreviewedScenarioAttempt.events,
+    'an unreviewed scenario execution attempt does not mutate the aggregate');
+  const sharedDraftProject = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
+  const sharedDraftCreated = await request(app.base, '/api/sdlc/cases', { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ mode: 'golden', projectId: project.id, sourceObjectId: 'process-learn',
+      expectedProjectVersion: sharedDraftProject.version, expectedBlueprintId: sharedDraftProject.latestBlueprint.id,
+      expectedBlueprintVersion: sharedDraftProject.latestBlueprint.version }) }, 201);
+  let sharedDraftReady = await request(app.base, `/api/sdlc/cases/${sharedDraftCreated.id}/run`, { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ version: sharedDraftCreated.version, idempotencyKey: 't91-ac3-shared-draft-advance' }) });
+  let sharedDraftRequirement = sharedDraftReady.artifacts.requirements.requirements
+    .find((entry) => entry.processTrace?.process.id === 'process-learn');
+  sharedDraftReady = await request(app.base, `/api/sdlc/cases/${sharedDraftCreated.id}/edit-requirements`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: sharedDraftReady.version,
+      expectedDraftRevision: sharedDraftReady.artifacts.requirements.draftRevision, requirementId: sharedDraftRequirement.id,
+      changes: { criterionContract: { schemaVersion: 1, version: 1, criteria: [{ id: 'LEARN-OUTCOME',
+        text: sharedDraftRequirement.acceptanceCriteria[0], type: 'BUSINESS', mandatory: true,
+        sourceRefId: sharedDraftRequirement.processTrace.process.id, scopeRefId: sharedDraftRequirement.processTrace.process.id }] } },
+      idempotencyKey: 't91-ac3-shared-draft-criterion' }) });
+  sharedDraftRequirement = sharedDraftReady.artifacts.requirements.requirements.find((entry) => entry.id === sharedDraftRequirement.id);
+  const sharedDraftRequirementBeforeAppend = structuredClone(sharedDraftRequirement);
+  const sharedDraftAppendResponse = await request(app.base, `/api/sdlc/cases/${sharedDraftCreated.id}/add-requirement`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: sharedDraftReady.version,
+      expectedDraftRevision: sharedDraftReady.artifacts.requirements.draftRevision,
+      statement: 'A separate saved-process safeguard records the repair follow-up disposition.',
+      rationale: 'This unrelated requirement is authored from the same pinned process and remains independently reviewable.',
+      acceptanceCriteria: ['The follow-up disposition is recorded against its selected process references.'],
+      traceRefIds: [sharedDraftReady.processRequirementTrace.process.id,
+        sharedDraftReady.processRequirementTrace.outcome.outputRefs[0].id],
+      idempotencyKey: 't91-ac3-add-second-shared-draft-requirement' }) });
+  const sharedDraftCurrent = sharedDraftAppendResponse;
+  assert.equal(sharedDraftAppendResponse.version, sharedDraftReady.version + 1);
+  const sharedDraftOtherRequirement = sharedDraftCurrent.artifacts.requirements.requirements
+    .find((entry) => entry.id !== sharedDraftRequirement.id);
+  assert.deepEqual(sharedDraftCurrent.artifacts.requirements.requirements.find((entry) => entry.id === sharedDraftRequirement.id),
+    sharedDraftRequirementBeforeAppend, 'adding B preserves the selected A requirement byte-for-byte');
+  assert.equal(sharedDraftOtherRequirement.status, 'DRAFT');
+  assert.deepEqual(sharedDraftOtherRequirement.derivedFrom, [sharedDraftReady.processRequirementTrace.process.id,
+    sharedDraftReady.processRequirementTrace.outcome.outputRefs[0].id]);
+  const sharedDraftPlanRequest = { ...behaviorPlanRequest, version: sharedDraftCurrent.version,
+    draftRevision: sharedDraftCurrent.artifacts.requirements.draftRevision, requirementId: sharedDraftRequirement.id,
+    planId: behaviorPlanProcess.id, revision: behaviorPlanProcess.revision, taskId: planInput.taskId,
+    assertions: [{ ...behaviorPlanRequest.assertions[0], id: 'ac3-shared-draft-assertion',
+      testName: 'AC3 shared-draft applicability check', criterionIndex: 0, criterionId: 'LEARN-OUTCOME',
+      outcomeRefId: sharedDraftRequirement.processTrace.outcome.outputRefs[0].id,
+      scopeRefId: sharedDraftRequirement.processTrace.process.id,
+      riskRefId: sharedDraftRequirement.processTrace.risk.refs[0].id }],
+    fileMappings: behaviorPlanRequest.fileMappings,
+    caseDefinitions: { ...behaviorPlanRequest.caseDefinitions,
+      positive: { ...behaviorPlanRequest.caseDefinitions.positive, assertionId: 'ac3-shared-draft-assertion' } },
+    idempotencyKey: 't91-ac3-shared-draft-plan' };
+  const sharedDraftPlanResponse = await request(app.base, `/api/sdlc/cases/${sharedDraftCreated.id}/process-behavior-test-plans`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify(sharedDraftPlanRequest) }, 201);
+  const sharedDraftPlan = sharedDraftPlanResponse.processBehaviorTestPlan;
+  assert.equal(sharedDraftPlan.regenerationStatus, 'CURRENT');
+  const sharedArtifactEdit = await request(app.base, `/api/sdlc/cases/${sharedDraftCreated.id}/edit-requirements`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: sharedDraftPlanResponse.version,
+      expectedDraftRevision: sharedDraftCurrent.artifacts.requirements.draftRevision, requirementId: sharedDraftOtherRequirement.id,
+      changes: { rationale: `${sharedDraftOtherRequirement.rationale} Another requirement advances the shared artifact.` },
+      idempotencyKey: 't91-ac3-edit-other-shared-requirement' }) });
+  const sharedDraftReadback = await request(app.base, `/api/sdlc/cases/${sharedDraftCreated.id}`, as('alice'));
+  const sharedDraftSelectedRequirement = sharedDraftReadback.artifacts.requirements.requirements.find((entry) => entry.id === sharedDraftRequirement.id);
+  const staleSharedDraftPlan = sharedDraftSelectedRequirement.processBehaviorTestPlans.find((entry) => entry.id === sharedDraftPlan.id);
+  assert.equal(staleSharedDraftPlan.regenerationStatus, 'REGENERATION_REQUIRED');
+  assert.equal(staleSharedDraftPlan.regenerationReason, 'SHARED_REQUIREMENTS_DRAFT_CHANGED');
+  assert.equal(staleSharedDraftPlan.planHash, sharedDraftPlan.planHash,
+    'applicability is derived without mutating the old immutable plan hash');
+  assert.equal(staleSharedDraftPlan.requirementHash, sharedDraftPlan.requirementHash,
+    'editing another requirement leaves the selected requirement hash unchanged');
+  assert.equal(staleSharedDraftPlan.draftRevision, sharedDraftPlan.draftRevision);
+  assert.equal(staleSharedDraftPlan.currentDraftRevision, sharedArtifactEdit.artifacts.requirements.draftRevision);
+  const staleSharedDraftExecution = await fetch(`${app.base}/api/execution/process-task-runs`, {
+    ...as('alice'), method: 'POST', body: command('t91-ac3-shared-draft-stale-execution', {
+      ...planInput, revision: behaviorPlanProcess.revision, taskId: planInput.taskId, profileId: 'process-task-openai',
+      githubSnapshotId: handedOffSnapshotId, githubSelectedPaths: behaviorPlanSelectedPaths,
+      behaviorTestCaseId: sharedDraftCreated.id, behaviorTestPlanId: sharedDraftPlan.id,
+    }) });
+  assert.equal(staleSharedDraftExecution.status, 409);
+  assert.equal((await staleSharedDraftExecution.json()).error.code, 'BEHAVIOR_TEST_PLAN_STALE',
+    'execution rejects a plan pinned to the previous shared requirements artifact revision');
+  const sharedDraftPlanAfterStaleDenial = await request(app.base, `/api/sdlc/cases/${sharedDraftCreated.id}`, as('alice'));
+  const sharedDraftFreshPlanResponse = await request(app.base, `/api/sdlc/cases/${sharedDraftCreated.id}/process-behavior-test-plans`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ ...sharedDraftPlanRequest,
+      version: sharedDraftPlanAfterStaleDenial.version,
+      draftRevision: sharedDraftPlanAfterStaleDenial.artifacts.requirements.draftRevision,
+      idempotencyKey: 't91-ac3-shared-draft-plan-fresh' }) }, 201);
+  const sharedDraftFreshPlan = sharedDraftFreshPlanResponse.processBehaviorTestPlan;
+  assert.notEqual(sharedDraftFreshPlan.id, sharedDraftPlan.id);
+  const sharedDraftFreshRun = await taskRequest('process-task-t91-ac3-shared-draft-run-fresh', { ...planInput,
+    revision: behaviorPlanProcess.revision, profileId: 'process-task-openai', githubSnapshotId: handedOffSnapshotId,
+    githubSelectedPaths: behaviorPlanSelectedPaths, behaviorTestCaseId: sharedDraftCreated.id,
+    behaviorTestPlanId: sharedDraftFreshPlan.id });
+  assert.equal((await approveAndExecute(sharedDraftFreshRun, 'carol')).status, 'SUCCEEDED');
+  const sharedDraftFreshLinkResponse = await request(app.base, `/api/sdlc/cases/${sharedDraftCreated.id}/process-run-evidence`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: sharedDraftFreshPlanResponse.version,
+      draftRevision: sharedDraftPlanAfterStaleDenial.artifacts.requirements.draftRevision,
+      requirementId: sharedDraftRequirement.id, runId: sharedDraftFreshRun.id,
+      idempotencyKey: 't91-ac3-shared-draft-link-fresh' }) }, 201);
+  const sharedDraftFreshLink = sharedDraftFreshLinkResponse.processRunEvidenceLink;
+  assert.equal(sharedDraftFreshLink.behaviorEvaluation.planHash, sharedDraftFreshPlan.planHash);
+  assert.equal(sharedDraftFreshLink.behaviorEvaluation.result, 'TEST_PASS');
+  assert.equal(sharedDraftPlanAfterStaleDenial.artifacts.requirements.requirements.find((entry) => entry.id === sharedDraftRequirement.id)
+    .processRunEvidenceLinks.length, 0, 'the denied stale plan did not fabricate an evidence link');
+  const r2MappingState = await request(app.base, `/api/sdlc/cases/${sharedDraftCreated.id}`, as('alice'));
+  const r2MappingResponse = await request(app.base, `/api/sdlc/cases/${sharedDraftCreated.id}/product-behavior-harness-mappings`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: r2MappingState.version,
+      planId: sharedDraftFreshPlan.id, subcaseId: 'R2', idempotencyKey: 't91-ac3-r2-recovery-map' }) }, 201);
+  const r2Mapping = r2MappingResponse.productBehaviorHarnessMapping;
+  assert.equal(r2Mapping.subcaseId, 'R2');
+  assert.equal(r2Mapping.oldPlanId, sharedDraftFreshPlan.id);
+  assert.equal(r2Mapping.oldPlanHash, sharedDraftFreshPlan.planHash);
+  assert.equal(r2Mapping.oldLinkId, sharedDraftFreshLink.id);
+  assert.equal(r2Mapping.oldLinkHash, sharedDraftFreshLink.linkHash);
+  const r2StoredStateResult = await app.persistence.query(`select state from orgward.aggregates
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`, [sharedDraftCreated.id]);
+  const r2StoredSelectedRequirement = r2StoredStateResult.rows[0].state.artifacts.requirements.requirements
+    .find((entry) => entry.id === sharedDraftRequirement.id);
+  assert.equal(r2Mapping.selectedRequirementHash, digest(r2StoredSelectedRequirement),
+    'mapping pins the stored selected requirement bytes rather than UI-derived projections');
+  assert.equal(r2Mapping.otherRequirementId, sharedDraftOtherRequirement.id);
+  assert.equal(r2Mapping.integrityStatus, 'VALID');
+  const r2ReviewerState = await request(app.base, `/api/sdlc/cases/${sharedDraftCreated.id}`, as('bob'));
+  const r2ReviewResponse = await fetch(`${app.base}/api/sdlc/cases/${sharedDraftCreated.id}/product-behavior-harness-mapping-reviews`, {
+    ...as('bob'), method: 'POST', body: JSON.stringify({ version: r2ReviewerState.version,
+      mappingId: r2Mapping.id, mappingHash: r2Mapping.mappingHash,
+      decision: 'APPROVE_FOR_TEST_EXECUTION', idempotencyKey: 't91-ac3-r2-recovery-review' }) });
+  assert.equal(r2ReviewResponse.status, 201, await r2ReviewResponse.clone().text());
+  const r2ReviewResponseBody = await r2ReviewResponse.json();
+  assert.equal(r2ReviewResponseBody.productBehaviorHarnessMappingReview.mappingHash, r2Mapping.mappingHash);
+  assert.equal(r2ReviewResponseBody.productBehaviorHarnessMappingReview.status, 'REVIEWED_FOR_TEST_EXECUTION');
+  const r2ExecutionState = await request(app.base, `/api/sdlc/cases/${sharedDraftCreated.id}`, as('alice'));
+  const r2ExecutionRequest = { version: r2ExecutionState.version, mappingId: r2Mapping.id,
+    mappingHash: r2Mapping.mappingHash, subcaseId: 'R2', idempotencyKey: 't91-ac3-r2-recovery-execute' };
+  const r2ExecutionResponse = await fetch(`${app.base}/api/sdlc/cases/${sharedDraftCreated.id}/product-behavior-harness-executions`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify(r2ExecutionRequest) });
+  const r2ExecutionBody = await r2ExecutionResponse.json();
+  assert.equal(r2ExecutionResponse.status, 201, JSON.stringify(r2ExecutionBody));
+  const r2Receipt = r2ExecutionBody.productBehaviorHarnessExecution;
+  assert.equal(r2Receipt.subcaseId, 'R2');
+  assert.equal(r2Receipt.status, 'PASS', JSON.stringify(r2Receipt));
+  assert.equal(r2Receipt.integrityStatus, 'VALID');
+  assert.equal(r2Receipt.oldPlanHash, sharedDraftFreshPlan.planHash);
+  assert.equal(r2Receipt.oldLinkHash, sharedDraftFreshLink.linkHash);
+  assert.equal(r2Receipt.selectedRequirementHash, r2Mapping.selectedRequirementHash);
+  assert.equal(r2Receipt.otherRequirementId, sharedDraftOtherRequirement.id);
+  assert.equal(r2Receipt.recovery.old.regenerationReason, 'SHARED_REQUIREMENTS_DRAFT_CHANGED');
+  assert.equal(r2Receipt.recovery.staleAttempt.errorCode, 'BEHAVIOR_TEST_PLAN_STALE');
+  assert.deepEqual(r2Receipt.recovery.staleAttempt.before, r2Receipt.recovery.staleAttempt.after);
+  assert.notEqual(r2Receipt.recovery.fresh.planId, r2Receipt.oldPlanId);
+  assert.notEqual(r2Receipt.recovery.fresh.runId, r2Receipt.recovery.old.fixtureRunId);
+  assert.notEqual(r2Receipt.recovery.fresh.linkId, r2Receipt.recovery.old.fixtureLinkId);
+  assert.equal(r2Receipt.businessTruthStatus, 'UNVERIFIED');
+  assert.equal(r2Receipt.runtimeVerificationStatus, 'NOT_EXECUTED');
+  const r2Readback = await request(app.base, `/api/sdlc/cases/${sharedDraftCreated.id}`, as('alice'));
+  const r2SavedReceipt = r2Readback.artifacts.processBehaviorProductHarnessExecutions
+    .find((entry) => entry.id === r2Receipt.id);
+  assert.equal(r2SavedReceipt.integrityStatus, 'VALID');
+  assert.equal(r2SavedReceipt.receiptHash, r2Receipt.receiptHash);
+  const r2ReplayResponse = await fetch(`${app.base}/api/sdlc/cases/${sharedDraftCreated.id}/product-behavior-harness-executions`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify(r2ExecutionRequest) });
+  assert.equal(r2ReplayResponse.status, 200);
+  const r2ReplayBody = await r2ReplayResponse.json();
+  assert.equal(r2ReplayBody.command.replayed, true);
+  assert.equal(r2ReplayBody.productBehaviorHarnessExecution.receiptHash, r2Receipt.receiptHash);
+  assert.equal(r2ReplayBody.version, r2Readback.version);
+  assert.deepEqual(r2ReplayBody.events, r2Readback.events,
+    'same-key R2 replay returns the immutable receipt without another event or version');
+  const r2BeforeLaterEdit = await request(app.base, `/api/sdlc/cases/${sharedDraftCreated.id}`, as('alice'));
+  const r2OtherBeforeLaterEdit = r2BeforeLaterEdit.artifacts.requirements.requirements
+    .find((entry) => entry.id === sharedDraftOtherRequirement.id);
+  const r2LaterEditResponse = await request(app.base, `/api/sdlc/cases/${sharedDraftCreated.id}/edit-requirements`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: r2BeforeLaterEdit.version,
+      expectedDraftRevision: r2BeforeLaterEdit.artifacts.requirements.draftRevision,
+      requirementId: sharedDraftOtherRequirement.id,
+      changes: { rationale: `${r2OtherBeforeLaterEdit.rationale} A later owner edit advances the shared draft.` },
+      idempotencyKey: 't91-ac3-r2-later-other-requirement-edit' }) });
+  const r2AfterLaterEdit = await request(app.base, `/api/sdlc/cases/${sharedDraftCreated.id}`, as('alice'));
+  assert.equal(r2LaterEditResponse.version, r2BeforeLaterEdit.version + 1);
+  const r2HistoricalMapping = r2AfterLaterEdit.artifacts.processBehaviorProductHarnessMappings
+    .find((entry) => entry.id === r2Mapping.id);
+  const r2HistoricalReceipt = r2AfterLaterEdit.artifacts.processBehaviorProductHarnessExecutions
+    .find((entry) => entry.id === r2Receipt.id);
+  assert.equal(r2HistoricalMapping.integrityStatus, 'VALID',
+    'a later B edit does not invalidate the immutable R2 mapping snapshot');
+  assert.equal(r2HistoricalReceipt.integrityStatus, 'VALID',
+    'a later B edit does not invalidate the immutable R2 receipt');
+  const r2CurrentnessBeforeDeniedExecution = { version: r2AfterLaterEdit.version, events: r2AfterLaterEdit.events };
+  const r2NewExecutionAfterEdit = await fetch(`${app.base}/api/sdlc/cases/${sharedDraftCreated.id}/product-behavior-harness-executions`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ ...r2ExecutionRequest,
+      version: r2AfterLaterEdit.version, idempotencyKey: 't91-ac3-r2-stale-mapping-denied' }) });
+  assert.equal(r2NewExecutionAfterEdit.status, 409);
+  assert.equal((await r2NewExecutionAfterEdit.json()).error.code, 'PRODUCT_HARNESS_EXECUTION_NOT_APPROVED');
+  const r2AfterDeniedExecution = await request(app.base, `/api/sdlc/cases/${sharedDraftCreated.id}`, as('alice'));
+  assert.equal(r2AfterDeniedExecution.version, r2CurrentnessBeforeDeniedExecution.version);
+  assert.deepEqual(r2AfterDeniedExecution.events, r2CurrentnessBeforeDeniedExecution.events,
+    'a stale R2 mapping cannot start another fixture reservation');
+  const r2ReplayAfterLaterEdit = await fetch(`${app.base}/api/sdlc/cases/${sharedDraftCreated.id}/product-behavior-harness-executions`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify(r2ExecutionRequest) });
+  assert.equal(r2ReplayAfterLaterEdit.status, 200);
+  const r2ReplayAfterLaterEditBody = await r2ReplayAfterLaterEdit.json();
+  assert.equal(r2ReplayAfterLaterEditBody.productBehaviorHarnessExecution.receiptHash, r2Receipt.receiptHash);
+  assert.equal(r2ReplayAfterLaterEditBody.version, r2AfterDeniedExecution.version);
+  assert.deepEqual(r2ReplayAfterLaterEditBody.events, r2AfterDeniedExecution.events,
+    'same-key R2 replay remains readable after a later draft edit without another event or version');
+  const ac3AfterV2Link = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+  const ac3AfterV2Requirement = ac3AfterV2Link.artifacts.requirements.requirements.find((entry) => entry.id === ac3Requirement.id);
+  assert.deepEqual(ac3AfterV2Requirement.processRunEvidenceLinks.map(({ applicability }) => applicability), ['STALE', 'CURRENT'],
+    JSON.stringify({ currentDraftRevision: ac3AfterV2Link.artifacts.requirements.draftRevision,
+      links: ac3AfterV2Requirement.processRunEvidenceLinks.map(({ draftRevision, requirementHash, applicability, behaviorEvaluation }) => ({
+        draftRevision, requirementHash, applicability, planId: behaviorEvaluation?.planId })),
+      currentRequirementHash: digest(Object.fromEntries(Object.entries(ac3AfterV2Requirement)
+        .filter(([key]) => !['processRunEvidenceLinks', 'processRunEvidenceReviews', 'behaviorTestPlans',
+          'reviewCriteria', 'criterionSources', 'processBehaviorTestPlans'].includes(key)))) }));
+  const ac3PlanForReview = ac3AfterV2Link.artifacts.processBehaviorTestPlans.find((entry) => entry.id === ac3LinkV2.behaviorEvaluation.planId);
+  const ownerFormScenarioCases = ac3PlanForReview.caseDefinitions.cases.map((entry) => entry.type === 'NEGATIVE'
+    ? { ...entry, dataset: behaviorPlanRequest.caseDefinitions.negative.dataset,
+      expectedOutput: behaviorPlanRequest.caseDefinitions.negative.expectedOutput }
+    : entry);
+  const versionedReviewCriteria = ac3AfterV2Requirement.reviewCriteria.map((entry) => ({
+    criterionHash: entry.criterionHash, disposition: 'SUPPORTED',
+    note: `Independent reviewer checked typed criterion ${entry.criterionId} against the pinned v2 evidence.`,
+  }));
+  const exactScenarioReviewInput = ac3PlanForReview.caseDefinitions.cases.map((entry) => ({ type: entry.type,
+    definition: Object.fromEntries(Object.entries(entry).filter(([key]) => key !== 'definitionHash')),
+    disposition: 'SUPPORTED',
+    executionDecision: entry.executionMapping?.status === 'OWNER_PROPOSED_UNVERIFIED'
+      ? 'APPROVE_FOR_TEST_EXECUTION' : 'REQUEST_CHANGES',
+    note: `Independent review of exact ${entry.type.toLowerCase()} definition.` }));
+  const partialScenarioReviewState = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('dave'));
+  const partialScenarioReview = await request(app.base, `/api/sdlc/cases/${ac3Case.id}/process-run-evidence-reviews`, {
+    ...as('dave'), method: 'POST', body: JSON.stringify({ version: partialScenarioReviewState.version,
+      draftRevision: partialScenarioReviewState.artifacts.requirements.draftRevision, requirementId: ac3Requirement.id,
+      linkId: ac3LinkV2.id, criteria: versionedReviewCriteria,
+      scenarioCases: exactScenarioReviewInput.map((entry) => entry.type === 'POSITIVE'
+        ? entry : { ...entry, executionDecision: 'REQUEST_CHANGES' }),
+      idempotencyKey: 't91-ac3-positive-only-scenario-review' }) }, 201);
+  assert.equal(partialScenarioReview.processRunEvidenceReview.integrityStatus, 'VALID');
+  assert.equal(partialScenarioReview.processRunEvidenceReview.scenarioCases
+    .find((entry) => entry.type === 'POSITIVE').executionDecision, 'APPROVE_FOR_TEST_EXECUTION');
+  assert.equal(partialScenarioReview.processRunEvidenceReview.scenarioCases
+    .find((entry) => entry.type === 'NEGATIVE').executionDecision, 'REQUEST_CHANGES');
+  assert.equal(partialScenarioReview.processRunEvidenceReview.scenarioCases
+    .find((entry) => entry.type === 'RECOVERY').executionDecision, 'REQUEST_CHANGES');
+  const partialScenarioBeforeAttempt = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+  const savedScenarioReviews = partialScenarioBeforeAttempt.artifacts.requirements.requirements
+    .find((entry) => entry.id === ac3Requirement.id).processRunEvidenceReviews
+    .filter((review) => review.behaviorPlanId === ac3PlanV2.id && review.linkId === ac3LinkV2.id);
+  assert.deepEqual(savedScenarioReviews.map((review) => ({ reviewer: review.reviewerPrincipal,
+    cases: review.scenarioCases.map((entry) => [entry.type, entry.executionDecision]) })), [{
+    reviewer: principal('dave'), cases: [['POSITIVE', 'APPROVE_FOR_TEST_EXECUTION'],
+      ['NEGATIVE', 'REQUEST_CHANGES'], ['RECOVERY', 'REQUEST_CHANGES']],
+  }], 'only the partial exact-case approval is current before the negative denial check');
+  const partialNegativeAttempt = await fetch(`${app.base}/api/sdlc/cases/${ac3Case.id}/process-behavior-scenario-executions`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: partialScenarioBeforeAttempt.version,
+      draftRevision: partialScenarioBeforeAttempt.artifacts.requirements.draftRevision,
+      requirementId: ac3Requirement.id, linkId: ac3LinkV2.id, planId: ac3PlanV2.id,
+      caseType: 'NEGATIVE', idempotencyKey: 't91-ac3-partial-negative-denial' }) });
+  const partialNegativeBody = await partialNegativeAttempt.json();
+  assert.equal(partialNegativeAttempt.status, 409, JSON.stringify({ status: partialNegativeAttempt.status,
+    body: partialNegativeBody, reviews: savedScenarioReviews }));
+  assert.equal(partialNegativeBody.error.code, 'SCENARIO_NOT_REVIEWED_FOR_EXECUTION');
+  const partialScenarioAfterAttempt = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+  assert.equal(partialScenarioAfterAttempt.version, partialScenarioBeforeAttempt.version,
+    'a positive-only approval cannot reserve a negative case');
+  assert.deepEqual(partialScenarioAfterAttempt.events, partialScenarioBeforeAttempt.events);
+  const alteredScenarioBefore = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('dave'));
+  const alteredScenarioCases = exactScenarioReviewInput.map((entry, index) => index === 0
+    ? { ...entry, definition: { ...entry.definition, definition: `${entry.definition.definition} altered` } } : entry);
+  const alteredScenarioResponse = await fetch(`${app.base}/api/sdlc/cases/${ac3Case.id}/process-run-evidence-reviews`, {
+    ...as('dave'), method: 'POST', body: JSON.stringify({ version: alteredScenarioBefore.version,
+      draftRevision: alteredScenarioBefore.artifacts.requirements.draftRevision, requirementId: ac3Requirement.id,
+      linkId: ac3LinkV2.id, criteria: versionedReviewCriteria, scenarioCases: alteredScenarioCases,
+      idempotencyKey: 't91-ac3-altered-scenario-definition-review' }) });
+  assert.equal(alteredScenarioResponse.status, 409);
+  assert.equal((await alteredScenarioResponse.json()).error.code, 'SCENARIO_DEFINITION_MISMATCH');
+  const alteredScenarioAfter = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('dave'));
+  assert.equal(alteredScenarioAfter.version, alteredScenarioBefore.version,
+    'an altered scenario definition is denied without changing aggregate version');
+  assert.deepEqual(alteredScenarioAfter.events, alteredScenarioBefore.events,
+    'an altered scenario definition is denied without appending an event');
+  const selfReviewBefore = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+  const selfReviewResponse = await fetch(`${app.base}/api/sdlc/cases/${ac3Case.id}/process-run-evidence-reviews`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: selfReviewBefore.version,
+      draftRevision: selfReviewBefore.artifacts.requirements.draftRevision, requirementId: ac3Requirement.id,
+      linkId: ac3LinkV2.id, criteria: versionedReviewCriteria, scenarioCases: exactScenarioReviewInput,
+      idempotencyKey: 't91-ac3-owner-self-scenario-review' }) });
+  assert.equal(selfReviewResponse.status, 409);
+  assert.equal((await selfReviewResponse.json()).error.code, 'REVIEWER_NOT_INDEPENDENT');
+  const selfReviewAfter = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+  assert.equal(selfReviewAfter.version, selfReviewBefore.version, 'owner self-review denial leaves the aggregate version unchanged');
+  assert.equal(selfReviewAfter.artifacts.requirements.processRunEvidenceReviews?.length ?? 0,
+    selfReviewBefore.artifacts.requirements.processRunEvidenceReviews?.length ?? 0, 'owner self-review denial appends no review');
+  const staleScenarioReview = await fetch(`${app.base}/api/sdlc/cases/${ac3Case.id}/process-run-evidence-reviews`, {
+    ...as('dave'), method: 'POST', body: JSON.stringify({ version: selfReviewAfter.version,
+      draftRevision: selfReviewAfter.artifacts.requirements.draftRevision, requirementId: ac3Requirement.id,
+      linkId: ac3LinkV1.id, criteria: versionedReviewCriteria, scenarioCases: exactScenarioReviewInput,
+      idempotencyKey: 't91-ac3-stale-scenario-review' }) });
+  assert.equal(staleScenarioReview.status, 409);
+  assert.equal((await staleScenarioReview.json()).error.code, 'PROCESS_EVIDENCE_LINK_STALE');
+  const afterStaleScenarioReview = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+  assert.equal(afterStaleScenarioReview.version, selfReviewAfter.version, 'stale-plan review denial leaves the aggregate version unchanged');
+  const contradictedReview = await request(app.base, `/api/sdlc/cases/${ac3Case.id}/process-run-evidence-reviews`, {
+    ...as('dave'), method: 'POST', body: JSON.stringify({ version: afterStaleScenarioReview.version,
+      draftRevision: afterStaleScenarioReview.artifacts.requirements.draftRevision, requirementId: ac3Requirement.id,
+      linkId: ac3LinkV2.id, criteria: versionedReviewCriteria.map((entry) => ({ ...entry,
+        disposition: 'CONTRADICTED', note: 'The independent reviewer did not support this mandatory criterion.' })),
+      scenarioCases: exactScenarioReviewInput,
+      conflictResolution: { decision: 'PRESERVE_CRITERION_OUTCOMES',
+        rationale: 'Retain the contradictory mandatory finding and block acceptance until independently resolved.' },
+      idempotencyKey: 't91-ac3-review-contradicted-for-acceptance' }) }, 201);
+  assert.equal(contradictedReview.processRunEvidenceReview.acceptanceStatus, 'BLOCKED_MANDATORY_FAILURE');
+  const beforeRejectedReviewAcceptance = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+  const aggregateBeforeRejectedAcceptance = await app.persistence.query(`select state,state_hash from orgward.aggregates
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`, [ac3Case.id]);
+  const auditBeforeRejectedAcceptance = await app.persistence.query(`select event_hash,command_id,actor,aggregate_version,event
+    from orgward.audit_log where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1
+    order by aggregate_version,event_hash`, [ac3Case.id]);
+  const rejectedReviewAcceptanceKey = 't91-ac3-reject-contradicted-review';
+  const rejectedReviewAcceptance = await fetch(`${app.base}/api/sdlc/cases/${ac3Case.id}/intent-evaluation-acceptances`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: beforeRejectedReviewAcceptance.version,
+      draftRevision: beforeRejectedReviewAcceptance.artifacts.requirements.draftRevision,
+      requirementId: ac3Requirement.id, linkId: ac3LinkV2.id,
+      reviewId: contradictedReview.processRunEvidenceReview.id,
+      reason: 'A contradicted mandatory criterion cannot support acceptance.', idempotencyKey: rejectedReviewAcceptanceKey }) });
+  assert.equal(rejectedReviewAcceptance.status, 409);
+  assert.equal((await rejectedReviewAcceptance.json()).error.code, 'INTENT_EVALUATION_REVIEW_INCOMPLETE',
+    'a contradictory review is rejected at criterion/review validation despite otherwise passing behavior evidence');
+  const afterRejectedReviewAcceptance = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+  assert.equal(afterRejectedReviewAcceptance.version, beforeRejectedReviewAcceptance.version);
+  assert.equal(afterRejectedReviewAcceptance.events.filter((event) => event.type === 'IntentEvaluationAccepted').length, 0);
+  assert.equal(Object.hasOwn(afterRejectedReviewAcceptance.idempotency, rejectedReviewAcceptanceKey), false);
+  const aggregateAfterRejectedAcceptance = await app.persistence.query(`select state,state_hash from orgward.aggregates
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`, [ac3Case.id]);
+  assert.deepEqual(aggregateAfterRejectedAcceptance.rows, aggregateBeforeRejectedAcceptance.rows,
+    'rejected criterion review leaves the complete canonical aggregate and its hash unchanged');
+  const auditAfterRejectedAcceptance = await app.persistence.query(`select event_hash,command_id,actor,aggregate_version,event
+    from orgward.audit_log where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1
+    order by aggregate_version,event_hash`, [ac3Case.id]);
+  assert.deepEqual(auditAfterRejectedAcceptance.rows, auditBeforeRejectedAcceptance.rows,
+    'rejected criterion review leaves all prior audit rows and identities unchanged');
+  let versionedEvidenceReview;
+  let acceptanceInput;
+  let acceptanceCaseBefore;
+  let acceptanceRequirementBefore;
+  const acceptanceReason = 'The exact current declared criteria passed the authorized checks and received an independent supporting review.';
+  const acceptanceCommandId = 't91-accept-intent-evaluation-v2';
+  const acceptanceContract = JSON.parse(await readFile(new URL('../contracts/enterprise/wp-T-91.json', import.meta.url), 'utf8'));
+  const boundaryOperation = acceptanceContract.operations.find((entry) => entry.name === 'AcceptIntentEvaluation');
+  assert.equal(boundaryOperation.transport, 'POST /api/v1/commands');
+  assert.equal(boundaryOperation.requestSchema, 'AcceptIntentEvaluationRequest');
+  assert.equal(boundaryOperation.resultSchema, 'AcceptIntentEvaluationResult');
+  const browserSession = async (subject) => {
+    const id = randomBytes(32).toString('base64url');
+    await app.sessionStore.create(id, { issuer: 'https://persistence-identity.example.test', subject,
+      principal: principal(subject), displayName: subject, tenantId: 'tenant-a', actorType: 'human' },
+    Math.floor(Date.now() / 1000) + 300);
+    return id;
+  };
+  const bobBrowserSession = await browserSession('bob');
+  const aliceBrowserSession = await browserSession('alice');
+  let browserEvidenceReview;
+  let n2Receipt;
+  let n2MissingAssertionReceipt;
+  let persistedOwnerPlan;
+  let browserAcceptanceResult;
+  let browserAcceptanceRequest;
+  let latestSupportingEvidenceReview;
+  await withHeadlessChromium(`${app.base}/sdlc.html?case=${encodeURIComponent(ac3Case.id)}`, async ({ send, evaluate, waitFor, press, setSession }) => {
+    await waitFor("document.querySelector('#case-tabs [data-tab=\"requirements\"]')", 'case tabs rendered');
+    await setSession(aliceBrowserSession);
+    await send('Page.reload');
+    await waitFor(`window.__orgwardSessionResponse?.principal === ${JSON.stringify(principal('alice'))}`, 'accountable owner identity loaded');
+    await waitFor("document.querySelector('#case-tabs [data-tab=\"requirements\"]')", 'owner case tabs restored');
+    await evaluate("document.querySelector('#case-tabs [data-tab=\"requirements\"]').click(); true");
+    await waitFor(`Array.from(document.querySelectorAll('article.checkpoint-callout')).some((article) => article.innerText.includes(${JSON.stringify(ac3R1Mapping.mappingHash)}) && article.innerText.includes('PASS — v1 evidence remained pinned and stale'))`,
+      'owner sees the rendered R1 recovery receipt and its scope');
+    const r1RenderedReceiptCopy = await evaluate(`(() => [...document.querySelectorAll('article.checkpoint-callout')]
+      .find((entry) => entry.innerText.includes(${JSON.stringify(ac3R1Mapping.mappingHash)}) )?.innerText ?? '')()`);
+    assert.match(r1RenderedReceiptCopy, new RegExp(ac3R1Receipt.oldPlanHash));
+    assert.match(r1RenderedReceiptCopy, new RegExp(ac3R1Receipt.recovery.fresh.planHash));
+    assert.match(r1RenderedReceiptCopy, /business truth remains unverified/i);
+    const ownerFormSelector = `form.process-behavior-plan-form[aria-label="Authorize behavior tests for ${ac3Requirement.id}"]`;
+    await waitFor(`document.querySelector(${JSON.stringify(ownerFormSelector)})?.querySelector('[aria-label="Saved process task for behavior assertions"]')`,
+      'owner behavior-plan form with current saved task options rendered');
+    const oneSidedFormAttempt = await evaluate(`(async () => {
+      const originalFetch = window.fetch.bind(window);
+      window.__ownerBehaviorPlanPosts = [];
+      window.__ownerProductHarnessPosts = [];
+      window.fetch = async (input, init = {}) => {
+        const url = typeof input === 'string' ? input : input.url;
+        const response = await originalFetch(input, init);
+        if (new URL(url, location.href).pathname.endsWith('/process-behavior-test-plans')) {
+          const requestBody = JSON.parse(init.body);
+          const responseBody = await response.clone().json();
+          window.__ownerBehaviorPlanPosts.push({ requestBody, status: response.status, responseBody });
+        }
+        if (new URL(url, location.href).pathname.endsWith('/product-behavior-harness-mappings')) {
+          window.__ownerProductHarnessPosts.push({ requestBody: JSON.parse(init.body), status: response.status,
+            responseBody: await response.clone().json() });
+        }
+        return response;
+      };
+      const form = document.querySelector(${JSON.stringify(ownerFormSelector)});
+      const setValue = (element, value) => {
+        element.value = value;
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+      };
+      const selectFirst = (element) => {
+        const option = [...element.options].find((entry) => entry.value);
+        if (!option) throw new Error('No exact saved option is available for the owner form.');
+        setValue(element, option.value);
+      };
+      selectFirst(form.querySelector('[aria-label="Saved process task for behavior assertions"]'));
+      selectFirst(form.querySelector('[aria-label="Pinned GitHub snapshot for behavior assertions"]'));
+      setValue(form.querySelector('[aria-label="Exact repository file paths to pin"]'), 'src/process.mjs\\ntest/scenario-contract.test.mjs');
+      setValue(form.querySelector('[aria-label="Candidate file to criterion mapping"]'), 'src/process.mjs | IMPLEMENTATION | LEARN-OUTCOME\\ntest/scenario-contract.test.mjs | TEST | LEARN-OUTCOME');
+      setValue(form.querySelector('[aria-label="Effective time context (UTC)"]'), '2026-10-07T00:00:00.000Z');
+      selectFirst(form.querySelector('[aria-label="Effective time source process input"]'));
+      for (const row of form.querySelectorAll('.behavior-assertion-row')) {
+        setValue(row.querySelector('input[aria-label^="Exact TAP test name"]'), 'Pinned process learning check');
+        for (const selector of ['select[aria-label^="Business outcome"]', 'select[aria-label^="Process scope"]', 'select[aria-label^="Risk reference"]']) {
+          selectFirst(row.querySelector(selector));
+        }
+      }
+      const scenarios = ${JSON.stringify(ownerFormScenarioCases)};
+      for (const row of form.querySelectorAll('.intent-evaluation-case-row')) {
+        const type = row.querySelector('legend').textContent.toUpperCase().split(' ')[0];
+        const scenario = scenarios.find((entry) => entry.type === type);
+        setValue(row.querySelector('textarea[aria-label$="case definition"]'), scenario.definition);
+        selectFirst(row.querySelector('select[aria-label$="case exact source"]'));
+        selectFirst(row.querySelector('select[aria-label="positive case criterion"], select[aria-label="negative case criterion"], select[aria-label="recovery case criterion"]'));
+        if (type === 'NEGATIVE') setValue(row.querySelector('textarea[aria-label$="typed dataset JSON"]'), JSON.stringify(scenario.dataset));
+        if (type === 'NEGATIVE') setValue(row.querySelector('textarea[aria-label$="expected output oracle JSON"]'), '');
+      }
+      const caseBefore = await (await originalFetch('/api/sdlc/cases/${ac3Case.id}')).json();
+      form.requestSubmit();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      return { postCount: window.__ownerBehaviorPlanPosts.length,
+        toast: document.querySelector('#sdlc-toast')?.textContent ?? '',
+        versionBefore: caseBefore.version,
+        versionAfter: (await (await originalFetch('/api/sdlc/cases/${ac3Case.id}')).json()).version };
+    })()`);
+    assert.equal(oneSidedFormAttempt.postCount, 0, 'an owner-form dataset without its oracle does not submit an API request');
+    assert.match(oneSidedFormAttempt.toast, /dataset and expected output oracle must be paired/);
+    assert.equal(oneSidedFormAttempt.versionAfter, oneSidedFormAttempt.versionBefore,
+      'the one-sided form attempt does not mutate the saved case');
+    const ownerPlanPost = await evaluate(`(async () => {
+      const form = document.querySelector(${JSON.stringify(ownerFormSelector)});
+      const setValue = (element, value) => {
+        element.value = value;
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+      };
+      const negative = [...form.querySelectorAll('.intent-evaluation-case-row')]
+        .find((row) => row.querySelector('legend').textContent.startsWith('Negative'));
+      const scenario = ${JSON.stringify(ownerFormScenarioCases.find((entry) => entry.type === 'NEGATIVE'))};
+      setValue(negative.querySelector('textarea[aria-label$="expected output oracle JSON"]'), JSON.stringify(scenario.expectedOutput));
+      form.requestSubmit();
+      const deadline = Date.now() + 10000;
+      while (Date.now() < deadline && window.__ownerBehaviorPlanPosts.length < 1) await new Promise((resolve) => setTimeout(resolve, 25));
+      return window.__ownerBehaviorPlanPosts[0] ?? null;
+    })()`);
+    assert.ok(ownerPlanPost, 'the complete dataset/oracle pair is submitted through the actual owner form');
+    assert.equal(ownerPlanPost.status, 201);
+    const submittedNegative = ownerPlanPost.requestBody.caseDefinitions.negative;
+    assert.deepEqual(submittedNegative.dataset, ownerFormScenarioCases.find((entry) => entry.type === 'NEGATIVE').dataset);
+    assert.deepEqual(submittedNegative.expectedOutput, ownerFormScenarioCases.find((entry) => entry.type === 'NEGATIVE').expectedOutput);
+    assert.equal(Object.hasOwn(submittedNegative, 'testPath'), false);
+    assert.equal(Object.hasOwn(submittedNegative, 'assertionId'), false);
+    const submittedPlan = ownerPlanPost.responseBody.processBehaviorTestPlan;
+    const submittedNegativeCase = submittedPlan.caseDefinitions.cases.find((entry) => entry.type === 'NEGATIVE');
+    assert.deepEqual(submittedNegativeCase.executionMapping, { status: 'INCOMPLETE' });
+    assert.equal(submittedNegativeCase.status, 'NOT_EXECUTED');
+    assert.equal(submittedPlan.caseDefinitions.mappingStatus, 'INCOMPLETE');
+    assert.equal(ownerPlanPost.responseBody.processRunEvidenceLink?.verificationStatus ?? ac3LinkV2.verificationStatus, 'NOT_EXECUTED');
+    assert.equal(ac3LinkV2.behaviorEvaluation.businessTruthStatus, 'UNVERIFIED');
+    const ownerFormReadback = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    persistedOwnerPlan = ownerFormReadback.artifacts.processBehaviorTestPlans.find((entry) => entry.id === submittedPlan.id);
+    const { ...persistedNegativeCaseCore } = persistedOwnerPlan.caseDefinitions.cases
+      .find((entry) => entry.type === 'NEGATIVE');
+    const { definitionHash: submittedDefinitionHash, ...submittedNegativeCaseCore } = submittedNegativeCase;
+    assert.match(submittedDefinitionHash, /^[a-f0-9]{64}$/);
+    assert.deepEqual(persistedNegativeCaseCore, submittedNegativeCaseCore,
+      'the submitted pair and incomplete mapping survive persisted API readback');
+    assert.equal(persistedOwnerPlan.planHash, submittedPlan.planHash, 'readback preserves the immutable plan hash for the captured case');
+    assert.match(persistedOwnerPlan.planHash, /^[a-f0-9]{64}$/);
+
+    const ownerHarnessMappingPost = await evaluate(`(async () => {
+      const form = document.querySelector('.product-harness-mapping-request-form');
+      if (!form) throw new Error('fixed N2.AUTHORIZATION owner mapping control is unavailable');
+      const select = form.querySelector('[aria-label="Saved plan for fixed N2 authorization harness"]');
+      select.value = ${JSON.stringify(submittedPlan.id)};
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      form.requestSubmit();
+      const deadline = Date.now() + 10000;
+      while (Date.now() < deadline && window.__ownerProductHarnessPosts.length < 1) await new Promise((resolve) => setTimeout(resolve, 25));
+      return window.__ownerProductHarnessPosts[0] ?? null;
+    })()`);
+    assert.ok(ownerHarnessMappingPost, 'owner UI requests only the registry-owned N2.AUTHORIZATION mapping');
+    assert.equal(ownerHarnessMappingPost.status, 201);
+    assert.equal(ownerHarnessMappingPost.responseBody.productHarnessCapabilities?.n2AuthorizationFixture, 'AVAILABLE',
+      'mapping-save projection preserves the current fixed-harness capability');
+    assert.deepEqual(Object.keys(ownerHarnessMappingPost.requestBody).sort(), ['idempotencyKey', 'planId', 'subcaseId', 'version']);
+    assert.equal(ownerHarnessMappingPost.requestBody.subcaseId, 'N2.AUTHORIZATION');
+    const ownerHarnessMapping = ownerHarnessMappingPost.responseBody.productBehaviorHarnessMapping;
+    assert.equal(ownerHarnessMapping.planHash, persistedOwnerPlan.planHash);
+    assert.equal(ownerHarnessMapping.parentDefinitionHash, digest(submittedNegativeCaseCore));
+    assert.equal(ownerHarnessMapping.datasetHash, digest(submittedNegativeCase.dataset.cases.find((entry) => entry.id === 'N2')));
+    assert.equal(ownerHarnessMapping.oracleHash, digest(submittedNegativeCase.expectedOutput.cases.find((entry) => entry.id === 'N2')));
+    assert.equal(ownerHarnessMapping.subcaseId, 'N2.AUTHORIZATION');
+    assert.equal(ownerHarnessMapping.harnessId, 't91-n2-authorization');
+    assert.equal(ownerHarnessMapping.assertionId, 'rejects-empty-assertion-selection');
+    assert.equal(ownerHarnessMapping.scope, 'ORGWARD_PRODUCT_PATH_FIXTURE');
+    const afterMappingRequest = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    const persistedHarnessMapping = afterMappingRequest.artifacts.processBehaviorProductHarnessMappings
+      .find((entry) => entry.id === ownerHarnessMapping.id);
+    assert.equal(persistedHarnessMapping.mappingHash, ownerHarnessMapping.mappingHash);
+    assert.equal(persistedHarnessMapping.integrityStatus, 'VALID');
+    assert.equal((afterMappingRequest.artifacts.processBehaviorProductHarnessMappingReviews ?? [])
+      .filter((entry) => entry.mappingId === ownerHarnessMapping.id).length, 0,
+    'the new owner N2 mapping has no review until a distinct reviewer acts');
+    const selfReviewBefore = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    const selfReview = await fetch(`${app.base}/api/sdlc/cases/${ac3Case.id}/product-behavior-harness-mapping-reviews`, {
+      ...as('alice'), method: 'POST', body: JSON.stringify({ version: selfReviewBefore.version,
+        mappingId: ownerHarnessMapping.id, mappingHash: ownerHarnessMapping.mappingHash,
+        decision: 'APPROVE_FOR_TEST_EXECUTION', idempotencyKey: 'n2-product-harness-self-review' }) });
+    assert.equal(selfReview.status, 409, 'mapping author cannot independently review the product-harness mapping');
+    const changedPinReview = await fetch(`${app.base}/api/sdlc/cases/${ac3Case.id}/product-behavior-harness-mapping-reviews`, {
+      ...as('bob'), method: 'POST', body: JSON.stringify({ version: selfReviewBefore.version,
+        mappingId: ownerHarnessMapping.id, mappingHash: 'f'.repeat(64),
+        decision: 'APPROVE_FOR_TEST_EXECUTION', idempotencyKey: 'n2-product-harness-changed-pin' }) });
+    assert.equal(changedPinReview.status, 409, 'review cannot approve a changed mapping hash');
+    const afterDeniedMappingReviews = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    assert.equal(afterDeniedMappingReviews.version, selfReviewBefore.version);
+    assert.equal(afterDeniedMappingReviews.events.length, selfReviewBefore.events.length);
+    assert.equal((afterDeniedMappingReviews.artifacts.processBehaviorProductHarnessMappingReviews ?? [])
+      .filter((entry) => entry.mappingId === ownerHarnessMapping.id).length, 0,
+    'denied owner self-review and altered-pin review do not create a review for this mapping');
+    const unapprovedExecution = await fetch(`${app.base}/api/sdlc/cases/${ac3Case.id}/product-behavior-harness-executions`, {
+      ...as('alice'), method: 'POST', body: JSON.stringify({ version: afterDeniedMappingReviews.version,
+        mappingId: ownerHarnessMapping.id, mappingHash: ownerHarnessMapping.mappingHash,
+        subcaseId: 'N2.AUTHORIZATION', idempotencyKey: 't91-n2-authz-before-review' }) });
+    assert.equal(unapprovedExecution.status, 409, 'dispatch requires an integrity-valid independent approval');
+    const afterUnapprovedExecution = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    assert.equal(afterUnapprovedExecution.version, afterDeniedMappingReviews.version);
+    assert.equal(afterUnapprovedExecution.events.length, afterDeniedMappingReviews.events.length);
+    assert.equal((afterUnapprovedExecution.artifacts.processBehaviorProductHarnessExecutionReservations ?? [])
+      .filter((entry) => entry.mappingId === ownerHarnessMapping.id).length, 0,
+    'an unapproved N2 mapping creates no reservation even though separate R1 history is retained');
+    assert.equal(n2DispatchCount, 0, 'denial before approval creates no reservation and does not dispatch');
+
+    await setSession(bobBrowserSession);
+    await send('Page.reload');
+    await waitFor(`window.__orgwardSessionResponse?.principal === ${JSON.stringify(principal('bob'))}`, 'non-owner identity loaded');
+    await waitFor("document.querySelector('#case-tabs [data-tab=\"requirements\"]')", 'non-owner case tabs restored');
+    await evaluate("document.querySelector('#case-tabs [data-tab=\"requirements\"]').click(); true");
+    await waitFor("document.querySelector('[aria-label=\"N2 product mapping review decision\"]')", 'independent fixed N2 mapping review control rendered');
+    const mappingReviewFromBrowser = await evaluate(`(async () => {
+      const originalFetch = window.fetch.bind(window);
+      window.__productHarnessReviewPost = null;
+      window.fetch = async (input, init = {}) => {
+        const url = typeof input === 'string' ? input : input.url;
+        const response = await originalFetch(input, init);
+        if (new URL(url, location.href).pathname.endsWith('/product-behavior-harness-mapping-reviews')) {
+          window.__productHarnessReviewPost = { requestBody: JSON.parse(init.body), status: response.status,
+            responseBody: await response.clone().json() };
+        }
+        return response;
+      };
+      const decision = document.querySelector('[aria-label="N2 product mapping review decision"]');
+      decision.value = 'APPROVE_FOR_TEST_EXECUTION';
+      decision.dispatchEvent(new Event('change', { bubbles: true }));
+      [...document.querySelectorAll('button')].find((button) => button.textContent.includes('Record independent mapping review')).click();
+      const deadline = Date.now() + 10000;
+      while (Date.now() < deadline && !window.__productHarnessReviewPost) await new Promise((resolve) => setTimeout(resolve, 25));
+      return window.__productHarnessReviewPost;
+    })()`);
+    assert.ok(mappingReviewFromBrowser, 'reviewer UI submits the fixed mapping decision through its API route');
+    assert.equal(mappingReviewFromBrowser.status, 201);
+    assert.equal(mappingReviewFromBrowser.responseBody.productHarnessCapabilities?.n2AuthorizationFixture, 'AVAILABLE',
+      'mapping-review projection preserves the current fixed-harness capability');
+    assert.equal(mappingReviewFromBrowser.requestBody.mappingId, ownerHarnessMapping.id);
+    assert.equal(mappingReviewFromBrowser.requestBody.mappingHash, ownerHarnessMapping.mappingHash);
+    const mappingReview = mappingReviewFromBrowser.responseBody.productBehaviorHarnessMappingReview;
+    assert.equal(mappingReview.reviewerPrincipal, principal('bob'));
+    assert.equal(mappingReview.decision, 'APPROVE_FOR_TEST_EXECUTION');
+    assert.equal(mappingReview.status, 'REVIEWED_FOR_TEST_EXECUTION');
+    assert.equal(mappingReview.integrityStatus, 'VALID');
+    assert.equal(mappingReview.businessTruthStatus, 'UNVERIFIED');
+    assert.equal(mappingReview.scenarioStatus, 'NOT_EXECUTED');
+    assert.equal(mappingReviewFromBrowser.responseBody.artifacts.processBehaviorScenarioExecutions?.length ?? 0, 0);
+    const mappingReviewReadback = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    const persistedMappingReview = mappingReviewReadback.artifacts.processBehaviorProductHarnessMappingReviews
+      .find((entry) => entry.id === mappingReview.id);
+    assert.equal(persistedMappingReview.reviewHash, mappingReview.reviewHash);
+    assert.equal(persistedMappingReview.mappingHash, ownerHarnessMapping.mappingHash);
+    assert.equal(persistedMappingReview.integrityStatus, 'VALID');
+
+    const beforeN2Execution = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    const n2ExecutionCommandId = 't91-n2-authz-fixed-fixture-execution';
+    const executeN2 = () => fetch(`${app.base}/api/sdlc/cases/${ac3Case.id}/product-behavior-harness-executions`, {
+      ...as('alice'), method: 'POST', body: JSON.stringify({ version: beforeN2Execution.version,
+        mappingId: ownerHarnessMapping.id, mappingHash: ownerHarnessMapping.mappingHash,
+        subcaseId: 'N2.AUTHORIZATION', idempotencyKey: n2ExecutionCommandId }) });
+    const pendingN2Execution = executeN2();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const concurrentN2Replay = await executeN2();
+    assert.ok([200, 202].includes(concurrentN2Replay.status),
+      'a concurrent duplicate observes the durable reservation or completed receipt without starting another fixture');
+    const n2ExecutionResponse = await pendingN2Execution;
+    const n2ExecutionBody = await n2ExecutionResponse.json();
+    assert.equal(n2ExecutionResponse.status, 201);
+    n2Receipt = n2ExecutionBody.productBehaviorHarnessExecution;
+    assert.equal(n2Receipt.schemaVersion, 4);
+    const n2AfterRecord = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    const n2Reservation = n2AfterRecord.artifacts.processBehaviorProductHarnessExecutionReservations
+      .find((entry) => entry.mappingId === ownerHarnessMapping.id);
+    assert.equal(n2Receipt.reservationHash, n2Reservation.reservationHash);
+    assert.match(n2Receipt.fixtureInvocationId, /^t91-n2-fixture-invocation-[0-9a-f-]{36}$/);
+    assert.equal(n2Receipt.subcaseId, 'N2.AUTHORIZATION');
+    assert.equal(n2Receipt.status, 'PASS', JSON.stringify(n2Receipt));
+    assert.equal(n2Receipt.noMutationVerified, true);
+    assert.equal(n2Receipt.httpStatus, 400);
+    assert.equal(n2Receipt.errorCode, 'INVALID_PROCESS_BEHAVIOR_TEST_PLAN');
+    assert.equal(n2Receipt.mappingHash, ownerHarnessMapping.mappingHash);
+    assert.equal(n2Receipt.reviewHash, mappingReview.reviewHash);
+    assert.equal(n2Receipt.scenarioExecutionStatus, 'NOT_EXECUTED');
+    assert.equal(n2Receipt.negativeSuiteStatus, 'INCOMPLETE');
+    assert.equal(n2Receipt.businessTruthStatus, 'UNVERIFIED');
+    assert.equal(n2Receipt.runtimeVerificationStatus, 'NOT_EXECUTED');
+    assert.equal(n2Receipt.terminal, true, 'the terminal observation used for classification is stored in the immutable receipt');
+    const replayedN2Execution = await executeN2();
+    const replayedN2ExecutionBody = await replayedN2Execution.json();
+    assert.equal(replayedN2Execution.status, 200, JSON.stringify(replayedN2ExecutionBody));
+    assert.equal(replayedN2ExecutionBody.productBehaviorHarnessExecution.receiptHash, n2Receipt.receiptHash,
+      'completed same-key replay returns the immutable receipt without redispatch');
+    const changedN2Command = await fetch(`${app.base}/api/sdlc/cases/${ac3Case.id}/product-behavior-harness-executions`, {
+      ...as('alice'), method: 'POST', body: JSON.stringify({ version: beforeN2Execution.version,
+        mappingId: ownerHarnessMapping.id, mappingHash: ownerHarnessMapping.mappingHash,
+        subcaseId: 'N2.AUTHORIZATION', idempotencyKey: 't91-n2-authz-second-command' }) });
+    assert.equal(changedN2Command.status, 409, 'a new command key cannot rerun an already reserved mapping');
+    const changedN2Pins = await fetch(`${app.base}/api/sdlc/cases/${ac3Case.id}/product-behavior-harness-executions`, {
+      ...as('alice'), method: 'POST', body: JSON.stringify({ version: beforeN2Execution.version,
+        mappingId: ownerHarnessMapping.id, mappingHash: 'e'.repeat(64), subcaseId: 'N2.AUTHORIZATION',
+        idempotencyKey: n2ExecutionCommandId }) });
+    assert.equal(changedN2Pins.status, 409, 'same command key with altered pins conflicts without redispatch');
+    const n2ExecutionReadback = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    const persistedN2Receipt = n2ExecutionReadback.artifacts.processBehaviorProductHarnessExecutions
+      .find((entry) => entry.id === n2Receipt.id);
+    assert.equal(persistedN2Receipt.receiptHash, n2Receipt.receiptHash);
+    assert.equal(persistedN2Receipt.terminal, true);
+    assert.equal(persistedN2Receipt.integrityStatus, 'VALID');
+    assert.equal(n2ExecutionReadback.artifacts.processBehaviorScenarioExecutions?.length ?? 0, 0,
+      'product-path denial does not become customer scenario execution');
+    assert.equal(n2ExecutionReadback.artifacts.processBehaviorTestPlans.find((entry) => entry.id === submittedPlan.id)
+      .caseDefinitions.cases.find((entry) => entry.type === 'NEGATIVE').status, 'NOT_EXECUTED');
+    await setSession(aliceBrowserSession);
+    await send('Page.reload');
+    await waitFor(`window.__orgwardSessionResponse?.principal === ${JSON.stringify(principal('alice'))}`,
+      'owner identity restored for the N2.MISSING_ASSERTION mapping');
+    await waitFor("document.querySelector('#case-tabs [data-tab=\"requirements\"]')", 'owner requirements tab restored');
+    await evaluate("document.querySelector('#case-tabs [data-tab=\"requirements\"]').click(); true");
+    await waitFor("document.querySelector('.product-harness-missing-assertion-request-form')",
+      'fixed N2.MISSING_ASSERTION owner mapping control rendered');
+    const missingMappingPost = await evaluate(`(async () => {
+      const originalFetch = window.fetch.bind(window);
+      window.__missingAssertionMappingPost = null;
+      window.fetch = async (input, init = {}) => {
+        const response = await originalFetch(input, init);
+        const url = typeof input === 'string' ? input : input.url;
+        if (new URL(url, location.href).pathname.endsWith('/product-behavior-harness-mappings')) {
+          const body = JSON.parse(init.body);
+          if (body.subcaseId === 'N2.MISSING_ASSERTION') window.__missingAssertionMappingPost = {
+            requestBody: body, status: response.status, responseBody: await response.clone().json() };
+        }
+        return response;
+      };
+      const form = document.querySelector('.product-harness-missing-assertion-request-form');
+      const select = form.querySelector('[aria-label="Saved plan for N2 missing assertion safeguard"]');
+      select.value = ${JSON.stringify(persistedOwnerPlan.id)};
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      form.requestSubmit();
+      const deadline = Date.now() + 10000;
+      while (Date.now() < deadline && !window.__missingAssertionMappingPost) await new Promise((resolve) => setTimeout(resolve, 25));
+      return window.__missingAssertionMappingPost;
+    })()`);
+    assert.ok(missingMappingPost, 'owner UI submits the fixed N2.MISSING_ASSERTION mapping request');
+    assert.equal(missingMappingPost.status, 201, JSON.stringify(missingMappingPost.responseBody));
+    assert.equal(missingMappingPost.requestBody.subcaseId, 'N2.MISSING_ASSERTION');
+    const missingAssertionMapping = missingMappingPost.responseBody.productBehaviorHarnessMapping;
+    const missingAssertionPlanAssertion = persistedOwnerPlan.assertions.find((entry) => entry.criterionId === 'LEARN-OUTCOME'
+      && entry.testName === 'Pinned process learning check');
+    assert.ok(missingAssertionPlanAssertion, 'the saved plan contains the exact authored mandatory assertion');
+    assert.equal(missingAssertionMapping.planHash, persistedOwnerPlan.planHash);
+    assert.equal(missingAssertionMapping.datasetHash,
+      digest(submittedNegative.dataset.cases.find((entry) => entry.id === 'N2')));
+    assert.equal(missingAssertionMapping.oracleHash,
+      digest(submittedNegative.expectedOutput.cases.find((entry) => entry.id === 'N2')));
+    assert.equal(missingAssertionMapping.requiredPlanAssertionId, missingAssertionPlanAssertion.id);
+    assert.equal(missingAssertionMapping.requiredPlanAssertionName, missingAssertionPlanAssertion.testName);
+    assert.match(missingAssertionMapping.requiredPlanAssertionHash, /^[a-f0-9]{64}$/);
+    const missingMappingReadback = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    const persistedMissingMapping = missingMappingReadback.artifacts.processBehaviorProductHarnessMappings
+      .find((entry) => entry.id === missingAssertionMapping.id);
+    assert.equal(persistedMissingMapping.mappingHash, missingAssertionMapping.mappingHash);
+    assert.equal(persistedMissingMapping.integrityStatus, 'VALID');
+
+    await setSession(bobBrowserSession);
+    await send('Page.reload');
+    await waitFor(`window.__orgwardSessionResponse?.principal === ${JSON.stringify(principal('bob'))}`,
+      'independent reviewer identity restored for N2.MISSING_ASSERTION');
+    await waitFor("document.querySelector('#case-tabs [data-tab=\"requirements\"]')", 'reviewer requirements tab restored');
+    await evaluate("document.querySelector('#case-tabs [data-tab=\"requirements\"]').click(); true");
+    await waitFor(`Array.from(document.querySelectorAll('article.checkpoint-callout')).some((article) => article.innerText.includes(${JSON.stringify(missingAssertionMapping.mappingHash)}))`,
+      'reviewer sees the exact missing-assertion mapping');
+    const missingReviewCard = await evaluate(`(() => {
+      const article = [...document.querySelectorAll('article.checkpoint-callout')]
+        .find((entry) => entry.innerText.includes(${JSON.stringify(missingAssertionMapping.mappingHash)}));
+      return article?.innerText ?? '';
+    })()`);
+    assert.ok(missingReviewCard.includes(missingAssertionMapping.requiredPlanAssertionId));
+    assert.ok(missingReviewCard.includes(missingAssertionMapping.requiredPlanAssertionName));
+    assert.ok(missingReviewCard.includes(missingAssertionMapping.requiredPlanAssertionHash));
+    assert.ok(missingReviewCard.includes('409 BEHAVIOR_CANDIDATE_REJECTED'));
+    assert.ok(missingReviewCard.includes('UNKNOWN / ASSERTION_RESULT_NOT_FOUND'));
+    const missingMappingReviewPost = await evaluate(`(async () => {
+      const originalFetch = window.fetch.bind(window);
+      window.__missingAssertionMappingReviewPost = null;
+      window.fetch = async (input, init = {}) => {
+        const response = await originalFetch(input, init);
+        const url = typeof input === 'string' ? input : input.url;
+        if (new URL(url, location.href).pathname.endsWith('/product-behavior-harness-mapping-reviews')) {
+          const body = JSON.parse(init.body);
+          if (body.mappingId === ${JSON.stringify(missingAssertionMapping.id)}) window.__missingAssertionMappingReviewPost = {
+            requestBody: body, status: response.status, responseBody: await response.clone().json() };
+        }
+        return response;
+      };
+      const article = [...document.querySelectorAll('article.checkpoint-callout')]
+        .find((entry) => entry.innerText.includes(${JSON.stringify(missingAssertionMapping.mappingHash)}));
+      const decision = article.querySelector('[aria-label="N2 product mapping review decision"]');
+      decision.value = 'APPROVE_FOR_TEST_EXECUTION';
+      decision.dispatchEvent(new Event('change', { bubbles: true }));
+      [...article.querySelectorAll('button')].find((button) => button.textContent.includes('Record independent mapping review')).click();
+      const deadline = Date.now() + 10000;
+      while (Date.now() < deadline && !window.__missingAssertionMappingReviewPost) await new Promise((resolve) => setTimeout(resolve, 25));
+      return window.__missingAssertionMappingReviewPost;
+    })()`);
+    assert.ok(missingMappingReviewPost, 'independent reviewer UI submits the exact N2.MISSING_ASSERTION mapping');
+    assert.equal(missingMappingReviewPost.status, 201, JSON.stringify(missingMappingReviewPost.responseBody));
+    assert.equal(missingMappingReviewPost.requestBody.mappingId, missingAssertionMapping.id);
+    assert.equal(missingMappingReviewPost.requestBody.mappingHash, missingAssertionMapping.mappingHash);
+    const missingAssertionReview = missingMappingReviewPost.responseBody.productBehaviorHarnessMappingReview;
+    assert.equal(missingAssertionReview.decision, 'APPROVE_FOR_TEST_EXECUTION');
+    assert.equal(missingAssertionReview.integrityStatus, 'VALID');
+    assert.equal(missingAssertionReview.status, 'REVIEWED_FOR_TEST_EXECUTION');
+
+    const beforeCrossSubcase = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    const crossSubcaseAttempt = await fetch(`${app.base}/api/sdlc/cases/${ac3Case.id}/product-behavior-harness-executions`, {
+      ...as('alice'), method: 'POST', body: JSON.stringify({ version: beforeCrossSubcase.version,
+        mappingId: missingAssertionMapping.id, mappingHash: missingAssertionMapping.mappingHash,
+        subcaseId: 'N2.AUTHORIZATION', idempotencyKey: 't91-n2-cross-subcase-reservation-denied' }) });
+    const crossSubcaseBody = await crossSubcaseAttempt.json();
+    assert.equal(crossSubcaseAttempt.status, 409, JSON.stringify(crossSubcaseBody));
+    assert.equal(crossSubcaseBody.error.code, 'PRODUCT_HARNESS_EXECUTION_NOT_APPROVED');
+    const afterCrossSubcase = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    assert.equal(afterCrossSubcase.version, beforeCrossSubcase.version);
+    assert.deepEqual(afterCrossSubcase.events, beforeCrossSubcase.events,
+      'a cross-subcase request cannot append a reservation event');
+    assert.equal((afterCrossSubcase.artifacts.processBehaviorProductHarnessExecutionReservations ?? [])
+      .filter((entry) => entry.mappingId === missingAssertionMapping.id).length, 0,
+    'a mismatched subcase is denied before reservation persistence');
+    assert.equal((afterCrossSubcase.artifacts.processBehaviorProductHarnessExecutions ?? [])
+      .filter((entry) => entry.mappingId === missingAssertionMapping.id).length, 0);
+
+    await setSession(aliceBrowserSession);
+    await send('Page.reload');
+    await waitFor(`window.__orgwardSessionResponse?.principal === ${JSON.stringify(principal('alice'))}`,
+      'owner identity restored to run the reviewed missing-assertion safeguard');
+    await waitFor("document.querySelector('#case-tabs [data-tab=\"requirements\"]')", 'owner requirements tab restored for execution');
+    await evaluate("document.querySelector('#case-tabs [data-tab=\"requirements\"]').click(); true");
+    await waitFor(`Array.from(document.querySelectorAll('article.checkpoint-callout')).some((article) => article.innerText.includes(${JSON.stringify(missingAssertionMapping.mappingHash)}) && [...article.querySelectorAll('button')].some((button) => button.textContent.includes('Run missing-assertion safeguard check')))`,
+      'owner execution control appears only after independent review');
+    const missingAssertionRunPost = await evaluate(`(async () => {
+      const originalFetch = window.fetch.bind(window);
+      window.__missingAssertionExecutionPost = null;
+      window.fetch = async (input, init = {}) => {
+        const response = await originalFetch(input, init);
+        const url = typeof input === 'string' ? input : input.url;
+        if (new URL(url, location.href).pathname.endsWith('/product-behavior-harness-executions')) {
+          const body = JSON.parse(init.body);
+          if (body.subcaseId === 'N2.MISSING_ASSERTION') window.__missingAssertionExecutionPost = {
+            requestBody: body, status: response.status, responseBody: await response.clone().json() };
+        }
+        return response;
+      };
+      const article = [...document.querySelectorAll('article.checkpoint-callout')]
+        .find((entry) => entry.innerText.includes(${JSON.stringify(missingAssertionMapping.mappingHash)}));
+      [...article.querySelectorAll('button')].find((button) => button.textContent.includes('Run missing-assertion safeguard check')).click();
+      const deadline = Date.now() + 60000;
+      const expectedToast = 'PASS — the required assertion was absent, and no evidence link was saved';
+      while (Date.now() < deadline && (!window.__missingAssertionExecutionPost
+        || !document.querySelector('#sdlc-toast')?.textContent.includes(expectedToast))) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      return { post: window.__missingAssertionExecutionPost, toast: document.querySelector('#sdlc-toast')?.textContent ?? '' };
+    })()`);
+    assert.ok(missingAssertionRunPost.post, 'owner UI dispatches the reviewed fixed missing-assertion subcase');
+    assert.equal(missingAssertionRunPost.post.status, 201, JSON.stringify(missingAssertionRunPost.post.responseBody));
+    n2MissingAssertionReceipt = missingAssertionRunPost.post.responseBody.productBehaviorHarnessExecution;
+    assert.equal(n2MissingAssertionReceipt.subcaseId, 'N2.MISSING_ASSERTION');
+    assert.equal(n2MissingAssertionReceipt.status, 'PASS', JSON.stringify(n2MissingAssertionReceipt));
+    assert.equal(n2MissingAssertionReceipt.requiredPlanAssertionId, missingAssertionMapping.requiredPlanAssertionId);
+    assert.equal(n2MissingAssertionReceipt.requiredPlanAssertionName, missingAssertionMapping.requiredPlanAssertionName);
+    assert.equal(n2MissingAssertionReceipt.mappingHash, missingAssertionMapping.mappingHash);
+    assert.equal(n2MissingAssertionReceipt.reviewHash, missingAssertionReview.reviewHash);
+    assert.equal(n2MissingAssertionReceipt.businessTruthStatus, 'UNVERIFIED');
+    assert.equal(n2MissingAssertionReceipt.runtimeVerificationStatus, 'NOT_EXECUTED');
+    assert.equal(n2MissingAssertionReceipt.scenarioExecutionStatus, 'NOT_EXECUTED');
+    assert.match(missingAssertionRunPost.toast, /PASS — the required assertion was absent, and no evidence link was saved/);
+    const missingAssertionReceiptReadback = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    const persistedMissingReceipt = missingAssertionReceiptReadback.artifacts.processBehaviorProductHarnessExecutions
+      .find((entry) => entry.id === n2MissingAssertionReceipt.id);
+    assert.equal(persistedMissingReceipt.receiptHash, n2MissingAssertionReceipt.receiptHash);
+    assert.equal(persistedMissingReceipt.integrityStatus, 'VALID');
+    assert.equal(persistedMissingReceipt.run.assertion.status, 'UNKNOWN');
+    assert.equal(persistedMissingReceipt.run.assertion.reason, 'ASSERTION_RESULT_NOT_FOUND');
+    const missingVersionBeforeReplay = missingAssertionReceiptReadback.version;
+    const missingEventsBeforeReplay = missingAssertionReceiptReadback.events.length;
+    const missingReplay = await fetch(`${app.base}/api/sdlc/cases/${ac3Case.id}/product-behavior-harness-executions`, {
+      ...as('alice'), method: 'POST', body: JSON.stringify({ version: missingAssertionRunPost.post.requestBody.version,
+        mappingId: missingAssertionMapping.id, mappingHash: missingAssertionMapping.mappingHash,
+        subcaseId: 'N2.MISSING_ASSERTION', idempotencyKey: missingAssertionRunPost.post.requestBody.idempotencyKey }) });
+    const missingReplayBody = await missingReplay.json();
+    assert.equal(missingReplay.status, 200, JSON.stringify(missingReplayBody));
+    assert.equal(missingReplayBody.productBehaviorHarnessExecution.receiptHash, n2MissingAssertionReceipt.receiptHash);
+    const missingReadbackAfterReplay = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    assert.equal(missingReadbackAfterReplay.version, missingVersionBeforeReplay);
+    assert.equal(missingReadbackAfterReplay.events.length, missingEventsBeforeReplay);
+    assert.equal(missingReadbackAfterReplay.artifacts.processBehaviorProductHarnessExecutions
+      .filter((entry) => entry.subcaseId === 'N2.MISSING_ASSERTION').length, 1);
+
+    await setSession(aliceBrowserSession);
+    await send('Page.reload');
+    await waitFor(`window.__orgwardSessionResponse?.principal === ${JSON.stringify(principal('alice'))}`,
+      'owner identity restored to request the N1 orphan-path mapping');
+    await waitFor("document.querySelector('#case-tabs [data-tab=\"requirements\"]')", 'owner requirements tab restored for N1');
+    await evaluate("document.querySelector('#case-tabs [data-tab=\"requirements\"]').click(); true");
+    await waitFor("document.querySelector('.product-harness-n1-request-form')", 'N1 owner mapping control rendered');
+    const n1MappingPost = await evaluate(`(async () => {
+      const originalFetch = window.fetch.bind(window);
+      window.__n1MappingPost = null;
+      window.fetch = async (input, init = {}) => {
+        const response = await originalFetch(input, init);
+        const url = typeof input === 'string' ? input : input.url;
+        if (new URL(url, location.href).pathname.endsWith('/product-behavior-harness-mappings')) {
+          const body = JSON.parse(init.body);
+          if (body.subcaseId === 'N1') window.__n1MappingPost = { body, status: response.status,
+            responseBody: await response.clone().json() };
+        }
+        return response;
+      };
+      const form = document.querySelector('.product-harness-n1-request-form');
+      const plan = form.querySelector('[aria-label="Saved plan for N1 orphan path safeguard"]');
+      plan.value = ${JSON.stringify(submittedPlan.id)};
+      plan.dispatchEvent(new Event('change', { bubbles: true }));
+      form.requestSubmit();
+      const deadline = Date.now() + 10000;
+      while (Date.now() < deadline && !window.__n1MappingPost) await new Promise((resolve) => setTimeout(resolve, 25));
+      return window.__n1MappingPost;
+    })()`);
+    assert.ok(n1MappingPost, 'owner UI submits a separate N1 fixed mapping request');
+    assert.equal(n1MappingPost.status, 201, JSON.stringify(n1MappingPost.responseBody));
+    assert.equal(n1MappingPost.body.subcaseId, 'N1');
+    const n1Mapping = n1MappingPost.responseBody.productBehaviorHarnessMapping;
+    assert.equal(n1Mapping.candidatePath, 'src/unmapped.mjs');
+    assert.equal(n1Mapping.planHash, persistedOwnerPlan.planHash);
+    assert.equal(n1Mapping.parentDefinitionHash, digest(persistedNegativeCaseCore));
+    assert.equal(n1Mapping.datasetHash, digest(submittedNegative.dataset.cases.find((entry) => entry.id === 'N1')));
+    assert.equal(n1Mapping.oracleHash, digest(submittedNegative.expectedOutput.cases.find((entry) => entry.id === 'N1')));
+    assert.equal(n1Mapping.subcaseId, 'N1');
+    assert.equal(n1Mapping.harnessId, 't91-n1-orphan-path');
+    assert.match(n1Mapping.repositoryTreeDigest, /^[a-f0-9]{64}$/);
+    assert.equal(n1MappingPost.responseBody.productHarnessCapabilities?.n1OrphanPathFixture, 'AVAILABLE');
+
+    await setSession(bobBrowserSession);
+    await send('Page.reload');
+    await waitFor(`window.__orgwardSessionResponse?.principal === ${JSON.stringify(principal('bob'))}`,
+      'independent reviewer identity restored for N1');
+    await waitFor("document.querySelector('#case-tabs [data-tab=\"requirements\"]')", 'reviewer requirements tab restored for N1');
+    await evaluate("document.querySelector('#case-tabs [data-tab=\"requirements\"]').click(); true");
+    await waitFor(`Array.from(document.querySelectorAll('article.checkpoint-callout')).some((article) => article.innerText.includes(${JSON.stringify(n1Mapping.mappingHash)}))`,
+      'reviewer sees the exact N1 mapping');
+    const n1ReviewerCopy = await evaluate(`(() => [...document.querySelectorAll('article.checkpoint-callout')]
+      .find((article) => article.innerText.includes(${JSON.stringify(n1Mapping.mappingHash)}))?.innerText ?? '')()`);
+    assert.match(n1ReviewerCopy, /src\/unmapped\.mjs/);
+    assert.match(n1ReviewerCopy, /BEHAVIOR_CANDIDATE_ORPHAN_PATH/);
+    assert.match(n1ReviewerCopy, new RegExp(n1Mapping.repositoryTreeDigest));
+    const n1ReviewPost = await evaluate(`(async () => {
+      const originalFetch = window.fetch.bind(window);
+      window.__n1ReviewPost = null;
+      window.fetch = async (input, init = {}) => {
+        const response = await originalFetch(input, init);
+        const url = typeof input === 'string' ? input : input.url;
+        if (new URL(url, location.href).pathname.endsWith('/product-behavior-harness-mapping-reviews')) {
+          const body = JSON.parse(init.body);
+          if (body.mappingId === ${JSON.stringify(n1Mapping.id)}) window.__n1ReviewPost = { body, status: response.status,
+            responseBody: await response.clone().json() };
+        }
+        return response;
+      };
+      const article = [...document.querySelectorAll('article.checkpoint-callout')]
+        .find((entry) => entry.innerText.includes(${JSON.stringify(n1Mapping.mappingHash)}));
+      const decision = article.querySelector('[aria-label="N1 product mapping review decision"]');
+      decision.value = 'APPROVE_FOR_TEST_EXECUTION';
+      decision.dispatchEvent(new Event('change', { bubbles: true }));
+      [...article.querySelectorAll('button')].find((button) => button.textContent.includes('Record independent mapping review')).click();
+      const deadline = Date.now() + 10000;
+      while (Date.now() < deadline && !window.__n1ReviewPost) await new Promise((resolve) => setTimeout(resolve, 25));
+      return window.__n1ReviewPost;
+    })()`);
+    assert.ok(n1ReviewPost, 'independent reviewer UI submits the exact N1 decision');
+    assert.equal(n1ReviewPost.status, 201, JSON.stringify(n1ReviewPost.responseBody));
+    const n1Review = n1ReviewPost.responseBody.productBehaviorHarnessMappingReview;
+    assert.equal(n1Review.integrityStatus, 'VALID');
+    assert.equal(n1Review.reviewerPrincipal, principal('bob'));
+    assert.equal(n1Review.mappingHash, n1Mapping.mappingHash);
+    assert.equal(n1Review.scenarioStatus, 'NOT_EXECUTED');
+    assert.equal(n1Review.businessTruthStatus, 'UNVERIFIED');
+
+    await setSession(aliceBrowserSession);
+    await send('Page.reload');
+    await waitFor(`window.__orgwardSessionResponse?.principal === ${JSON.stringify(principal('alice'))}`,
+      'owner identity restored to execute the reviewed N1 check');
+    await waitFor("document.querySelector('#case-tabs [data-tab=\"requirements\"]')", 'owner requirements tab restored for N1 run');
+    await evaluate("document.querySelector('#case-tabs [data-tab=\"requirements\"]').click(); true");
+    await waitFor(`Array.from(document.querySelectorAll('article.checkpoint-callout')).some((article) => article.innerText.includes(${JSON.stringify(n1Mapping.mappingHash)}) && [...article.querySelectorAll('button')].some((button) => button.textContent.includes('Run N1 orphan-path rejection check')))`,
+      'N1 execution action appears after the independent review');
+    const n1ExecutionStarted = await evaluate(`(async () => {
+      const originalFetch = window.fetch.bind(window);
+      window.__n1ExecutionPost = null;
+      window.__n1ExecutionBody = null;
+      window.fetch = async (input, init = {}) => {
+        const url = typeof input === 'string' ? input : input.url;
+        if (new URL(url, location.href).pathname.endsWith('/product-behavior-harness-executions')) {
+          const body = JSON.parse(init.body);
+          if (body.subcaseId === 'N1') window.__n1ExecutionBody = body;
+        }
+        const response = await originalFetch(input, init);
+        if (new URL(url, location.href).pathname.endsWith('/product-behavior-harness-executions')) {
+          const body = JSON.parse(init.body);
+          if (body.subcaseId === 'N1') window.__n1ExecutionPost = { body, status: response.status,
+            responseBody: await response.clone().json() };
+        }
+        return response;
+      };
+      const article = [...document.querySelectorAll('article.checkpoint-callout')]
+        .find((entry) => entry.innerText.includes(${JSON.stringify(n1Mapping.mappingHash)}));
+      [...article.querySelectorAll('button')].find((button) => button.textContent.includes('Run N1 orphan-path rejection check')).click();
+      const requestDeadline = Date.now() + 10000;
+      while (Date.now() < requestDeadline && !window.__n1ExecutionBody) await new Promise((resolve) => setTimeout(resolve, 25));
+      return window.__n1ExecutionBody;
+    })()`);
+    assert.ok(n1ExecutionStarted?.idempotencyKey, 'owner starts one N1 request with its saved command ID');
+    await Promise.race([n1DispatchStarted, new Promise((_, reject) => setTimeout(() => reject(
+      new Error('The original N1 request did not reserve and enter dispatch within 10 seconds.')), 10000))]);
+    const n1Duplicate = await evaluate(`(async () => {
+      const duplicate = await window.fetch('/api/sdlc/cases/${ac3Case.id}/product-behavior-harness-executions', {
+        method: 'POST', headers: { authorization: 'Bearer alice', 'content-type': 'application/json' },
+        body: JSON.stringify(${JSON.stringify(n1ExecutionStarted)}) });
+      return { status: duplicate.status, body: await duplicate.json() };
+    })()`);
+    assert.equal(n1Duplicate.status, 202, JSON.stringify(n1Duplicate.body));
+    assert.equal(n1Duplicate.body.productBehaviorHarnessExecution.status, 'RUNNING');
+    releaseN1Dispatch();
+    const n1ExecutionPost = await evaluate(`(async () => {
+      const deadline = Date.now() + 60000;
+      while (Date.now() < deadline && (!window.__n1ExecutionPost
+        || !document.querySelector('#sdlc-toast')?.textContent.includes('PASS — src/unmapped.mjs was rejected before verifier dispatch'))) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      return { post: window.__n1ExecutionPost, toast: document.querySelector('#sdlc-toast')?.textContent ?? '' };
+    })()`);
+    assert.ok(n1ExecutionPost.post, 'owner starts the separately reviewed N1 product-path check');
+    assert.equal(n1ExecutionPost.post.status, 201, JSON.stringify(n1ExecutionPost.post.responseBody));
+    const n1Receipt = n1ExecutionPost.post.responseBody.productBehaviorHarnessExecution;
+    assert.equal(n1Receipt.subcaseId, 'N1');
+    assert.equal(n1Receipt.status, 'PASS', JSON.stringify(n1Receipt));
+    assert.equal(n1Receipt.candidatePath, 'src/unmapped.mjs');
+    assert.equal(n1Receipt.run.errorCode, 'BEHAVIOR_CANDIDATE_ORPHAN_PATH');
+    assert.equal(n1Receipt.verifierDispatchCount, 0);
+    assert.equal(n1Receipt.candidate.changes.length, 1);
+    assert.equal(n1Receipt.candidate.changes[0].path, 'src/unmapped.mjs');
+    assert.equal(n1Receipt.candidate.changes[0].change, 'added');
+    assert.match(n1Receipt.source.treeDigest, /^[a-f0-9]{64}$/);
+    assert.match(n1Receipt.candidate.treeDigest, /^[a-f0-9]{64}$/);
+    assert.notEqual(n1Receipt.source.treeDigest, n1Receipt.candidate.treeDigest);
+    assert.equal(n1Receipt.source.planTreeDigest, n1Mapping.repositoryTreeDigest);
+    assert.equal(n1Receipt.reviewHash, n1Review.reviewHash);
+    assert.equal(n1Receipt.businessTruthStatus, 'UNVERIFIED');
+    assert.equal(n1Receipt.runtimeVerificationStatus, 'NOT_EXECUTED');
+    assert.equal(n1Receipt.negativeSuiteStatus, 'INCOMPLETE');
+    assert.match(n1ExecutionPost.toast, /PASS — src\/unmapped\.mjs was rejected before verifier dispatch/);
+    const n1Readback = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    const n1Reservations = n1Readback.artifacts.processBehaviorProductHarnessExecutionReservations.filter((entry) => entry.mappingId === n1Mapping.id);
+    const n1ReservationEvents = n1Readback.events.filter((event) => event.type === 'ProcessBehaviorProductHarnessExecutionReserved'
+      && event.data.recordId === n1Receipt.reservationId);
+    assert.equal(n1Reservations.length, 1);
+    assert.equal(n1Reservations[0].id, n1Receipt.reservationId);
+    assert.equal(n1ReservationEvents.length, 1);
+    const savedN1Receipt = n1Readback.artifacts.processBehaviorProductHarnessExecutions.find((entry) => entry.id === n1Receipt.id);
+    assert.equal(savedN1Receipt.receiptHash, n1Receipt.receiptHash);
+    assert.equal(savedN1Receipt.integrityStatus, 'VALID');
+    const n1VersionBeforeReplay = n1Readback.version;
+    const n1EventsBeforeReplay = n1Readback.events.length;
+    const replayN1 = await fetch(`${app.base}/api/sdlc/cases/${ac3Case.id}/product-behavior-harness-executions`, {
+      ...as('alice'), method: 'POST', body: JSON.stringify(n1ExecutionPost.post.body) });
+    const replayN1Body = await replayN1.json();
+    assert.equal(replayN1.status, 200, JSON.stringify(replayN1Body));
+    assert.equal(replayN1Body.productBehaviorHarnessExecution.receiptHash, n1Receipt.receiptHash);
+    const n1AfterReplay = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    assert.equal(n1AfterReplay.version, n1VersionBeforeReplay);
+    assert.equal(n1AfterReplay.events.length, n1EventsBeforeReplay);
+    assert.equal(n1AfterReplay.artifacts.processBehaviorProductHarnessExecutions.filter((entry) => entry.subcaseId === 'N1').length, 1,
+      'completed idempotent N1 replay returns the same durable receipt without creating a second execution record');
+
+    await setSession(aliceBrowserSession);
+    await send('Page.reload');
+    await waitFor(`window.__orgwardSessionResponse?.principal === ${JSON.stringify(principal('alice'))}`,
+      'owner identity restored for N3');
+    await waitFor("document.querySelector('#case-tabs [data-tab=\"requirements\"]')", 'owner requirements tab restored for N3');
+    await evaluate("document.querySelector('#case-tabs [data-tab=\"requirements\"]').click(); true");
+    await waitFor("document.querySelector('.product-harness-n3-request-form')", 'N3 owner mapping control rendered');
+    const n3MappingPost = await evaluate(`(async () => {
+      const originalFetch = window.fetch.bind(window);
+      window.__n3MappingPost = null;
+      window.fetch = async (input, init = {}) => {
+        const response = await originalFetch(input, init);
+        const url = typeof input === 'string' ? input : input.url;
+        if (new URL(url, location.href).pathname.endsWith('/product-behavior-harness-mappings')) {
+          const body = JSON.parse(init.body);
+          if (body.subcaseId === 'N3') window.__n3MappingPost = { body, status: response.status,
+            responseBody: await response.clone().json() };
+        }
+        return response;
+      };
+      const form = document.querySelector('.product-harness-n3-request-form');
+      const plan = form.querySelector('[aria-label="Saved plan for N3 deleted failing test safeguard"]');
+      plan.value = ${JSON.stringify(submittedPlan.id)};
+      plan.dispatchEvent(new Event('change', { bubbles: true }));
+      form.requestSubmit();
+      const deadline = Date.now() + 10000;
+      while (Date.now() < deadline && !window.__n3MappingPost) await new Promise((resolve) => setTimeout(resolve, 25));
+      return window.__n3MappingPost;
+    })()`);
+    assert.ok(n3MappingPost, 'owner UI submits the distinct N3 mapping');
+    assert.equal(n3MappingPost.status, 201, JSON.stringify(n3MappingPost.responseBody));
+    const n3Mapping = n3MappingPost.responseBody.productBehaviorHarnessMapping;
+    assert.equal(n3Mapping.subcaseId, 'N3');
+    assert.equal(n3Mapping.candidatePath, 'tests/learning.test.js');
+    assert.equal(n3Mapping.sourceTestBytesHash, '1161115b3960df1b636a0f837f1adcbba444a6af768928cf6fb9906d50c83d1f');
+    assert.equal(n3Mapping.sourceExpectedExitCode, 1);
+    assert.equal(n3Mapping.fixtureTemplateHash, '7dcb70f53d2f0bff4d955a51d007042f8360d82fc00a2d58d91402011dc49f88');
+
+    await setSession(bobBrowserSession);
+    await send('Page.reload');
+    await waitFor(`window.__orgwardSessionResponse?.principal === ${JSON.stringify(principal('bob'))}`,
+      'independent reviewer identity restored for N3');
+    await waitFor("document.querySelector('#case-tabs [data-tab=\"requirements\"]')", 'reviewer requirements tab restored for N3');
+    await evaluate("document.querySelector('#case-tabs [data-tab=\"requirements\"]').click(); true");
+    await waitFor(`Array.from(document.querySelectorAll('article.checkpoint-callout')).some((article) => article.innerText.includes(${JSON.stringify(n3Mapping.mappingHash)}))`,
+      'reviewer sees exact N3 source and deletion pins');
+    const n3ReviewerCopy = await evaluate(`(() => [...document.querySelectorAll('article.checkpoint-callout')]
+      .find((article) => article.innerText.includes(${JSON.stringify(n3Mapping.mappingHash)}))?.innerText ?? '')()`);
+    assert.match(n3ReviewerCopy, /Original test fails/);
+    assert.match(n3ReviewerCopy, /Unauthorized deletion is rejected/);
+    assert.match(n3ReviewerCopy, new RegExp(n3Mapping.sourceTestBytesHash));
+    const n3ReviewPost = await evaluate(`(async () => {
+      const originalFetch = window.fetch.bind(window);
+      window.__n3ReviewPost = null;
+      window.fetch = async (input, init = {}) => {
+        const response = await originalFetch(input, init);
+        const url = typeof input === 'string' ? input : input.url;
+        if (new URL(url, location.href).pathname.endsWith('/product-behavior-harness-mapping-reviews')) {
+          const body = JSON.parse(init.body);
+          if (body.mappingId === ${JSON.stringify(n3Mapping.id)}) window.__n3ReviewPost = { status: response.status,
+            responseBody: await response.clone().json() };
+        }
+        return response;
+      };
+      const article = [...document.querySelectorAll('article.checkpoint-callout')]
+        .find((entry) => entry.innerText.includes(${JSON.stringify(n3Mapping.mappingHash)}));
+      const decision = article.querySelector('[aria-label="N3 product mapping review decision"]');
+      decision.value = 'APPROVE_FOR_TEST_EXECUTION';
+      decision.dispatchEvent(new Event('change', { bubbles: true }));
+      [...article.querySelectorAll('button')].find((button) => button.textContent.includes('Record independent mapping review')).click();
+      const deadline = Date.now() + 10000;
+      while (Date.now() < deadline && !window.__n3ReviewPost) await new Promise((resolve) => setTimeout(resolve, 25));
+      return window.__n3ReviewPost;
+    })()`);
+    assert.ok(n3ReviewPost, 'distinct reviewer submits the N3 mapping decision');
+    assert.equal(n3ReviewPost.status, 201, JSON.stringify(n3ReviewPost.responseBody));
+    const n3Review = n3ReviewPost.responseBody.productBehaviorHarnessMappingReview;
+    assert.equal(n3Review.integrityStatus, 'VALID');
+    assert.equal(n3Review.reviewerPrincipal, principal('bob'));
+    assert.equal(n3Review.mappingHash, n3Mapping.mappingHash);
+
+    await setSession(aliceBrowserSession);
+    await send('Page.reload');
+    await waitFor(`window.__orgwardSessionResponse?.principal === ${JSON.stringify(principal('alice'))}`,
+      'owner identity restored to execute N3');
+    await waitFor("document.querySelector('#case-tabs [data-tab=\"requirements\"]')", 'owner requirements tab restored for N3 run');
+    await evaluate("document.querySelector('#case-tabs [data-tab=\"requirements\"]').click(); true");
+    await waitFor(`Array.from(document.querySelectorAll('article.checkpoint-callout')).some((article) => article.innerText.includes(${JSON.stringify(n3Mapping.mappingHash)}) && [...article.querySelectorAll('button')].some((button) => button.textContent.includes('Run N3 failing-source/deletion safeguard check')))`,
+      'N3 action appears only after separate approval');
+    const n3RunPost = await evaluate(`(async () => {
+      const originalFetch = window.fetch.bind(window);
+      window.__n3RunPost = null; window.__n3ExecutionBody = null;
+      window.fetch = async (input, init = {}) => {
+        const url = typeof input === 'string' ? input : input.url;
+        if (new URL(url, location.href).pathname.endsWith('/product-behavior-harness-executions')) {
+          const body = JSON.parse(init.body);
+          if (body.subcaseId === 'N3') window.__n3ExecutionBody = body;
+        }
+        const response = await originalFetch(input, init);
+        if (new URL(url, location.href).pathname.endsWith('/product-behavior-harness-executions')) {
+          const body = JSON.parse(init.body);
+          if (body.subcaseId === 'N3') window.__n3RunPost = { status: response.status, body,
+            responseBody: await response.clone().json() };
+        }
+        return response;
+      };
+      const article = [...document.querySelectorAll('article.checkpoint-callout')]
+        .find((entry) => entry.innerText.includes(${JSON.stringify(n3Mapping.mappingHash)}));
+      [...article.querySelectorAll('button')].find((button) => button.textContent.includes('Run N3 failing-source/deletion safeguard check')).click();
+      const deadline = Date.now() + 65000;
+      while (Date.now() < deadline && !window.__n3RunPost) await new Promise((resolve) => setTimeout(resolve, 50));
+      return window.__n3RunPost;
+    })()`);
+    assert.ok(n3RunPost, 'owner triggers the separately reviewed N3 fixed runner');
+    assert.equal(n3RunPost.status, 201, JSON.stringify(n3RunPost.responseBody));
+    const n3Receipt = n3RunPost.responseBody.productBehaviorHarnessExecution;
+    assert.equal(n3Receipt.subcaseId, 'N3');
+    assert.equal(n3Receipt.status, 'PASS', JSON.stringify({ receipt: n3Receipt,
+      providerError: ownerN3DispatchError }));
+    assert.equal(n3Receipt.sourceStage.path, 'tests/learning.test.js');
+    assert.equal(n3Receipt.sourceStage.bytesHash, n3Mapping.sourceTestBytesHash);
+    assert.equal(n3Receipt.sourceStage.exitCode, 1);
+    assert.match(n3Receipt.sourceStage.tap, /# fail 1/);
+    assert.equal(n3Receipt.candidate.deletedPath, 'tests/learning.test.js');
+    assert.equal(n3Receipt.candidate.deletedPathHash, n3Mapping.sourceTestBytesHash);
+    assert.equal(n3Receipt.candidate.changes.length, 1);
+    assert.equal(n3Receipt.candidate.changes[0].change, 'deleted');
+    assert.equal(n3Receipt.run.errorCode, 'BEHAVIOR_CANDIDATE_ORPHAN_PATH');
+    assert.equal(n3Receipt.verifierDispatchCount, 0);
+    assert.match(n3Receipt.statement, /pinned source test failed as expected/);
+    assert.match(n3Receipt.statement, /deletion of tests\/learning\.test\.js was rejected before verifier dispatch/);
+    assert.equal(n3Receipt.businessTruthStatus, 'UNVERIFIED');
+    assert.equal(n3Receipt.runtimeVerificationStatus, 'NOT_EXECUTED');
+    const n3Readback = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    const n3Reservations = n3Readback.artifacts.processBehaviorProductHarnessExecutionReservations.filter((entry) => entry.mappingId === n3Mapping.id);
+    const n3ReservationEvents = n3Readback.events.filter((event) => event.type === 'ProcessBehaviorProductHarnessExecutionReserved'
+      && event.data.recordId === n3Receipt.reservationId);
+    assert.equal(n3Reservations.length, 1);
+    assert.equal(n3ReservationEvents.length, 1);
+    const n3SavedReceipt = n3Readback.artifacts.processBehaviorProductHarnessExecutions.find((entry) => entry.id === n3Receipt.id);
+    assert.equal(n3SavedReceipt.receiptHash, n3Receipt.receiptHash);
+    assert.equal(n3SavedReceipt.integrityStatus, 'VALID');
+    const n3VersionBeforeReplay = n3Readback.version;
+    const n3EventsBeforeReplay = n3Readback.events.length;
+    const n3Replay = await fetch(`${app.base}/api/sdlc/cases/${ac3Case.id}/product-behavior-harness-executions`, {
+      ...as('alice'), method: 'POST', body: JSON.stringify(n3RunPost.body) });
+    const n3ReplayBody = await n3Replay.json();
+    assert.equal(n3Replay.status, 200, JSON.stringify(n3ReplayBody));
+    assert.equal(n3ReplayBody.productBehaviorHarnessExecution.receiptHash, n3Receipt.receiptHash);
+    const n3AfterReplay = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    assert.equal(n3AfterReplay.version, n3VersionBeforeReplay);
+    assert.equal(n3AfterReplay.events.length, n3EventsBeforeReplay);
+    assert.equal(n3AfterReplay.artifacts.processBehaviorProductHarnessExecutions.filter((entry) => entry.subcaseId === 'N3').length, 1);
+
+    await setSession(bobBrowserSession);
+    await send('Page.reload');
+    await waitFor(`window.__orgwardSessionResponse?.principal === ${JSON.stringify(principal('bob'))}`,
+      'reviewer identity restored after N2 execution advanced the case');
+    await waitFor("document.querySelector('#case-tabs [data-tab=\"requirements\"]')",
+      'requirements tab restored after N2 execution advanced the case');
+    await evaluate("document.querySelector('#case-tabs [data-tab=\"requirements\"]').click(); true");
+    await waitFor("document.querySelector('#case-content .process-evidence-review-form')", 'non-owner requirements view');
+    assert.equal(await evaluate("Boolean(document.querySelector('.intent-evaluation-acceptance-form'))"), false,
+      'a signed-in non-owner cannot see the acceptance action');
+    const reviewFormReady = await evaluate(`(() => {
+      const form = document.querySelector('.process-evidence-review-form');
+      return { criteria: [...(form?.querySelectorAll('select[data-criterion-hash]') ?? [])].map((entry) => entry.dataset.criterionHash),
+        notes: [...(form?.querySelectorAll('textarea[data-criterion-note]') ?? [])].map((entry) => entry.dataset.criterionNote),
+        scenarios: [...(form?.querySelectorAll('select[data-scenario-type]') ?? [])].map((entry) => entry.dataset.scenarioType),
+        executionScenarios: [...(form?.querySelectorAll('select[data-execution-decision]') ?? [])].map((entry) => entry.dataset.executionDecision) };
+    })()`);
+    assert.deepEqual(reviewFormReady.criteria, ac3AfterV2Requirement.reviewCriteria.map((entry) => entry.criterionHash),
+      'the browser review form presents the exact pinned versioned criteria');
+    assert.deepEqual(reviewFormReady.notes, ac3AfterV2Requirement.reviewCriteria.map((entry) => entry.criterionHash));
+    assert.deepEqual(reviewFormReady.scenarios, ac3PlanForReview.caseDefinitions.cases.map((entry) => entry.type),
+      'the browser review form exposes each exact captured positive, negative, and recovery definition');
+    assert.deepEqual(reviewFormReady.executionScenarios, ac3PlanForReview.caseDefinitions.cases.map((entry) => entry.type),
+      'the browser review form exposes a separate test-execution decision for every scenario');
+    const scenarioFieldsetText = await evaluate(`([...document.querySelectorAll('.process-evidence-review-form select[data-scenario-type]')]
+      .map((entry) => entry.closest('fieldset')?.innerText ?? ''))`);
+    for (const [index, scenario] of ac3PlanForReview.caseDefinitions.cases.entries()) {
+      assert.ok(scenarioFieldsetText[index]?.includes(scenario.definition),
+        `the reviewer fieldset renders the exact authored ${scenario.type.toLowerCase()} definition text`);
+      assert.ok(scenarioFieldsetText[index]?.includes(JSON.stringify(scenario.dataset ?? 'INCOMPLETE')),
+        `the reviewer fieldset renders the exact ${scenario.type.toLowerCase()} dataset or its incomplete state`);
+      assert.ok(scenarioFieldsetText[index]?.includes(JSON.stringify(scenario.expectedOutput ?? 'INCOMPLETE')),
+        `the reviewer fieldset renders the exact ${scenario.type.toLowerCase()} oracle or its incomplete state`);
+      assert.ok(scenarioFieldsetText[index]?.includes(scenario.executionMapping?.assertionId ?? 'INCOMPLETE'));
+      assert.ok(scenarioFieldsetText[index]?.includes(scenario.executionMapping?.testPath ?? 'INCOMPLETE'));
+    }
+    const criterionNotes = ac3AfterV2Requirement.reviewCriteria.map((entry) =>
+      `Bob reviewed ${entry.criterionId} against the exact linked behavior evidence and recorded the supporting rationale.`);
+    for (let index = 0; index < reviewFormReady.criteria.length; index += 1) {
+      await evaluate(`document.querySelectorAll('.process-evidence-review-form select[data-criterion-hash]')[${index}].focus(); true`);
+      await press('Home', 'Home', 36);
+      await press('ArrowDown', 'ArrowDown', 40);
+      await press('Enter', 'Enter', 13);
+      assert.equal(await evaluate(`document.querySelectorAll('.process-evidence-review-form select[data-criterion-hash]')[${index}].value`), 'SUPPORTED',
+        `keyboard selection records support for criterion ${index + 1}`);
+      await evaluate(`document.querySelectorAll('.process-evidence-review-form textarea[data-criterion-note]')[${index}].focus(); true`);
+      await send('Input.insertText', { text: criterionNotes[index] });
+    }
+    const scenarioNotes = ac3PlanForReview.caseDefinitions.cases.map((entry) => `Bob independently reviewed the captured ${entry.type.toLowerCase()} scenario definition.`);
+    for (let index = 0; index < reviewFormReady.scenarios.length; index += 1) {
+      await evaluate(`document.querySelectorAll('.process-evidence-review-form select[data-scenario-type]')[${index}].focus(); true`);
+      await press('Home', 'Home', 36);
+      await press('ArrowDown', 'ArrowDown', 40);
+      await press('Enter', 'Enter', 13);
+      await evaluate(`document.querySelectorAll('.process-evidence-review-form select[data-execution-decision]')[${index}].focus(); true`);
+      await press('Home', 'Home', 36);
+      if (ac3PlanForReview.caseDefinitions.cases[index].executionMapping?.status === 'OWNER_PROPOSED_UNVERIFIED') {
+        await press('ArrowDown', 'ArrowDown', 40);
+      } else {
+        await press('ArrowDown', 'ArrowDown', 40);
+        await press('ArrowDown', 'ArrowDown', 40);
+      }
+      await press('Enter', 'Enter', 13);
+      await evaluate(`document.querySelectorAll('.process-evidence-review-form textarea[data-scenario-note]')[${index}].focus(); true`);
+      await send('Input.insertText', { text: scenarioNotes[index] });
+    }
+    await press('Tab', 'Tab', 9);
+    assert.equal(await evaluate("document.activeElement.matches('.process-evidence-review-form button[type=submit]')"), true,
+      'keyboard tab order reaches the independent-review submit control after criterion rationales');
+    await press('Enter', 'Enter', 13);
+    await waitFor("window.__orgwardReviewResponse || (document.querySelector('#sdlc-toast')?.textContent && !document.querySelector('#sdlc-toast').textContent.includes('Independent N2 mapping review recorded'))",
+      'review response or browser error after keyboard submission');
+    assert.ok(await evaluate("window.__orgwardReviewResponse?.processRunEvidenceReview?.status === 'HUMAN_REVIEWED'"),
+      `review submission failed: ${JSON.stringify(await evaluate(`({ toast: document.querySelector('#sdlc-toast')?.textContent ?? '',
+        formValid: document.querySelector('.process-evidence-review-form')?.checkValidity(),
+        decisions: [...document.querySelectorAll('.process-evidence-review-form select[data-criterion-hash]')].map((entry) => entry.value),
+        notes: [...document.querySelectorAll('.process-evidence-review-form textarea[data-criterion-note]')].map((entry) => entry.value),
+        active: document.activeElement?.outerHTML })`))}`);
+    browserEvidenceReview = await evaluate('window.__orgwardReviewResponse');
+    assert.equal(browserEvidenceReview.processRunEvidenceReview.reviewerPrincipal, principal('bob'));
+    assert.equal(browserEvidenceReview.processRunEvidenceReview.verificationStatus, 'NOT_EXECUTED');
+    assert.equal(browserEvidenceReview.processRunEvidenceReview.truthStatus, 'UNVERIFIED');
+    assert.deepEqual(browserEvidenceReview.processRunEvidenceReview.criteria.map((entry) => entry.note), criterionNotes,
+      'reviewer criterion rationale is persisted without converting it to verified truth');
+    assert.deepEqual(browserEvidenceReview.processRunEvidenceReview.scenarioCases.map((entry) => entry.type), reviewFormReady.scenarios);
+    assert.equal(browserEvidenceReview.processRunEvidenceReview.schemaVersion, 4);
+    assert.deepEqual(browserEvidenceReview.processRunEvidenceReview.scenarioCases.map((entry) => entry.executionReviewStatus),
+      ['REVIEWED_FOR_TEST_EXECUTION', 'REVIEWED_FOR_TEST_EXECUTION', 'REVIEWED_FOR_TEST_EXECUTION']);
+    assert.equal(browserEvidenceReview.processRunEvidenceReview.behaviorPlanHash, ac3PlanForReview.planHash);
+    await waitFor("document.body.innerText.includes('HUMAN_REVIEWED')", 'saved review readback rendered');
+    const browserReviewRequest = await evaluate('window.__orgwardReviewRequest');
+    assert.match(browserReviewRequest.idempotencyKey, /^process-evidence-review-/,
+      'the rendered reviewer action submits a generated idempotency key');
+    assert.equal(browserReviewRequest.linkId, ac3LinkV2.id);
+    assert.deepEqual(browserReviewRequest.criteria.map((entry) => ({ criterionHash: entry.criterionHash,
+      disposition: entry.disposition, note: entry.note })), ac3AfterV2Requirement.reviewCriteria.map((entry, index) => ({
+      criterionHash: entry.criterionHash, disposition: 'SUPPORTED',
+      note: `Bob reviewed ${entry.criterionId} against the exact linked behavior evidence and recorded the supporting rationale.`,
+    })), 'the captured reviewer command contains the exact criterion IDs, judgments and entered notes');
+    assert.deepEqual(browserReviewRequest.scenarioCases.map(({ type, disposition, executionDecision, note }) => ({ type, disposition, executionDecision, note })),
+      ac3PlanForReview.caseDefinitions.cases.map((entry, index) => ({ type: entry.type, disposition: 'SUPPORTED',
+        executionDecision: entry.executionMapping?.status === 'OWNER_PROPOSED_UNVERIFIED'
+          ? 'APPROVE_FOR_TEST_EXECUTION' : 'REQUEST_CHANGES', note: scenarioNotes[index] })));
+    await send('Page.reload');
+    await waitFor(`window.__orgwardSessionResponse?.principal === ${JSON.stringify(principal('bob'))}`, 'reviewer identity restored after reload');
+    await waitFor("document.querySelector('#case-tabs [data-tab=\"requirements\"]')", 'reviewer case tabs restored after reload');
+    await evaluate("document.querySelector('#case-tabs [data-tab=\"requirements\"]').click(); true");
+    await waitFor("document.body.innerText.includes('HUMAN_REVIEWED')", 'persisted review visible after reload');
+    assert.equal(await evaluate(`document.body.innerText.includes(${JSON.stringify(principal('bob'))})`), true,
+      'reload renders Bob’s exact reviewer identity rather than only another reviewer’s generic status');
+    assert.equal(await evaluate(`document.body.innerText.includes(${JSON.stringify(criterionNotes[0])})`), true,
+      'reload renders the rationale entered by Bob in the browser review form');
+    assert.equal(await evaluate("document.body.innerText.includes('verification remains NOT EXECUTED')"), true);
+    assert.equal(await evaluate("document.body.innerText.includes('truth UNVERIFIED')"), true);
+    const directDenied = await evaluate(`fetch('/api/sdlc/cases/${ac3Case.id}/intent-evaluation-acceptances', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: ${JSON.stringify(JSON.stringify({
+        version: browserEvidenceReview.version, draftRevision: browserEvidenceReview.artifacts.requirements.draftRevision,
+        requirementId: ac3Requirement.id, linkId: ac3LinkV2.id,
+        reviewId: browserEvidenceReview.processRunEvidenceReview.id,
+        reason: acceptanceReason, idempotencyKey: 't91-browser-nonowner-denial' }))}
+    }).then(async (response) => ({ status: response.status, body: await response.json() }))`);
+    assert.equal(directDenied.status, 403, 'a direct acceptance invocation is denied for a non-owner');
+
+    const beforeLatestUnsupported = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('dave'));
+    const latestUnsupportedReview = await request(app.base, `/api/sdlc/cases/${ac3Case.id}/process-run-evidence-reviews`, {
+      ...as('dave'), method: 'POST', body: JSON.stringify({ version: beforeLatestUnsupported.version,
+        draftRevision: beforeLatestUnsupported.artifacts.requirements.draftRevision,
+        requirementId: ac3Requirement.id, linkId: ac3LinkV2.id,
+        criteria: browserReviewRequest.criteria.map((entry) => ({ ...entry, disposition: 'CONTRADICTED',
+          note: 'The latest independent review does not support this mandatory criterion.' })),
+        scenarioCases: browserReviewRequest.scenarioCases,
+        conflictResolution: { decision: 'PRESERVE_CRITERION_OUTCOMES',
+          rationale: 'Preserve the unsupported criterion finding and deny acceptance.' },
+        idempotencyKey: 't91-ac3-latest-unsupported-review' }) }, 201);
+    assert.equal(latestUnsupportedReview.processRunEvidenceReview.integrityStatus, 'VALID');
+    const beforeStaleSupportAttempt = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    const latestUnsupportedRequirement = beforeStaleSupportAttempt.artifacts.requirements.requirements
+      .find((entry) => entry.id === ac3Requirement.id);
+    assert.equal(canAcceptIntentEvaluation({ authenticated: true, principal: principal('alice'),
+      accountableOwner: principal('alice'), requirement: latestUnsupportedRequirement,
+      draftRevision: beforeStaleSupportAttempt.artifacts.requirements.draftRevision,
+      link: latestUnsupportedRequirement.processRunEvidenceLinks.find((entry) => entry.id === ac3LinkV2.id),
+      reviews: latestUnsupportedRequirement.processRunEvidenceReviews,
+      acceptances: latestUnsupportedRequirement.processIntentEvaluationAcceptances }), false,
+    'the owner acceptance projection hides the action when the latest independent review does not support criteria');
+    const staleSupportAttempt = await fetch(`${app.base}/api/sdlc/cases/${ac3Case.id}/intent-evaluation-acceptances`, {
+      ...as('alice'), method: 'POST', body: JSON.stringify({ version: beforeStaleSupportAttempt.version,
+        draftRevision: beforeStaleSupportAttempt.artifacts.requirements.draftRevision,
+        requirementId: ac3Requirement.id, linkId: ac3LinkV2.id,
+        reviewId: browserEvidenceReview.processRunEvidenceReview.id,
+        reason: acceptanceReason, idempotencyKey: 't91-ac3-stale-support-acceptance-denied' }) });
+    assert.equal(staleSupportAttempt.status, 409,
+      'an older supporting review cannot override the newer independent unsupported review');
+    assert.equal((await staleSupportAttempt.json()).error.code, 'INTENT_EVALUATION_REVIEW_INCOMPLETE');
+    const afterStaleSupportAttempt = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    assert.equal(afterStaleSupportAttempt.version, beforeStaleSupportAttempt.version);
+    assert.deepEqual(afterStaleSupportAttempt.events, beforeStaleSupportAttempt.events);
+    assert.equal(afterStaleSupportAttempt.artifacts.processIntentEvaluationAcceptances?.length ?? 0,
+      beforeStaleSupportAttempt.artifacts.processIntentEvaluationAcceptances?.length ?? 0,
+      'stale review rejection creates no acceptance record');
+    latestSupportingEvidenceReview = await request(app.base, `/api/sdlc/cases/${ac3Case.id}/process-run-evidence-reviews`, {
+      ...as('dave'), method: 'POST', body: JSON.stringify({ version: afterStaleSupportAttempt.version,
+        draftRevision: afterStaleSupportAttempt.artifacts.requirements.draftRevision,
+        requirementId: ac3Requirement.id, linkId: ac3LinkV2.id,
+        criteria: browserReviewRequest.criteria.map((entry) => ({ ...entry, disposition: 'SUPPORTED',
+          note: 'The newest independent review supports the exact current criterion.' })),
+        scenarioCases: browserReviewRequest.scenarioCases,
+        idempotencyKey: 't91-ac3-latest-supporting-review' }) }, 201);
+    assert.equal(latestSupportingEvidenceReview.processRunEvidenceReview.integrityStatus, 'VALID');
+    assert.equal(latestSupportingEvidenceReview.processRunEvidenceReview.acceptanceStatus, 'REVIEW_ONLY_NOT_ACCEPTED');
+    const latestSupportedCase = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    const latestSupportedRequirement = latestSupportedCase.artifacts.requirements.requirements
+      .find((entry) => entry.id === ac3Requirement.id);
+    assert.equal(canAcceptIntentEvaluation({ authenticated: true, principal: principal('alice'),
+      accountableOwner: principal('alice'), requirement: latestSupportedRequirement,
+      draftRevision: latestSupportedCase.artifacts.requirements.draftRevision,
+      link: latestSupportedRequirement.processRunEvidenceLinks.find((entry) => entry.id === ac3LinkV2.id),
+      reviews: latestSupportedRequirement.processRunEvidenceReviews,
+      acceptances: latestSupportedRequirement.processIntentEvaluationAcceptances }), true,
+    'the owner acceptance projection permits the newest current independent supporting review');
+
+    await setSession(aliceBrowserSession);
+    await send('Page.reload');
+    await waitFor(`window.__orgwardSessionResponse?.principal === ${JSON.stringify(principal('alice'))}`, 'accountable owner identity loaded');
+    await waitFor("document.querySelector('#case-tabs [data-tab=\"requirements\"]')", 'owner case tabs restored');
+    await evaluate("document.querySelector('#case-tabs [data-tab=\"requirements\"]').click(); true");
+    await waitFor("document.querySelector('.intent-evaluation-acceptance-form textarea[name=reason]')", 'owner acceptance form');
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__scenarioExecutionRequest = null;
+      window.__scenarioExecutionResponse = null;
+      window.__scenarioExecutionHttpStatus = null;
+      window.__scenarioConcurrentDuplicate = null;
+      window.fetch = async (input, init) => {
+        if (String(input).includes('/process-behavior-scenario-executions')) {
+          window.__scenarioExecutionRequest = JSON.parse(init.body);
+          const primary = originalFetch(input, init);
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          const duplicate = await originalFetch(input, init);
+          window.__scenarioConcurrentDuplicate = { status: duplicate.status, body: await duplicate.json() };
+          const response = await primary;
+          window.__scenarioExecutionHttpStatus = response.status;
+          window.__scenarioExecutionResponse = await response.clone().json();
+          return response;
+        }
+        return originalFetch(input, init);
+      };
+    })()`);
+    const fixtureVerifierAdapterFactory = app.executionService.commandAdapterFactory;
+    const reviewVerifier = app.sdlcStore.verifyProcessEvidenceReviews.bind(app.sdlcStore);
+    const currentScenarioState = await app.sdlcStore.get(ac3Case.id, 'tenant-a');
+    const caseRowBeforeInvalidReview = await app.persistence.query(`select version,state_hash from orgward.aggregates
+      where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`, [ac3Case.id]);
+    const eventCountBeforeInvalidReview = await app.persistence.query(`select count(*)::int as count from orgward.audit_log
+      where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`, [ac3Case.id]);
+    app.sdlcStore.verifyProcessEvidenceReviews = async (current) => {
+      for (const requirement of current.artifacts?.requirements?.requirements ?? []) {
+        for (const review of requirement.processRunEvidenceReviews ?? []) review.integrityStatus = 'INVALID';
+      }
+      return current;
+    };
+    const invalidAuditDenial = await request(app.base, `/api/sdlc/cases/${ac3Case.id}/process-behavior-scenario-executions`, {
+      ...as('alice'), method: 'POST', body: JSON.stringify({ version: currentScenarioState.version,
+        draftRevision: currentScenarioState.artifacts.requirements.draftRevision,
+        requirementId: ac3Requirement.id, linkId: ac3LinkV2.id, planId: ac3PlanV2.id,
+        caseType: 'POSITIVE', idempotencyKey: 't91-invalid-review-audit-denial' }) }, 409);
+    assert.equal(invalidAuditDenial.error.code, 'SCENARIO_NOT_REVIEWED_FOR_EXECUTION');
+    const caseRowAfterInvalidReview = await app.persistence.query(`select version,state_hash from orgward.aggregates
+      where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`, [ac3Case.id]);
+    const eventCountAfterInvalidReview = await app.persistence.query(`select count(*)::int as count from orgward.audit_log
+      where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`, [ac3Case.id]);
+    assert.deepEqual(caseRowAfterInvalidReview.rows, caseRowBeforeInvalidReview.rows,
+      'invalid review audit integrity cannot reserve execution or mutate the case');
+    assert.deepEqual(eventCountAfterInvalidReview.rows, eventCountBeforeInvalidReview.rows);
+    app.sdlcStore.verifyProcessEvidenceReviews = reviewVerifier;
+    app.executionService.commandAdapterFactory = isolatedScenarioAdapterFactory;
+    await evaluate(`[...document.querySelectorAll('.checkpoint-callout button')]
+      .find((button) => button.textContent === 'Run reviewed positive case')?.click(); true`);
+    await waitFor("window.__scenarioExecutionResponse || document.querySelector('#sdlc-toast')?.textContent",
+      'scenario execution response or browser error');
+    const scenarioUiState = await evaluate(`({ status: window.__scenarioExecutionHttpStatus,
+      response: window.__scenarioExecutionResponse, toast: document.querySelector('#sdlc-toast')?.textContent ?? '' })`);
+    assert.equal(scenarioUiState.status, 201, JSON.stringify(scenarioUiState));
+    const concurrentScenarioDuplicate = await evaluate('window.__scenarioConcurrentDuplicate');
+    assert.equal(concurrentScenarioDuplicate.status, 202, JSON.stringify(concurrentScenarioDuplicate));
+    assert.equal(concurrentScenarioDuplicate.body.processBehaviorScenarioExecution.status, 'RUNNING');
+    assert.equal(concurrentScenarioDuplicate.body.command.inProgress, true,
+      'a concurrent duplicate sees the durable reservation and cannot launch another worker');
+    assert.equal(scenarioUiState.response.processBehaviorScenarioExecution.result, 'PASS', JSON.stringify(scenarioUiState));
+    await waitFor("document.body.innerText.includes('POSITIVE case assertion PASS')", 'isolated positive scenario receipt rendered');
+    const browserScenarioExecution = await evaluate('window.__scenarioExecutionResponse');
+    assert.equal(browserScenarioExecution.processBehaviorScenarioExecution.result, 'PASS');
+    assert.equal(browserScenarioExecution.processBehaviorScenarioExecution.tap.tests, 1);
+    assert.equal(browserScenarioExecution.processBehaviorScenarioExecution.tap.passed, 1);
+    assert.equal(browserScenarioExecution.processBehaviorScenarioExecution.workspaceReadOnlyVerified, true,
+      'the isolated worker leaves its source and scoped input workspace unchanged');
+    assert.equal(browserScenarioExecution.processBehaviorScenarioExecution.businessTruthStatus, 'UNVERIFIED');
+    assert.equal(browserScenarioExecution.processBehaviorScenarioExecution.runtimeVerificationStatus, 'NOT_EXECUTED');
+    assert.equal(browserScenarioExecution.processBehaviorScenarioExecution.integrityStatus, 'VALID');
+    const scenarioReplay = await evaluate(`fetch('/api/sdlc/cases/${ac3Case.id}/process-behavior-scenario-executions', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(window.__scenarioExecutionRequest),
+    }).then(async (response) => ({ status: response.status, body: await response.json() }))`);
+    assert.equal(scenarioReplay.status, 200);
+    assert.equal(scenarioReplay.body.command.replayed, true);
+    assert.equal(scenarioReplay.body.processBehaviorScenarioExecution.id, browserScenarioExecution.processBehaviorScenarioExecution.id,
+      'idempotent replay returns the immutable receipt without launching a second scenario');
+    const truncatedScenarioKey = 't91-scenario-truncated-tap';
+    const originalScenarioRequest = await evaluate('window.__scenarioExecutionRequest');
+    app.executionService.commandAdapterFactory = (options) => options.name === 'orgward-reviewed-scenario'
+      ? { execute: async () => ({ status: 'COMPLETED', exitCode: 0,
+        stdout: `ok 1 - ${browserScenarioExecution.processBehaviorScenarioExecution.testName}\n# tests 1\n# pass 1\n# fail 0\n# duration_ms 1\n`,
+        stderr: '', stdoutTruncated: true, stderrTruncated: false }) }
+      : isolatedScenarioAdapterFactory(options);
+    const truncatedScenario = await request(app.base, `/api/sdlc/cases/${ac3Case.id}/process-behavior-scenario-executions`, {
+      ...as('alice'), method: 'POST', body: JSON.stringify({ ...originalScenarioRequest,
+        version: browserScenarioExecution.version, idempotencyKey: truncatedScenarioKey }) }, 201);
+    assert.equal(truncatedScenario.processBehaviorScenarioExecution.result, 'INCONCLUSIVE',
+      'truncated TAP output cannot produce a PASS even when its retained tail resembles a complete passing summary');
+    app.executionService.commandAdapterFactory = isolatedScenarioAdapterFactory;
+    const runReviewedCase = async (caseType, key) => {
+      const before = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+      const response = await request(app.base, `/api/sdlc/cases/${ac3Case.id}/process-behavior-scenario-executions`, {
+        ...as('alice'), method: 'POST', body: JSON.stringify({ version: before.version,
+          draftRevision: before.artifacts.requirements.draftRevision, requirementId: ac3Requirement.id,
+          linkId: ac3LinkV2.id, planId: ac3PlanV2.id, caseType, idempotencyKey: key }) }, 201);
+      const receipt = response.processBehaviorScenarioExecution;
+      const expected = ac3PlanV2.caseDefinitions.cases.find((entry) => entry.type === caseType);
+      assert.equal(receipt.caseType, caseType);
+      assert.equal(receipt.caseDefinitionHash, expected.definitionHash);
+      assert.equal(receipt.datasetHash, digest(expected.dataset));
+      assert.equal(receipt.oracleHash, digest(expected.expectedOutput));
+      assert.equal(receipt.testPath, 'test/reviewed-behavior.test.mjs');
+      assert.equal(receipt.criterionHash, ac3PlanV2.assertions[0].criterionHash);
+      assert.equal(receipt.result, 'PASS', JSON.stringify(receipt));
+      assert.equal(receipt.statement.includes('does not establish suite completion'), true);
+      return response;
+    };
+    const negativeScenarioResponse = await runReviewedCase('NEGATIVE', 't91-ac3-negative-case-execution');
+    const recoveryScenarioResponse = await runReviewedCase('RECOVERY', 't91-ac3-recovery-case-execution');
+    const legacyScenarioCommandId = 't91-ac3-legacy-v1-receipt';
+    const legacyScenarioBefore = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    const legacyScenarioSelection = { id: ac3Case.id, tenantId: 'tenant-a', principal: principal('alice'),
+      authzGeneration: await authzGeneration(app, 'alice'), requirementId: ac3Requirement.id,
+      linkId: ac3LinkV2.id, planId: ac3PlanV2.id, caseType: 'POSITIVE',
+      expectedVersion: legacyScenarioBefore.version,
+      expectedDraftRevision: legacyScenarioBefore.artifacts.requirements.draftRevision,
+      commandId: legacyScenarioCommandId };
+    const legacyScenarioPrepared = await app.sdlcStore.prepareProcessBehaviorScenarioExecution(legacyScenarioSelection);
+    const legacyScenarioExecution = await app.executionService.executeReviewedBehaviorScenario({ tenantId: 'tenant-a',
+      principal: principal('alice'), authzGeneration: legacyScenarioSelection.authzGeneration,
+      context: legacyScenarioPrepared, commandId: legacyScenarioCommandId });
+    legacyScenarioExecution.schemaVersion = 1;
+    delete legacyScenarioExecution.criterionHash;
+    const legacyPinsHash = digest({ planHash: legacyScenarioPrepared.plan.planHash,
+      criterionHash: legacyScenarioPrepared.criterionHash, assertionHash: legacyScenarioPrepared.assertionHash,
+      testFileHash: legacyScenarioPrepared.testFileHash, sourceSnapshotId: legacyScenarioPrepared.sourceSnapshotId,
+      sourceTreeDigest: legacyScenarioPrepared.sourceTreeDigest,
+      candidateTreeDigest: legacyScenarioPrepared.candidateTreeDigest, caseId: legacyScenarioPrepared.definition.id,
+      caseType: legacyScenarioPrepared.definition.type, caseDefinitionHash: legacyScenarioPrepared.caseDefinitionHash,
+      mappingHash: legacyScenarioPrepared.mappingHash, datasetHash: legacyScenarioPrepared.datasetHash,
+      oracleHash: legacyScenarioPrepared.oracleHash, runAggregateHash: legacyScenarioPrepared.runAggregateHash,
+      reviewId: legacyScenarioPrepared.reviewId, reviewHash: legacyScenarioPrepared.reviewHash,
+      linkHash: legacyScenarioPrepared.linkHash });
+    const legacyScenarioRecorded = await app.sdlcStore.recordProcessBehaviorScenarioExecution({
+      ...legacyScenarioSelection, expectedVersion: legacyScenarioPrepared.expectedVersion,
+      reservationToken: legacyScenarioPrepared.reservationToken, expectedPinsHash: legacyPinsHash,
+      execution: legacyScenarioExecution });
+    assert.equal(legacyScenarioRecorded.receipt.schemaVersion, 1);
+    assert.equal(Object.hasOwn(legacyScenarioRecorded.receipt, 'criterionHash'), false,
+      'the persisted compatibility fixture represents the pre-criterionHash v1 receipt shape');
+    app.executionService.commandAdapterFactory = fixtureVerifierAdapterFactory;
+    const allScenarioReadback = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    assert.deepEqual(allScenarioReadback.artifacts.processBehaviorScenarioExecutions
+      .filter((entry) => entry.linkId === ac3LinkV2.id).map((entry) => entry.caseType).sort(),
+    ['NEGATIVE', 'POSITIVE', 'POSITIVE', 'POSITIVE', 'RECOVERY']);
+    const legacyScenarioReadback = allScenarioReadback.artifacts.processBehaviorScenarioExecutions
+      .find((entry) => entry.id === legacyScenarioRecorded.receipt.id);
+    assert.equal(legacyScenarioReadback.schemaVersion, 1);
+    assert.equal(Object.hasOwn(legacyScenarioReadback, 'criterionHash'), false);
+    assert.equal(legacyScenarioReadback.integrityStatus, 'VALID',
+      'a persisted hash-valid legacy v1 receipt remains verifiable without a criterionHash');
+    assert.equal(allScenarioReadback.artifacts.processBehaviorScenarioExecutions
+      .find((entry) => entry.id === negativeScenarioResponse.processBehaviorScenarioExecution.id).integrityStatus, 'VALID');
+    const recoveredReceiptReadback = allScenarioReadback.artifacts.processBehaviorScenarioExecutions
+      .find((entry) => entry.id === recoveryScenarioResponse.processBehaviorScenarioExecution.id);
+    assert.equal(recoveredReceiptReadback?.integrityStatus, 'VALID', JSON.stringify({
+      responseId: recoveryScenarioResponse.processBehaviorScenarioExecution.id,
+      recoveryReceipts: allScenarioReadback.artifacts.processBehaviorScenarioExecutions
+        .filter((entry) => entry.caseType === 'RECOVERY' && entry.linkId === ac3LinkV2.id)
+        .map(({ id, integrityStatus, result, reviewId }) => ({ id, integrityStatus, result, reviewId })),
+    }));
+    const negativeReplay = await request(app.base, `/api/sdlc/cases/${ac3Case.id}/process-behavior-scenario-executions`, {
+      ...as('alice'), method: 'POST', body: JSON.stringify({ version: negativeScenarioResponse.version - 1,
+        draftRevision: allScenarioReadback.artifacts.requirements.draftRevision, requirementId: ac3Requirement.id,
+        linkId: ac3LinkV2.id, planId: ac3PlanV2.id, caseType: 'NEGATIVE',
+        idempotencyKey: 't91-ac3-negative-case-execution' }) });
+    assert.equal(negativeReplay.command.replayed, true);
+    assert.equal(negativeReplay.processBehaviorScenarioExecution.receiptHash,
+      negativeScenarioResponse.processBehaviorScenarioExecution.receiptHash,
+      'same-hash replay returns the saved negative case receipt without redispatch');
+    await send('Page.reload');
+    await waitFor(`window.__orgwardSessionResponse?.principal === ${JSON.stringify(principal('alice'))}`, 'owner identity restored after scenario receipt reload');
+    await waitFor("document.querySelector('#case-tabs [data-tab=\"requirements\"]')", 'requirements tab restored after scenario receipt reload');
+    await evaluate("document.querySelector('#case-tabs [data-tab=\"requirements\"]').click(); true");
+    await waitFor("document.body.innerText.includes('POSITIVE case assertion PASS')", 'persisted scenario receipt survives reload');
+    await waitFor(`document.body.innerText.includes(${JSON.stringify(legacyScenarioRecorded.receipt.id)})`,
+      'legacy v1 scenario receipt remains visible after reload');
+    assert.equal(await evaluate("document.body.innerText.includes('criterion SHA-256 not recorded in legacy receipt')"), true,
+      'legacy scenario receipt presentation explains its missing criterion hash without rewriting the saved receipt');
+    assert.equal(await evaluate("document.body.innerText.includes('Business truth UNVERIFIED; runtime verification NOT_EXECUTED.')"), true,
+      'receipt readback keeps test outcome separate from business truth and runtime verification');
+    await evaluate("document.querySelector('.intent-evaluation-acceptance-form textarea[name=reason]').focus(); true");
+    await send('Input.insertText', { text: acceptanceReason });
+    assert.equal(await evaluate("document.querySelector('.intent-evaluation-acceptance-form').checkValidity()"), true,
+      'the keyboard journey supplies the required acceptance reason');
+    await press('Tab', 'Tab', 9);
+    assert.equal(await evaluate("document.activeElement.matches('.intent-evaluation-acceptance-form button[type=submit]')"), true,
+      'keyboard tab order moves from the reason field to the acceptance submit control');
+    await press('Enter', 'Enter', 13);
+    await waitFor("window.__orgwardAcceptanceResponse || document.querySelector('#sdlc-toast')?.textContent.includes('Scoped intent evaluation accepted')",
+      'acceptance response or browser error after keyboard submission');
+    assert.ok(await evaluate('window.__orgwardAcceptanceResponse?.command?.action === "accept-intent-evaluation"'),
+      `keyboard acceptance failed: ${await evaluate("document.querySelector('#sdlc-toast')?.textContent ?? ''")}`);
+    browserAcceptanceRequest = await evaluate('window.__orgwardAcceptanceRequest');
+    await waitFor("[...document.querySelectorAll('#case-content strong')].some((entry) => entry.textContent.includes('ACCEPTED · CURRENT · integrity VALID'))",
+      'accepted state rendered after keyboard submission');
+    assert.equal(await evaluate("document.body.innerText.includes('business truth remains UNVERIFIED')"), true);
+    assert.equal(await evaluate("document.body.innerText.includes('verification remains NOT_EXECUTED')"), true);
+    assert.equal(await evaluate("Boolean(document.querySelector('.intent-evaluation-acceptance-form'))"), false,
+      'the current acceptance action disappears after acceptance');
+    browserAcceptanceResult = await evaluate('window.__orgwardAcceptanceResponse');
+    assert.equal(browserAcceptanceResult.command.action, 'accept-intent-evaluation');
+    assert.equal(browserAcceptanceResult.intentEvaluationAcceptance.status, 'ACCEPTED');
+
+    await send('Page.reload');
+    await waitFor(`window.__orgwardSessionResponse?.principal === ${JSON.stringify(principal('alice'))}`, 'owner identity restored after page reload');
+    await waitFor("document.querySelector('#case-tabs [data-tab=\"requirements\"]')", 'owner case tabs restored after acceptance');
+    await evaluate("document.querySelector('#case-tabs [data-tab=\"requirements\"]').click(); true");
+    await waitFor("[...document.querySelectorAll('#case-content strong')].some((entry) => entry.textContent.includes('ACCEPTED · CURRENT · integrity VALID'))",
+      'accepted state read back after reload');
+    assert.equal(await evaluate("Boolean(document.querySelector('.intent-evaluation-acceptance-form'))"), false);
+
+    await send('Page.navigate', { url: `${app.base}/sdlc.html?case=${encodeURIComponent(missingAssertionCase.id)}` });
+    await waitFor("document.querySelector('#case-tabs [data-tab=\"requirements\"]')", 'missing-assertion case loaded in owner browser');
+    await setSession(aliceBrowserSession);
+    await send('Page.reload');
+    await waitFor(`window.__orgwardSessionResponse?.principal === ${JSON.stringify(principal('alice'))}`,
+      'owner identity restored for missing-assertion feedback');
+    await waitFor("document.querySelector('#case-tabs [data-tab=\"requirements\"]')", 'owner requirements tab restored');
+    await evaluate("document.querySelector('#case-tabs [data-tab=\"requirements\"]').click(); true");
+    await waitFor("document.querySelector('.process-run-evidence-link-form')", 'owner runtime evidence-link form rendered');
+    const linkFeedback = await evaluate(`(async () => {
+      const form = document.querySelector('.process-run-evidence-link-form');
+      const runInput = form.elements.runId;
+      runInput.value = ${JSON.stringify(missingAssertionRun.id)};
+      runInput.dispatchEvent(new Event('input', { bubbles: true }));
+      let responseRecord = null;
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = async (input, init = {}) => {
+        const response = await originalFetch(input, init);
+        if (String(input).includes('/process-run-evidence')) responseRecord = {
+          status: response.status, body: await response.clone().json() };
+        return response;
+      };
+      form.requestSubmit();
+      const deadline = Date.now() + 10000;
+      while (Date.now() < deadline && !responseRecord) await new Promise((resolve) => setTimeout(resolve, 25));
+      const message = form.querySelector('.process-run-evidence-feedback');
+      const feedbackDeadline = Date.now() + 10000;
+      while (Date.now() < feedbackDeadline && message?.hidden) await new Promise((resolve) => setTimeout(resolve, 25));
+      return { responseRecord, message: message?.textContent ?? '', hidden: message?.hidden,
+        ariaLive: message?.getAttribute('aria-live') };
+    })()`);
+    assert.equal(linkFeedback.responseRecord?.status, 409);
+    assert.equal(linkFeedback.responseRecord?.body?.error?.code, 'BEHAVIOR_CANDIDATE_REJECTED');
+    assert.equal(linkFeedback.hidden, false);
+    assert.equal(linkFeedback.ariaLive, 'polite');
+    assert.match(linkFeedback.message, /A named test deleted before candidate execution \(UNKNOWN: ASSERTION_RESULT_NOT_FOUND\)/);
+    assert.match(linkFeedback.message, /No evidence link was saved/);
+    assert.match(linkFeedback.message, /Update the exact test.*rerun the check, then link the new run/);
+  }, { sessionId: bobBrowserSession });
+
+  versionedEvidenceReview = latestSupportingEvidenceReview ?? browserEvidenceReview;
+  acceptanceCaseBefore = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+  acceptanceRequirementBefore = acceptanceCaseBefore.artifacts.requirements.requirements.find((entry) => entry.id === ac3Requirement.id);
+  acceptanceInput = browserAcceptanceRequest;
+  assert.equal(acceptanceInput.reviewId, versionedEvidenceReview.processRunEvidenceReview.id);
+  assert.equal(acceptanceInput.version + 1, acceptanceCaseBefore.version,
+    'the browser acceptance advances exactly the aggregate version returned before submission');
+  const acceptedEvaluationResponse = browserAcceptanceResult;
+  assert.equal(acceptedEvaluationResponse.command.action, 'accept-intent-evaluation');
+  assert.equal(acceptedEvaluationResponse.version, acceptanceInput.version + 1);
+  const resolvedContractContext = ac3Requirement.processTrace.context ?? null;
+  const resolvedNegativeCase = ac3Requirement.processTrace.negativeCase ?? null;
+  const resolvedRecoveryCase = ac3Requirement.processTrace.recoveryCase ?? null;
+  const contractRouteProjection = {
+    commandId: acceptanceInput.idempotencyKey, operation: boundaryOperation.name,
+    expectedHead: acceptanceInput.version, expectedVersion: acceptanceInput.version,
+    context: resolvedContractContext,
+    payload: { requirementId: acceptanceInput.requirementId,
+      outcomeRef: ac3Requirement.processTrace.outcome.outputRefs[0].id,
+      processRef: ac3Requirement.processTrace.process.id,
+      riskRef: ac3Requirement.processTrace.risk.refs[0].id,
+      positiveCase: acceptanceInput.linkId,
+      negativeCase: resolvedNegativeCase,
+      recoveryCase: resolvedRecoveryCase },
+    reason: acceptanceInput.reason,
+  };
+  assert.equal(contractRouteProjection.commandId, browserAcceptanceRequest.idempotencyKey);
+  assert.equal(contractRouteProjection.payload.positiveCase, ac3LinkV2.id,
+    'the positive case resolves to the exact persisted passing evidence link');
+  assert.equal(contractRouteProjection.payload.outcomeRef, ac3Requirement.processTrace.outcome.outputRefs[0].id);
+  assert.equal(contractRouteProjection.payload.processRef, ac3Requirement.processTrace.process.id);
+  assert.equal(contractRouteProjection.payload.riskRef, ac3Requirement.processTrace.risk.refs[0].id);
+  assert.equal(contractRouteProjection.context, null,
+    'the pinned process trace has no workspace/branch/effective-time context object to map into the draft boundary');
+  assert.equal(contractRouteProjection.payload.negativeCase, null,
+    'the pinned process trace has no negative-case reference; a separate broken candidate is not bound to this trace');
+  assert.equal(contractRouteProjection.payload.recoveryCase, null,
+    'the pinned process trace has no recovery-case reference; stale-plan history is not a declared recovery case');
+  const acceptedEvaluation = acceptedEvaluationResponse.intentEvaluationAcceptance;
+  const operationResult = acceptedEvaluationResponse.operationResult;
+  const operationResultSchema = acceptanceContract.schemas.find((entry) => entry.id === boundaryOperation.resultSchema).definition;
+  assert.deepEqual(Object.keys(operationResult).sort(), Object.keys(operationResultSchema.properties).sort(),
+    'the dedicated route returns the complete contract result projection');
+  assert.equal(operationResult.operation, boundaryOperation.name);
+  assert.equal(operationResult.status, 'completed');
+  assert.equal(operationResult.targetState, 'accepted');
+  assert.equal(operationResult.commandId, browserAcceptanceRequest.idempotencyKey,
+    'the accepted operation result echoes the browser command ID actually submitted');
+  assert.equal(operationResult.resultRef, acceptedEvaluation.id);
+  assert.equal(operationResult.version, acceptedEvaluationResponse.version);
+  assert.equal(operationResult.authoritativeGeneration, acceptedEvaluation.recordedVersion);
+  assert.equal(operationResult.projectionWatermark, acceptedEvaluationResponse.version);
+  assert.equal(operationResult.partial, false);
+  assert.equal(operationResult.jobId, null);
+  assert.equal(acceptedEvaluation.status, 'ACCEPTED');
+  assert.equal(acceptedEvaluation.integrityStatus, 'VALID');
+  assert.equal(acceptedEvaluation.applicability, 'CURRENT');
+  assert.equal(acceptedEvaluation.truthStatus, 'UNVERIFIED');
+  assert.equal(acceptedEvaluation.verificationStatus, 'NOT_EXECUTED');
+  assert.equal(acceptedEvaluation.linkHash, ac3LinkV2.linkHash);
+  assert.equal(acceptedEvaluation.reviewHash, versionedEvidenceReview.processRunEvidenceReview.reviewHash);
+  assert.equal(acceptedEvaluation.evaluationHash, contentHash(acceptanceRequirementBefore.processRunEvidenceLinks.find((entry) => entry.id === ac3LinkV2.id).behaviorEvaluation));
+  const acceptanceReplay = await request(app.base, `/api/sdlc/cases/${ac3Case.id}/intent-evaluation-acceptances`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify(browserAcceptanceRequest) });
+  assert.equal(acceptanceReplay.command.replayed, true);
+  assert.equal(acceptanceReplay.intentEvaluationAcceptance.id, acceptedEvaluation.id);
+  assert.equal(acceptanceReplay.artifacts.processIntentEvaluationAcceptances.length, 1);
+  assert.equal(acceptanceReplay.intentEvaluationAcceptance.reviewHash, versionedEvidenceReview.processRunEvidenceReview.reviewHash,
+    'acceptance readback continues to bind the immutable independent review hash');
+  const acceptedEvents = acceptanceReplay.events.filter((event) => event.type === 'IntentEvaluationAccepted');
+  assert.equal(acceptedEvents.length, 1);
+  assert.equal(acceptedEvents[0].data.acceptanceHash, acceptedEvaluation.acceptanceHash);
+  assert.equal(acceptedEvents[0].data.reviewHash, versionedEvidenceReview.processRunEvidenceReview.reviewHash);
+  const acceptanceAudit = await app.persistence.query(`select event_hash,command_id,actor,aggregate_version,event
+    from orgward.audit_log where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1 and event_hash=$2`,
+  [ac3Case.id, contentHash(acceptedEvents[0])]);
+  assert.equal(acceptanceAudit.rowCount, 1, 'the accepted event is durably audited');
+  assert.equal(acceptanceAudit.rows[0].command_id, browserAcceptanceRequest.idempotencyKey);
+  assert.equal(acceptanceAudit.rows[0].actor, principal('alice'));
+  const acceptanceConflict = await fetch(`${app.base}/api/sdlc/cases/${ac3Case.id}/intent-evaluation-acceptances`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ ...browserAcceptanceRequest, reason: 'Changed reason under the same key.' }) });
+  assert.equal(acceptanceConflict.status, 409);
+  assert.equal((await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'))).version, acceptedEvaluationResponse.version,
+    'a changed replay conflicts without another event or aggregate mutation');
+  await t.test('N2.AUTHORIZATION injected dispatch failure receipt is durable', async () => {
+    const failureApp = await start(postgres.databaseUrl, { executionProfiles: profiles, oidcAuthenticator,
+      secretEncryptionKey: Buffer.alloc(32, 0x5c), openAiValidationEndpoint: `${providerOrigin}/v1/models`,
+      localRepositories: [localRepositoryBinding, gitRepositoryBinding], githubVerifierProfile: fixedGithubVerifierProfile,
+      productHarnessDispatcher: fixedN2ProductHarnessDispatcher });
+    const beforeFailureMapping = await request(failureApp.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    const failureMapping = await request(failureApp.base, `/api/sdlc/cases/${ac3Case.id}/product-behavior-harness-mappings`, {
+      ...as('alice'), method: 'POST', body: JSON.stringify({ version: beforeFailureMapping.version,
+        planId: persistedOwnerPlan.id, subcaseId: 'N2.AUTHORIZATION', idempotencyKey: 't91-n2-authz-failure-map' }) }, 201);
+    const beforeFailureReview = await request(failureApp.base, `/api/sdlc/cases/${ac3Case.id}`, as('bob'));
+    const failureReviewResponse = await fetch(`${failureApp.base}/api/sdlc/cases/${ac3Case.id}/product-behavior-harness-mapping-reviews`, {
+      ...as('bob'), method: 'POST', body: JSON.stringify({ version: beforeFailureReview.version,
+        mappingId: failureMapping.productBehaviorHarnessMapping.id,
+        mappingHash: failureMapping.productBehaviorHarnessMapping.mappingHash,
+        decision: 'APPROVE_FOR_TEST_EXECUTION', idempotencyKey: 't91-n2-authz-failure-review' }) });
+    assert.equal(failureReviewResponse.status, 201);
+    const beforeFailureExecution = await request(failureApp.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    const failureCommand = { version: beforeFailureExecution.version,
+      mappingId: failureMapping.productBehaviorHarnessMapping.id,
+      mappingHash: failureMapping.productBehaviorHarnessMapping.mappingHash,
+      subcaseId: 'N2.AUTHORIZATION', idempotencyKey: 't91-n2-authz-dispatch-failure' };
+    const dispatchCountBeforeFailure = n2DispatchCount;
+    releaseN2Dispatch();
+    failNextN2Dispatch = true;
+    const failureExecutionResponse = await fetch(`${failureApp.base}/api/sdlc/cases/${ac3Case.id}/product-behavior-harness-executions`, {
+      ...as('alice'), method: 'POST', body: JSON.stringify(failureCommand) });
+    assert.equal(failureExecutionResponse.status, 201);
+    assert.equal(n2DispatchCount, dispatchCountBeforeFailure + 1, 'the injected dispatch-failure path ran exactly once');
+    const failureExecutionBody = await failureExecutionResponse.json();
+    const failureReceipt = failureExecutionBody.productBehaviorHarnessExecution;
+    assert.equal(failureReceipt.status, 'INCONCLUSIVE', 'a failed fixture dispatch remains explicitly inconclusive');
+    assert.equal(failureReceipt.terminal, false);
+    assert.equal(failureReceipt.run, null);
+    assert.equal(failureReceipt.schemaVersion, 4);
+    const failureReadback = await request(failureApp.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    const persistedFailureReceipt = failureReadback.artifacts.processBehaviorProductHarnessExecutions
+      .find((entry) => entry.id === failureReceipt.id);
+    assert.equal(persistedFailureReceipt.integrityStatus, 'VALID');
+    assert.equal(persistedFailureReceipt.status, 'INCONCLUSIVE');
+    assert.equal(persistedFailureReceipt.run, null);
+    const replayFailure = await fetch(`${failureApp.base}/api/sdlc/cases/${ac3Case.id}/product-behavior-harness-executions`, {
+      ...as('alice'), method: 'POST', body: JSON.stringify(failureCommand) });
+    assert.equal(replayFailure.status, 200);
+    assert.equal((await replayFailure.json()).productBehaviorHarnessExecution.receiptHash, failureReceipt.receiptHash,
+      'the dispatch-failure receipt remains durably readable and replayable');
+
+    const beforeN3FailureMapping = await request(failureApp.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    const existingN3Mapping = beforeN3FailureMapping.artifacts.processBehaviorProductHarnessMappings
+      .find((entry) => entry.subcaseId === 'N3');
+    assert.ok(existingN3Mapping, 'the accepted N3 definition has a saved mapping to bind the failure receipt');
+    const n3FailureMappingResponse = await request(failureApp.base,
+      `/api/sdlc/cases/${ac3Case.id}/product-behavior-harness-mappings`, {
+        ...as('alice'), method: 'POST', body: JSON.stringify({ version: beforeN3FailureMapping.version,
+          planId: existingN3Mapping.planId, subcaseId: 'N3', idempotencyKey: 't91-n3-dispatch-failure-map' }) }, 201);
+    const n3FailureMapping = n3FailureMappingResponse.productBehaviorHarnessMapping;
+    const beforeN3FailureReview = await request(failureApp.base, `/api/sdlc/cases/${ac3Case.id}`, as('bob'));
+    const n3FailureReviewResponse = await fetch(`${failureApp.base}/api/sdlc/cases/${ac3Case.id}/product-behavior-harness-mapping-reviews`, {
+      ...as('bob'), method: 'POST', body: JSON.stringify({ version: beforeN3FailureReview.version,
+        mappingId: n3FailureMapping.id, mappingHash: n3FailureMapping.mappingHash,
+        decision: 'APPROVE_FOR_TEST_EXECUTION', idempotencyKey: 't91-n3-dispatch-failure-review' }) });
+    const n3FailureReviewBody = await n3FailureReviewResponse.text();
+    assert.equal(n3FailureReviewResponse.status, 201, `N3 failure mapping review returned ${n3FailureReviewResponse.status}: ${n3FailureReviewBody}`);
+    const beforeN3FailureExecution = await request(failureApp.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    const n3FailureCommand = { version: beforeN3FailureExecution.version, mappingId: n3FailureMapping.id,
+      mappingHash: n3FailureMapping.mappingHash, subcaseId: 'N3', idempotencyKey: 't91-n3-dispatch-failure-execute' };
+    failNextN3ProviderSetup = true;
+    const n3FailureExecutionResponse = await fetch(`${failureApp.base}/api/sdlc/cases/${ac3Case.id}/product-behavior-harness-executions`, {
+      ...as('alice'), method: 'POST', body: JSON.stringify(n3FailureCommand) });
+    const n3FailureExecutionBody = await n3FailureExecutionResponse.text();
+    assert.equal(n3FailureExecutionResponse.status, 201,
+      `N3 provider-style pre-fixture failure returned ${n3FailureExecutionResponse.status}: ${n3FailureExecutionBody}`);
+    const n3FailureReceipt = JSON.parse(n3FailureExecutionBody).productBehaviorHarnessExecution;
+    assert.equal(n3FailureReceipt.status, 'INCONCLUSIVE');
+    assert.equal(n3FailureReceipt.fixtureInvocationId,
+      't91-n3-fixture-invocation-11111111-1111-4111-8111-111111111111',
+      `provider annotation should survive the execution API: ${JSON.stringify(n3FailureReceipt)}`);
+    assert.equal(n3FailureReceipt.fixtureTemplateHash, T91_N3_PRODUCT_FIXTURE_TEMPLATE_HASH,
+      `registered template pin should survive the execution API: ${JSON.stringify(n3FailureReceipt)}`);
+    assert.equal(n3FailureReceipt.fixtureCaseId, null);
+    assert.equal(n3FailureReceipt.fixturePlan, null);
+    assert.equal(n3FailureReceipt.sourceStage, null);
+    assert.equal(n3FailureReceipt.candidate, null);
+    assert.equal(n3FailureReceipt.run, null);
+    const n3FailureReadback = await request(failureApp.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+    const savedN3FailureReceipt = n3FailureReadback.artifacts.processBehaviorProductHarnessExecutions
+      .find((entry) => entry.id === n3FailureReceipt.id);
+    assert.equal(savedN3FailureReceipt.integrityStatus, 'VALID');
+    assert.equal(savedN3FailureReceipt.status, 'INCONCLUSIVE');
+    const n3FailureReplay = await fetch(`${failureApp.base}/api/sdlc/cases/${ac3Case.id}/product-behavior-harness-executions`, {
+      ...as('alice'), method: 'POST', body: JSON.stringify(n3FailureCommand) });
+    assert.equal(n3FailureReplay.status, 200);
+    assert.equal((await n3FailureReplay.json()).productBehaviorHarnessExecution.receiptHash, n3FailureReceipt.receiptHash);
+    await close(failureApp);
+  });
+  const beforeHistoricalEdit = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+  const requirementBeforeHistoricalEdit = beforeHistoricalEdit.artifacts.requirements.requirements.find((entry) => entry.id === ac3Requirement.id);
+  const afterHistoricalEdit = await request(app.base, `/api/sdlc/cases/${ac3Case.id}/edit-requirements`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: beforeHistoricalEdit.version,
+      expectedDraftRevision: beforeHistoricalEdit.artifacts.requirements.draftRevision, requirementId: ac3Requirement.id,
+      changes: { rationale: `${requirementBeforeHistoricalEdit.rationale} Follow-up clarification after historical acceptance.` },
+      idempotencyKey: 't91-acceptance-post-acceptance-revision' }) });
+  const historicalAcceptance = afterHistoricalEdit.artifacts.processIntentEvaluationAcceptances[0];
+  assert.equal(historicalAcceptance.integrityStatus, 'VALID', 'the acceptance remains valid against its immutable historical pins');
+  assert.equal(historicalAcceptance.applicability, 'STALE', 'current applicability is derived separately after draft revision');
+  assert.equal(historicalAcceptance.acceptanceHash, acceptedEvaluation.acceptanceHash);
+  const historicalAcceptanceReplay = await request(app.base, `/api/sdlc/cases/${ac3Case.id}/intent-evaluation-acceptances`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify(browserAcceptanceRequest) });
+  assert.equal(historicalAcceptanceReplay.command.replayed, true,
+    'exact replay returns the retained historical acceptance after later requirement edits');
+  assert.equal(historicalAcceptanceReplay.intentEvaluationAcceptance.id, acceptedEvaluation.id);
+  assert.equal(historicalAcceptanceReplay.intentEvaluationAcceptance.integrityStatus, 'VALID');
+  assert.equal(historicalAcceptanceReplay.intentEvaluationAcceptance.applicability, 'STALE');
+  assert.equal(historicalAcceptanceReplay.version, afterHistoricalEdit.version, 'historical replay does not mutate the newer draft');
+  assert.equal(historicalAcceptanceReplay.events.filter((event) => event.type === 'IntentEvaluationAccepted').length, 1);
+
+  // AC4: conflicting typed criteria require an explicit reviewer resolution,
+  // but the resolution preserves each judgment and cannot accept a failed mandatory criterion.
+  const ac4ProcessId = dependentHumanTask.sourceProcessId;
+  const ac4TaskId = dependentHumanTask.id;
+  assert.ok(ac4ProcessId, 'the linked human task supplies the exact source process identity');
+  const ac4Project = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
+  const ac4CaseCreated = await request(app.base, '/api/sdlc/cases', { ...as('alice'), method: 'POST', body: JSON.stringify({
+    mode: 'golden', projectId: project.id, sourceObjectId: ac4ProcessId,
+    expectedProjectVersion: ac4Project.version, expectedBlueprintId: ac4Project.latestBlueprint.id,
+    expectedBlueprintVersion: ac4Project.latestBlueprint.version,
+  }) }, 201);
+  let ac4Case = await request(app.base, `/api/sdlc/cases/${ac4CaseCreated.id}/run`, { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ version: ac4CaseCreated.version, idempotencyKey: 't91-ac4-advance' }) });
+  let ac4Requirement = ac4Case.artifacts.requirements.requirements.find((entry) => entry.processTrace?.process.id === ac4ProcessId);
+  ac4Case = await request(app.base, `/api/sdlc/cases/${ac4Case.id}/edit-requirements`, { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ version: ac4Case.version, expectedDraftRevision: ac4Case.artifacts.requirements.draftRevision,
+      requirementId: ac4Requirement.id, changes: { acceptanceCriteria: [
+        'The reported process outcome meets its declared business purpose.',
+        'The process stays within its declared technical boundary.',
+      ], criterionContract: { schemaVersion: 1, version: 1, criteria: [
+        { id: 'AC4-BUSINESS-OUTCOME', text: 'The reported process outcome meets its declared business purpose.', type: 'BUSINESS', mandatory: true,
+          sourceRefId: ac4ProcessId, scopeRefId: ac4ProcessId },
+        { id: 'AC4-TECHNICAL-BOUNDARY', text: 'The process stays within its declared technical boundary.', type: 'TECHNICAL', mandatory: true,
+          sourceRefId: ac4ProcessId, scopeRefId: ac4ProcessId },
+      ] } }, idempotencyKey: 't91-ac4-typed-conflict-contract' }) });
+  ac4Requirement = ac4Case.artifacts.requirements.requirements.find((entry) => entry.id === ac4Requirement.id);
+  const ac4LinkResponse = await request(app.base, `/api/sdlc/cases/${ac4Case.id}/process-run-evidence`, { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ version: ac4Case.version, draftRevision: ac4Case.artifacts.requirements.draftRevision,
+      requirementId: ac4Requirement.id, planInstanceId: dependentHumanStart.planInstanceId, taskId: ac4TaskId,
+      idempotencyKey: 't91-ac4-human-link' }) }, 201);
+  const ac4Link = ac4LinkResponse.processRunEvidenceLink;
+  const ac4ReviewCriteria = ac4Requirement.reviewCriteria.map((criterion) => ({ criterionHash: criterion.criterionHash,
+    disposition: criterion.criterionId === 'AC4-BUSINESS-OUTCOME' ? 'SUPPORTED' : 'CONTRADICTED',
+    note: `Independent review of ${criterion.criterionId} against the exact linked human task evidence.` }));
+  const ac4ReviewRequest = { version: ac4LinkResponse.version, draftRevision: ac4Case.artifacts.requirements.draftRevision,
+    requirementId: ac4Requirement.id, linkId: ac4Link.id, criteria: ac4ReviewCriteria,
+    idempotencyKey: 't91-ac4-conflict-review' };
+  const ac4BeforeMissingResolution = await request(app.base, `/api/sdlc/cases/${ac4Case.id}`, as('alice'));
+  const missingAc4Resolution = await request(app.base, `/api/sdlc/cases/${ac4Case.id}/process-run-evidence-reviews`, {
+    ...as('carol'), method: 'POST', body: JSON.stringify(ac4ReviewRequest),
+  }, 409);
+  assert.equal(missingAc4Resolution.error.code, 'REVIEW_CONFLICT_RESOLUTION_REQUIRED');
+  const afterMissingAc4Resolution = await request(app.base, `/api/sdlc/cases/${ac4Case.id}`, as('alice'));
+  assert.equal(afterMissingAc4Resolution.version, ac4BeforeMissingResolution.version,
+    'a conflict without explicit resolution does not change the case version');
+  assert.equal(afterMissingAc4Resolution.events.filter((event) => event.type === 'ProcessRunEvidenceReviewed').length, 0,
+    'a conflict without resolution appends no review event and cannot be accepted');
+  const ac4ReviewedResponse = await request(app.base, `/api/sdlc/cases/${ac4Case.id}/process-run-evidence-reviews`, {
+    ...as('carol'), method: 'POST', body: JSON.stringify({ ...ac4ReviewRequest,
+      idempotencyKey: 't91-ac4-conflict-review-resolved', conflictResolution: {
+        decision: 'PRESERVE_CRITERION_OUTCOMES',
+        rationale: 'The linked human-reported output supports the business criterion, while the available evidence contradicts the mandatory technical boundary; retain both findings for follow-up.',
+      } }),
+  }, 201);
+  const ac4Review = ac4ReviewedResponse.processRunEvidenceReview;
+  assert.equal(ac4Review.status, 'HUMAN_REVIEWED');
+  assert.equal(ac4Review.disposition, 'CONTRADICTED');
+  assert.equal(ac4Review.criteria.find((entry) => entry.criterionId === 'AC4-BUSINESS-OUTCOME').disposition, 'SUPPORTED');
+  assert.equal(ac4Review.criteria.find((entry) => entry.criterionId === 'AC4-TECHNICAL-BOUNDARY').disposition, 'CONTRADICTED');
+  assert.deepEqual(ac4Review.failedMandatoryCriterionIds, ['AC4-TECHNICAL-BOUNDARY']);
+  assert.equal(ac4Review.acceptanceStatus, 'BLOCKED_MANDATORY_FAILURE');
+  assert.equal(ac4Review.conflictResolution.recordedBy, principal('carol'));
+  assert.deepEqual(ac4Review.conflictResolution.businessCriterionIds, ['AC4-BUSINESS-OUTCOME']);
+  assert.deepEqual(ac4Review.conflictResolution.technicalCriterionIds, ['AC4-TECHNICAL-BOUNDARY']);
+  assert.equal(ac4Review.verificationStatus, 'NOT_EXECUTED');
+  assert.equal(ac4Review.truthStatus, 'UNVERIFIED');
+  assert.equal(Object.hasOwn(ac4Review, 'score'), false, 'no aggregate score can turn a failed mandatory criterion into acceptance');
+  const ac4AcceptanceBefore = await request(app.base, `/api/sdlc/cases/${ac4Case.id}`, as('alice'));
+  const rejectedFailedMandatoryAcceptance = await fetch(`${app.base}/api/sdlc/cases/${ac4Case.id}/intent-evaluation-acceptances`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: ac4AcceptanceBefore.version,
+      draftRevision: ac4AcceptanceBefore.artifacts.requirements.draftRevision, requirementId: ac4Requirement.id,
+      linkId: ac4Link.id, reviewId: ac4Review.id, reason: 'Attempt to accept conflicting evidence.',
+      idempotencyKey: 't91-ac4-rejected-intent-acceptance' }) });
+  assert.equal(rejectedFailedMandatoryAcceptance.status, 409);
+  assert.equal((await rejectedFailedMandatoryAcceptance.json()).error.code, 'INTENT_EVALUATION_EVIDENCE_INCOMPLETE');
+  const ac4AcceptanceAfter = await request(app.base, `/api/sdlc/cases/${ac4Case.id}`, as('alice'));
+  assert.equal(ac4AcceptanceAfter.version, ac4AcceptanceBefore.version);
+  assert.equal(ac4AcceptanceAfter.events.filter((event) => event.type === 'IntentEvaluationAccepted').length, 0);
   const githubTerminalEvent = githubCandidate.events.at(-1);
   assert.equal(githubTerminalEvent.data.evidenceHash, githubCandidateReceipt.hash);
   assert.equal(githubTerminalEvent.data.candidateEvidenceHash, githubCandidateReceipt.hash);
-  const repositoryEvidenceProject = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
-  const repositoryEvidenceBlueprint = repositoryEvidenceProject.latestBlueprint;
-  const repositoryEvidenceCase = await request(app.base, '/api/sdlc/cases', { ...as('alice'), method: 'POST',
-    body: JSON.stringify({ mode: 'golden', projectId: project.id, sourceObjectId: 'process-learn',
-      expectedProjectVersion: repositoryEvidenceProject.version, expectedBlueprintId: repositoryEvidenceBlueprint.id,
-      expectedBlueprintVersion: repositoryEvidenceBlueprint.version }) }, 201);
-  let repositoryEvidenceReady = await request(app.base, `/api/sdlc/cases/${repositoryEvidenceCase.id}/run`, {
-    ...as('alice'), method: 'POST', body: JSON.stringify({ version: repositoryEvidenceCase.version,
-      idempotencyKey: 't91-repository-check-link-advance' }) });
-  const repositoryEvidenceRequirement = repositoryEvidenceReady.artifacts.requirements.requirements
-    .find((entry) => entry.processTrace?.process.id === 'process-learn');
-  assert.ok(repositoryEvidenceRequirement);
-  const repositoryEvidenceLink = await request(app.base, `/api/sdlc/cases/${repositoryEvidenceCase.id}/process-run-evidence`, {
-    ...as('alice'), method: 'POST', body: JSON.stringify({ version: repositoryEvidenceReady.version,
-      draftRevision: repositoryEvidenceReady.artifacts.requirements.draftRevision,
-      requirementId: repositoryEvidenceRequirement.id, runId: githubRequest.id,
-      idempotencyKey: 't91-repository-check-link-once' }) }, 201);
+  // Reuse the exact case/run link: a behavior-plan run is case-bound and cannot
+  // be relinked to a second case merely to inspect its repository-check receipt.
+  const repositoryEvidenceCase = behaviorPlanCase;
+  const repositoryEvidenceReady = behaviorPlanReady;
+  const repositoryEvidenceRequirement = behaviorRequirement;
+  const repositoryEvidenceLink = behaviorLinked;
   const repositoryChecks = repositoryEvidenceLink.processRunEvidenceLink.repositoryCheckEvidence;
   assert.equal(repositoryChecks.length, 2);
   assert.ok(repositoryChecks.every((receipt) => receipt.category === 'REPOSITORY_CHECK'
@@ -10174,8 +13522,11 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
       idempotencyKey: 't91-repository-check-link-mismatch' }) });
   assert.equal(mismatchedRepositoryLink.status, 503,
     'a check receipt whose command pin differs from the persisted plan is rejected');
-  assert.equal((await request(app.base, `/api/sdlc/cases/${repositoryEvidenceCase.id}`, as('alice'))).version,
-    repositoryEvidenceLink.version, 'mismatched repository evidence leaves the case unchanged');
+  assert.equal((await fetch(`${app.base}/api/sdlc/cases/${repositoryEvidenceCase.id}`, as('alice'))).status, 503,
+    'case readback refuses a linked run whose persisted receipt was tampered');
+  assert.equal(Number((await app.persistence.query(`select version from orgward.aggregates
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`, [repositoryEvidenceCase.id])).rows[0].version),
+  repositoryEvidenceLink.version, 'mismatched repository evidence leaves the case aggregate unchanged');
   const alteredSourceMetadataRun = structuredClone(persistedGithubRun);
   alteredSourceMetadataRun.execution.repositoryCandidate.source.commitOid = 'f'.repeat(40);
   await app.persistence.query(`update orgward.aggregates set state=$2::jsonb,state_hash=$3
@@ -10188,25 +13539,34 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
       idempotencyKey: 't91-repository-check-link-source-metadata-mismatch' }) });
   assert.equal(mismatchedSourceMetadataLink.status, 503,
     'a candidate commit metadata mutation is rejected even when the aggregate state is resealed');
-  assert.equal((await request(app.base, `/api/sdlc/cases/${repositoryEvidenceCase.id}`, as('alice'))).version,
-    repositoryEvidenceLink.version, 'source metadata mismatch leaves the linked case unchanged');
+  assert.equal((await fetch(`${app.base}/api/sdlc/cases/${repositoryEvidenceCase.id}`, as('alice'))).status, 503,
+    'case readback refuses the resealed source metadata mismatch');
+  assert.equal(Number((await app.persistence.query(`select version from orgward.aggregates
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`, [repositoryEvidenceCase.id])).rows[0].version),
+  repositoryEvidenceLink.version, 'source metadata mismatch leaves the linked case aggregate unchanged');
   await app.persistence.query(`update orgward.aggregates set state=$2::jsonb,state_hash=$3
     where tenant_id='tenant-a' and aggregate_kind='execution_run' and aggregate_id=$1`,
   [githubRequest.id, JSON.stringify(persistedGithubRun), contentHash(persistedGithubRun)]);
-  assert.equal(githubCandidate.execution.stdout, 'Applied bounded updates to 1 selected file.');
-  assert.equal(providerRequest.body.model, 'gpt-fixture');
-  assert.equal(providerRequest.body.store, false);
-  assert.deepEqual(providerRequest.body.tools, []);
-  const githubPrompt = JSON.parse(providerRequest.body.input);
-  assert.deepEqual(githubPrompt.selectedFiles.map((file) => [file.path, file.text]), [['README.md', 'before\n']]);
-  assert.equal(JSON.stringify(providerRequest.body).includes(openAiFixtureSecret), false,
+  assert.equal((await request(app.base, `/api/sdlc/cases/${repositoryEvidenceCase.id}`, as('alice'))).version,
+    repositoryEvidenceLink.version, 'restored persisted run allows case readback without a case mutation');
+  assert.equal(githubCandidate.execution.stdout, 'Applied bounded updates to 2 selected files.');
+  assert.equal(githubCandidateProviderRequest.body.model, 'gpt-fixture');
+  assert.equal(githubCandidateProviderRequest.body.store, false);
+  assert.deepEqual(githubCandidateProviderRequest.body.tools, []);
+  const githubPrompt = JSON.parse(githubCandidateProviderRequest.body.input);
+  assert.deepEqual(githubPrompt.selectedFiles.map((file) => [file.path, file.text]), [
+    ['src/process.mjs', processCandidateSource.toString()],
+    ['test/process-contract.test.mjs', processOracleSource.toString()],
+  ]);
+  assert.equal(JSON.stringify(githubCandidateProviderRequest.body).includes(openAiFixtureSecret), false,
     'the broker credential is not included in model input or request metadata');
   assert.equal(JSON.stringify(githubCandidate).includes(openAiFixtureSecret), false,
     'run and candidate API results contain no provider credential material');
-  const githubSourceResponse = await fetch(`${app.base}/api/execution/runs/${githubRequest.id}/repository-source?path=README.md`, as('alice'));
-  assert.equal(Buffer.from(await githubSourceResponse.arrayBuffer()).toString(), 'before\n');
-  const githubArtifactResponse = await fetch(`${app.base}/api/execution/runs/${githubRequest.id}/artifact?path=README.md`, as('alice'));
-  assert.equal(Buffer.from(await githubArtifactResponse.arrayBuffer()).toString(), 'after\n');
+  const githubSourceResponse = await fetch(`${app.base}/api/execution/runs/${githubRequest.id}/repository-source?path=src%2Fprocess.mjs`, as('alice'));
+  assert.equal(Buffer.from(await githubSourceResponse.arrayBuffer()).toString(), processCandidateSource.toString());
+  const githubArtifactResponse = await fetch(`${app.base}/api/execution/runs/${githubRequest.id}/artifact?path=src%2Fprocess.mjs`, as('alice'));
+  assert.equal(Buffer.from(await githubArtifactResponse.arrayBuffer()).toString(),
+    processCandidateSource.toString().replace("? 'unknown' : 'routine'", "? 'prioritised-repair' : 'routine'"));
   const buildArtifactResponse = await fetch(`${app.base}/api/execution/runs/${githubRequest.id}/artifact?path=${encodeURIComponent('builds/build-1/dist/app.js')}`, as('alice'));
   assert.equal(buildArtifactResponse.status, 200);
   assert.equal(Buffer.from(await buildArtifactResponse.arrayBuffer()).toString(), 'stable bundle\n',
@@ -10225,25 +13585,29 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(typeof repeatReaderDenied.error, 'string', 'the existing 403 API envelope reports a string error message');
   const firstRepeat = await request(app.base, repeatRoute, { ...as('alice'), method: 'POST',
     body: JSON.stringify({ commandId: 'github-repeat-first' }) }, 201);
-  assert.equal(firstRepeat.comparison, 'matched');
+  assert.equal(firstRepeat.comparison, 'mismatch',
+    'byte-for-byte TAP hashes differ because real Node test output includes per-run timing even when the candidate and outcomes are unchanged');
   assert.equal(firstRepeat.verification.status, 'COMPLETED');
   assert.equal(firstRepeat.verification.exitCode, 0);
+  assert.deepEqual(firstRepeat.checkReceipts.map((receipt) => receipt.status), ['PASSED', 'PASSED'],
+    'the distinct repeat executes the same real oracle and both checks pass despite nondeterministic TAP timing bytes');
+  assert.notEqual(firstRepeat.verification.outputHash, githubCandidate.execution.repositoryCandidate.verification.outputHash);
   assert.match(firstRepeat.verification.outputHash, /^[a-f0-9]{64}$/);
   assert.equal(Object.hasOwn(firstRepeat.verification, 'stdout'), false,
     'repeat records expose a bounded output hash without returning verifier output');
   assert.equal(JSON.stringify(firstRepeat).includes(openAiFixtureSecret), false,
     'repeat responses never disclose the model broker credential');
-  assert.equal(verifierObservations.length, 4, 'a deliberate repeat invokes every check from the saved plan');
+  assert.equal(verifierObservations.length, 13, 'the R2 owner recovery run adds two real checks; the broken candidate stops after its first failed check');
   const repeatReplay = await request(app.base, repeatRoute, { ...as('alice'), method: 'POST',
     body: JSON.stringify({ commandId: 'github-repeat-first' }) });
   assert.equal(repeatReplay.replayed, true);
   assert.equal(repeatReplay.attemptId, firstRepeat.attemptId);
-  assert.equal(verifierObservations.length, 4, 'idempotent replay does not invoke any check again');
+  assert.equal(verifierObservations.length, 13, 'idempotent replay does not invoke any check again');
   const secondRepeat = await request(app.base, repeatRoute, { ...as('alice'), method: 'POST',
     body: JSON.stringify({ commandId: 'github-repeat-second' }) }, 201);
   assert.notEqual(secondRepeat.attemptId, firstRepeat.attemptId,
     'a new command ID creates a distinct append-only repeat attempt');
-  assert.equal(verifierObservations.length, 6);
+  assert.equal(verifierObservations.length, 15);
   assert.deepEqual(secondRepeat.checkReceipts.map((receipt) => receipt.status), ['PASSED', 'PASSED'],
     'repeat verification reruns every check from the pinned plan');
   verifierScenario = 'fail-first'; verifierScenarioCall = 0;
@@ -10272,10 +13636,30 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   await close(app);
   app = await start(postgres.databaseUrl, { executionProfiles: profiles, oidcAuthenticator,
     secretEncryptionKey: Buffer.alloc(32, 0x5c), openAiValidationEndpoint: `${providerOrigin}/v1/models`,
-    githubVerifierProfile: fixedGithubVerifierProfile, githubBuildPlan: fixedGithubBuildPlan });
+    githubVerifierProfile: fixedGithubVerifierProfile, githubBuildPlan: fixedGithubBuildPlan,
+    productHarnessDispatcher: fixedN2ProductHarnessDispatcher });
   const repeatsAfterRestart = await request(app.base, repeatRoute, as('alice'));
   assert.deepEqual(repeatsAfterRestart.attempts, repeatsBeforeRestart.attempts,
     'append-only verifier observations and comparison evidence survive PostgreSQL application restart');
+  const ac4AfterRestart = await request(app.base, `/api/sdlc/cases/${ac4Case.id}`, as('alice'));
+  const persistedAc4Review = ac4AfterRestart.artifacts.requirements.requirements.find((entry) => entry.id === ac4Requirement.id)
+    .processRunEvidenceReviews[0];
+  assert.equal(persistedAc4Review.integrityStatus, 'VALID');
+  assert.equal(persistedAc4Review.reviewHash, ac4Review.reviewHash);
+  assert.equal(persistedAc4Review.conflictResolution.recordedBy, principal('carol'));
+  assert.equal(persistedAc4Review.conflictResolution.rationale, ac4Review.conflictResolution.rationale);
+  assert.equal(persistedAc4Review.criteria.find((entry) => entry.criterionId === 'AC4-TECHNICAL-BOUNDARY').disposition, 'CONTRADICTED');
+  assert.equal(persistedAc4Review.acceptanceStatus, 'BLOCKED_MANDATORY_FAILURE');
+  assert.equal(persistedAc4Review.verificationStatus, 'NOT_EXECUTED');
+  assert.equal(persistedAc4Review.truthStatus, 'UNVERIFIED');
+  const acceptedEvaluationAfterRestart = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+  const persistedEvaluationAcceptance = acceptedEvaluationAfterRestart.artifacts.processIntentEvaluationAcceptances[0];
+  assert.equal(persistedEvaluationAcceptance.id, acceptedEvaluation.id);
+  assert.equal(persistedEvaluationAcceptance.integrityStatus, 'VALID');
+  assert.equal(persistedEvaluationAcceptance.applicability, 'STALE');
+  assert.equal(persistedEvaluationAcceptance.acceptanceHash, acceptedEvaluation.acceptanceHash);
+  assert.equal(persistedEvaluationAcceptance.verificationStatus, 'NOT_EXECUTED');
+  assert.equal(persistedEvaluationAcceptance.truthStatus, 'UNVERIFIED');
   const githubCandidateAfterRepeat = await request(app.base, `/api/execution/runs/${githubRequest.id}`, as('alice'));
   assert.equal(githubCandidateAfterRepeat.execution.repositoryCandidate.candidateEvidence.hash, githubCandidateReceipt.hash,
   'repeat verification leaves the original candidate receipt unchanged');
@@ -10285,10 +13669,153 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     `/api/sdlc/cases/${repositoryEvidenceCase.id}`, as('alice'));
   assert.deepEqual(repositoryEvidenceAfterRestart.artifacts.requirements.processRunEvidenceLinks[0].repositoryCheckEvidence,
     repositoryChecks, 'validated repository-check evidence survives restart with its exact pins');
+  const behaviorAggregateRow = await app.persistence.query(`select state from orgward.aggregates
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`, [behaviorPlanCase.id]);
+  const originalBehaviorAggregate = structuredClone(behaviorAggregateRow.rows[0].state);
+  const tamperedBehaviorAggregate = structuredClone(originalBehaviorAggregate);
+  tamperedBehaviorAggregate.artifacts.processBehaviorTestPlans[1].assertions[0].testName = 'post-hoc assertion mapping';
+  await app.persistence.query(`update orgward.aggregates set state=$2::jsonb,state_hash=$3
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`,
+  [behaviorPlanCase.id, JSON.stringify(tamperedBehaviorAggregate), contentHash(tamperedBehaviorAggregate)]);
+  await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}`, as('alice'), 503);
+  await app.persistence.query(`update orgward.aggregates set state=$2::jsonb,state_hash=$3
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`,
+  [behaviorPlanCase.id, JSON.stringify(originalBehaviorAggregate), contentHash(originalBehaviorAggregate)]);
+  const behaviorCaseAfterTamperRestore = await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}`, as('alice'));
+  assert.equal(behaviorCaseAfterTamperRestore.artifacts.processBehaviorTestPlans[1].planHash, behaviorPlan.planHash,
+    'tampered assertion mapping fails readback and the retained plan remains valid after restoration');
   const buildArtifactAfterRestart = await fetch(`${app.base}/api/execution/runs/${githubRequest.id}/artifact?path=${encodeURIComponent('builds/build-2/dist/app.js')}`, as('alice'));
   assert.equal(buildArtifactAfterRestart.status, 200);
   assert.equal(Buffer.from(await buildArtifactAfterRestart.arrayBuffer()).toString(), 'stable bundle\n',
     'both captured build artifact sets remain available after application restart');
+  const observationRoute = `/api/sdlc/cases/${repositoryEvidenceCase.id}/repository-check-observations`;
+  const observationCase = await request(app.base, `/api/sdlc/cases/${repositoryEvidenceCase.id}`, as('alice'));
+  const observationRequest = { version: observationCase.version,
+    draftRevision: observationCase.artifacts.requirements.draftRevision,
+    requirementId: repositoryEvidenceRequirement.id,
+    linkId: repositoryEvidenceLink.processRunEvidenceLink.id,
+    idempotencyKey: 't90-repository-check-observation' };
+  const projectVersionBeforeObservation = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data.version;
+  await request(app.base, observationRoute, { method: 'POST', headers: { authorization: 'Bearer invalid-observer' },
+    body: JSON.stringify(observationRequest) }, 401);
+  await request(app.base, observationRoute, { ...as('readonly'), method: 'POST', body: JSON.stringify(observationRequest) }, 403);
+  await request(app.base, observationRoute, { ...as('tenant-b-admin'), method: 'POST', body: JSON.stringify(observationRequest) }, 404);
+  await request(app.base, observationRoute, { ...as('alice'), method: 'POST', body: JSON.stringify({ ...observationRequest, signals: { technicalHealthy: false } }) }, 400);
+  const afterRejectedObservationRequests = await request(app.base, `/api/sdlc/cases/${repositoryEvidenceCase.id}`, as('alice'));
+  assert.equal(afterRejectedObservationRequests.version, observationCase.version);
+  assert.equal(afterRejectedObservationRequests.events.filter((event) => event.type === 'RepositoryCheckObserved').length, 0);
+  const observedRepositoryChecks = await request(app.base, observationRoute, { ...as('alice'), method: 'POST',
+    body: JSON.stringify(observationRequest) }, 201);
+  const checkObservation = observedRepositoryChecks.repositoryCheckObservation;
+  const checkProposal = observedRepositoryChecks.repositoryCheckProposal;
+  assert.equal(checkObservation.category, 'REPOSITORY_CHECK');
+  assert.equal(checkObservation.candidateEvidenceHash, githubCandidateReceipt.hash);
+  assert.equal(checkObservation.runOutcome, 'SUCCEEDED');
+  assert.equal(checkObservation.verifierResult.status, 'COMPLETED');
+  assert.equal(checkObservation.verifierResult.exitCode, 0);
+  assert.equal(checkObservation.verifierResult.outputHash, githubCandidate.execution.repositoryCandidate.verification.outputHash);
+  assert.equal(checkObservation.businessTruthStatus, 'UNVERIFIED');
+  assert.equal(checkObservation.verificationStatus, 'NOT_EXECUTED');
+  assert.equal(checkObservation.causality, 'HYPOTHESIS');
+  assert.equal(checkProposal.status, 'PROPOSED_NOT_APPLIED');
+  assert.equal(checkProposal.authorityRequired, true);
+  assert.equal(checkProposal.businessTruthStatus, 'UNVERIFIED');
+  assert.equal(checkProposal.verificationStatus, 'NOT_EXECUTED');
+  assert.match(checkProposal.proposedClaim, /Passing checks do not establish business behavior/);
+  assert.equal((await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data.version, projectVersionBeforeObservation,
+    'recording a repository-check hypothesis does not mutate the saved design aggregate');
+  const replayedCheckObservation = await request(app.base, observationRoute, { ...as('alice'), method: 'POST',
+    body: JSON.stringify(observationRequest) });
+  assert.equal(replayedCheckObservation.command.replayed, true);
+  assert.equal(replayedCheckObservation.repositoryCheckObservation.id, checkObservation.id);
+  assert.equal(replayedCheckObservation.artifacts.repositoryCheckObservations.length, 1);
+  assert.equal(replayedCheckObservation.artifacts.repositoryCheckProposals.length, 1);
+  const changedObservationReplay = await fetch(`${app.base}${observationRoute}`, { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ ...observationRequest, linkId: `process-run-link-${randomUUID()}` }) });
+  assert.equal(changedObservationReplay.status, 409);
+  const secondObservationLinkCase = await request(app.base, `/api/sdlc/cases/${repositoryEvidenceCase.id}`, as('alice'));
+  const secondObservationLink = await request(app.base, `/api/sdlc/cases/${repositoryEvidenceCase.id}/process-run-evidence`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: secondObservationLinkCase.version,
+      draftRevision: secondObservationLinkCase.artifacts.requirements.draftRevision,
+      requirementId: repositoryEvidenceRequirement.id, runId: githubRequest.id,
+      idempotencyKey: 't90-repository-check-second-link' }) }, 201);
+  const staleObservationAttempt = await fetch(`${app.base}${observationRoute}`, { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ ...observationRequest, linkId: secondObservationLink.processRunEvidenceLink.id,
+      idempotencyKey: 't90-repository-check-stale-case-version' }) });
+  assert.equal(staleObservationAttempt.status, 409, 'a stale case version cannot create an observation against a newly linked receipt');
+  const preservedObservationRun = structuredClone((await app.persistence.query(`select state from orgward.aggregates
+    where tenant_id='tenant-a' and aggregate_kind='execution_run' and aggregate_id=$1`, [githubRequest.id])).rows[0].state);
+  const tamperedObservationRun = structuredClone(preservedObservationRun);
+  tamperedObservationRun.execution.repositoryCandidate.checkReceipts[0].commandHash = 'e'.repeat(64);
+  await app.persistence.query(`update orgward.aggregates set state=$2::jsonb,state_hash=$3
+    where tenant_id='tenant-a' and aggregate_kind='execution_run' and aggregate_id=$1`,
+  [githubRequest.id, JSON.stringify(tamperedObservationRun), contentHash(tamperedObservationRun)]);
+  const observationCaseVersionBeforeTamper = Number((await app.persistence.query(`select version from orgward.aggregates
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`, [repositoryEvidenceCase.id])).rows[0].version);
+  assert.equal((await fetch(`${app.base}/api/sdlc/cases/${repositoryEvidenceCase.id}`, as('alice'))).status, 503,
+    'linked case readback rejects a tampered repository receipt');
+  const tamperedObservationAttempt = await fetch(`${app.base}${observationRoute}`, { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ ...observationRequest, version: observationCaseVersionBeforeTamper,
+      linkId: secondObservationLink.processRunEvidenceLink.id,
+      idempotencyKey: 't90-repository-check-tampered-attempt' }) });
+  assert.equal(tamperedObservationAttempt.status, 503);
+  assert.equal(Number((await app.persistence.query(`select version from orgward.aggregates
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`, [repositoryEvidenceCase.id])).rows[0].version),
+  observationCaseVersionBeforeTamper, 'a tampered persisted receipt cannot append a proposal or observation');
+  await app.persistence.query(`update orgward.aggregates set state=$2::jsonb,state_hash=$3
+    where tenant_id='tenant-a' and aggregate_kind='execution_run' and aggregate_id=$1`,
+  [githubRequest.id, JSON.stringify(preservedObservationRun), contentHash(preservedObservationRun)]);
+  const pinnedProjectState = structuredClone((await app.persistence.query(`select state from orgward.aggregates
+    where tenant_id='tenant-a' and aggregate_kind='project' and aggregate_id=$1`, [project.id])).rows[0].state);
+  const advancedProjectState = structuredClone(pinnedProjectState);
+  const nextBlueprint = structuredClone(advancedProjectState.blueprintVersions.at(-1));
+  nextBlueprint.version += 1;
+  advancedProjectState.blueprintVersions.push(nextBlueprint);
+  await app.persistence.query(`update orgward.aggregates set state=$2::jsonb,state_hash=$3
+    where tenant_id='tenant-a' and aggregate_kind='project' and aggregate_id=$1`,
+  [project.id, JSON.stringify(advancedProjectState), contentHash(advancedProjectState)]);
+  const staleSourceAttempt = await fetch(`${app.base}${observationRoute}`, { ...as('alice'), method: 'POST',
+    body: JSON.stringify({ ...observationRequest, version: observationCaseVersionBeforeTamper,
+      linkId: secondObservationLink.processRunEvidenceLink.id, idempotencyKey: 't90-repository-check-stale-source' }) });
+  assert.equal(staleSourceAttempt.status, 409, 'a repository-check observation cannot be attached after the source blueprint advances');
+  await app.persistence.query(`update orgward.aggregates set state=$2::jsonb,state_hash=$3
+    where tenant_id='tenant-a' and aggregate_kind='project' and aggregate_id=$1`,
+  [project.id, JSON.stringify(pinnedProjectState), contentHash(pinnedProjectState)]);
+  await close(app);
+  app = await start(postgres.databaseUrl, { executionProfiles: profiles, oidcAuthenticator,
+    secretEncryptionKey: Buffer.alloc(32, 0x5c), openAiValidationEndpoint: `${providerOrigin}/v1/models`,
+    githubVerifierProfile: fixedGithubVerifierProfile, githubBuildPlan: fixedGithubBuildPlan,
+    productHarnessDispatcher: fixedN2ProductHarnessDispatcher });
+  const observedAfterRestart = await request(app.base, `/api/sdlc/cases/${repositoryEvidenceCase.id}`, as('alice'));
+  assert.equal(observedAfterRestart.artifacts.repositoryCheckObservations[0].contentHash, checkObservation.contentHash);
+  assert.equal(observedAfterRestart.artifacts.repositoryCheckProposals[0].contentHash, checkProposal.contentHash);
+  assert.equal(observedAfterRestart.artifacts.repositoryCheckProposals[0].status, 'PROPOSED_NOT_APPLIED');
+  assert.equal(observedAfterRestart.events.filter((event) => event.type === 'RepositoryCheckObserved').length, 1);
+  const retainedObservationState = structuredClone((await app.persistence.query(`select state from orgward.aggregates
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`, [repositoryEvidenceCase.id])).rows[0].state);
+  const resealedObservationState = structuredClone(retainedObservationState);
+  resealedObservationState.artifacts.repositoryCheckObservations[0].scope = 'caller-mutated scope';
+  await app.persistence.query(`update orgward.aggregates set state=$2::jsonb,state_hash=$3
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`,
+  [repositoryEvidenceCase.id, JSON.stringify(resealedObservationState), contentHash(resealedObservationState)]);
+  await request(app.base, `/api/sdlc/cases/${repositoryEvidenceCase.id}`, as('alice'), 503);
+  await app.persistence.query(`update orgward.aggregates set state=$2::jsonb,state_hash=$3
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`,
+  [repositoryEvidenceCase.id, JSON.stringify(retainedObservationState), contentHash(retainedObservationState)]);
+  const resealedProposalState = structuredClone(retainedObservationState);
+  const retainedProposal = resealedProposalState.artifacts.repositoryCheckProposals[0];
+  retainedProposal.proposedClaim = 'Tampered proposal claim with a recomputed self-hash.';
+  retainedProposal.contentHash = contentHash(Object.fromEntries(Object.entries(retainedProposal).filter(([key]) => key !== 'contentHash')));
+  await app.persistence.query(`update orgward.aggregates set state=$2::jsonb,state_hash=$3
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`,
+  [repositoryEvidenceCase.id, JSON.stringify(resealedProposalState), contentHash(resealedProposalState)]);
+  const tamperedProposalReplay = await fetch(`${app.base}${observationRoute}`, { ...as('alice'), method: 'POST',
+    body: JSON.stringify(observationRequest) });
+  assert.equal(tamperedProposalReplay.status, 503,
+    'exact idempotent replay rejects a self-resealed proposal whose retained event pins a different proposal hash');
+  await app.persistence.query(`update orgward.aggregates set state=$2::jsonb,state_hash=$3
+    where tenant_id='tenant-a' and aggregate_kind='change_case' and aggregate_id=$1`,
+  [repositoryEvidenceCase.id, JSON.stringify(retainedObservationState), contentHash(retainedObservationState)]);
   await rm(githubCandidateWorkspace, { recursive: true, force: true });
 
   const staleAgentPauseRequest = await taskRequest('process-task-pause-stale-agent-request', {
@@ -10340,11 +13867,13 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.deepEqual((await request(app.base,
     `/api/execution/process-task-instances?projectId=${encodeURIComponent(otherProject.id)}`, as('alice'))).instances, []);
 
+
   const proposalApplyPath = `/api/v1/projects/${project.id}/blueprint-proposals/${openAiSuccessfulRun.id}/apply`;
   const projectBeforeProposalApply = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
   const actorDesignBeforeProposalApply = Object.values(projectBeforeProposalApply.latestBlueprint.areas).flatMap((area) => area.items)
     .filter((item) => item.type === 'actor-human' || item.type === 'actor-agent');
-  const processPlansBeforeProposalApply = structuredClone(projectBeforeProposalApply.processPlans);
+  const immutablePlanProjection = (plans) => plans?.map(({ blueprintApplicability: _applicability, ...plan }) => plan);
+  const processPlansBeforeProposalApply = immutablePlanProjection(projectBeforeProposalApply.processPlans);
   const runtimeBeforeProposalApply = (await request(app.base,
     `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances;
   const editorProposalApply = await request(app.base, proposalApplyPath, {
@@ -10480,12 +14009,17 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.deepEqual(Object.values(project.latestBlueprint.areas).flatMap((area) => area.items)
     .filter((item) => item.type === 'actor-human' || item.type === 'actor-agent'), actorDesignBeforeProposalApply,
   'proposal application does not change actor assignments or authority design');
-  assert.deepEqual(project.processPlans, processPlansBeforeProposalApply,
-    'proposal application preserves immutable plan revisions and task assignments');
+  assert.ok(project.processPlans.length > 0);
+  assert.deepEqual(project.processPlans.map((plan) => plan.blueprintApplicability?.status),
+    project.processPlans.map(() => 'STALE'),
+    'the material proposed-detail change marks plans pinned to the prior blueprint as stale');
+  assert.deepEqual(immutablePlanProjection(project.processPlans), processPlansBeforeProposalApply,
+    'proposal application preserves immutable plan revisions and task assignments; derived applicability may change with the current blueprint');
   const runtimeAfterProposalApply = (await request(app.base,
     `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances;
-  assert.deepEqual(runtimeAfterProposalApply, runtimeBeforeProposalApply,
-    'applying proposed detail does not change process runtime or assignment state');
+  const runtimeAssignmentProjection = (instances) => instances.map(({ effectiveAssigneeDisplayName, ...instance }) => instance);
+  assert.deepEqual(runtimeAssignmentProjection(runtimeAfterProposalApply), runtimeAssignmentProjection(runtimeBeforeProposalApply),
+    'applying proposed detail does not change process runtime or assignment state; resolved display names are presentation metadata');
   const proposalApplyReplay = await request(app.base, proposalApplyPath, {
     ...as('alice'), method: 'POST', body: command('proposal-apply-success', {
       proposalHash: generatedProposal.proposalHash, reviewEventId: finalPassedReview.event.eventId,
@@ -10707,7 +14241,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   });
   assert.equal(freshProposalReview.event.type, 'BlueprintProposalReviewed');
   const freshProjectReadyToApply = freshProposalReview.data;
-  const freshPlansBeforeApply = structuredClone(projectBeforeFreshProposalApply.processPlans);
+  const freshPlansBeforeApply = immutablePlanProjection(projectBeforeFreshProposalApply.processPlans);
   const freshRuntimesBeforeApply = (await request(app.base,
     `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances;
   const editorFreshProposalApply = await request(app.base, freshProposalApplyPath, {
@@ -10739,8 +14273,12 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   const freshAppliedTarget = Object.values(project.latestBlueprint.areas).flatMap((area) => area.items)
     .find((item) => item.id === freshDependentProposal.target.id);
   assert.equal(freshAppliedTarget.detail, freshDependentProposal.proposedDetail);
-  assert.deepEqual(project.processPlans, freshPlansBeforeApply,
-    'applying the current dependent proposal leaves all immutable plan revisions pinned');
+  assert.ok(project.processPlans.length > 0);
+  assert.deepEqual(project.processPlans.map((savedPlan) => savedPlan.blueprintApplicability?.status),
+    project.processPlans.map(() => 'STALE'),
+    'the material proposed-detail change marks plans pinned to the prior blueprint as stale');
+  assert.deepEqual(immutablePlanProjection(project.processPlans), freshPlansBeforeApply,
+    'applying the current dependent proposal leaves all immutable plan revisions pinned; derived applicability may change with the current blueprint');
   const freshRuntimesAfterApply = (await request(app.base,
     `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('alice'))).instances;
   assert.deepEqual(freshRuntimesAfterApply, freshRuntimesBeforeApply,
@@ -10761,6 +14299,7 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     where tenant_id = 'tenant-a' and aggregate_kind = 'execution_run' and aggregate_id = $1
   `, [secondRoot.id]), /immutable/i);
 
+
   await close(app); app = null;
   app = await start(postgres.databaseUrl, {
     executionProfiles: profiles, oidcAuthenticator, secretEncryptionKey: Buffer.alloc(32, 0x5c),
@@ -10780,6 +14319,45 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.equal(restoredRuns.find((run) => run.id === pendingCancellation.id)
     .events.filter((event) => event.type === 'ExecutionCancelled').length, 1);
   assert.deepEqual(new Map(restoredRuns.map((run) => [run.id, run.status])).get(secondRoot.id), 'SUCCEEDED');
+  const restoredBehaviorCase = await request(app.base, `/api/sdlc/cases/${behaviorPlanCase.id}`, as('alice'));
+  const restoredBehaviorRequirement = restoredBehaviorCase.artifacts.requirements.requirements
+    .find((entry) => entry.id === behaviorRequirement.id);
+  assert.equal(restoredBehaviorRequirement.processRunEvidenceLinks[0].behaviorEvaluation.result, 'TEST_PASS');
+  assert.equal(restoredBehaviorRequirement.processRunEvidenceLinks[0].behaviorEvaluation.assertionResult, 'TEST_PASS');
+  assert.equal(restoredBehaviorRequirement.processRunEvidenceLinks[0].behaviorEvaluation.riskCoverage, 'LINKED');
+  assert.equal(restoredBehaviorRequirement.processRunEvidenceLinks[0].behaviorEvaluation.businessTruthStatus, 'UNVERIFIED');
+  assert.equal(restoredBehaviorRequirement.processRunEvidenceLinks[0].verificationStatus, 'NOT_EXECUTED');
+  const restoredAc3Case = await request(app.base, `/api/sdlc/cases/${ac3Case.id}`, as('alice'));
+  const restoredN2Receipt = restoredAc3Case.artifacts.processBehaviorProductHarnessExecutions
+    .find((entry) => entry.id === n2Receipt.id);
+  assert.equal(restoredN2Receipt.receiptHash, n2Receipt.receiptHash,
+    'restart verifies and retains the immutable N2.AUTHORIZATION partial receipt');
+  assert.equal(restoredN2Receipt.status, 'PASS');
+  assert.equal(restoredN2Receipt.negativeSuiteStatus, 'INCOMPLETE');
+  assert.equal(restoredN2Receipt.businessTruthStatus, 'UNVERIFIED');
+  const restoredMissingAssertionReceipt = restoredAc3Case.artifacts.processBehaviorProductHarnessExecutions
+    .find((entry) => entry.id === n2MissingAssertionReceipt.id);
+  assert.equal(restoredMissingAssertionReceipt.receiptHash, n2MissingAssertionReceipt.receiptHash);
+  assert.equal(restoredMissingAssertionReceipt.status, 'PASS');
+  assert.equal(restoredMissingAssertionReceipt.integrityStatus, 'VALID');
+  assert.equal(restoredMissingAssertionReceipt.run.assertion.reason, 'ASSERTION_RESULT_NOT_FOUND');
+  assert.equal(restoredMissingAssertionReceipt.businessTruthStatus, 'UNVERIFIED');
+  const restoredAc3Requirement = restoredAc3Case.artifacts.requirements.requirements
+    .find((entry) => entry.id === ac3Requirement.id);
+  assert.deepEqual(restoredAc3Requirement.processRunEvidenceLinks.map((entry) => entry.applicability), ['STALE', 'STALE'],
+    JSON.stringify({ currentDraftRevision: restoredAc3Case.artifacts.requirements.draftRevision,
+      currentContract: { version: restoredAc3Requirement.criterionContract.version, hash: restoredAc3Requirement.criterionContract.contentHash },
+      links: restoredAc3Requirement.processRunEvidenceLinks.map(({ draftRevision, requirementHash, applicability, behaviorEvaluation }) => ({
+        draftRevision, requirementHash, applicability, planId: behaviorEvaluation?.planId })),
+      currentRequirementHash: digest(Object.fromEntries(Object.entries(restoredAc3Requirement)
+        .filter(([key]) => !['processRunEvidenceLinks', 'processRunEvidenceReviews', 'behaviorTestPlans',
+          'reviewCriteria', 'criterionSources', 'processBehaviorTestPlans'].includes(key)))) }));
+  assert.equal(restoredAc3Requirement.processRunEvidenceLinks[0].behaviorEvaluation.planHash, ac3PlanV1.planHash,
+    'restart retains the prior result under its original baseline hash');
+  assert.equal(restoredAc3Requirement.processRunEvidenceLinks[1].behaviorEvaluation.planHash, ac3PlanV2.planHash,
+    'restart retains regenerated evidence under the revised baseline hash');
+  assert.deepEqual(restoredAc3Requirement.processBehaviorTestPlans.map((entry) => entry.regenerationStatus),
+    ['REGENERATION_REQUIRED', 'REGENERATION_REQUIRED', 'REGENERATION_REQUIRED']);
   assert.deepEqual(new Map(restoredRuns.map((run) => [run.id, run.status])).get(dependent.id), 'SUCCEEDED');
   const restoredOpenAiRun = restoredRuns.find((run) => run.id === openAiSuccessfulRun.id);
   assert.equal(restoredOpenAiRun.status, 'SUCCEEDED');
@@ -10955,8 +14533,11 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     { disposition: 'resume', ownerAction: null },
     { disposition: 'resume', ownerAction: 'reassign' },
   ]);
-  assert.equal(JSON.stringify(restoredReassignedHuman).includes(principal('bob')), false,
-    'the reassignment target remains private in runtime reads after restart');
+  assert.equal(JSON.stringify(restoredReassignedHuman.events
+    .filter((event) => event.type === 'HumanTaskEscalationResolved')).includes(principal('bob')), false,
+  'the reassignment target remains private in runtime event reads after restart');
+  assert.equal(restoredReassignedHuman.outcome.outputRecords.some((record) => record.reporterPrincipal === principal('bob')), true,
+    'separate human-reported output provenance retains the reporter identity');
   const restoredFormerEffectiveAssignee = (await request(app.base,
     `/api/execution/process-task-instances?projectId=${encodeURIComponent(project.id)}`, as('carol'))).instances
     .find((runtime) => runtime.taskId === 'task-process-review' && runtime.planInstanceId === secondRoot.processTaskRef.planInstanceId);
@@ -11042,8 +14623,12 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     runtime.processPlanId === mixedPlan.id && runtime.planInstanceId === planInstanceId && runtime.taskId === taskId);
   const restoredMixedCheckpoint = restoredMixedRuntime(mixedHumanStart.planInstanceId, mixedCheckpointTask.id);
   assert.equal(restoredMixedCheckpoint.status, 'SUCCEEDED');
-  assert.deepEqual(restoredMixedCheckpoint.outcome, { result: 'succeeded' },
+  assert.equal(restoredMixedCheckpoint.outcome.result, 'succeeded',
     'the saved human checkpoint result survives the application restart');
+  assert.equal(restoredMixedCheckpoint.outcome.outputSchemaVersion, 1);
+  assert.ok(restoredMixedCheckpoint.outcome.outputRecords.length > 0);
+  assert.ok(restoredMixedCheckpoint.outcome.outputRecords.every((record) => record.status === 'UNAVAILABLE'),
+    'missing typed checkpoint values remain explicitly unavailable after restart');
   assert.deepEqual(restoredMixedCheckpoint.evidence, ['The original review result was checked.', 'Supporting notes were verified against the saved design.']);
   const restoredMixedCheckpointCompletion = restoredMixedCheckpoint.events.filter((event) => event.type === 'HumanTaskCompleted');
   assert.equal(restoredMixedCheckpointCompletion.length, 1,
@@ -11095,7 +14680,10 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     ['Owner checked the assignment.', 'Owner recorded permission to resume.'],
     ['Assigned human verified the checkpoint.', 'Supporting evidence matches the saved task.'],
   ], 'multiple evidence notes remain attached to their original escalation, owner decision and completion after restart');
-  assert.equal(JSON.stringify(restoredAssignedMixedRoot).includes(principal('bob')), false);
+  assert.equal(JSON.stringify(restoredAssignedMixedRoot.events
+    .filter((event) => ['HumanTaskEscalated', 'HumanTaskEscalationResolved'].includes(event.type)))
+    .includes(principal('bob')), false,
+  'runtime task events do not disclose private assignment principals after restart');
   const restoredOverrideMixedRoot = restoredMixedRuntime(mixedOverrideStart.planInstanceId, mixedHumanRootTask.id);
   assert.equal(restoredOverrideMixedRoot.status, 'SUCCEEDED');
   assert.deepEqual(restoredOverrideMixedRoot.evidence, ['Owner checked the saved review and accepted the result.']);
@@ -11135,7 +14723,10 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
   assert.deepEqual([persistedHumanHistory[3].data.result, persistedHumanHistory[3].data.evidence], [
     'succeeded', ['Root human task completed.'],
   ]);
-  assert.equal(JSON.stringify(persistedHumanHistory).includes(principal('bob')), false);
+  assert.equal(JSON.stringify(persistedHumanHistory
+    .filter((event) => ['HumanTaskEscalated', 'HumanTaskEscalationResolved'].includes(event.type)))
+    .includes(principal('bob')), false,
+  'escalation history keeps direct assignment principals private while completion provenance remains attributable');
   assert.equal(restoredHumanRuntime(ownerSuccessRefs.planInstanceId).status, 'SUCCEEDED');
   assert.equal(restoredHumanRuntime(ownerFailureRefs.planInstanceId).status, 'FAILED');
   const restoredStaleEscalation = restoredHumanRuntime(staleResumeRefs.planInstanceId);
@@ -11150,6 +14741,126 @@ test('saved process task requests are linked, idempotent, dependency-gated, and 
     where tenant_id='tenant-a' and plan_instance_id=$1 and task_id=$2
   `, [staleResumeRefs.planInstanceId, rootHumanTask.id]), /exactly one append-only event/i,
   'the database trigger rejects a terminal escalation update that omits its resolution event');
+
+  const dispatchFreshProject = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
+  const dispatchFlow = { schemaVersion: '1.0', startStepId: 'work', steps: [
+    { id: 'work', kind: 'manual', title: 'Record a delivery outcome', processId: 'process-deliver',
+      roleId: 'role-operations', inputIds: ['information-prioritised-need'],
+      outputIds: ['information-delivery-result'], nextStepId: 'done', exceptionStepId: null },
+    { id: 'done', kind: 'end', title: 'Finish delivery review' },
+  ] };
+  const dispatchFlowSaved = await request(app.base, `/api/v1/projects/${project.id}/enterprise/commands`, {
+    ...as('alice'), method: 'POST', body: command('t123-save-provider-dispatch-flow', {
+      kind: 'define-process-flow', objectId: 'process-deliver', processFlow: dispatchFlow,
+      blueprintId: dispatchFreshProject.latestBlueprint.id, blueprintVersion: dispatchFreshProject.latestBlueprint.version,
+      reason: 'Create the manual process fixture for provider dispatch freshness.',
+    }, dispatchFreshProject.version),
+  });
+  project = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
+  const currentBlueprintVersion = project.latestBlueprint.version;
+  const dispatchOperationsBindingProposal = await request(app.base, bindingRoute, {
+    ...as('alice'), method: 'POST', body: command('t123-dispatch-operations-binding', {
+      actorId: 'actor-design-assistant', roleId: 'role-operations', targetPrincipal: principal('servicebot'),
+      blueprintVersion: currentBlueprintVersion,
+    }, project.version),
+  });
+  const dispatchOperationsBindingEnabled = await request(app.base, bindingEnableRoute, {
+    ...as('alice'), method: 'POST', body: command('t123-dispatch-operations-binding-enable', {
+      actorId: 'actor-design-assistant', roleId: 'role-operations', blueprintVersion: currentBlueprintVersion,
+      executionProfileIds: profiles.map((profile) => profile.id),
+    }, dispatchOperationsBindingProposal.data.version),
+  });
+  project = dispatchOperationsBindingEnabled.data;
+  const dispatchFreshPlanCreated = await request(app.base, plansRoute, {
+    ...as('alice'), method: 'POST', body: command('t123-dispatch-fresh-plan', {
+      processId: 'process-deliver', mode: 'manual-flow',
+      blueprintId: dispatchFlowSaved.data.blueprintId, blueprintVersion: dispatchFlowSaved.data.blueprintVersion,
+    }, project.version),
+  }, 201);
+  const dispatchFreshPlan = dispatchFreshPlanCreated.data.processPlans.at(-1);
+  const dispatchFreshRevision = await request(app.base, `${plansRoute}/${dispatchFreshPlan.id}/revisions`, {
+    ...as('alice'), method: 'POST', body: command('t123-dispatch-fresh-plan-revision', {
+      tasks: dispatchFreshPlan.tasks.map((task) => {
+        const human = task.id === 'task-process-review' || task.assignee?.roleId === 'role-founder';
+        return { taskId: task.id, title: task.title, detail: task.detail, dependencies: task.dependencies,
+          roleId: human ? 'role-founder' : 'role-operations', actorId: human ? 'actor-founder' : 'actor-design-assistant' };
+      }),
+    }, dispatchFreshPlanCreated.data.version),
+  });
+  const dispatchFreshCurrentPlan = dispatchFreshRevision.data.processPlans.find((entry) => entry.id === dispatchFreshPlan.id
+    && entry.revision === 2);
+  assert.equal(dispatchFreshCurrentPlan.kind, 'manual_process_flow_plan');
+  const dispatchFreshTask = dispatchFreshCurrentPlan.tasks.find((task) => task.assignee?.actorId === 'actor-design-assistant'
+    && task.assignee?.roleId === 'role-operations');
+  assert.ok(dispatchFreshTask, `the current manual plan has its provider-backed operations task: ${JSON.stringify(dispatchFreshCurrentPlan.tasks)}`);
+  assert.deepEqual(dispatchFreshTask.dependencies, []);
+  const staleSourceRequest = await taskRequest('t123-linked-run-approved-before-blueprint-advance', {
+    projectId: project.id, planId: dispatchFreshCurrentPlan.id, revision: dispatchFreshCurrentPlan.revision,
+    taskId: dispatchFreshTask.id, profileId: 'process-task-openai',
+  });
+  assert.ok(staleSourceRequest.processTaskRef.flowBinding,
+    'the provider request is linked to a revisioned manual-flow plan rather than an ordinary saved graph');
+  const staleSourceApproval = await request(app.base, `/api/execution/runs/${staleSourceRequest.id}/approve`, {
+    ...as('bob'), method: 'POST', body: JSON.stringify({ version: staleSourceRequest.version }),
+  });
+  let announceStaleHandoff;
+  let releaseStaleHandoff;
+  const staleHandoffEntered = new Promise((resolve) => { announceStaleHandoff = resolve; });
+  const staleHandoffGate = new Promise((resolve) => { releaseStaleHandoff = resolve; });
+  const priorHandoffFault = app.persistence.faults.afterProviderDispatchHandoff;
+  app.persistence.faults.afterProviderDispatchHandoff = async ({ runId }) => {
+    if (runId !== staleSourceRequest.id) return priorHandoffFault?.({ runId });
+    announceStaleHandoff();
+    await staleHandoffGate;
+  };
+  const providerCallsBeforeStaleHandoff = providerCallCount;
+  const pendingStaleSourceDispatch = fetch(`${app.base}/api/execution/runs/${staleSourceRequest.id}/execute`, {
+    ...as('alice'), method: 'POST', body: JSON.stringify({ version: staleSourceApproval.version }),
+  }).then(async (response) => ({ status: response.status, body: await response.json() }));
+  await staleHandoffEntered;
+  const beforeStaleDispatchProject = (await request(app.base, `/api/v1/projects/${project.id}`, as('alice'))).data;
+  const freshnessRisk = beforeStaleDispatchProject.latestBlueprint.areas.governanceRiskControls.items
+    .find((item) => item.id === 'risk-unvalidated-demand');
+  assert.ok(freshnessRisk);
+  await request(app.base, `/api/v1/projects/${project.id}/blueprint/edits`, {
+    ...as('alice'), method: 'POST', body: command('t123-advance-risk-source-after-process-approval', {
+      objectId: freshnessRisk.id, name: freshnessRisk.name,
+      detail: `${freshnessRisk.detail} Dispatch freshness fixture edit.`, processIds: ['process-learn'],
+    }, beforeStaleDispatchProject.version),
+  });
+  releaseStaleHandoff();
+  const staleSourceDispatchResult = await pendingStaleSourceDispatch;
+  app.persistence.faults.afterProviderDispatchHandoff = priorHandoffFault;
+  const staleSourceDispatch = staleSourceDispatchResult.body;
+  assert.equal(staleSourceDispatchResult.status, 200);
+  assert.equal(staleSourceDispatch.status, 'INTERRUPTED');
+  assert.equal(staleSourceDispatch.events.at(-1).data.reason, 'process_plan_blueprint_stale');
+  assert.equal(staleSourceDispatch.linkedOutcomeCategory, 'source_stale');
+  assert.deepEqual(staleSourceDispatch.execution.changedArtifacts, [], 'no worker result is produced after the source pin becomes stale');
+  assert.equal(staleSourceDispatch.processTaskRef.processPlanId, dispatchFreshCurrentPlan.id,
+    'the interrupted history remains linked to its exact historical plan');
+  assert.equal(providerCallCount, providerCallsBeforeStaleHandoff,
+    'a blueprint edit committed after durable provider handoff but before actual send prevents provider invocation');
+  const staleDispatchAttempt = await postgres.query(`select status from orgward.provider_dispatch_attempts
+    where tenant_id='tenant-a' and run_id=$1`, [staleSourceRequest.id]);
+  assert.equal(staleDispatchAttempt.rows[0].status, 'cancelled');
+  const staleDispatchLease = await postgres.query(`select count(*)::int count from orgward.execution_worker_leases
+    where tenant_id='tenant-a' and run_id=$1 and lease_until > now()`, [staleSourceRequest.id]);
+  assert.equal(staleDispatchLease.rows[0].count, 0, 'source-stale denial releases the worker lease');
+  const reapprovalAfterSourceStale = await fetch(`${app.base}/api/execution/runs/${staleSourceRequest.id}/approve`, {
+    ...as('bob'), method: 'POST', body: JSON.stringify({ version: staleSourceDispatch.version }),
+  });
+  const reapprovalDenial = await reapprovalAfterSourceStale.json();
+  assert.equal(reapprovalAfterSourceStale.status, 400,
+    'the approval route rejects reapproval for a source-stale interruption');
+  assert.equal(reapprovalDenial.error,
+    'Execution run must be awaiting approval or require renewed approval after authority changed.',
+    'source-stale interruptions do not use the special approval-stale recovery path');
+  const runAfterDeniedReapproval = await request(app.base, `/api/execution/runs/${staleSourceRequest.id}`, as('bob'));
+  assert.equal(runAfterDeniedReapproval.status, 'INTERRUPTED');
+  assert.equal(runAfterDeniedReapproval.version, staleSourceDispatch.version,
+    'denied reapproval does not mutate the interrupted run');
+
 });
 
 test('startup refuses an applied migration whose checksum no longer matches', async (t) => {

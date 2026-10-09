@@ -34,12 +34,66 @@ export function sentinelAssessmentChoices(project) {
     && typeof entry.reportHash === 'string');
 }
 
+export function n3StageStatusCopy(mapping, execution) {
+  const testPath = mapping?.candidatePath ?? 'tests/learning.test.js';
+  const sourceHash = mapping?.sourceTestBytesHash;
+  if (!execution) {
+    return `Original test fails: run the pinned source bytes for ${testPath} (SHA-256 ${sourceHash}) and retain TAP with exit code 1. Unauthorized deletion is rejected: delete that same path in the candidate and require BEHAVIOR_CANDIDATE_ORPHAN_PATH before verifier dispatch. Neither stage has executed yet.`;
+  }
+  if (execution.status === 'PASS') {
+    const source = execution.sourceStage;
+    const candidate = execution.candidate;
+    const exactPassEvidence = source?.path === testPath && source?.bytesHash === sourceHash
+      && source?.exitCode === 1 && typeof source?.tap === 'string' && /# fail 1\b/.test(source.tap)
+      && candidate?.deletedPath === testPath && candidate.deletedPathHash === sourceHash
+      && candidate?.changes?.length === 1 && candidate.changes[0]?.path === testPath
+      && candidate.changes[0]?.change === 'deleted' && execution.run?.errorCode === 'BEHAVIOR_CANDIDATE_ORPHAN_PATH'
+      && execution.verifierDispatchCount === 0;
+    if (exactPassEvidence) {
+      return `Original test fails: pinned source bytes for ${testPath} exited 1 and TAP records one failure. Unauthorized deletion is rejected: OrgWard rejected deletion of that same pinned path before verifier dispatch.`;
+    }
+    return 'N3 is marked PASS, but the saved receipt does not contain both exact stage proofs; review the receipt before relying on this result.';
+  }
+  if (execution.status === 'INCONCLUSIVE') {
+    return `N3 result INCONCLUSIVE: the pinned source failure and same-path deletion rejection could not both be confirmed. No stage result is claimed; restore the isolated fixture and rerun.`;
+  }
+  if (execution.status === 'FAIL') {
+    return 'N3 result FAIL: the saved stage evidence did not match the expected source-failure and deletion-rejection outcomes. Review the receipt and correct the fixture or guard before rerunning.';
+  }
+  return `Original test fails: run the pinned source bytes for ${testPath} (SHA-256 ${sourceHash}) and retain TAP with exit code 1. Unauthorized deletion is rejected: delete that same path in the candidate and require BEHAVIOR_CANDIDATE_ORPHAN_PATH before verifier dispatch. Neither stage has executed yet.`;
+}
+
+export function productHarnessEligiblePlanGroups(requirement) {
+  const plans = (requirement?.processBehaviorTestPlans ?? []).filter((plan) => plan.caseDefinitions?.cases
+    ?.some((entry) => entry.type === 'NEGATIVE'
+      && ['N2', 'N3'].every((scenarioId) => entry.dataset?.cases?.some((scenario) => scenario.id === scenarioId)
+        && entry.expectedOutput?.cases?.some((scenario) => scenario.id === scenarioId))));
+  const r1Plans = (requirement?.processBehaviorTestPlans ?? []).filter((plan) => plan.criterionContractVersion === 1
+    && plan.caseDefinitions?.cases?.some((entry) => entry.type === 'RECOVERY'
+      && entry.dataset?.cases?.some((scenario) => scenario.id === 'R1')
+      && entry.expectedOutput?.cases?.some((scenario) => scenario.id === 'R1'))
+    && requirement.processRunEvidenceLinks?.some((link) => link.behaviorEvaluation?.planId === plan.id
+      && link.behaviorEvaluation?.planHash === plan.planHash && link.behaviorEvaluation?.result === 'TEST_PASS'));
+  const r2Plans = (requirement?.processBehaviorTestPlans ?? []).filter((plan) => plan.caseDefinitions?.cases?.some((entry) => entry.type === 'RECOVERY'
+    && entry.dataset?.cases?.some((scenario) => scenario.id === 'R2')
+    && entry.expectedOutput?.cases?.some((scenario) => scenario.id === 'R2'))
+    && requirement.processRunEvidenceLinks?.some((link) => link.behaviorEvaluation?.planId === plan.id
+      && link.behaviorEvaluation?.planHash === plan.planHash && link.behaviorEvaluation?.result === 'TEST_PASS'));
+  return { plans, r1Plans, r2Plans };
+}
+
+export function productHarnessRequestFormVisibility({ owner, plans = [], r1Plans = [], r2Plans = [] } = {}) {
+  return { subcaseForms: owner === true && plans.length > 0,
+    r1RecoveryForm: owner === true && r1Plans.length > 0,
+    r2RecoveryForm: owner === true && r2Plans.length > 0 };
+}
+
 export function savedProjectPinSummary(context) {
   if (context?.manifestVersion === 1 && !Object.hasOwn(context, 'savedProjectPin')) {
     return 'Historical context manifest v1 has no structured saved-project pin.';
   }
   const pin = context?.savedProjectPin;
-  if (![2, 3].includes(context?.manifestVersion) || !pin) return 'No saved project is pinned in this context manifest.';
+  if (![2, 3, 4].includes(context?.manifestVersion) || !pin) return 'No saved project is pinned in this context manifest.';
   const snapshot = pin.blueprintSnapshotStatus === 'PINNED'
     ? `blueprint snapshot SHA-256 ${pin.blueprintSnapshotHash}`
     : 'blueprint snapshot hash unavailable in this legacy source binding';
@@ -73,9 +127,15 @@ export function contextManifestPresentation(context) {
     unknownDependencies: Array.isArray(context.unknownDependencies) ? context.unknownDependencies : [],
     excludedDependencies: Array.isArray(context.excludedDependencies) ? context.excludedDependencies : [],
     savedProjectCoverage: context.savedProjectCoverage && typeof context.savedProjectCoverage === 'object' ? {
+      schemaVersion: context.savedProjectCoverage.schemaVersion ?? 1,
       status: context.savedProjectCoverage.status ?? 'UNKNOWN',
       sourcePinHash: context.savedProjectCoverage.sourcePinHash ?? 'unavailable',
       processTraceHash: context.savedProjectCoverage.processTraceHash ?? null,
+      sourcePins: context.savedProjectCoverage.sourcePins ?? null,
+      candidateUniverse: context.savedProjectCoverage.candidateUniverse ?? null,
+      contextRequirements: Array.isArray(context.savedProjectCoverage.contextRequirements) ? context.savedProjectCoverage.contextRequirements : [],
+      classifications: Array.isArray(context.savedProjectCoverage.classifications) ? context.savedProjectCoverage.classifications : [],
+      classificationHash: context.savedProjectCoverage.classificationHash ?? null,
       represented: Array.isArray(context.savedProjectCoverage.represented) ? context.savedProjectCoverage.represented : [],
       unknownDependencies: Array.isArray(context.savedProjectCoverage.unknownDependencies) ? context.savedProjectCoverage.unknownDependencies : [],
       excludedDependencies: context.savedProjectCoverage.excludedDependencies ?? { status: 'UNKNOWN', reason: 'Unavailable.' },
@@ -96,10 +156,125 @@ export function processRunEvidencePresentation(link) {
     repositoryChecks: (link.repositoryCheckEvidence ?? []).map((receipt) =>
       `${receipt.id} v${receipt.version}: ${receipt.status} · repository ${receipt.repositoryId} · source snapshot ${receipt.sourceSnapshotId}${receipt.sourceCommitOid ? ` · commit ${receipt.sourceCommitOid}` : ''} · command SHA-256 ${receipt.commandHash} · check plan SHA-256 ${receipt.planHash} · source tree SHA-256 ${receipt.sourceTreeDigest} · candidate tree SHA-256 ${receipt.candidateTreeDigest} · candidate evidence SHA-256 ${receipt.candidateEvidenceHash} · output SHA-256 ${receipt.outputHash}`),
     repositoryCheckStatus: link.repositoryCheckEvidenceStatus ?? 'UNKNOWN',
+    behaviorEvaluation: link.behaviorEvaluation ? {
+      status: `Authorized assertion evaluation · ${link.behaviorEvaluation.status} · result ${link.behaviorEvaluation.result} · risk coverage ${link.behaviorEvaluation.riskCoverage ?? 'UNKNOWN'} · business truth ${link.behaviorEvaluation.businessTruthStatus}; overall verification remains ${link.verificationStatus}.`,
+      assertions: (link.behaviorEvaluation.assertions ?? []).map((assertion) =>
+        `${assertion.testName}: ${assertion.status}${assertion.reason ? ` · ${assertion.reason}` : ''} · output SHA-256 ${assertion.outputHash ?? 'UNAVAILABLE'}`),
+      scenarioMappings: (link.behaviorEvaluation.scenarioMappings ?? []).map((mapping) =>
+        `${mapping.type}: mapping ${mapping.status}${mapping.reason ? ` · ${mapping.reason}` : ''} · ${mapping.scope} · case remains ${mapping.caseStatus}`),
+    } : null,
     applicability: link.applicability === 'CURRENT'
       ? 'Applies to this exact requirement draft.'
-      : 'STALE: the requirement draft changed after this link was created.',
+      : 'STALE · REGENERATION_REQUIRED: this immutable evidence remains pinned to its original requirement and criterion revision.',
   };
+}
+
+export function processBehaviorTestPlanPresentation(plan) {
+  if (!plan?.id || !plan.planHash || !Number.isSafeInteger(plan.criterionContractVersion)) return null;
+  const stale = plan.regenerationStatus === 'REGENERATION_REQUIRED';
+  const regenerationAction = stale
+    ? `Regenerate v${plan.currentCriterionContractVersion ?? 'current'} plan`
+    : null;
+  return {
+    heading: `Pre-run plan ${plan.id} · ${stale ? 'REGENERATION_REQUIRED' : plan.regenerationStatus ?? 'APPLICABILITY_UNKNOWN'}`,
+    pins: `Plan SHA-256 ${plan.planHash} · requirement SHA-256 ${plan.requirementHash} · criterion baseline v${plan.criterionContractVersion} SHA-256 ${plan.criterionContractHash} · repository snapshot ${plan.repository?.snapshotId ?? 'unavailable'}`,
+    status: stale
+      ? `Old plan and results remain immutably bound to criterion baseline v${plan.criterionContractVersion} and shared requirements draft r${plan.draftRevision}. Current baseline v${plan.currentCriterionContractVersion ?? 'unavailable'} and shared draft r${plan.currentDraftRevision ?? 'unavailable'} require a newly authorized plan${plan.regenerationReason ? ` (${plan.regenerationReason})` : ''}.`
+      : plan.regenerationStatus === 'CURRENT'
+        ? `Current for criterion baseline v${plan.criterionContractVersion} and shared requirements draft r${plan.currentDraftRevision ?? plan.draftRevision}. Authorization is pre-run only; it does not assert business truth.`
+        : 'Applicability could not be established; do not treat this plan as current.',
+    repositorySnapshotId: plan.repository?.snapshotId ?? null,
+    regenerationAction,
+    contextPins: plan.evaluationContext ? `Workspace ${plan.evaluationContext.workspace?.projectId ?? 'unavailable'} · branch ${plan.evaluationContext.branch?.branchRef ?? 'unavailable'} @ ${plan.evaluationContext.branch?.commitOid ?? 'unavailable'} · effective time ${plan.evaluationContext.effectiveTime?.value ?? 'unavailable'} (owner asserted from ${plan.evaluationContext.effectiveTime?.sourceRef?.id ?? 'unavailable'})` : null,
+    scenarioMappingsStatus: plan.caseDefinitions?.mappingStatus
+      ?? (plan.caseDefinitions?.cases?.every((entry) => entry.executionMapping?.status === 'OWNER_PROPOSED_UNVERIFIED')
+        ? 'OWNER_PROPOSED_UNVERIFIED' : 'INCOMPLETE'),
+    scenarioCases: Array.isArray(plan.caseDefinitions?.cases) ? plan.caseDefinitions.cases.map((entry) => {
+      const mapping = entry.executionMapping;
+      const hasDatasetAndOracle = Object.hasOwn(entry, 'dataset') && Object.hasOwn(entry, 'expectedOutput');
+      const details = mapping?.status === 'OWNER_PROPOSED_UNVERIFIED'
+        ? `dataset ${JSON.stringify(entry.dataset)} · expected ${JSON.stringify(entry.expectedOutput)} · assertion ${mapping.assertionId} / ${mapping.testName} · TEST ${mapping.testPath} SHA-256 ${mapping.testFileHash} · mapping ${mapping.status}`
+        : hasDatasetAndOracle
+          ? `dataset ${JSON.stringify(entry.dataset)} · expected ${JSON.stringify(entry.expectedOutput)} · dataset/oracle captured · execution mapping INCOMPLETE`
+          : `dataset/oracle INCOMPLETE · execution mapping INCOMPLETE`;
+      return `${entry.type} · ${entry.definition} · source ${entry.sourceRef?.id ?? 'unavailable'} · criterion ${entry.criterionId ?? 'unavailable'} · ${details} · ${entry.status ?? 'UNKNOWN'}`;
+    }) : [],
+  };
+}
+
+export function repositoryCheckObservationPresentation(observation, proposal = null) {
+  if (!observation?.id || observation.category !== 'REPOSITORY_CHECK' || !observation.contentHash) return null;
+  return {
+    heading: `Repository-check observation · ${observation.id}`,
+    pins: `Run ${observation.runId} · plan ${observation.planId} r${observation.planRevision} · task ${observation.taskId} · candidate evidence SHA-256 ${observation.candidateEvidenceHash}`,
+    outcome: `Execution run ${observation.runOutcome ?? 'UNKNOWN'}${observation.verifierResult
+      ? ` · verifier ${observation.verifierResult.id} v${observation.verifierResult.version}: ${observation.verifierResult.status} · output SHA-256 ${observation.verifierResult.outputHash}`
+      : ' · verifier result unavailable'}`,
+    checks: (observation.checks ?? []).map((entry) => `${entry.id} v${entry.version}: ${entry.status} · command SHA-256 ${entry.commandHash} · output SHA-256 ${entry.outputHash}`),
+    status: `Code/check scope only · causality ${observation.causality} · business truth ${observation.businessTruthStatus} · verification ${observation.verificationStatus}`,
+    proposal: proposal ? `${proposal.title} · ${proposal.status} · authority required · ${proposal.proposedClaim}` : 'No correction proposal was derived.',
+  };
+}
+
+export function processEvidenceReviewPresentation(review) {
+  if (!review?.id || !review?.linkId || !review?.reviewerPrincipal || !review?.reviewHash
+    || review.status !== 'HUMAN_REVIEWED') return null;
+  return {
+    heading: `HUMAN_REVIEWED · ${review.disposition} · ${review.applicability ?? 'UNKNOWN'} · integrity ${review.integrityStatus ?? 'UNKNOWN'}`,
+    identity: `Link ${review.linkId} · reviewer ${review.reviewerPrincipal} · source process ${review.source?.processId ?? 'UNKNOWN'} · blueprint ${review.source?.blueprintId ?? 'UNKNOWN'} v${review.source?.blueprintVersion ?? 'UNKNOWN'} · criteria baseline ${review.criterionContractVersion ?? 'legacy'} SHA-256 ${review.criterionContractHash ?? 'unavailable'} · review SHA-256 ${review.reviewHash}`,
+    status: `Runtime verification ${review.verificationStatus ?? 'UNKNOWN'} · truth ${review.truthStatus ?? 'UNKNOWN'} · acceptance ${review.acceptanceStatus ?? 'UNASSESSED'}. This is a human attestation against saved evidence and does not establish external truth.`,
+    criteria: (review.criteria ?? []).map((entry) => `${entry.disposition}: ${entry.criterion} · ${entry.note}`),
+    scenarios: (review.scenarioCases ?? []).map((entry) => `${entry.type} definition ${entry.disposition} · ${entry.executionReviewStatus ?? 'REVIEW_ONLY'}${entry.executionDecision ? ` · ${entry.executionDecision}` : ''} · ${entry.note}`),
+    resolution: review.conflictResolution
+      ? `Explicit resolution by ${review.conflictResolution.recordedBy}: ${review.conflictResolution.decision} · ${review.conflictResolution.rationale} · business criteria ${review.conflictResolution.businessCriterionIds.join(', ') || 'none'} · technical criteria ${review.conflictResolution.technicalCriterionIds.join(', ') || 'none'} · failed mandatory criteria ${review.failedMandatoryCriterionIds?.join(', ') || 'none'}`
+      : (review.failedMandatoryCriterionIds?.length
+        ? `Mandatory failures remain failed: ${review.failedMandatoryCriterionIds.join(', ')}.`
+        : null),
+  };
+}
+
+export function processBehaviorScenarioExecutionPresentation(receipt, { current = false } = {}) {
+  if (!receipt?.id || ![1, 2].includes(receipt.schemaVersion) || !receipt.receiptHash
+    || !['PASS', 'FAIL', 'INCONCLUSIVE'].includes(receipt.result)
+    || receipt.businessTruthStatus !== 'UNVERIFIED' || receipt.runtimeVerificationStatus !== 'NOT_EXECUTED') return null;
+  return {
+    heading: `${receipt.caseType ?? 'UNKNOWN'} case assertion ${receipt.result} · ${receipt.id} · ${current ? 'CURRENT' : 'HISTORICAL'}`,
+    pins: `Case ${receipt.caseId} · plan SHA-256 ${receipt.planHash} · criterion SHA-256 ${receipt.criterionHash ?? 'not recorded in legacy receipt'} · run ${receipt.runId} · candidate tree SHA-256 ${receipt.candidateTreeDigest}`,
+    assertion: `${receipt.testPath} SHA-256 ${receipt.testFileHash} · assertion ${receipt.assertionId} (${receipt.testName}) · dataset SHA-256 ${receipt.datasetHash} · oracle SHA-256 ${receipt.oracleHash}`,
+    tap: `Node TAP ${receipt.tap?.status ?? 'UNKNOWN'} · tests ${receipt.tap?.tests ?? 'UNKNOWN'} · pass ${receipt.tap?.passed ?? 'UNKNOWN'} · fail ${receipt.tap?.failed ?? 'UNKNOWN'} · TAP output SHA-256 ${receipt.tap?.outputHash ?? 'unavailable'}`,
+    status: `One saved assertion against its pinned dataset and oracle. This is not a suite or business PASS. Business truth ${receipt.businessTruthStatus}; runtime verification ${receipt.runtimeVerificationStatus}. ${receipt.statement ?? ''}`,
+  };
+}
+
+export function intentEvaluationAcceptancePresentation(acceptance) {
+  if (!acceptance?.id || acceptance.status !== 'ACCEPTED' || !acceptance.acceptanceHash) return null;
+  return {
+    heading: `ACCEPTED · ${acceptance.applicability ?? 'UNKNOWN'} · integrity ${acceptance.integrityStatus ?? 'UNKNOWN'}`,
+    pins: `Requirement ${acceptance.requirementId} · draft r${acceptance.draftRevision} · source process ${acceptance.source?.processId ?? 'UNKNOWN'} · blueprint ${acceptance.source?.blueprintId ?? 'UNKNOWN'} v${acceptance.source?.blueprintVersion ?? 'UNKNOWN'} · evaluation SHA-256 ${acceptance.evaluationHash} · review SHA-256 ${acceptance.reviewHash} · record SHA-256 ${acceptance.acceptanceHash}`,
+    status: `Scoped intent evaluation accepted by ${acceptance.acceptedBy}. Runtime verification remains ${acceptance.verificationStatus}; business truth remains ${acceptance.truthStatus}. ${acceptance.statement}`,
+    reason: acceptance.reason,
+  };
+}
+
+export function canAcceptIntentEvaluation({ authenticated, principal, accountableOwner, baseline = false,
+  requirement, draftRevision, link, reviews = [], acceptances = [] }) {
+  if (!authenticated || !principal || principal !== accountableOwner || baseline || !requirement || !link
+    || link.applicability !== 'CURRENT' || link.behaviorEvaluation?.status !== 'CHECKED_BEHAVIOR'
+    || link.behaviorEvaluation?.result !== 'TEST_PASS' || link.behaviorEvaluation?.businessTruthStatus !== 'UNVERIFIED'
+    || link.status !== 'UNVERIFIED' || link.verificationStatus !== 'NOT_EXECUTED') return false;
+  if (acceptances.some((entry) => entry.status === 'ACCEPTED' && entry.integrityStatus === 'VALID'
+    && entry.applicability === 'CURRENT' && entry.requirementId === requirement.id
+    && entry.draftRevision === draftRevision)) return false;
+  const planId = link.behaviorEvaluation.planId;
+  const latest = reviews.filter((review) => review.linkId === link.id && review.behaviorPlanId === planId
+    && review.behaviorPlanHash === link.behaviorEvaluation.planHash && review.integrityStatus === 'VALID'
+    && review.applicability === 'CURRENT' && review.reviewerPrincipal !== principal)
+    .sort((left, right) => Number(left.recordedVersion ?? 0) - Number(right.recordedVersion ?? 0)
+      || String(left.reviewedAt ?? '').localeCompare(String(right.reviewedAt ?? ''))
+      || String(left.id).localeCompare(String(right.id))).at(-1);
+  return Boolean(latest && latest.acceptanceStatus === 'REVIEW_ONLY_NOT_ACCEPTED' && !latest.conflictResolution
+    && latest.criteria?.length === (requirement.reviewCriteria ?? []).length
+    && latest.criteria.every((entry) => entry.disposition === 'SUPPORTED'));
 }
 
 function clarificationModel(entry, currentRevision) {

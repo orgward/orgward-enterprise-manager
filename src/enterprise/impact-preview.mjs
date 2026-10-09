@@ -2,6 +2,7 @@ import { digest } from '../sdlc/contracts.mjs';
 import { blueprintObjects, enterpriseFailure } from './types.mjs';
 import { applyEnterpriseCommand, normalizeEnterpriseCommand } from './commands.mjs';
 import { latestBlueprint } from '../model.mjs';
+import { processFlowSensitivity } from './process-flow-sensitivity.mjs';
 
 const incompleteAreas = [
   'Role instructions and constraints beyond direct blueprint relationships',
@@ -29,6 +30,90 @@ function decisionTableChanges(before, after) {
     .map((field) => ({ field, before: oldFields.get(field) ?? null, after: newFields.get(field) ?? null }));
 }
 
+function flattenFields(value, path, fields = new Map()) {
+  if (Array.isArray(value)) {
+    if (!value.length) fields.set(path, value);
+    else value.forEach((entry, index) => flattenFields(entry,
+      `${path}[${entry && typeof entry === 'object' && typeof entry.id === 'string' ? entry.id : index}]`, fields));
+  } else if (value && typeof value === 'object') {
+    const entries = Object.entries(value);
+    if (!entries.length) fields.set(path, value);
+    else entries.forEach(([key, entry]) => flattenFields(entry, `${path}.${key}`, fields));
+  } else fields.set(path, value ?? null);
+  return fields;
+}
+
+function processFlowChanges(before, after) {
+  const oldFields = flattenFields(before ?? null, 'processFlow');
+  const newFields = flattenFields(after ?? null, 'processFlow');
+  return [...new Set([...oldFields.keys(), ...newFields.keys()])].sort()
+    .filter((field) => digest(oldFields.get(field) ?? null) !== digest(newFields.get(field) ?? null))
+    .map((field) => ({ field, before: oldFields.get(field) ?? null, after: newFields.get(field) ?? null }));
+}
+
+function flowReferenceField(field) {
+  return /\.(?:processId|roleId|decisionId|resourceId)$/.test(field)
+    || /\.(?:inputIds|outputIds)\[\d+\]$/.test(field);
+}
+
+function traceProcessFlowDependencies({ targetId, changedFields, relations, currentObjects, candidateObjects, source, budget }) {
+  const relationIndex = new Map();
+  for (const relation of relations) {
+    const key = `${relation.source}\0${relation.type}\0${relation.target}`;
+    const saved = relationIndex.get(key) ?? { ...relation, before: false, after: false };
+    if (relation.side === 'before') saved.before = true;
+    else saved.after = true;
+    relationIndex.set(key, saved);
+  }
+  const edges = [...relationIndex.values()].sort((a, b) => `${a.source}:${a.type}:${a.target}`.localeCompare(`${b.source}:${b.type}:${b.target}`));
+  const objects = new Map([...currentObjects, ...candidateObjects]);
+  const seeds = [];
+  for (const change of changedFields.filter((entry) => flowReferenceField(entry.field))) {
+    for (const id of [change.before, change.after]) {
+      if (typeof id !== 'string' || !objects.has(id) || id === targetId) continue;
+      seeds.push({ id, field: change.field });
+    }
+  }
+  const uniqueSeeds = [...new Map(seeds.map((seed) => [`${seed.id}\0${seed.field}`, seed])).values()];
+  const paths = uniqueSeeds.flatMap((seed) => {
+    const record = candidateObjects.get(seed.id) ?? currentObjects.get(seed.id);
+    return record ? [{ objectId: record.id, name: record.name, type: record.type,
+      path: [{ objectId: targetId, field: seed.field }, { objectId: seed.id, field: seed.field, relation: 'process-flow-reference' }],
+      source: { blueprintId: source.blueprintId, blueprintVersion: source.blueprintVersion, snapshotHash: source.snapshotHash } }] : [];
+  });
+  const rootPath = [{ objectId: targetId, field: changedFields.map((entry) => entry.field).join(', ') || 'processFlow' }];
+  const queue = [{ id: targetId, path: rootPath }];
+  for (const seed of uniqueSeeds) {
+    queue.push({ id: seed.id, path: [{ objectId: targetId, field: seed.field }, { objectId: seed.id, field: seed.field, relation: 'process-flow-reference' }] });
+  }
+  const visited = new Set();
+  const seenPaths = new Set(uniqueSeeds.map((seed) => `${targetId}:${seed.field}>${seed.id}:${seed.field}:process-flow-reference`));
+  while (queue.length && visited.size < budget) {
+    const current = queue.shift();
+    if (visited.has(current.id)) continue;
+    visited.add(current.id);
+    const record = candidateObjects.get(current.id) ?? currentObjects.get(current.id);
+    if (!record) continue;
+    const pathKey = current.path.map((entry) => `${entry.objectId}:${entry.field ?? ''}:${entry.relation ?? ''}`).join('>');
+    if (!seenPaths.has(pathKey)) {
+      seenPaths.add(pathKey);
+      paths.push({ objectId: record.id, name: record.name, type: record.type, path: current.path,
+        source: { blueprintId: source.blueprintId, blueprintVersion: source.blueprintVersion, snapshotHash: source.snapshotHash } });
+    }
+    for (const edge of edges) {
+      // Walk saved relations outward from the edited process and changed flow
+      // references to show their dependency/consumer closure.
+      if (edge.source !== current.id || visited.has(edge.target)) continue;
+      queue.push({ id: edge.target, path: [...current.path, { objectId: edge.target, relation: edge.type,
+        edgeState: edge.before && edge.after ? 'UNCHANGED' : edge.after ? 'ADDED' : 'REMOVED' }] });
+    }
+  }
+  const hasUnvisitedQueuedObject = queue.some(({ id }) => !visited.has(id));
+  return { status: hasUnvisitedQueuedObject ? 'INCOMPLETE' : 'COMPUTED', budget, visitedCount: visited.size,
+    visitedObjectIds: [...visited].sort(),
+    paths: paths.sort((a, b) => a.objectId.localeCompare(b.objectId) || a.path.length - b.path.length) };
+}
+
 function processFlowsReferencingDecision(blueprint, decisionId) {
   return blueprintObjects(blueprint).filter((object) => object.type === 'process' && object.processFlow)
     .flatMap((process) => {
@@ -40,12 +125,16 @@ function processFlowsReferencingDecision(blueprint, decisionId) {
     });
 }
 
-export function previewEnterpriseEditImpact(project, input) {
+export function previewEnterpriseEditImpact(project, input, { traversalBudget = 256 } = {}) {
+  if (!Number.isSafeInteger(traversalBudget) || traversalBudget < 1 || traversalBudget > 10000) {
+    throw enterpriseFailure('INVALID_IMPACT_TRAVERSAL_BUDGET', 'Impact traversal budget must be a bounded positive integer.', 400);
+  }
   const command = normalizeEnterpriseCommand(input);
   const decisionTableEdit = command.kind === 'define-decision-table';
-  const branchEdit = command.kind === 'edit-branch-object' || (decisionTableEdit && Boolean(command.branchId));
-  if (command.kind !== 'edit-blueprint-object' && !branchEdit && !decisionTableEdit) {
-    throw enterpriseFailure('INVALID_IMPACT_PREVIEW', 'Impact preview supports one main or branch proposed-design object edit or typed decision-table edit at a time.', 400);
+  const processFlowEdit = command.kind === 'define-process-flow';
+  const branchEdit = command.kind === 'edit-branch-object' || ((decisionTableEdit || processFlowEdit) && Boolean(command.branchId));
+  if (command.kind !== 'edit-blueprint-object' && !branchEdit && !decisionTableEdit && !processFlowEdit) {
+    throw enterpriseFailure('INVALID_IMPACT_PREVIEW', 'Impact preview supports one main or branch proposed-design object edit, typed decision-table edit or process-flow edit at a time.', 400);
   }
   const main = latestBlueprint(project);
   const branch = branchEdit ? project.enterpriseBranches?.find((entry) => entry.id === command.branchId) : null;
@@ -99,8 +188,11 @@ export function previewEnterpriseEditImpact(project, input) {
   const candidateTarget = blueprintObjects(candidate).find((object) => object.id === targetId);
   const changedFields = decisionTableEdit
     ? decisionTableChanges(currentTarget?.decisionTable, candidateTarget?.decisionTable)
+    : processFlowEdit ? processFlowChanges(currentTarget?.processFlow, candidateTarget?.processFlow)
     : candidate.edit.changedFields.map((field) => ({ field,
       before: candidate.edit.before[field] ?? null, after: candidate.edit.after[field] ?? null }));
+  const processSensitivity = processFlowEdit ? processFlowSensitivity(currentTarget?.processFlow,
+    candidateTarget?.processFlow, changedFields) : null;
   const priorFlows = decisionTableEdit ? processFlowsReferencingDecision(current, targetId) : [];
   const proposedFlows = decisionTableEdit ? processFlowsReferencingDecision(candidate, targetId) : [];
   const flowsById = new Map();
@@ -114,6 +206,24 @@ export function previewEnterpriseEditImpact(project, input) {
     previous.afterProcessSnapshotHash = flow.processSnapshotHash;
     flowsById.set(flow.processId, previous);
   }
+  const processFlowDependencies = processFlowEdit && processSensitivity.materialFieldPaths.length ? traceProcessFlowDependencies({ targetId,
+    changedFields: changedFields.filter((entry) => processSensitivity.materialFieldPaths.includes(entry.field)),
+    relations: [...current.relations.map((relation) => ({ ...relation, side: 'before' })),
+      ...candidate.relations.map((relation) => ({ ...relation, side: 'after' }))],
+    currentObjects, candidateObjects, source: { blueprintId: current.id, blueprintVersion: current.version, snapshotHash: sourceHash }, budget: traversalBudget })
+    : processFlowEdit ? { status: 'COMPUTED', budget: traversalBudget, visitedCount: 0, visitedObjectIds: [], paths: [] } : null;
+  const affectedIds = processFlowDependencies
+    ? [targetId, ...processFlowDependencies.paths.map((entry) => entry.objectId)]
+    : objectIds;
+  const affectedObjects = [...new Set(affectedIds)].flatMap((objectId) => {
+    const object = candidateObjects.get(objectId) ?? currentObjects.get(objectId);
+    if (!object) return [];
+    const beforeRelations = current.relations.filter((relation) => relation.source === objectId || relation.target === objectId);
+    const afterRelations = candidate.relations.filter((relation) => relation.source === objectId || relation.target === objectId);
+    return [{ objectId, name: object.name, type: object.type, edited: objectId === targetId,
+      relationshipTypes: [...new Set([...beforeRelations, ...afterRelations].map((relation) => relation.type))].sort(),
+      source: { blueprintId: current.id, blueprintVersion: current.version, snapshotHash: sourceHash } }];
+  });
   const core = {
     status: 'INCOMPLETE',
     source: { projectId: project.id, projectVersion: project.version, blueprintId: current.id,
@@ -125,15 +235,52 @@ export function previewEnterpriseEditImpact(project, input) {
     ...(branchEdit ? { proposedBranchRevision: branchHead.revision + 1 } : {}),
     editedObjectId: targetId,
     changedFields,
+    ...(processSensitivity ? { fieldSensitivity: processSensitivity } : {}),
     directRelationshipChanges: {
       before: current.relations.filter((relation) => relation.source === targetId || relation.target === targetId),
       after: candidate.relations.filter((relation) => relation.source === targetId || relation.target === targetId),
     },
-    directlyAffectedObjects,
+    directlyAffectedObjects: processFlowEdit ? affectedObjects : directlyAffectedObjects,
+    ...(processFlowDependencies ? { dependencyTraversal: processFlowDependencies } : {}),
     ...(decisionTableEdit ? { directlyReferencingProcessFlows: [...flowsById.values()].sort((a, b) => a.processId.localeCompare(b.processId)) } : {}),
     coverage: { directBlueprintRelationships: 'COMPUTED', operationalAndDownstreamImpact: 'UNKNOWN' },
     unknownAreas: incompleteAreas,
     limitation: 'This read-only preview does not authorize publication or establish currentness for dependent approvals or work.',
   };
   return { ...core, previewHash: digest(core) };
+}
+
+export const ENTERPRISE_PUBLICATION_TRAVERSAL_BUDGET = 256;
+
+// Internal publication has no client preview receipt to trust. Recompute the
+// current candidate's declared process-flow neighborhoods inside the caller's
+// project transaction and fail closed if any one exceeds the fixed budget.
+export function assessEnterprisePublicationImpact(project) {
+  const blueprint = latestBlueprint(project);
+  if (!blueprint) return { status: 'COMPUTED', budget: ENTERPRISE_PUBLICATION_TRAVERSAL_BUDGET, flows: [] };
+  const objects = blueprintObjects(blueprint);
+  const byId = new Map(objects.map((object) => [object.id, object]));
+  const relations = (blueprint.relations ?? []).map((relation) => ({ ...relation, side: 'after' }));
+  const source = { blueprintId: blueprint.id, blueprintVersion: blueprint.version, snapshotHash: digest(blueprint) };
+  const flows = objects.filter((object) => object.type === 'process' && object.processFlow).map((process) => {
+    const changedFields = [];
+    for (const step of process.processFlow.steps ?? []) {
+      for (const field of ['processId', 'roleId', 'decisionId', 'resourceId']) {
+        if (typeof step[field] === 'string') changedFields.push({ field: `processFlow.steps[${step.id}].${field}`,
+          before: null, after: step[field] });
+      }
+      for (const field of ['inputIds', 'outputIds']) {
+        for (const [index, id] of (step[field] ?? []).entries()) {
+          changedFields.push({ field: `processFlow.steps[${step.id}].${field}[${index}]`, before: null, after: id });
+        }
+      }
+    }
+    const traversal = traceProcessFlowDependencies({ targetId: process.id,
+      changedFields, relations, currentObjects: byId, candidateObjects: byId,
+      source, budget: ENTERPRISE_PUBLICATION_TRAVERSAL_BUDGET });
+    return { processId: process.id, status: traversal.status, visitedCount: traversal.visitedCount,
+      budget: traversal.budget, visitedObjectIds: traversal.visitedObjectIds };
+  });
+  return { status: flows.some((flow) => flow.status !== 'COMPUTED') ? 'INCOMPLETE' : 'COMPUTED',
+    budget: ENTERPRISE_PUBLICATION_TRAVERSAL_BUDGET, flows };
 }

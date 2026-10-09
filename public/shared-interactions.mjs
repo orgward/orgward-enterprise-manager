@@ -42,7 +42,7 @@ export function encodeStudioRoute({ projectId = null, view = 'blueprint', select
   return query ? `/?${query}` : '/';
 }
 
-export function encodeExecutionRoute(projectId = null, planTarget = null, runId = null, githubSnapshotId = null) {
+export function encodeExecutionRoute(projectId = null, planTarget = null, runId = null, githubSnapshotId = null, behaviorPlanTarget = null) {
   const studioRoute = encodeStudioRoute({ projectId });
   const url = new URL(studioRoute, 'http://orgward.local');
   if (PROJECT_ID.test(projectId ?? '') && /^[a-f0-9]{64}$/.test(githubSnapshotId ?? '')) {
@@ -62,7 +62,25 @@ export function encodeExecutionRoute(projectId = null, planTarget = null, runId 
     if (SAFE_ID.test(planTarget.taskId ?? '')) url.searchParams.set('task', planTarget.taskId);
   }
   if (!planTarget && SAFE_ID.test(runId ?? '')) url.searchParams.set('run', runId);
+  if (PROJECT_ID.test(projectId ?? '') && behaviorPlanTarget?.projectId === projectId
+    && /^change-case-[0-9a-f-]{36}$/i.test(behaviorPlanTarget.caseId ?? '')
+    && /^behavior-test-plan-[0-9a-f-]{36}$/i.test(behaviorPlanTarget.planId ?? '')) {
+    url.searchParams.set('behaviorCase', behaviorPlanTarget.caseId);
+    url.searchParams.set('behaviorPlan', behaviorPlanTarget.planId);
+  }
   return `/execution.html${url.search}`;
+}
+
+export function executionBehaviorPlanTarget(value, projects = []) {
+  const url = new URL(value, 'http://orgward.local');
+  const requested = url.searchParams.has('behaviorCase') || url.searchParams.has('behaviorPlan');
+  if (!requested) return { requested: false, target: null };
+  const projectId = decodeStudioRoute(url.href).projectId;
+  const target = projectId && Array.isArray(projects) && projects.some((project) => project.id === projectId)
+    && /^change-case-[0-9a-f-]{36}$/i.test(url.searchParams.get('behaviorCase') ?? '')
+    && /^behavior-test-plan-[0-9a-f-]{36}$/i.test(url.searchParams.get('behaviorPlan') ?? '')
+    ? { projectId, caseId: url.searchParams.get('behaviorCase'), planId: url.searchParams.get('behaviorPlan') } : null;
+  return { requested: true, target };
 }
 
 export function encodeMyWorkRoute(projectId = null, processId = null) {

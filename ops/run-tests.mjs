@@ -5,7 +5,7 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { randomUUID } from 'node:crypto';
 import { startTestPostgresCluster, stopTestPostgresCluster } from '../tests/helpers/postgres-cluster.mjs';
-import { createTestWorkerEnvironment, testFilesRequirePostgres, withRunnerOwnedCluster } from '../tests/helpers/postgres-runner.mjs';
+import { createTestWorkerEnvironment, readTestConcurrency, testFilesRequirePostgres, withRunnerOwnedCluster } from '../tests/helpers/postgres-runner.mjs';
 
 const files = [
   'tests/model.test.mjs',
@@ -26,6 +26,7 @@ const files = [
 ];
 
 const requested = process.argv.slice(2);
+const testConcurrency = readTestConcurrency(process.env);
 const namePatterns = requested.filter((argument) => argument.startsWith('--test-name-pattern='));
 const requestedFiles = requested.filter((argument) => !argument.startsWith('--test-name-pattern='));
 const selectedFiles = requestedFiles.length ? requestedFiles : files;
@@ -55,7 +56,7 @@ try {
       if (interruptedSignal) return { status: 128 + signalNumbers[interruptedSignal] };
       const env = createTestWorkerEnvironment(process.env, cluster?.baseUrl, randomUUID());
       await new Promise((resolve) => {
-        child = spawn(process.execPath, ['--test', '--test-concurrency=2', ...namePatterns, ...selectedFiles], {
+        child = spawn(process.execPath, ['--test', `--test-concurrency=${testConcurrency}`, ...namePatterns, ...selectedFiles], {
           stdio: ['inherit', logFd, logFd], env,
         });
         child.once('error', (error) => resolve({ error, status: 1 }));

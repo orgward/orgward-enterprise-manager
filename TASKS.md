@@ -8336,6 +8336,45 @@ full check was run because the parent task remains open. Parent review approved
 with no remaining findings. T-122 and PR-17 remain open; `npm run task:next`
 still identifies PR-15 as first open, and no release-gate status changed.
 
+PR-17 T-122 bounded impact/evidence follow-up (2026-10-07): process-flow impact
+preview now traces reverse dependencies from edited flows and changed references
+to a fixed point with explainable paths and a bounded visited set. Cycles
+terminate; budget exhaustion returns `INCOMPLETE` and blocks process-flow save
+and protected internal publication before mutation. Declared sensitivity
+distinguishes step title/order presentation changes from material flow edits;
+eligible plans retain their original blueprint pins and may start after only
+validated view-only successors, while material or unknown changes remain
+stale. The economics path classifies complete disclosed deterministic inputs
+separately from legacy results without an input manifest; the latter read as
+`UNTRACKED`/`UNKNOWN` with eligibility false. Scripted simulations remain
+`SIMULATION_ONLY`. There is currently no mandatory evaluation/approval consumer
+for economics results, and no customer truth or operational outcome is
+established. Undeclared dynamic inputs remain unknown; broader operation
+contracts are still open.
+
+Focused AC3/AC4 regressions passed 5/5 (TAP
+`/tmp/orgward-tests-iiVpsb/node-test.tap.log`; wrapper
+`/tmp/orgward-t122-ac4-ac3-publication-review-fix-20261007.log`). The final
+review follow-up also passed the targeted persistence selection 2/2 in 54.04s
+(TAP `/tmp/orgward-tests-xhderz/node-test.tap.log`) and the material-proposal
+applicability regression 1/1 in 50.73s (TAP
+`/tmp/orgward-tests-zVxWuh/node-test.tap.log`); `git diff --check` passed.
+The first full check exposed two persistence failures: projects without saved
+plans gained an unintended empty `processPlans` API field, and an immutability
+assertion compared persisted plan data with dynamically derived blueprint
+applicability. The API shape was corrected; tests now separately assert
+immutable plan/task retention and the expected `STALE` result after material
+proposal application. Sol review accepted the bounded AC3 publication guard;
+AC4 scope limits were accepted, including the absence of an economics approval
+consumer.
+
+Final `npm run check` passed: 698 passed, 1 skipped, 0 failed in 156.41s (TAP
+`/tmp/orgward-tests-zKjROA/node-test.tap.log`; wrapper
+`/tmp/orgward-t122-final-check-after-fixes-20261007.log`). This is bounded T-122
+evidence, not T-122 or PR-17 completion. T-122/PR-17 and release gates remain
+open; PR-15 remains the first open cursor. Task checkboxes, cursor and gate
+statuses are unchanged, and uncovered operation contracts remain open.
+
 PR-17 T-121 saved-blueprint chat edit increment (2026-10-06): conversation now
 offers a recognizable, transient edit mode for one exact replacement of a
 current main-design customer name or detail. It pins the project/version,
@@ -8623,6 +8662,193 @@ Sentinel domains remain unknown; external systems require their own exact source
 pins. T-90 and PR-15 remain open. No task checkbox/cursor, implementation
 backlog acceptance state or production gate was changed.
 
+PR-15 T-90 source-bound partial-context coverage display (2026-10-06): new
+context manifest v3 in commit `8154af542a0af16becc19544ce91536ab1128957`
+seals a separate saved-project coverage record to the exact
+saved-project pin and process-trace hash. It lists the selected process and its
+directly represented references with content hashes, including explicitly typed
+risk and metric references; coverage remains `PARTIAL`, broader enterprise
+inventory/policy/observed-outcome/external domains remain `UNKNOWN`, and
+exclusions are `NOT_ENUMERATED`. The UI labels the synthetic reference matrix
+separately, marks synthetic enterprise context as non-authoritative, and displays
+the saved-project pin, represented references, unknowns/exclusions, guardrails,
+and whether accepted requirements are pinned. Historical manifest v1/v2 hash
+recipes remain compatible; v1 fixtures omit v3-only coverage fields. After Sol's
+review, risk/metric type persistence and genuine-v1 fixture regressions passed.
+The focused context suite passed 6/6, 0 failures/skips, 3.30s; log
+`/tmp/orgward-tests-K8d1Hg/node-test.tap.log`. Sol-finding regressions passed
+3/3, 0 failures/skips, 2.63s; log
+`/tmp/orgward-tests-yW9t3W/node-test.tap.log`. `node --check` and
+`git diff --check` passed. Sol approved with no remaining material findings.
+This represents only the exact selected saved-design scope, not enterprise-wide
+truth or completeness; T-90 and PR-15 remain open. No task checkbox/cursor,
+backlog acceptance or production-gate status changed.
+
+PR-15 T-90 AC1 scoped coverage classifications (2026-10-07): new context
+manifests use additive v4 coverage while v1/v2/v3 verification keeps its
+version-specific recipes. V4 pins the exact saved project, blueprint snapshot,
+in-repository Sentinel profile/evaluator and selected assessment/report, plus
+the synthetic enterprise-context version/content hash and context-plan
+requirements. Canonical classifications record the selected process/direct
+references, required context domains, intent guardrails, case-scoped non-goals,
+Sentinel profile/report, and explicit UNKNOWN candidates for absent assessment,
+synthetic authority, unenumerated project dependencies and external/uninspected
+sources. The declared candidate universe is exhaustive only for the selected
+process trace and case guardrails. The UI shows this separately from the
+synthetic reference matrix; no enterprise-wide inventory, factual truth,
+operational effectiveness, compliance or full completeness is claimed.
+
+Focused command
+`node ops/run-tests.mjs tests/sdlc/engine.test.mjs tests/sdlc/server.test.mjs tests/enterprise/view.test.mjs tests/enterprise/server.test.mjs tests/persistence.test.mjs --test-name-pattern='context manifest|saved-project|saved project|v4 saved-project|SDLC case pins a saved design source|source-bound requirements are revisioned|Sentinel assessment is human-authorized, aggregate-versioned, replayable and exactly selected into SDLC source binding|change cases and execution runs use PostgreSQL compare-and-swap state across restart'`
+passed 13/13, 0 failures/skips, 6.95s; TAP
+`/tmp/orgward-tests-TBi48G/node-test.tap.log`. Named PostgreSQL copied-case
+identity regression
+`node ops/run-tests.mjs tests/persistence.test.mjs --test-name-pattern='change cases and execution runs use PostgreSQL compare-and-swap state across restart'`
+passed 1/1, 0 failures/skips, 6.11s; TAP
+`/tmp/orgward-tests-0GNmjA/node-test.tap.log`. Final `npm run check` passed
+680/681, 0 failures and 1 skip in 132.28s; TAP
+`/tmp/orgward-tests-3DNNDc/node-test.tap.log` and wrapper
+`/tmp/orgward-t90-v4-combined-check-final-20261007.log`. Review confirmed the
+v1/v2/v3 verifier branches and v3 coverage recipe remain unchanged; the copied
+case retains coverage only when its pinned intent/source are unchanged, and
+resealed intent/source drift fails. `git diff --check` passed. Non-TASKS patch
+fingerprint at this receipt: SHA-256
+`1c08e319400f0b24d664053a1cfcac16829f6cb8d6dec87a739a01eb8e165e73`.
+AC1 evidence is limited to the saved project's selected-process scope. T-90
+AC2–AC4 remain open; T-90 and PR-15 remain open. No task checkbox/cursor,
+backlog acceptance or production gate changed.
+
+PR-15 T-90 AC2 acceptance evidence (2026-10-07): current behavior blocks
+planning when critical regulation/control context is absent, with domain-specific
+recovery guidance and no downstream requirements; refuses compilation after the
+pinned saved design is stale without mutating the existing case or adding a
+delivery draft; and denies an inaccessible source through principal-scoped
+lookup with a safe recovery message and no source-content disclosure or case
+write. These clauses were already implemented and receipted separately; no new
+product code was needed for this check. Current combined-tree focused selection
+passed 3/3, 0 failures/skips, 6.31s; TAP
+`/tmp/orgward-tests-j0x7ta/node-test.tap.log`:
+`node ops/run-tests.mjs tests/sdlc/server.test.mjs tests/persistence.test.mjs --test-name-pattern='source selection from an inaccessible tenant blocks without exposing project data and gives recovery guidance|missing critical context blocks the saved case with domain-specific recovery guidance|change cases and execution runs use PostgreSQL compare-and-swap state across restart'`.
+The last full `npm run check` on this same non-TASKS source tree passed 680/681,
+0 failures and 1 skip in 132.28s; TAP
+`/tmp/orgward-tests-3DNNDc/node-test.tap.log`, wrapper
+`/tmp/orgward-t90-v4-combined-check-final-20261007.log`. `git diff --check`
+passed. Non-TASKS patch fingerprint at this receipt: SHA-256
+`1c08e319400f0b24d664053a1cfcac16829f6cb8d6dec87a739a01eb8e165e73`.
+The evidence covers the stated AC2 failure conditions at the current API/test
+boundaries; it does not audit principal-store internals or establish broader
+enterprise completeness. AC3–AC4 remain open; T-90 and PR-15 remain open. No
+task checkbox/cursor, backlog acceptance or production-gate status changed.
+
+PR-15 T-90 AC3 authority-change recovery evidence (2026-10-07): changing the
+pinned saved-project human-authority control marks the dependent accepted
+requirements baseline, accepted architecture baseline, evaluation and approval
+stale in the source-binding view, while preserving their historical references
+and the original source snapshot/hash. The restart-backed API regression also
+confirms the historical context manifest and evidence remain integrity-valid
+after the project advances; a subsequent action against the stale case is
+refused without changing its version, events or artifacts. Current focused
+selection passed 2/2, 0 failures/skips, 1.03s; TAP
+`/tmp/orgward-tests-jE9bsr/node-test.tap.log`:
+`node ops/run-tests.mjs tests/sdlc/workspace.test.mjs tests/sdlc/server.test.mjs --test-name-pattern='an accepted upstream authority change invalidates dependent artifacts while retaining the pinned history|SDLC case pins a saved design source, rejects stale or unresolved selections, and retains provenance after project edits and restart'`.
+No product source changed for this check. The last full `npm run check` on the
+same non-TASKS source tree passed 680/681, 0 failures and 1 skip in 132.28s;
+TAP `/tmp/orgward-tests-3DNNDc/node-test.tap.log`, wrapper
+`/tmp/orgward-t90-v4-combined-check-final-20261007.log`. `git diff --check`
+passed. Non-TASKS patch fingerprint at this receipt: SHA-256
+`1c08e319400f0b24d664053a1cfcac16829f6cb8d6dec87a739a01eb8e165e73`.
+This evidence covers the saved-project authority-change path and retained
+historical context; it does not establish universal policy-graph invalidation
+or external-source coverage. AC4 remains open; T-90 and PR-15 remain open. No
+task checkbox/cursor, backlog acceptance or production-gate status changed.
+
+PR-15 T-90 AC4 observation-to-proposal boundary evidence (2026-10-07): an
+observation submitted through the SDLC case API is explicitly labelled
+`synthetic:first-30-days`; unhealthy technical health and control exceptions
+produce a hash-linked `DESIGN_CORRECTION_CLAIM` at learning. The persisted
+proposal remains `PROPOSED_NOT_APPLIED`, requires owner authority, references
+the observation hash/release/outcome, and leaves the release content hash and
+approval count unchanged. Readback after restart preserves the same proposal
+and valid evidence; the served UI labels the correction and says it does not
+change the saved design or authorize another release. Focused selection passed
+3/3, 0 failures/skips, 0.82s; TAP
+`/tmp/orgward-tests-0i6tgb/node-test.tap.log`:
+`node ops/run-tests.mjs tests/sdlc/engine.test.mjs tests/sdlc/server.test.mjs --test-name-pattern='runtime and control findings propose an evidence-linked design correction without applying it|runtime observations persist a non-authorizing design correction proposal across restart|served SDLC product surface and meta contract expose stages and mutation lab'`.
+Final combined `npm run check` passed 681/682, 0 failures and 1 skip in
+135.04s; TAP `/tmp/orgward-tests-yus4SI/node-test.tap.log`. `node --check
+tests/sdlc/server.test.mjs` and `git diff --check` passed. Review found only
+additive API/UI assertions and the restart-backed fixture; no product behavior
+or authority was weakened. Combined non-TASKS source/test patch fingerprint at
+this receipt: SHA-256
+`b9eafc2f8b9faf5fdcfe687d0e30be8bab2087904142c7ed129bd56c2bff2390`.
+This proves the explicitly synthetic observation path and its non-authorizing
+proposal boundary; it does not prove authenticity of external or real runtime
+evidence. T-90 AC4 remains limited to this path; T-90 and PR-15 remain open, as
+do all parent/gate states. No task checkbox/cursor, backlog acceptance or
+production-gate status changed.
+
+PR-15 T-90 AC4 repository-check observation supplement (2026-10-07): an
+authenticated owner/editor can now select a retained process-run evidence link
+with validated `REPOSITORY_CHECK` receipts and record a server-resolved code/check
+observation. The API accepts only the exact requirement/link IDs, current case
+and draft versions, and an idempotency key; it rejects caller signals or receipt
+claims. In one PostgreSQL transaction it reloads and verifies the project and
+latest blueprint, source binding/context, requirement trace/contract, linked run,
+plan/task, canonical runtime instance and audited event histories, recomputes
+candidate/check evidence, and binds the observation to project/blueprint/plan/
+instance/task/run IDs and versions, source/candidate trees, verifier result,
+check statuses, output hashes and terminal event. A `DESIGN_CORRECTION_CLAIM`
+proposal is `PROPOSED_NOT_APPLIED`, requires authority, and is limited to review
+of the pinned code/check result. The observation and proposal explicitly retain
+`UNVERIFIED`, `NOT_EXECUTED` and `HYPOTHESIS`; they assert no business outcome,
+causality, design mutation, approval or execution authority. The synthetic
+`recordObservation` path remains separately labeled synthetic, and T-91
+`HUMAN_REPORTED` outputs are not accepted as verified behavior.
+
+Focused selection passed 2/2, 0 failures/skips in 26.85s; TAP
+`/tmp/orgward-tests-1NyrZY/node-test.tap.log`:
+`node ops/run-tests.mjs tests/persistence.test.mjs tests/sdlc/server.test.mjs --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable|repository-check observation presentation keeps code scope and proposal authority explicit'`.
+The PostgreSQL/API path covers authentication, read-only denial, cross-tenant
+denial, rejection of caller-supplied signals, no mutation on denied requests,
+stale case and blueprint conflicts, resealed receipt tamper rejection, exact
+replay/conflict, restart readback and unchanged project version. A replay now
+reuses the full observation/proposal/event/audit verifier; the append-only
+observation event pins the proposal hash, and a regression rejects a
+self-resealed proposal mutation on replay. Presenter tests keep code/check scope
+and authority state explicit. Final `npm run check` passed 682/683, 0 failures
+and 1 skip in 133.55s; TAP `/tmp/orgward-tests-UaOgLg/node-test.tap.log`, wrapper
+`/tmp/orgward-t90-ac4-proposal-replay-final-npm-check.log`. Syntax checks and
+`git diff --check` passed; `npm run task:next` still reports PR-15 first open.
+High-level review found no weakened assertions or broadened evidence authority.
+Non-TASKS patch fingerprint for the combined uncommitted source/test tree:
+SHA-256 `1d1fde313102f18226c277cb84bb61c1f68156bbe3cc98093fb6e94f64e9e1c0`
+(`git diff --no-ext-diff --binary HEAD -- . ':(exclude)TASKS.md'`). This
+qualifies only repository code/check evidence as a proposal input; it does not
+establish business behavior or close T-90 AC4, T-90, PR-15 or any production
+gate. No task checkbox/cursor, backlog acceptance or gate status changed.
+
+PR-15 T-90 acceptance audit (2026-10-07): current AC1–AC4 receipts and focused
+evidence establish the bounded task acceptance. AC1 pins the exact saved-project/
+blueprint and Sentinel profile/assessment, classifies relevant selected-process
+context, and marks unenumerated or external domains UNKNOWN. AC2 blocks missing
+critical context, stale compilation and unauthorized retrieval. AC3 marks
+dependent artifacts stale after an accepted authority change while retaining
+pinned history. AC4 derives a non-authorizing code-check observation/proposal
+from a persisted, revalidated repository-check receipt. The frozen-tree check
+passed 682/683 with one skip; the AC4 replay-integrity selection passed 2/2.
+Non-TASKS source/test patch fingerprint is SHA-256
+`1d1fde313102f18226c277cb84bb61c1f68156bbe3cc98093fb6e94f64e9e1c0` against
+`8154af542a0af16becc19544ce91536ab1128957`.
+
+Direct dependencies T-25, T-26, T-54, T-68, T-71, T-84 and T-89 are covered by
+checked PR-07, PR-12, PR-13 and PR-14. `npm run task:next` still selects PR-15.
+T-90 is accepted at the task acceptance level. Its source scope remains the
+exact saved project's represented design, and AC4 supports code/check
+hypotheses only; this does not establish enterprise-wide completeness, external
+truth or business behavior. PR-15 remains open for its remaining tasks. T-91 is
+dependency-ready; its first open acceptance is AC1, actual behavior evaluation.
+No PR checkbox/cursor or production gate changed.
+
 PR-15 T-91 AC1 process-specific requirement trace (2026-10-06): the reviewed
 slice generates one draft requirement from the exact selected saved process and
 pins project/blueprint/process identities and hashes, source-binding hash,
@@ -8763,6 +8989,324 @@ in the simulated legacy replay fixture; both were corrected before final passing
 runs. Syntax and diff checks passed. No full check was run because the parent PR
 is not complete. PR-17 remains open, PR-15 remains first open by `npm run
 task:next`, and no task checkbox/cursor or production gate changed.
+
+PR-15 T-91 AC4 persisted human evidence review (2026-10-07): the SDLC flow
+supports an independent reviewer attestation against each declared criterion
+and the exact linked process-run evidence. Review records pin the selected
+requirement, source, run/task/output evidence, and draft; reviewer identity is
+checked against the requirement creator, case author, evidence linker,
+performer, and workload requester. Review, event, audit, and idempotency data
+are persisted together and verified on readback/replay; stale source or draft
+evidence remains distinguishable. The UI labels the result HUMAN_REVIEWED and
+states it is a reviewer judgment, not external truth or executed behavior.
+Verification remains NOT_EXECUTED and truth remains UNVERIFIED.
+
+The AC4 focused suite passed 3/3 (`/tmp/orgward-tests-09ywuV/node-test.tap.log`).
+The corrected named persistence/reassignment test passed 1/1
+(`/tmp/orgward-tests-eGuwbg/node-test.tap.log`): privacy assertions scope
+principal hiding to escalation events, while `reporterPrincipal` remains on
+HUMAN_REPORTED output records. Sol review is still pending due quota; this does
+not complete T-91 or PR-15. No task checkbox/cursor, backlog acceptance, or
+production-gate status changed.
+
+T-91 AC4 implementation evidence supplement (2026-10-07): acceptance was checked
+against the active PR-15 entry (`TASKS.md:6882`),
+`docs/production/TASK-INDEX.md:103`,
+`docs/production/IMPLEMENTATION-BACKLOG.json:6834-6920` (especially AC4 at
+6912-6917), and section 2 of `docs/product/DELIVERY-CUSTOMER-INTERACTIONS-14.md`.
+The bounded change
+records a human disposition and note for every exact declared criterion against
+the pinned run evidence. The focused selection passed 5/5, 0 failures/skips:
+`node ops/run-tests.mjs tests/enterprise/view.test.mjs tests/persistence.test.mjs tests/sdlc/server.test.mjs --test-name-pattern='process evidence review presentation keeps reviewer attestation separate from behavior verification|process-run evidence links require verified human identity and never accept caller provenance|served SDLC product surface and meta contract expose stages and mutation lab|owner-authored human task information output is pinned, versioned, audited, and replayable after restart|saved process task requests are linked, idempotent, dependency-gated, and durable'`
+(`/tmp/orgward-tests-6XVD48/node-test.tap.log`). The combined `npm run check`
+completed with exit 0: 677 passed, 0 failed, 1 skipped of 678 in 132.17s
+(`/tmp/orgward-tests-sgu0mP/node-test.tap.log`; wrapper
+`/tmp/orgward-t91-combined-check-20261007.log`). Luna's high-level diff review
+found no apparent scope expansion or weakened assertions. Non-TASKS source/test
+diff fingerprint: SHA-256
+`9fc2fc50713623a256cdcafcd675d4c04363325e5ae816ea43b49ba8e04d804f`, computed
+as `git diff --no-ext-diff --binary HEAD -- . ':(exclude)TASKS.md'` at base
+`8154af542a0af16becc19544ce91536ab1128957` (the uncommitted source/test patch).
+This demonstrates the review workflow increment only. It does not fully satisfy
+AC4's conflicting business/technical criteria scenario: criteria do not yet have
+typed business-versus-technical or mandatory classifications, and no explicit
+conflict-resolution record is exercised. AC1's actual-behavior evaluation and
+AC2's orphan/guardrail/deleted-test rejection remain open; AC3's stale test and
+result regeneration remains open. T-90 also remains open as a T-91 dependency.
+The review result remains HUMAN_REVIEWED; verification is NOT_EXECUTED and truth
+is UNVERIFIED. T-91 and PR-15 remain open; task/cursor, backlog and gate statuses
+are unchanged.
+
+PR-15 T-91 AC1 bounded actual-behavior evaluation increment (2026-10-07): an
+owner can authorize an immutable assertion plan before execution, pinned to the
+exact requirement draft/trace, saved process-plan revision/task, selected
+repository snapshot/tree/files, fixed check plan, and assertion outcome/scope
+references. The persisted run captures and parses one exact TAP result per
+declared assertion; linked evaluation and plan/event/audit bindings are verified
+on readback. The focused fixture passes one named assertion as TEST_PASS while
+keeping aggregate/risk coverage UNKNOWN, business truth UNVERIFIED, and overall
+verification NOT_EXECUTED. Cross-tenant authorization, stale-version conflict,
+idempotent replay, resealed plan tamper rejection, case-bound run linking, and
+restart readback are covered. The UI displays the bounded result and limits.
+
+Focused command passed 8/8 (0 failures, 0 skips; 27.02s):
+`node ops/run-tests.mjs tests/persistence.test.mjs tests/sdlc/behavior-test-evidence.test.mjs tests/sdlc/server.test.mjs --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable|behavior-test plan maps exact declared criteria and parses only persisted unique TAP outcomes|missing, skipped, truncated, duplicate and tampered assertion output cannot pass|process-run evidence presentation shows exact runtime identity|human output evidence presentation separates reported values|repository check receipts remain a separate evidence category|repository-check observation presentation keeps code scope|behavior evaluation presentation keeps checked scope'`
+TAP: `/tmp/orgward-tests-TKaBtK/node-test.tap.log`. The one full `npm run
+check` passed 685/686 with one skip (0 failures, 132.08s); TAP
+`/tmp/orgward-tests-AvI6eb/node-test.tap.log`, wrapper
+`/tmp/orgward-t91-ac1-full-check-20261007.log`. Syntax checks and `git diff
+--check` passed; high-level review found no weakened evidence boundary.
+
+Non-TASKS source/test patch SHA-256 (includes both new behavior-test files):
+`9fe18ec207818fe4a999b810575f3742351f6d6cad2acc515c9e1f0014995b44`, computed
+from the binary diff against current HEAD with `TASKS.md` excluded plus the two
+untracked files. This is bounded evidence only, not full T-91 AC1 acceptance:
+the selected saved process has no linked concrete risk, so the plan honestly
+pins `risk.status: UNKNOWN`. The criterion requires a source-backed risk mapping
+alongside outcome, scope and source. No risk was invented; T-91 AC1 remains
+open until a real linked risk and matching assertion evidence are available.
+Do not advance to AC2 while AC1 remains incomplete. T-91, PR-15 and all release
+gates remain open; no checkbox, cursor or gate status changed.
+
+PR-15 T-91 AC1 explicit risk-link follow-up (2026-10-07): the existing owner-
+authenticated, expected-version blueprint edit now accepts a bounded `processIds`
+relation for an existing risk. The server requires distinct IDs for existing
+same-project process records; the risk editor offers explicit checkboxes with no
+automatic selection. Existing IDs and fields remain intact, and no risk record
+is created or inferred. A synthetic persisted journey explicitly links
+`risk-unvalidated-demand` to `process-learn` before saving its process plan; the
+generated trace pins that exact risk, while an unrelated unlinked risk is rejected
+as an assertion mapping and appends no plan. The named persisted assertion returns
+`TEST_PASS`/`LINKED` within its checked scope. Business truth remains `UNVERIFIED`,
+the process-run link remains `UNVERIFIED`, and verification remains
+`NOT_EXECUTED`; this does not establish real-world customer truth or close T-91.
+
+Focused command passed 3/3 (0 failures, 0 skips; 31.19s):
+`node ops/run-tests.mjs tests/persistence.test.mjs tests/enterprise/view.test.mjs --test-name-pattern='risk mitigating-control selection updates both references atomically and survives restart|saved process task requests are linked, idempotent, dependency-gated, and durable|risk editor exposes only explicit same-blueprint process scope selections'`
+TAP: `/tmp/orgward-tests-r13RF7/node-test.tap.log`. The full `npm run check`
+passed 686/687 with one skip (0 failures, 138.16s); TAP
+`/tmp/orgward-tests-skdBCY/node-test.tap.log`. Syntax checks and `git diff
+--check` passed; review found the change remains on the existing blueprint edit,
+picker and persisted evidence paths.
+
+Non-TASKS source/test state fingerprint SHA-256:
+`ba6946c7d6bf5d336a96850f354d0e5364b9aec1a02a965551738184f79f9c42`, computed
+from the binary diff against current HEAD excluding TASKS.md plus sorted untracked
+source/test files. This is scoped evidence only. T-91, PR-15 and all release
+gates remain open; no checkbox, cursor, backlog or gate status changed.
+
+T-91 AC1 acceptance addendum (2026-10-07): this follow-up closes the previously
+recorded risk-link gap for the bounded saved-process scenario. The fixture's
+explicitly owner-linked risk, exact outcome/scope/source pins and persisted named
+TEST_PASS satisfy the T-91-AC1 acceptance scenario for this fixture. This does
+not establish customer-specific business truth, general coverage, or completion
+of T-91. It supersedes only the prior receipt's statement that this fixture had
+no linked risk; that statement remains accurate for its earlier source snapshot.
+The fingerprint and test/check evidence immediately above bind this acceptance
+addendum to the current bounded source state. Task/PR/gate status remains open.
+
+T-91-D01 / AC1 independent-oracle evidence addendum (2026-10-07): the bounded
+saved-process fixture now executes the pinned candidate with a real local
+`node --test` subprocess against an independent fixed input/output oracle. The
+passing candidate's captured TAP and terminal result are persisted and linked
+to the preauthorized plan, requirement criterion, run, source tree and evidence
+hashes. A deliberately broken candidate produces a real failing TAP run and is
+rejected before mutation. Focused command passed 1/1 in 46.86s:
+`node ops/run-tests.mjs tests/persistence.test.mjs --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable'`
+(wrapper `/tmp/orgward-t91-d01-real-oracle-r12.log`, TAP
+`/tmp/orgward-tests-czDGwe/node-test.tap.log`). The sole full `npm run check`
+passed 694/695 with one skip and no failures in 154.34s (wrapper
+`/tmp/orgward-t91-d01-full-check.log`, TAP
+`/tmp/orgward-tests-IAMwoS/node-test.tap.log`). Sol reviewed the frozen change
+and found no blockers. Non-TASKS source/test patch fingerprint SHA-256:
+`e5db005cc57412c1ede5199c7d0e922fd22f1d3a8544c403a628967b194a060e`.
+This supports only the named local code behavior under its independent fixture;
+business truth remains `UNVERIFIED` and verification remains `NOT_EXECUTED`.
+It does not establish customer behavior or complete AC1/T-91. T-91, PR-15 and
+release gates remain open; no task checkbox, cursor or gate status changed.
+
+T-91 AC2 bounded acceptance receipt (2026-10-07): the frozen implementation
+rejects candidates before configured checks when a mandatory criterion/guardrail
+has no preauthorized assertion, when changed/deleted paths lack exact criterion
+mappings, or when the selected source snapshot contains a failing test that the
+candidate deletes. The deletion fixture verifies the source test fails in an
+isolated `node --test` subprocess, then exercises removal through the candidate
+snapshot adapter and confirms the runtime rejects it before check dispatch.
+Historical criterion contracts remain readable at their pinned versions; a
+separate ordinary draft edit does not invalidate retained contract readback,
+while stale execution remains fenced. Focused journey and deletion-fixture tests
+passed 2/2 in 32.90s (`/tmp/orgward-tests-GVoN5i/node-test.tap.log`); standalone
+failing-fixture proof passed 1/1 (`/tmp/orgward-tests-yRv0tU/node-test.tap.log`).
+The sole final `npm run check` passed 691/692, 0 failures, 1 skip, in 140.11s
+(`/tmp/orgward-tests-5VEkkp/node-test.tap.log`). `git diff --check` passed and
+Sol's final review found no issues. Non-TASKS source/test patch fingerprint:
+`36aad0fcc5977a34356649a31e557c1d483eb8333bab82d477204ae549799343`.
+This receipt accepts only the bounded T-91 AC2 candidate-rejection behavior;
+it does not close AC3, T-91, PR-15 or any release gate. Task cursor and all
+other acceptance/status fields remain unchanged.
+
+PR-15 T-91 AC3 bounded regeneration and applicability receipt (2026-10-07):
+retained v1 plans and results remain bound to their original criterion contract;
+after revision, the old plan/evidence are reported stale and newly authorized
+v2 evidence remains pinned to v2 across restart. Plan applicability also checks
+the shared requirements artifact draft revision: a test-only second same-source
+requirement is edited through the normal API while the selected requirement
+hash stays unchanged; the old plan becomes `REGENERATION_REQUIRED` and execution
+returns `BEHAVIOR_TEST_PLAN_STALE` without changing the plan hash. Versioned
+independent evidence review now uses the same canonical typed criterion hash as
+the UI and persistence, while legacy string criteria retain their original hash
+recipe. Plan display uses the sanitized `repository.snapshotId` field. Review
+results remain `HUMAN_REVIEWED`, `NOT_EXECUTED`, and `UNVERIFIED`.
+
+Focused selection passed 3/3 (0 failures/skips, 34.90s):
+`node ops/run-tests.mjs tests/persistence.test.mjs tests/sdlc/server.test.mjs --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable|behavior plan recovery presentation retains old revision pins and calls for regeneration|criterion editor and behavior plan form expose typed obligations and exact path mappings'`
+TAP: `/tmp/orgward-tests-HdHkgX/node-test.tap.log`. After the full check found
+the stale presenter assertion, its test-only expected text was corrected; the
+named presenter test passed 1/1 in 0.47s at
+`/tmp/orgward-tests-CdS11l/node-test.tap.log`. Both Sol read-only reviews found
+no blockers. The sole final `npm run check` passed 692/693 tests, 0 failures,
+1 skip, in 144.67s; TAP `/tmp/orgward-tests-oGhmfU/node-test.tap.log`, wrapper
+`/tmp/orgward-t91-ac3-final-check2-20261007.log`. `git diff --check` passed.
+
+Non-TASKS source/test fingerprint SHA-256:
+`3f836181968ba3b7c492f43f3f26528d63ced3337dcbbf58005b7655ba737fdb`, computed
+from the binary diff against current HEAD excluding TASKS.md plus sorted
+untracked source/test files. This receipt is bounded to AC3 regeneration,
+shared-draft applicability, review hash compatibility, and snapshot display.
+AC4, T-91, PR-15 and release gates remain open; no checkbox, cursor, backlog or
+gate status changed.
+
+T-91 N2.AUTHORIZATION provider readiness follow-up (2026-10-08): Sol's
+lifecycle findings are addressed. PostgreSQL clients now have connection,
+query, server statement, lock, close and fixed-runner deadlines; a timeout
+destroys the affected socket and disables the provider. A timed-out runner is
+aborted and its database retained rather than dropped while its terminal state
+is unknown. Readiness additionally requires the fixture role to have
+superuser/CREATEDB capability on a writable primary and a writable session.
+Allocation, identity, runner and cleanup failures demote readiness. Optional
+fixture URL problems now produce redacted notices and disable only this
+capability, preserving application startup. Owner UI renders the exact
+`AVAILABLE` / `UNAVAILABLE` / `NOT_CONFIGURED` state with operator guidance.
+
+`node --test tests/platform/t91-n2-fixture-provider.test.mjs` passed 11/11
+(0 failures/skips; TAP duration 15.42s), including bounded unreachable-config
+readiness, synchronous initialization/dispatch factory failures, partial
+client cleanup, missing CREATEDB, post-readiness allocation failure/no
+database, post-reservation fixed-runner timeout/abort/orphan retention,
+OID-retention safety, and owner UI status rendering. The protected config
+journey passed 1/1 (0 failures/skips; TAP duration 0.46s):
+`node --test --test-name-pattern='protected file inputs enforce source exclusivity' tests/platform/preflight.test.mjs`.
+Syntax checks for the provider, config, server and browser script passed;
+`git diff --check` passed. No normal-app fixed runner/source bootstrap is
+implemented, so configured-but-incomplete provider setup remains
+`UNAVAILABLE`; no N2 product execution is claimed. No status, cursor or gate
+changed.
+
+Sol's final operator-copy follow-up now names both required sides: fixture
+administrator CREATEDB on a writable dedicated cluster and the application's
+narrow `pg_control_system()` identity permission. The API remedy and UI states
+remain redacted and show no raw connection errors. Targeted UI assertion passed
+1/1 (`node --test --test-name-pattern='owner mapping UI renders'
+tests/platform/t91-n2-fixture-provider.test.mjs`; TAP duration 0.20s); syntax
+and `git diff --check` passed.
+
+Delegated T-91 follow-on definition order (Sol-provided spec, not observed
+business truth) remains: N2.MISSING_ASSERTION (expected evidence-link POST 409
+`BEHAVIOR_CANDIDATE_REJECTED`, unchanged case/version/events/no link); N1
+(orphan candidate rejected before candidate-check dispatch, zero launches);
+N3 (deleted known-failing test source rejected with source-failure/deleted-path
+hashes, zero dispatch); R1 (v1-to-v2 contract stales old results, denies old
+execution mutation-free, regenerates/reviews distinct v2 evidence preserving
+v1 hashes); R2 (unrelated rationale edit advances shared draft, old plan
+execution gets `BEHAVIOR_TEST_PLAN_STALE`, regenerates against new draft while
+preserving old hashes). Each subcase needs its own reviewed mapping, reservation
+and receipt; UI should guide repair/regeneration. None of these cases is
+implemented or executed by this provider-readiness slice.
+
+T-91 N2.AUTHORIZATION isolated-provider lifecycle increment (2026-10-08):
+added a fixture-database provider that reads live PostgreSQL cluster/database
+identity through `pg_control_system()` and `pg_database`, rejects a fixture
+cluster matching the application cluster, creates only a random
+`orgward_t91_fixture_<uuid>` database with `template0`, verifies its connected
+cluster/name/OID, runs the injected fixed runner, and drops only the exact
+captured OID after rechecking the pinned cluster. If OID capture/cleanup cannot
+be proven, it retains the database and disables the provider. Provider
+initialization errors fail closed; the API checks provider readiness before
+reserving execution. The fixture administrator URL is accepted only from an
+owner-only protected file and duplicate application URLs are rejected. The
+ordinary app remains `NOT_CONFIGURED` because the production fixed fixture
+runner and private synthetic-source bootstrap are not yet wired; no normal-app
+N2 execution or scenario receipt is claimed. Customer scenario execution stays
+`NOT_EXECUTED`, negative coverage `INCOMPLETE`, and business truth
+`UNVERIFIED`.
+
+`node --test tests/platform/t91-n2-fixture-provider.test.mjs` passed 4/4
+(0 failures/skips; TAP duration 7.51s), covering separate-cluster dispatch,
+same-cluster and missing-config rejection, runner-failure cleanup, normal
+cleanup, and retained orphan/provider disable when the invocation cannot prove
+the generated database OID. `node --test --test-name-pattern='protected file inputs enforce source exclusivity' tests/platform/preflight.test.mjs`
+passed 1/1 (0 failures/skips; TAP duration 0.40s), covering protected fixture
+URL config, inline rejection, and duplicate URL rejection. `node --check
+server.mjs`, `node --check src/platform/install-config.mjs`, and
+`git diff --check` passed. An initial provider test run used the old
+throw-on-initialize expectation; after initialization was made fail-closed,
+the test now asserts unavailable status and the recorded internal cause. No
+task checkbox, cursor, or release gate changed.
+
+T-91 N2.AUTHORIZATION failed-dispatch readback follow-up (2026-10-08):
+supersedes the prior successful N2 journey to include Sol's null-fixture-ID
+readback case. The verifier now normalizes a missing control fixture ID to
+`null`; a second distinct mapping is independently reviewed, then its injected
+dispatcher throws. The resulting receipt stays `INCONCLUSIVE`, is valid on API
+readback, and replays the same immutable receipt without another dispatch.
+The same bounded journey continues to cover the successful fixed-route denial,
+control request, no-mutation proof, durable idempotency, audit/outbox counters,
+and owner capability projection. No case is promoted to customer scenario
+execution or business truth.
+
+`node --test tests/sdlc/behavior-test-evidence.test.mjs` passed 9/9 (0
+failures/skips; TAP duration 0.27s). The named persistence command passed 1/1
+(0 failures/skips; subtest duration 65.16s; TAP duration 65.61s; wrapper
+elapsed 66.66s):
+`node ops/run-tests.mjs --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable' tests/persistence.test.mjs`.
+TAP `/tmp/orgward-tests-Ipf5Hy/node-test.tap.log`; `git diff --check` passed.
+Scenario execution remains `NOT_EXECUTED`, the negative suite remains
+`INCOMPLETE`, and business truth remains `UNVERIFIED`. Normal app execution
+still fails closed without its separate isolated fixture provider. No task
+checkbox, cursor, or release-gate status changed.
+
+PR-15 T-91 AC4 bounded explicit conflict-resolution receipt (2026-10-07):
+typed BUSINESS/TECHNICAL review judgments that conflict, and reviews containing
+a contradicted mandatory criterion, now require an explicit independent
+reviewer decision and rationale. The immutable review/event retain reviewer
+identity, exact criterion-contract version/hash, every criterion result, the
+conflicting criterion IDs, failed mandatory IDs and the resolution rationale.
+Resolution preserves individual results: a failed mandatory criterion remains
+`CONTRADICTED` with `BLOCKED_MANDATORY_FAILURE`; review status remains
+`HUMAN_REVIEWED`, runtime verification `NOT_EXECUTED`, and business truth
+`UNVERIFIED`. No aggregate score or acceptance is inferred. Missing resolution
+returns a conflict without changing case version or appending an event. The
+authorized resolution and exact failed result survive application restart.
+
+Focused persistence/API test passed 1/1:
+`node --test --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable' tests/persistence.test.mjs`
+Log: `/tmp/orgward-t91-ac4-persistence-final2.log`. Focused presenter/UI tests
+passed 2/2:
+`node --test --test-name-pattern='evidence review presentation preserves explicit conflict resolution and mandatory failure|evidence review UI surfaces conflict resolution and preserves criterion outcomes' tests/sdlc/server.test.mjs`
+Log: `/tmp/orgward-t91-ac4-view.log`. Sol’s read-only review found no blockers.
+The single final `npm run check` passed 694/695 tests, 0 failures, 1 skip, in
+144.73s; TAP `/tmp/orgward-tests-jVgmg9/node-test.tap.log`, wrapper
+`/tmp/orgward-t91-ac4-final-check.log`. Syntax checks and `git diff --check`
+passed.
+
+Revision-bound source/test fingerprint SHA-256:
+`a0e64239332750894e220f77950e50e7d60c722d45f04b76d2b58ee138d56d9c`, computed
+by hashing the sorted SHA-256 manifest for `public/sdlc-view.mjs`,
+`public/sdlc.js`, `server.mjs`, `src/platform/postgres-stores.mjs`,
+`tests/persistence.test.mjs`, and `tests/sdlc/server.test.mjs`. This receipt is
+bounded to AC4 conflict surfacing, reviewer resolution persistence, and
+mandatory-failure preservation. T-91 AC4, T-91, PR-15, task cursor and release
+gates remain open; no checkbox, cursor, backlog or gate status changed.
 
 PR-17 T-55/T-125 bounded customer concept-schema foundation (2026-10-06): the
 project now supports owner-defined, project-private declarative schema versions
@@ -8982,3 +9526,1441 @@ failures/skips (TAP 0.39s; `/tmp/orgward-tests-e8aSYj/node-test.tap.log`).
 Syntax checks and `git diff --check` passed. T-126 and PR-17 remain open,
 PR-15 remains first open, and task/cursor/gate status is unchanged. No full
 check was run.
+
+PR-15 T-91 AcceptIntentEvaluation rendered workflow receipt (2026-10-07,
+bounded; no full-suite qualification): the dedicated acceptance API and
+canonical aggregate remain covered by focused persistence assertions for
+current evidence pins, independent reviewer separation, no-mutation denial,
+idempotent replay/conflict, audit binding, restart/readback and stale historical
+acceptance. The Chromium journey now has Bob submit each exact versioned
+criterion disposition and rationale through the rendered review form by
+keyboard, reload and read back Bob's reviewer identity and rationale, and
+receive 403 when attempting acceptance as reviewer. Alice then sees the
+owner-only acceptance form, submits by keyboard, and reloads the accepted
+record. The accepted result remains scoped; business truth is `UNVERIFIED` and
+runtime verification is `NOT_EXECUTED`.
+
+Focused command passed 1/1 in 52.79s:
+`node ops/run-tests.mjs tests/persistence.test.mjs --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable'`
+TAP `/tmp/orgward-tests-sX9TVY/node-test.tap.log`; wrapper
+`/tmp/orgward-t91-review-accept-browser-r22.log`. Sol's final evidence-limit
+finding was resolved with the exact reviewer identity and entered rationale
+asserted after reload. Earlier Sol findings for this acceptance slice were
+also resolved. Syntax checks and `git diff --check` passed.
+
+The route-to-contract assertion maps the current pinned trace's requirement,
+outcome, process, risk and positive evidence link. The current v1 trace has no
+`context` (workspace/branch/effective time), `negativeCase` or `recoveryCase`
+fields. A separate broken-candidate run and stale-plan history are not bound
+case definitions in this trace; no values were fabricated. These draft-boundary
+fields remain an explicit mapping limitation.
+
+One `npm run check` was started after review but stopped at 781.55s (outer
+session exit 130) because the runner made no progress in `tests/secrets.test.mjs`.
+TAP `/tmp/orgward-tests-O7pc18/node-test.tap.log` reports a file-level unresolved
+promise at `tests/secrets.test.mjs:1:1`; wrapper
+`/tmp/orgward-t91-accept-intent-final-check-20261007.log`. The focused browser
+case passed within that run, but the full suite did not complete and no full
+suite pass is counted. Follow-up diagnostics passed the suspected DeepSeek
+verification test alone 1/1 in 5.61s (log
+`/tmp/orgward-secrets-deepseek-targeted-30s-20261007.log`), the full
+`tests/secrets.test.mjs` file alone 7/7 in 9.61s (log
+`/tmp/orgward-secrets-file-alone-30s-20261007.log`), and the secrets/server
+pair under a 60s hard timeout 12/12 in 9.60s (TAP
+`/tmp/orgward-tests-jw82ru/node-test.tap.log`; wrapper
+`/tmp/orgward-secrets-server-pair-60s-20261007.log`). The full-suite context
+stall remains unreproduced and undiagnosed; no code change was made. No full
+suite pass is counted.
+
+This receipt records focused T-91 operation and UX evidence only. T-91, PR-15,
+the task cursor, checkboxes and release gates remain open and unchanged; no
+production qualification or full-suite milestone is claimed.
+
+T-91 serial full-check result supplement (2026-10-07):
+`ORGWARD_TEST_CONCURRENCY=1 npm run check` completed with 702 passed, 0 failed,
+and 1 skipped (703 total). TAP duration was 235.14s; TAP log
+`/tmp/orgward-tests-iAEYON/node-test.tap.log`; wrapper log
+`/tmp/orgward-full-check-serial-20261007.log`. This is a full-suite pass using
+the serial fallback. The earlier concurrency-2 unresolved promise remains
+undiagnosed; this result does not identify a cause or establish a fix. T-91 and
+PR-15 remain open, and this result does not complete either. Task checkboxes,
+cursor and release gates are unchanged.
+This serial full-suite pass supersedes the preceding receipt's statement that
+no full-suite pass is counted; the interrupted concurrency-2 run remains part
+of the historical record.
+
+PR-15 T-91 owner-authored evaluation context and case capture (2026-10-07,
+bounded; focused only): owner-authorized behavior-plan creation now requires
+one positive, one negative and one recovery case definition, each linked to an
+exact source hash in the selected process trace and a versioned criterion.
+Plans pin project/workspace and process revisions, the saved GitHub repository
+branch/commit/snapshot/tree, and an owner-asserted UTC effective time linked to
+a traced process input. These fields are covered by the immutable plan hash and
+authorization event, checked against retained source records on readback, and
+shown in the SDLC plan presentation. Scenario definitions remain
+`NOT_EXECUTED`; they are not independently reviewed by this increment. Existing
+positive check and T-91 AC2/AC3 flows are unchanged. No business truth or
+runtime verification is inferred: `UNVERIFIED` / `NOT_EXECUTED` remain.
+
+Focused command passed 3/3, 0 failures/skips, TAP duration 54.97s:
+`node ops/run-tests.mjs tests/persistence.test.mjs tests/sdlc/server.test.mjs --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable|served SDLC product surface and meta contract expose stages and mutation lab|behavior plan recovery presentation retains old revision pins and calls for regeneration'`
+TAP `/tmp/orgward-tests-gWUnrO/node-test.tap.log`. Syntax checks passed and
+`git diff --check` passed. No full suite was run for this bounded increment.
+T-91 and PR-15 remain open; task checkboxes, cursor and release gates are
+unchanged.
+
+PR-15 T-91 independent scenario-definition review (2026-10-07, bounded): Sol's
+read-only review reported no concrete blockers. The existing persisted process
+evidence review now requires a distinct workspace-write human reviewer for a
+linked behavior plan and records a decision and rationale for each exact
+positive, negative, and recovery definition. The review pins the immutable plan
+hash, context hash, complete case-definition hash, and individual exact case
+content; altered or stale linked evidence is rejected before mutation. Existing
+reviewer authority, owner self-review denial, and audit/idempotency paths remain
+in force. Scenario definitions remain `NOT_EXECUTED`; review status does not
+establish truth or execution (`UNVERIFIED` / `NOT_EXECUTED`).
+
+Focused command passed 1/1, 0 failures/skips, TAP duration 52.66s:
+`node --test --test-name-pattern='saved process task requests are linked' tests/persistence.test.mjs`.
+Direct TAP output was returned by the command; no separate log file was
+captured. `git diff --check` passed. No full suite was run. T-91 and PR-15
+remain open; task checkboxes, cursor and release gates are unchanged.
+
+PR-15 T-91 reviewer-rendering follow-up (2026-10-07): Sol's read-only review
+found the reviewer form displayed `definition.description`, while saved scenario
+records provide `definition`. The form now renders the authored definition text,
+and browser coverage asserts that each positive, negative and recovery definition
+appears in its review fieldset. The same focused persistence flow now also checks
+that a distinct authorized reviewer submitting altered definition content is
+denied with no aggregate version or event mutation.
+
+Focused command passed 1/1, 0 failures/skips, TAP duration 54.99s:
+`node --test --test-name-pattern='saved process task requests are linked' tests/persistence.test.mjs`.
+TAP log `/tmp/orgward-pr15-review-render-altered-denial-20261007.log`.
+`git diff --check` passed. No full suite was run; T-91 and PR-15 remain open,
+and task checkboxes, cursor and release gates are unchanged. Awaiting Sol's
+follow-up review. Sol's follow-up review reported no findings.
+
+PR-15 next-gap/readiness check (2026-10-07): the next uncovered T-91 behavior
+is execution of the captured positive, negative and recovery scenario semantics.
+The current `evaluateAuthorizedBehaviorPlan` evaluates per-criterion assertions
+and parses their persisted TAP results; it does not execute or derive results
+from `caseDefinitions`. The owner-authored definitions are descriptive text
+with source/criterion pins, not executable inputs, expected outputs or oracle
+bindings. `contracts/enterprise/wp-T-91.json` still has T-91-D01 open for an
+independent domain/security reviewer to author concrete datasets and independent
+output oracles; its AC1–AC4 domain fixture entries remain `not_run` and require
+review. Therefore no positive/negative/recovery scenario result is claimed.
+The missing inputs are those authored datasets, expected outputs/oracles, and
+their explicit mapping to saved executable assertions; no case value or command
+was invented.
+
+Later-task dependency check: T-92 and T-93 depend on T-91, and T-94/T-95 depend
+on those, so they are not independently ready. T-96 is dependency-ready from
+prior checked prerequisites, but its remaining AC1 requires a genuine external
+sandbox effect/provider; existing receipts cover only the first-party loopback
+test service and local fault harness. No provider configuration or authorization
+for that external effect is present. T-97 remains blocked on T-44 in PR-11;
+T-98 remains blocked on T-45 in PR-11; tasks depending on those stay blocked.
+No product code or task status changed. PR-15 remains active; task checkboxes,
+cursor and release gates are unchanged.
+
+PR-15 T-91 owner-authored dataset/oracle mapping (2026-10-07, bounded):
+positive, negative and recovery case authoring accepts an optional all-or-none
+JSON dataset, expected-output oracle, exact selected test path and assertion
+ID. The plan hash binds each complete proposal to its assertion hash, test-file
+hash, repository snapshot and tree digest. Creation validates that the
+assertion belongs to the same criterion and that the selected file is mapped
+as TEST for that criterion. Missing case mappings remain explicitly INCOMPLETE;
+partial mappings are rejected without changing the case or immutable plan
+list. The existing persistence fixture contains a positive dataset/oracle and
+test mapping; negative and recovery have no mapped dataset/oracle and remain
+INCOMPLETE. These fixture values are not business truth. The reviewer form
+shows the authored datasets, oracles, assertion IDs and test paths for
+independent review against the exact saved case definition. All scenarios
+remain NOT_EXECUTED, and business truth/runtime verification remain
+UNVERIFIED/NOT_EXECUTED. A future pinned repository-check/evaluation increment
+must verify whether the owner-proposed assertion implements the stated oracle;
+the current plan does not establish that mapping's executable behavior.
+
+Focused command passed 3/3, 0 failures/skips, TAP duration 57.90s:
+`node ops/run-tests.mjs tests/persistence.test.mjs tests/sdlc/server.test.mjs --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable|criterion editor and behavior plan form expose typed obligations and exact path mappings|behavior plan recovery presentation retains old revision pins and calls for regeneration'`
+TAP log `/tmp/orgward-tests-4endEG/node-test.tap.log`. `git diff --check`
+passed. No full suite was run. T-91 and PR-15 remain open; task checkboxes,
+queue cursor and release gates are unchanged.
+
+PR-15 T-91 behavior-plan schema compatibility follow-up (2026-10-07): new
+owner-mapped plans now use schema v4; the verifier retains the legacy schema-v3
+case-definition shape and the API derives aggregate mapping status as
+INCOMPLETE without rewriting the historical plan. The persisted schema-v3
+readback regression fixture has not passed yet: after validating the cloned
+plan's old hash and authorization event, case readback fails because the
+synthetic event has no matching durable audit-log command. The focused command
+below therefore is not a pass and this compatibility slice remains under
+review; no historical plan was rewritten and no task or release status changed.
+
+Focused command returned 2 passing UI tests and 1 failing persistence journey
+(27.05s): `node ops/run-tests.mjs tests/persistence.test.mjs tests/sdlc/server.test.mjs --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable|criterion editor and behavior plan form expose typed obligations and exact path mappings|behavior plan recovery presentation retains old revision pins and calls for regeneration'`
+TAP log `/tmp/orgward-tests-qcg9Jy/node-test.tap.log`; failing assertion is
+`a hashed schema-v3 plan without mapping fields remains readable`, with
+`A process behavior test plan authorization event has no matching durable audit command.`
+`git diff --check` passed. No full suite was run.
+
+T-91 schema-v3 compatibility regression completion (2026-10-07): the legacy
+fixture now clones the raw persisted plan, transforms it to the historical
+unmapped v3 shape, and records the corresponding event/audit/outbox through
+the existing `recordEvent` persistence helper. The earlier synthetic-audit
+fixture failure above is superseded. Readback succeeds; the derived requirement
+view and plan presentation label the old plan and each missing scenario mapping
+INCOMPLETE, while the raw plan hash, aggregate state, version and events remain
+unchanged by GET.
+
+Focused command passed 3/3, 0 failures/skips, TAP duration 57.75s:
+`node ops/run-tests.mjs tests/persistence.test.mjs tests/sdlc/server.test.mjs --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable|criterion editor and behavior plan form expose typed obligations and exact path mappings|behavior plan recovery presentation retains old revision pins and calls for regeneration'`
+TAP log `/tmp/orgward-tests-jy4uGW/node-test.tap.log`; `git diff --check`
+passed. No full suite was run. T-91/PR-15 statuses, task checkboxes, queue
+cursor and release gates remain unchanged. Awaiting Sol's read-only follow-up.
+
+PR-15 T-91 mapping-verification follow-up (2026-10-07): scenario mapping can
+become VERIFIED_TO_PASSING_ASSERTION only when the pinned test file/hash,
+assertion and criterion, repository snapshot/tree, candidate tree, verified
+repository-check result and passing named TAP result all agree. The command
+check uses a narrow Node allowlist: Node test mode, explicit TAP reporter, and
+exactly one positional test path equal to the pinned mapping; recognized
+options consume their values before positional paths are examined. Option
+values that merely equal a test path and unsupported executables remain
+UNVERIFIED. Mapped scenarios remain NOT_EXECUTED and business truth/runtime
+verification remain UNVERIFIED/NOT_EXECUTED.
+
+New evaluations for schema-v4 plans use schemaVersion 2 with scenarioMappings;
+legacy schema-v3 plans retain schemaVersion 1's exact field shape. The v3/v4
+shape helper regression passes. A synthetic persisted legacy-run fixture was
+removed after it returned a persistence-integrity 503: it did not establish a
+valid historical aggregate command/version chain. Thus exact legacy v1
+evaluation hash/readback through GET remains an explicit unverified persistence
+seam; no immutable row was altered in production storage. Earlier failed
+focused attempts are superseded by the passing run below.
+
+Focused command passed 6/6, 0 failures/skips, TAP duration 52.70s:
+`node ops/run-tests.mjs tests/sdlc/behavior-test-evidence.test.mjs tests/sdlc/server.test.mjs tests/persistence.test.mjs --test-name-pattern='behavior-test plan maps exact declared criteria and parses only persisted unique TAP outcomes|legacy behavior evaluations retain the exact v1 field shape while mapped plans use v2|missing, skipped, truncated, duplicate and tampered assertion output cannot pass|owner-proposed scenario mappings verify only to the exact passing pinned assertion|behavior evaluation presentation keeps checked scope separate from unknown risk and business truth|saved process task requests are linked, idempotent, dependency-gated, and durable'`
+TAP log `/tmp/orgward-tests-DGQveP/node-test.tap.log`; `git diff --check`
+passed. No full suite was run. T-91/PR-15, task checkboxes, queue cursor and
+release gates remain unchanged. Sol follow-up review is requested for the
+command parser and evaluation versioning; prior Sol disposition reported no
+findings on the separate schema-v3 plan compatibility slice.
+
+PR-15 T-91 intermediate evaluation-shape compatibility follow-up (2026-10-07):
+addressed Sol's finding that schema-v4 plans may already have immutable v1
+evaluation links from the interval before v2 mappings were added. New v4
+evaluation writes still default to schemaVersion 2. Readback now reconstructs
+the full expected evaluation using the stored hash-protected schemaVersion:
+v2/v3 plans accept v1 only; v4 plans accept v1 or v2. Full reconstructed shape
+and content hash comparison rejects unsupported versions, missing fields,
+extra mapping fields on v1, or altered assertion/mapping content. Pure tests
+cover v3/v1, v4/v1, v4/v2 and reject v3/v2. The exact persisted legacy GET
+fixture remains an unverified seam as noted above; no stored rows were mutated.
+
+Focused command passed 6/6, 0 failures/skips, TAP duration 53.05s:
+`node ops/run-tests.mjs tests/sdlc/behavior-test-evidence.test.mjs tests/sdlc/server.test.mjs tests/persistence.test.mjs --test-name-pattern='behavior-test plan maps exact declared criteria and parses only persisted unique TAP outcomes|legacy behavior evaluations retain the exact v1 field shape while mapped plans use v2|missing, skipped, truncated, duplicate and tampered assertion output cannot pass|owner-proposed scenario mappings verify only to the exact passing pinned assertion|behavior evaluation presentation keeps checked scope separate from unknown risk and business truth|saved process task requests are linked, idempotent, dependency-gated, and durable'`
+TAP log `/tmp/orgward-tests-EgIhUn/node-test.tap.log`; `git diff --check`
+passed. No full suite or status changes. Sol follow-up review requested for this
+compatibility case.
+
+PR-15 T-91 actual scenario-execution feasibility audit (2026-10-07): the
+existing sandboxed repository-check path cannot execute a saved case dataset
+or independently compare its expected-output oracle. `ExecutionService` runs
+only the fixed operator-pinned check executable/argv in a fresh materialized
+candidate workspace; `CommandExecutionAdapter` receives the check work item,
+run context and workspace, not a case dataset/oracle input. Persisted check
+receipts contain process status and TAP output, while case definitions remain
+separate. The current `scenarioMappings` path may establish assertion linkage
+from exact persisted check output; it cannot claim scenario execution or
+dataset/oracle validation. No execution endpoint, run receipt, or test was
+added, and cases remain NOT_EXECUTED.
+
+The missing interface is an authorized case-execution command that binds the
+owner-authored dataset and independent oracle to the exact immutable plan,
+source tree, test-file hash and assertion, supplies the dataset to a pinned
+sandbox through a bounded input channel, and persists a distinct scenario-run
+receipt. A trusted evaluator must compare observed behavior to the saved oracle
+outside candidate-controlled TAP text. Until that exists, no behavior was
+inferred from a passing repository check.
+
+Independent PR-15 readiness check: T-92 through T-95 remain dependent on T-91
+and/or each other. T-96 has independent checked prerequisites, but its open
+T-96-D01 requires an independently reviewed domain oracle, and its AC1 also
+requires an external sandbox test effect for which no provider configuration
+or authorization is present; no additional implementation-ready task was
+found in this check. T-97/T-98 and their dependents still rely on open PR-11
+tasks. No product code or tests changed. `git diff --check` passed; full suite,
+task statuses, queue cursor and release gates were unchanged.
+
+PR-15 T-91 per-scenario test-execution review decision (2026-10-07): the
+existing independent evidence-review command now supports schema-v4 records
+with one decision for each exact captured scenario: APPROVE_FOR_TEST_EXECUTION
+or REQUEST_CHANGES. Each decision is stored with the exact plan hash, case
+definition hash (including dataset, oracle and mapping pins), reviewer,
+rationale and append-only event hash. The existing workspace-write human
+authority and reviewer separation from plan author, linker and performers
+still apply. Approval is denied when a case lacks its owner dataset/oracle or
+exact assertion/TEST file mapping; stale plans/links and altered definitions
+remain mutation-free denials. The UI labels decisions only
+REVIEWED_FOR_TEST_EXECUTION or CHANGES_REQUESTED. Overall review remains
+HUMAN_REVIEWED / REVIEW_ONLY_NOT_ACCEPTED, verification NOT_EXECUTED, and truth
+UNVERIFIED. This records review readiness only; no behavior was executed.
+
+Focused command passed 2/2, 0 failures/skips, TAP duration 54.67s:
+`node ops/run-tests.mjs tests/sdlc/server.test.mjs tests/persistence.test.mjs --test-name-pattern='evidence review presentation preserves explicit conflict resolution and mandatory failure|saved process task requests are linked, idempotent, dependency-gated, and durable'`
+TAP log `/tmp/orgward-tests-46uVGu/node-test.tap.log`; `git diff --check`
+passed. No full suite or task/status changes. Sol read-only follow-up review
+requested; no actual case execution is included in this increment.
+
+PR-15 T-91 positive-case execution stop check (2026-10-07): no runner or
+receipt changes were made. The exact pinned test file in the current saved
+repository fixture (`tests/persistence.test.mjs` positive oracle source) embeds
+its own input and expected output literals and never reads the persisted
+owner-authored dataset/oracle. Executing that unchanged hash-pinned assertion
+would repeat its fixture, not execute the captured case. Making it data-driven
+changes its content hash and requires a newly authorized plan plus independent
+review of the revised assertion/mapping. The existing repository-check adapter
+is configured with no read-only case-input mount and has no fixed guest-path
+contract; it only persists the ordinary check/TAP receipt. There is also no
+separate scenario execution receipt model. A safe follow-up therefore needs a
+reviewed fixed input-file contract, a data-driven test saved and re-pinned in a
+new plan, a guest read-only mount target, and a distinct immutable scenario
+receipt bound to that new plan/run. No direct host child, shell, network or
+business effect was invoked. Scenario outcomes remain NOT_EXECUTED, business
+truth UNVERIFIED and runtime verification NOT_EXECUTED. No tests/full suite or
+status changes; `git diff --check` passed.
+
+PR-15 T-91 positive case-execution feasibility follow-up (2026-10-07): no
+execution path was added because the present authorization and sandbox
+interfaces cannot satisfy the requested contract. The independent scenario
+review route records HUMAN_REVIEWED dispositions but explicitly sets
+`acceptanceStatus: REVIEW_ONLY_NOT_ACCEPTED`; there is no accepted case/mapping
+review state for execution authorization. Repository checks use fixed
+operator-pinned executable/argv and instantiate the isolated adapter with
+`readOnlyFiles: []`; the adapter accepts read-only files only at their host
+absolute path and has no scoped mount target input. Existing check receipts
+persist command/TAP output, not dataset/oracle inputs or a separate scenario
+result. There is also no trusted host-side oracle comparison API.
+
+The smallest prerequisite is a reviewed API contract for (1) a distinct
+accepted reviewer state tied to the immutable plan/case/mapping, (2) a fixed
+test-harness input contract with a scoped read-only mount target and owner
+dataset, (3) a trusted oracle evaluator outside candidate-controlled TAP
+output, and (4) a separate immutable scenario receipt binding the run and all
+source/test/tree pins. Without those, execution would either bypass current
+authority, run an operator check with invented inputs, or treat self-reported
+TAP as oracle evidence. No product code/tests changed; all positive/negative/
+recovery cases remain NOT_EXECUTED and business truth/runtime verification
+remain UNVERIFIED/NOT_EXECUTED.
+
+PR-15 readiness recheck: T-92–T-95 remain downstream of T-91 and/or each
+other. T-96 has prerequisites but its independent T-96-D01 and missing
+external sandbox provider configuration still prevent a justified increment.
+T-97/T-98 remain dependent on PR-11 T-44/T-45. No independent task was found
+ready. No status, cursor, checkbox or release gate changed; no tests or full
+suite were run. `git diff --check` passed.
+
+PR-15 T-91 fresh data-driven plan/run/review fixture (2026-10-07, focused): the
+captured repository snapshot now includes a data-driven Node test fixture that
+requires `ORGWARD_SCENARIO_DATASET_FILE` and `ORGWARD_SCENARIO_ORACLE_FILE` and
+has no embedded input or expected output. The AC3 regenerated plan selects and
+hash-pins that exact fixture while retaining the owner-authored positive case
+dataset/oracle. It receives a distinct run carrying the new immutable plan
+hash, and the persisted run evidence link is checked against that plan/run.
+The existing independent-review journey approves the exact positive mapping
+and renders its captured dataset, oracle, assertion, and path. The older
+hardcoded plan/run remain unchanged. This supersedes the previous fixture-path
+stop check for establishing a new plan/run/review chain; it does not add actual
+case execution or a scenario receipt. Case execution remains NOT_EXECUTED,
+business truth UNVERIFIED, and runtime verification NOT_EXECUTED.
+
+Focused command passed 1/1, 0 failures/skips; TAP duration 53.93s, test
+duration 53.46s; wrapper elapsed 55.02s:
+`node ops/run-tests.mjs tests/persistence.test.mjs --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable'`
+TAP `/tmp/orgward-tests-BhXOIU/node-test.tap.log`; wrapper
+`/tmp/orgward-t91-fresh-plan-run-review.log`. An earlier run failed at a later
+provider-request assertion because it expected the prior hardcoded fixture;
+the assertion was corrected to verify the new fixture source and the focused
+journey then passed. `git diff --check` passed. No full suite, status, cursor,
+checkbox, or release-gate changes. Sol read-only review requested for this
+coherent fixture slice.
+
+PR-15 T-91 reviewed positive scenario execution (2026-10-07, focused): an
+owner-only endpoint now requires the current exact plan, linked run, positive
+case and distinct schema-v4 reviewer decision `REVIEWED_FOR_TEST_EXECUTION`.
+It reconstructs the saved candidate from the pinned GitHub snapshot and
+artifact hashes, then invokes only the fixed `process.execPath --test
+--test-reporter=tap --test-name-pattern=<escaped pinned assertion>
+test/scenario-contract.test.mjs` command through the existing bubblewrap
+adapter with `--unshare-all`, a read-only workspace and only the two
+`ORGWARD_SCENARIO_*_FILE` environment values. The fixture reads the plan's
+owner-authored dataset/oracle and confirms both files reject mutation. The
+separate immutable receipt records run/plan/link/review/case/assertion/test/
+source/candidate hashes, runner and TAP result; aggregate readback verifies
+its event, idempotency row and durable audit record. UI displays the receipt
+after reload. A pre-review execution attempt is denied without aggregate
+mutation; exact idempotent replay returns the same receipt without executing
+again. PASS records only the positive assertion result; business truth remains
+UNVERIFIED and runtime verification remains NOT_EXECUTED.
+
+Focused command passed 1/1, 0 failures/skips; TAP duration 54.78s, test
+duration 54.36s; wrapper elapsed 55.93s:
+`node ops/run-tests.mjs tests/persistence.test.mjs --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable'`
+TAP `/tmp/orgward-tests-CtLtDI/node-test.tap.log`; wrapper
+`/tmp/orgward-t91-scenario-execution.log`. Earlier focused failures during
+development were corrected; this final run passed. Syntax checks and
+`git diff --check` passed. No full suite, task checkbox, cursor or release gate
+changed. Sol read-only review requested for this slice.
+
+T-91 scenario execution review follow-up (2026-10-07): Sol identified that
+execution preparation released the case lock before the worker and claimed
+idempotency only after completion, and that authorization did not require
+verified review audit integrity. Execution now commits a durable reservation
+event and idempotency claim under the locked case aggregate before dispatch.
+An identical concurrent request receives the same RUNNING reservation (HTTP
+202) and does not launch another worker; only the caller holding the private
+reservation token may record the result. A distinct approval is executable
+only when persisted review/audit verification sets its integrity to VALID.
+The TAP result also requires complete captured output and a terminal duration
+summary; missing/truncated output or a missing terminal status is INCONCLUSIVE.
+Focused coverage checks concurrent duplicate denial, invalid-review-integrity
+denial with unchanged aggregate/audit counts, and truncated TAP remaining
+INCONCLUSIVE. Existing result boundaries are preserved: a PASS is only a test
+assertion result, business truth remains UNVERIFIED, and runtime verification
+remains NOT_EXECUTED.
+
+Focused command passed 1/1, 0 failures/skips; TAP duration 55.22s, test
+duration 54.82s; wrapper elapsed 56.31s:
+`node ops/run-tests.mjs tests/persistence.test.mjs --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable'`
+TAP `/tmp/orgward-tests-vdBemC/node-test.tap.log`. Earlier focused failures
+were fixture/assertion integration issues corrected before this final pass;
+the final run covers all three review findings. `git diff --check` passed.
+No full suite, task checkbox, cursor, or release gate changed. Sol read-only
+follow-up review requested.
+
+T-91 AC2/AC3 scenario-mapping feasibility check (2026-10-07): the current
+fresh AC3 plan has an executable positive mapping only. Its negative and
+recovery definitions contain text, source and criterion refs, but no dataset,
+oracle, assertion ID or selected TEST path; the plan builder consequently keeps
+both mappings INCOMPLETE. The captured `test/scenario-contract.test.mjs`
+fixture only imports the customer repository's `qualifyDemand` function and
+compares the supplied dataset with the supplied oracle. It does not invoke
+OrgWard's candidate-orphan/deleted-test rejection path, mandatory-guardrail
+plan validation, or stale-requirement/baseline regeneration path. Those
+behaviors are exercised by existing focused OrgWard persistence/contract
+tests, but those host product modules and their authority context are not in
+the pinned customer repository tree and are unavailable to the no-network
+scenario sandbox. Mapping those product checks to the current fixture would
+misstate what was executed. No case definitions or values were fabricated;
+negative and recovery remain INCOMPLETE/NOT_EXECUTED, and business truth
+remains UNVERIFIED.
+
+The exact next input is an owner-authored executable test contract in a pinned
+repository snapshot for each case: typed dataset, expected oracle, assertion
+ID/name, and selected test path, with an independent reviewer decision for
+that exact definition. For AC2/AC3 product-path coverage, a separately
+authorized fixed harness/API that tests the actual OrgWard rejection and
+regeneration behavior is also required; the current customer-candidate runner
+cannot safely substitute for it. Existing bounded AC2 candidate rejection and
+AC3 baseline/shared-draft regeneration receipts remain the available T-91
+acceptance evidence. No additional T-91 behavior was changed, no tests were
+run for this audit, and no task checkbox, cursor, release gate, or business
+status changed. `git diff --check` passed.
+
+PR-17/T-123 bounded publication-impact preview (2026-10-07): the owner
+publication panel now shows the current declared process-flow dependency
+impact, traversal status/budget, source blueprint snapshot pin, project and
+blueprint versions, and an impact-manifest hash. The publish command must
+include that exact hash; the server recomputes the manifest under the project
+write transaction and rejects stale hashes without changing the project. New
+publication records use schema v3 and retain the exact manifest/hash in the
+immutable record, event and publication hash. Readback verifies the record;
+schema-v2 publication history remains valid and only records with all markers
+absent remain historical. The UI says this is declared design-flow impact and
+does not establish downstream operational currentness or approval status.
+
+Focused persistence, enterprise API and view coverage passed 6/6 (0 failures,
+0 skips; TAP duration 16.35s; wrapper elapsed 17.44s):
+`ORGWARD_TEST_CONCURRENCY=1 npm test -- tests/persistence.test.mjs tests/enterprise/server.test.mjs tests/enterprise/view.test.mjs '--test-name-pattern=owner-only internal blueprint publication|enterprise scopes retain design identity|process plan compiles and runs a canonical process|enterprise branches merge exact typed changes|publication impact preview exposes exact pins|internal baseline watermark shows exact v2 pins'`.
+TAP `/tmp/orgward-tests-wlhHyM/node-test.tap.log`. Coverage includes exact
+manifest persistence/readback, stale-hash no-mutation denial, API replay/race
+journeys, pre-existing v2/history verification and rendered impact pins.
+`git diff --check` passed. This remains a bounded publication preview/pin
+increment: it does not implement T-123's atomic invalidation/outbox barrier,
+authoritative effect freshness fence, or consistent multi-lens projection, and
+does not complete T-123 or PR-17. No full suite, task checkbox, cursor, release
+gate, or truth/runtime status changed. Sol read-only follow-up review requested.
+
+PR-17/T-123 published-baseline freshness status increment (2026-10-07): the
+project API now derives an explicit status for the latest immutable internal
+baseline from its verified source blueprint pin and the current saved design.
+It reports `CURRENT_FOR_SAVED_BLUEPRINT` only for an exact verified match,
+`STALE` after the saved blueprint advances, `UNKNOWN` for unwatermarked
+historical records, and `NOT_PUBLISHED` when no baseline exists. The coverage
+panel presents that status and says a stale publication remains historical;
+it does not call it operationally current. This is a read-time projection over
+one persisted aggregate, not a mutation of publication records or publication
+events. A post-publication edit test confirms the status becomes STALE while
+publication and event bytes remain unchanged; the existing concurrent
+publish/edit race still allows only one expected-version winner.
+
+Focused persistence/API and view checks passed 2/2 (0 failures/skips; TAP
+duration 2.19s; wrapper elapsed 3.25s):
+`ORGWARD_TEST_CONCURRENCY=1 npm test -- tests/persistence.test.mjs tests/enterprise/view.test.mjs '--test-name-pattern=owner-only internal blueprint publication|publication status distinguishes current saved design'`.
+TAP `/tmp/orgward-tests-eqziXS/node-test.tap.log`; `git diff --check` passed.
+The projection preserves historical data and does not implement a durable
+invalidation/outbox barrier, authoritative effect freshness fence, or
+multi-lens projection coordination; it is not T-123 or PR-17 completion. No
+full suite, task checkbox, cursor or release gate changed. Sol read-only review
+requested.
+
+PR-17/T-123 stale-currentness replay correction (2026-10-07): Sol identified
+that an idempotent publish retry projected currentness from its immutable
+command-result snapshot. The publication endpoint now keeps the stored command
+result/event unchanged, then on replay performs a fresh authorized project read
+requiring active workspace-write authority and owner membership. The API
+projects the current blueprint and current publication status while returning
+the original publication event; metadata distinguishes the command-result
+project version from the current projected version. A persistence regression
+publishes blueprint vN, advances to vN+1, then replays the original key and
+asserts STALE/current vN+1 plus unchanged publication/event bytes. The existing
+concurrent publish/edit expected-version race remains covered in the same
+journey.
+
+Focused persistence test passed 1/1 (0 failures/skips; TAP duration 2.05s;
+wrapper elapsed 3.15s):
+`ORGWARD_TEST_CONCURRENCY=1 npm test -- tests/persistence.test.mjs '--test-name-pattern=owner-only internal blueprint publication'`.
+TAP `/tmp/orgward-tests-cu19Fd/node-test.tap.log`; syntax and `git diff --check`
+passed. No full suite or task/gate status changes. Sol read-only follow-up
+review requested.
+
+PR-17/T-123 linked process dispatch freshness fence slice (2026-10-07): the
+PostgreSQL dispatch boundary now resolves a linked manual-flow plan from the
+current project aggregate while holding the project share lock and rejects a
+plan whose source blueprint is no longer current or explicitly view-only
+compatible, before worker lease/start. The interrupted run is categorized as
+`source_stale` with guidance to start from a current plan; it does not enter
+approval-stale reapproval recovery. Existing plan/run history remains linked.
+
+Focused command:
+`ORGWARD_TEST_CONCURRENCY=1 npm test -- tests/persistence.test.mjs tests/execution/service.test.mjs tests/execution/linked-process-task-result.test.mjs '--test-name-pattern=saved process task requests are linked, idempotent, dependency-gated, and durable|linked terminal failure guidance persists only stable allowlisted categories|linked terminal failure guidance'`.
+Final TAP run had 2 passed and 1 failed (3 total; TAP duration 57.36s;
+wrapper elapsed 58.47s), log `/tmp/orgward-tests-b9aOCJ/node-test.tap.log`.
+The failure is in the newly added persistence fixture before the dispatch
+assertion: it attempted to edit actor identity labels, which the API rejects
+with `INVALID_BLUEPRINT_EDIT`. Therefore the stale-dispatch persistence path
+is not verified in this run; the persistence test remains failing and requires
+a non-actor blueprint edit fixture. Service categorization and linked UI
+guidance tests passed. `git diff --check` passed. No full suite or task/gate
+status changes; PR-17/T-123 remain open. Sol read-only follow-up is pending.
+
+PR-17/T-123 dispatch freshness fixture follow-up (2026-10-07): the enterprise
+`define-process-flow` request now includes the exact latest `blueprintId` and
+`blueprintVersion` plus the current expected project version. The one bounded
+focused run still fails before dispatch assertions: after the command succeeds,
+the fixture treats its command-result payload as a full project projection and
+reads `project.latestBlueprint.version`, which is undefined. TAP reports 2
+passed and 1 failed (3 total; TAP duration 56.44s; target test duration
+55.73s), log `/tmp/orgward-tests-iHOg6Z/node-test.tap.log`. The command route's
+result does not provide that projection; the fixture needs a fresh project GET
+before continuing. The dispatch freshness path remains unverified. No rerun,
+full suite, or task/gate status changes. `git diff --check` follows this receipt
+update.
+
+PR-17/T-123 dispatch freshness fixture follow-up (2026-10-07): the fixture now
+refreshes the full project after `define-process-flow` succeeds. The single
+bounded focused run still stops before the dispatch path: process-plan creation
+at `tests/persistence.test.mjs:13006` omits the explicit manual-flow runtime
+mode and exact blueprint pins, so the API returns 409
+`PROCESS_FLOW_RUNTIME_UNSUPPORTED` (advanced flows require an explicit
+manual-flow plan). TAP reports 2 passed and 1 failed (3 total; TAP duration
+56.66s; target test duration 55.98s), log
+`/tmp/orgward-tests-z09eju/node-test.tap.log`. Service/UI checks passed; the
+stale provider handoff assertion remains unverified. No rerun, full suite, or
+task/gate status changes; `git diff --check` follows this receipt update.
+
+Latest T-123 verification update (2026-10-07): the subsequent bounded run after
+the stale-cancellation fix and precise reapproval assertion supersedes the
+earlier failed reapproval receipt above. Source-stale reapproval returns HTTP
+400 with the existing exact message because only `execution_approval_stale`
+interruptions are eligible for recovery; GET confirms the run remains
+`INTERRUPTED` at the same version. Focused command:
+`ORGWARD_TEST_CONCURRENCY=1 npm test -- tests/persistence.test.mjs tests/execution/service.test.mjs tests/execution/linked-process-task-result.test.mjs '--test-name-pattern=saved process task requests are linked, idempotent, dependency-gated, and durable|linked terminal failure guidance persists only stable allowlisted categories|linked terminal failure guidance'`.
+Passed 3/3 (0 failed, 0 skipped; TAP duration 57.63s); log
+`/tmp/orgward-tests-yyCbDT/node-test.tap.log`. `git diff --check` passed.
+No full suite or task/gate status changes.
+
+PR-17/T-123 stale-source reapproval denial regression (2026-10-07): route
+inspection confirmed `approveExecutionRun()` permits interrupted-run recovery
+only when the latest interruption reason is `execution_approval_stale`; a
+`process_plan_blueprint_stale` interruption is denied with the existing HTTP
+400 message. The persistence regression now asserts that exact denial message
+and GET readback remains `INTERRUPTED` at the same version. This supersedes the
+prior incorrect 409 expectation and the earlier run whose assertion only
+checked status. Focused command:
+`ORGWARD_TEST_CONCURRENCY=1 npm test -- tests/persistence.test.mjs tests/execution/service.test.mjs tests/execution/linked-process-task-result.test.mjs '--test-name-pattern=saved process task requests are linked, idempotent, dependency-gated, and durable|linked terminal failure guidance persists only stable allowlisted categories|linked terminal failure guidance'`.
+Passed 3/3 (0 failed, 0 skipped; TAP duration 57.63s); log
+`/tmp/orgward-tests-yyCbDT/node-test.tap.log`. The persistence journey verifies
+stale handoff stops before provider invocation, leaves no artifacts, preserves
+the historical plan link, cancels the attempt, releases the lease, and rejects
+reapproval without mutation. No full suite or task/gate status changes;
+`git diff --check` follows this receipt update.
+
+PR-17/T-123 pre-send stale attempt cancellation correction (2026-10-07): the
+provider attempt cancellation now clears `handed_off_at` and records model
+usage as `dispatch_not_started` with null token fields/reason; the persisted
+attempt constraints and tenant handoff-control trigger can complete the
+cancellation. The one bounded focused run passed the stale interruption,
+source-stale category, no-artifact, historical-plan-link, unchanged provider
+call count, cancelled-attempt, and zero-active-lease assertions. It then failed
+the final reapproval assertion: approval refresh returned HTTP 400 where the
+fixture expected 409. No response body was captured by that assertion, so
+reapproval-alone denial remains unverified. TAP reports 2 passed and 1 failed
+(3 total; TAP duration 58.72s; target test duration 58.00s), log
+`/tmp/orgward-tests-u9ompP/node-test.tap.log`. No rerun, full suite, or task/gate
+status changes; `git diff --check` follows this receipt update.
+
+PR-17/T-123 dispatch freshness fixture follow-up (2026-10-07): plan creation
+now uses `mode: 'manual-flow'` and the exact blueprint ID/version returned by
+the saved flow command. The bounded focused run reached the post-dispatch
+assertions but failed because the persisted provider attempt was still
+`handed_off`, while the test requires it to be `cancelled` after the stale
+source interruption. TAP reports 2 passed and 1 failed (3 total; TAP duration
+57.83s; target test duration 57.12s), log
+`/tmp/orgward-tests-u79bMo/node-test.tap.log`; failure at
+`tests/persistence.test.mjs:13078`. The focused journey had already observed
+`INTERRUPTED`, reason `process_plan_blueprint_stale`, `source_stale`, empty
+changed artifacts, preserved plan link, and unchanged provider call count. The
+attempt-state assertion therefore remains a concrete unresolved defect in the
+stale handoff path; the remainder of the stale-dispatch journey, including
+lease and reapproval assertions, was not reached. No rerun, full suite, or
+task/gate status changes; `git diff --check` follows this receipt update.
+
+Latest T-123 verification update (2026-10-07): the subsequent bounded run after
+the stale-cancellation fix and precise reapproval assertion supersedes the
+earlier failed reapproval receipt above. Source-stale reapproval returns HTTP
+400 with the existing exact message because only `execution_approval_stale`
+interruptions are eligible for recovery; GET confirms the run remains
+`INTERRUPTED` at the same version. Focused command:
+`ORGWARD_TEST_CONCURRENCY=1 npm test -- tests/persistence.test.mjs tests/execution/service.test.mjs tests/execution/linked-process-task-result.test.mjs '--test-name-pattern=saved process task requests are linked, idempotent, dependency-gated, and durable|linked terminal failure guidance persists only stable allowlisted categories|linked terminal failure guidance'`.
+Passed 3/3 (0 failed, 0 skipped; TAP duration 57.63s); log
+`/tmp/orgward-tests-yyCbDT/node-test.tap.log`. `git diff --check` passed.
+No full suite or task/gate status changes.
+
+PR-17/T-123 AC4 project/baseline consistency projection (2026-10-07): project
+reads now include a read-only consistency envelope with explicit project-lens
+version, persisted baseline-lens project version, baseline publication and
+blueprint watermark, and current blueprint pin. It reports `CONSISTENT` only
+when the project aggregate version matches the published baseline version and
+the baseline watermark matches the current saved blueprint; missing publication
+or watermark is `PENDING`, and any generation mismatch is `STALE`. The
+publication panel renders those states and both versions. Existing
+`blueprintPublicationStatus` retains its saved-blueprint-only meaning, and this
+envelope does not assert operational currentness, approval or truth. It is
+derived from one project aggregate read and does not mutate publication records,
+events or outbox history; broader multi-projection reconciliation remains open.
+
+Focused command passed 4/4, 0 failures/skips (TAP duration 2.33s):
+`ORGWARD_TEST_CONCURRENCY=1 npm test -- tests/enterprise/view.test.mjs tests/persistence.test.mjs '--test-name-pattern=publication status distinguishes current saved design from stale and unknown historical pins|project and baseline consistency pins matching aggregate and blueprint generations|project and baseline consistency renderer never presents pending or stale lenses as consistent|owner-only internal blueprint publication snapshots disclosures immutably with replay and restart integrity'`
+TAP `/tmp/orgward-tests-ikh0Vs/node-test.tap.log`; `git diff --check` passed.
+No full suite, PR-15 cursor, task checkbox or release gate changed. T-123 and
+PR-17 remain open.
+
+PR-17/T-123 stale software-draft history readback (2026-10-07): when the
+source project advances, the software delivery draft read endpoint now keeps
+the immutable plans visible and attaches `sourceCurrentness` separately from
+plan integrity. It reports exact pinned/current project and blueprint
+versions, and the SDLC delivery view labels stale drafts as historical while
+hiding assignment, promotion and start controls. Compilation and later state
+changes retain their existing server freshness checks. A persistence journey
+asserts two saved draft versions remain readable and hash-identical after the
+source advances, with both records `valid` and `sourceCurrentness: STALE`; the
+served UI regression checks the stale history message and control guard.
+
+Focused command:
+`ORGWARD_TEST_CONCURRENCY=1 npm test -- tests/persistence.test.mjs tests/sdlc/server.test.mjs '--test-name-pattern=change cases and execution runs use PostgreSQL compare-and-swap state across restart|served SDLC product surface and meta contract expose stages and mutation lab'`.
+Passed 2/2 (0 failures, 0 skips; TAP duration 6.01s; wrapper elapsed 7.10s),
+TAP `/tmp/orgward-tests-iNChEf/node-test.tap.log`. Syntax checks and
+`git diff --check` passed. No full suite, PR-15 cursor, task checkbox or release
+gate changed; this increment does not complete T-123 or PR-17. Sol read-only
+follow-up review requested.
+
+PR-07/T-28 stale software-draft browser journey (2026-10-07): extended the
+restart-backed software runtime journey with a real material edit to the pinned
+saved information object after promotion and completion. The API still returns
+the hash-identical draft records with `sourceCurrentness: STALE`; attempting a
+new start against the old promoted snapshot returns `SOURCE_BINDING_STALE`
+without increasing instance-control or start-command counts. A persisted owner
+session then loads the SDLC case in Chromium, opens Delivery, and confirms the
+stale source banner and exact historical draft are visible while assignment,
+promotion and start controls are absent. Existing runtime rows remain history.
+
+Focused command:
+`ORGWARD_TEST_CONCURRENCY=1 npm test -- tests/persistence.test.mjs tests/sdlc/server.test.mjs '--test-name-pattern=change cases and execution runs use PostgreSQL compare-and-swap state across restart|served SDLC product surface and meta contract expose stages and mutation lab'`.
+Passed 2/2 (0 failures, 0 skips; TAP duration 8.94s; wrapper elapsed 10.06s),
+TAP `/tmp/orgward-tests-5rlP2J/node-test.tap.log`. Chromium ran through the
+existing headless CDP helper; `git diff --check` passed. No full suite, task,
+cursor, or gate status changed. Sol read-only follow-up review requested.
+
+PR-07/T-28 AC3 stale software-runtime start fence (2026-10-07): Sol identified
+that the human checkpoint start API could create a new instance from an
+already-promoted snapshot after its project source advanced. The start
+transaction now checks the immutable snapshot's project/blueprint/object/source
+pins against the locked current project and linked case, including the exact
+recomputed source hash, before creating task-instance rows or a command receipt.
+An API regression promotes a current snapshot, advances the project revision,
+then verifies a new start is denied with `SOURCE_BINDING_STALE` and creates no
+instance control or start receipt. This applies T-28 AC3's dispatch-staleness
+rule to software checkpoint starts; ordinary idempotent replay of an existing
+start remains a result lookup and does not create another instance.
+
+Focused command:
+`ORGWARD_TEST_CONCURRENCY=1 npm test -- tests/persistence.test.mjs tests/sdlc/server.test.mjs '--test-name-pattern=change cases and execution runs use PostgreSQL compare-and-swap state across restart|served SDLC product surface and meta contract expose stages and mutation lab'`.
+Passed 2/2 (0 failures, 0 skips; TAP duration 6.00s; wrapper elapsed 7.11s),
+TAP `/tmp/orgward-tests-n9FNG4/node-test.tap.log`. Syntax and
+`git diff --check` passed. The stale-history UI check is source-level only; no
+browser E2E was run. No full suite or task, cursor, or gate status changed.
+Sol read-only follow-up review requested.
+
+PR-07/T-28 stale software-draft E2E promotion-eligibility follow-up
+(2026-10-07): the browser fixture now saves a newer exact owner assignment
+review while the source is still current, leaving the immutable promoted
+snapshot on its prior review revision. API readback verifies the new review is
+eligible for `Promote revised human plan` before a real material source edit.
+That setup exposed a readback check that incorrectly required every old
+promotion to match the latest assignment review; the store now validates each
+immutable promotion against the exact review revision/hash pinned by its
+snapshot, so later review revisions remain visible without changing history.
+After the material edit, Chromium confirms the historical draft is visible and
+the revised-promotion action, assignment form and start action are absent; API
+history and stale-start denial remain covered.
+
+The first focused attempt failed before browser assertions because the plan
+list returned `PERSISTENCE_INTEGRITY` for the valid older promotion after a
+newer review was saved (TAP `/tmp/orgward-tests-BxoFeL/node-test.tap.log`). The
+store comparison was corrected; the single focused rerun passed 2/2 (0
+failures, 0 skips; TAP duration 9.11s; wrapper elapsed 10.25s):
+`ORGWARD_TEST_CONCURRENCY=1 npm test -- tests/persistence.test.mjs tests/sdlc/server.test.mjs '--test-name-pattern=change cases and execution runs use PostgreSQL compare-and-swap state across restart|served SDLC product surface and meta contract expose stages and mutation lab'`.
+TAP `/tmp/orgward-tests-3vwdLZ/node-test.tap.log`; syntax and
+`git diff --check` passed. No full suite or task, cursor, or gate status
+changed. Sol read-only follow-up review requested.
+Sol follow-up found no code blocker. Remaining limits: the browser journey
+does not assert the positive pre-edit controls, exercise an edit/start
+concurrency race, or tamper with a historical promotion record.
+
+PR-15/T-91 delegated negative/recovery case-data capture (2026-10-08): Sol
+provided the N1–N3 and R1–R2 definitions as delegated specification. They are
+recorded as owner-authored test inputs in the immutable behavior plan; this
+provenance is a product-spec delegation, not user-tested business truth. The
+plan builder now permits a complete typed dataset/oracle pair to persist while
+the product-path test/assertion mapping remains `INCOMPLETE`; it still rejects
+an unmatched dataset or oracle, and incomplete cases cannot be approved for
+test execution. N2's saved oracle is compared with the real owner plan
+authorization denial and the real candidate-evidence link rejection for a
+passing generic check with its named assertion absent. The browser reviewer
+form displays the exact saved definitions, datasets and oracles. N1/N3/R1/R2
+are captured only; they were not dispatched through a product-path harness in
+this increment. All five negative/recovery scenarios remain `NOT_EXECUTED`,
+their product-path mappings remain `INCOMPLETE`, and business truth remains
+`UNVERIFIED`.
+
+Focused command passed 3/3, 0 failures/skips; TAP duration 57.997s (wrapper
+elapsed 59.18s):
+`node ops/run-tests.mjs tests/sdlc/behavior-test-evidence.test.mjs tests/persistence.test.mjs --test-name-pattern='behavior-test plan maps exact declared criteria and parses only persisted unique TAP outcomes|owner-proposed scenario mappings verify only to the exact passing pinned assertion|saved process task requests are linked, idempotent, dependency-gated, and durable'`
+TAP `/tmp/orgward-tests-TaSKgv/node-test.tap.log`; `git diff --check` passed.
+Two earlier runs failed on test assertions that still expected the old empty
+case-data representation; those expectations were corrected before this final
+passing run (logs `/tmp/orgward-tests-NwNFNK/node-test.tap.log` and
+`/tmp/orgward-tests-lSWJWp/node-test.tap.log`).
+No full suite or task, cursor or release-gate status changed. The next slice
+must add a trusted fixed product-path harness and separate immutable receipts
+for N2 and R1/R2; the existing customer repository runner still executes only
+its positive `qualifyDemand` fixture.
+
+PR-15/T-91 N2 capture UX clarity follow-up (2026-10-08): the owner form now
+explains that a complete dataset/oracle pair can be captured before its exact
+test-path/assertion mapping is ready. Its live status distinguishes a saved
+pair with `INCOMPLETE` mapping from a one-sided pair, and keeps the scenario
+`NOT_EXECUTED`. Plan summaries say `dataset/oracle captured` while execution
+mapping remains `INCOMPLETE`; the server still rejects one-sided pairs and
+independent reviewers still cannot approve incomplete mappings. Truth remains
+`UNVERIFIED`.
+
+Focused UI/contract command passed 39/39, 0 failures/skips, TAP duration 3.532s:
+`node --test tests/sdlc/server.test.mjs tests/sdlc/behavior-test-evidence.test.mjs --test-name-pattern='criterion editor and behavior plan form expose typed obligations and exact path mappings|behavior plan recovery presentation retains old revision pins and calls for regeneration|owner-proposed scenario mappings verify only to the exact passing pinned assertion'`.
+The direct Node TAP output was not redirected to a file. Pair-only API
+persistence, one-sided denial, reviewer rendering, `NOT_EXECUTED`, and
+`UNVERIFIED` boundaries were covered by the prior focused persistence result
+at `/tmp/orgward-tests-TaSKgv/node-test.tap.log` (3/3). `git diff --check` passed.
+No task, cursor or release-gate status changed.
+
+PR-15/T-91 N2 owner-form submission follow-up (2026-10-08): Sol's review
+found the earlier clarity-only receipt overstated coverage: the browser form
+still required all four mapping fields and had no actual submission assertion.
+The submit handler now accepts a paired dataset/oracle without a test path or
+assertion and posts the case as `INCOMPLETE`; it rejects one-sided data/oracle
+without posting or changing the case version. If any mapping field is entered,
+the form requires the complete dataset/oracle and test-path/assertion pairs.
+The saved-plan form is reachable for the exact source-pinned task supported by
+the API. The Chromium journey submits the pair through the real form, asserts
+the POST payload and 201 response, then reads the captured pair back from the
+API. Mapping remains `INCOMPLETE`, scenario `NOT_EXECUTED`, truth
+`UNVERIFIED`. The new owner-authored plan remains in history after restart.
+
+Focused command passed 1/1, 0 failures/skips; TAP test duration 59.17s and
+suite duration 59.57s:
+`node ops/run-tests.mjs tests/persistence.test.mjs --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable'`.
+TAP `/tmp/orgward-tests-5gQtMq/node-test.tap.log`. Two interim runs reached
+readback and exposed assertion mismatches (POST versus GET derived hash fields);
+the next run exposed the expected third persisted plan in restart history. Those
+assertions were corrected, and the final journey passed. `git diff --check`
+passed. No task checkbox, cursor or release-gate status changed. N2 remains
+unexecuted against product behavior; the trusted product-path harness and
+separate scenario receipts remain the next implementation slice.
+Sol read-only follow-up found no implementation blocker. Review limits: the
+one-sided denial asserts the case version remains unchanged (it does not assert
+the project version independently); restart retains the added plan, but this
+journey does not compare that plan's exact dataset/hash after restart. The
+immediate authorized API readback does compare captured case content and plan
+hash. No scenario execution was performed.
+
+PR-15/T-91 N2.AUTHORIZATION denial evidence checkpoint (2026-10-08): the
+existing isolated PostgreSQL persistence journey now observes the real
+`POST /api/sdlc/cases/:id/process-behavior-test-plans` with an otherwise valid
+request and an empty assertion list. It verifies the delegated oracle's HTTP
+400, unchanged case version and event count, and no saved plan. This records
+only the authorization denial behavior. No product-harness mapping/review,
+pre-dispatch reservation, or durable N2 subcase receipt was added in this
+checkpoint; N2.AUTHORIZATION remains `NOT_EXECUTED` as a harness scenario, and
+N2.MISSING_ASSERTION/N1/N3 remain `NOT_EXECUTED`. Truth remains `UNVERIFIED`.
+The next slice must add the exact pinned mapping and fresh distinct review,
+then reservation/dispatch/receipt; it must not claim an N2 or NEGATIVE suite
+pass from this denial assertion alone.
+
+Focused command passed 1/1, 0 failures/skips; TAP test duration 61.85s and
+suite duration 62.28s:
+`node ops/run-tests.mjs tests/persistence.test.mjs --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable'`.
+TAP `/tmp/orgward-tests-69mZvC/node-test.tap.log`; `node --check
+tests/persistence.test.mjs` and `git diff --check` passed. No task checkbox,
+cursor, or release-gate status changed.
+
+N3 provider-allocated invocation API readback attempt (2026-10-08): corrected
+the persistence fixture to select N3 via `harness.subcaseId` (the dispatcher
+request object has no `subcaseId` field), then ran the named persistence
+journey once. It failed in nested subtest `N2.AUTHORIZATION injected dispatch
+failure receipt is durable` after 3.15s; the parent journey terminated after
+92.32s. TAP `/tmp/orgward-tests-rafZrT/node-test.tap.log` contains the failed
+subtest/parent summary but no assertion detail. The run was stopped after the
+child reported the terminal TAP failure; no rerun was started. Therefore the
+provider-allocated N3 invocation + null-case API GET/replay remains unverified;
+the separate store-verifier regression above passed, and must not be treated
+as durable API evidence.
+
+T-91 N3 provider-allocated pre-fixture failure boundary (2026-10-08): store
+readback now permits an absent fixture-case ID for an INCONCLUSIVE N3 receipt
+only when fixture plan, source stage, candidate and run evidence are all absent.
+The exact registered mapping/reservation template and source pins remain
+required; PASS still requires the complete source/candidate/run evidence. The
+provider's dispatch-error annotation was factored into a shared helper. A
+two-cluster provider test forces database allocation to fail after invocation
+allocation and confirms the real provider annotates the error with invocation
+ID and the supplied registered template hash. The classifier/readback-policy
+tests confirm that shape is accepted only as INCONCLUSIVE with no evidence.
+
+Focused command
+`node --test --test-name-pattern='N3 readback permits|N2 and N3 v4|fixture provider annotates pre-fixture' tests/sdlc/product-harness.test.mjs tests/platform/t91-n2-fixture-provider.test.mjs`
+passed 3/3 (0 failures/skips; TAP duration 2.51s). Syntax checks for changed
+modules/tests and `git diff --check` passed.
+
+An attempted API-level provider-style receipt regression in the existing long
+owner journey did not reach readback: the injected dispatcher returned an N3
+receipt with a null invocation ID instead of the provider-annotated ID. TAP
+`/tmp/orgward-tests-isM0MN/node-test.tap.log` (outer journey 88.19s; the named
+process was stopped after it remained live beyond the terminal TAP failure).
+This run is failed evidence and does not establish provider-style GET/replay.
+The earlier API readback/replay for pre-invocation null/null N3 failure remains
+valid; API GET/replay with provider-allocated invocation plus null case ID is
+still unverified. No task, cursor, or gate status changed.
+
+PR-15/T-91 N2.AUTHORIZATION fixed product-harness mapping/review slice
+(2026-10-08): owner UI can request only the registry-defined
+`N2.AUTHORIZATION` mapping for a saved plan. The persisted mapping is distinct
+from the customer TEST mapping and binds tenant/project/case/requirement, exact
+plan and source, criterion, parent NEGATIVE definition, N2 dataset/oracle,
+harness ID/version/hash, assertion ID/hash and fixed fixture scope. The server
+re-derives the mapping; caller-supplied pins are not accepted. A separate
+workspace-write human review must bind its exact mapping ID/hash and be distinct
+from the owner. The reviewer UI records `APPROVE_FOR_TEST_EXECUTION` or
+`REQUEST_CHANGES`; this does not reuse the NEGATIVE scenario decision. Mapping
+and review events have durable audit/idempotency verification on API readback.
+The browser test covers exact pin readback, altered-hash denial, owner
+self-review denial, independent reviewer approval and
+`REVIEWED_FOR_TEST_EXECUTION`; case scenario remains `NOT_EXECUTED`, business
+truth remains `UNVERIFIED`, and no dispatch/receipt was added. N2.AUTHORIZATION
+is only reviewed for test execution; N2.MISSING_ASSERTION/N1/N3 remain
+`NOT_EXECUTED`, and the NEGATIVE suite is not passed.
+
+Focused command passed 2/2, 0 failures/skips; TAP duration 64.08s (journey
+63.58s, mapping pin unit 3.58s):
+`node ops/run-tests.mjs tests/sdlc/behavior-test-evidence.test.mjs tests/persistence.test.mjs --test-name-pattern='fixed N2 product-harness mapping|saved process task requests are linked, idempotent, dependency-gated, and durable'`.
+TAP `/tmp/orgward-tests-XMsZaX/node-test.tap.log`; syntax checks and
+`git diff --check` passed. No task checkbox, cursor or release-gate status
+changed. The next slice is the fixed local fixture dispatch and immutable
+N2.AUTHORIZATION-only receipt with reservation/idempotency.
+
+PR-15/T-91 N2 mapping integrity/source review follow-up (2026-10-08): Sol
+review found that mapping request metadata was not fully bound to its durable
+event, old criterion versions were read from the current contract, stale plans
+could receive a fresh review, and reviewer independence did not separately
+exclude a former plan author. The verifier now binds request/review actor,
+command, request hash, timestamp and status to each audited event. Mapping
+construction resolves the plan's exact historical criterion contract and pins
+the repository snapshot/tree. Both mapping request and review recheck the plan
+against the current requirement draft, source binding and latest saved
+blueprint. Review authorization and readback exclude the mapping requester,
+plan creator and negative-definition author. Unit coverage checks historical
+pins, altered hashes and a former plan author's denial predicate; the browser
+persistence journey checks mutation-free self/altered-pin denials and a distinct
+reviewer approval/readback. The review only authorizes future harness
+execution; N2 remains NOT_EXECUTED, truth UNVERIFIED, and no receipt or N2 suite
+pass is claimed.
+
+Final focused command passed 2/2, 0 failures/skips; TAP suite duration 61.44s
+(persistence journey 61.01s; mapping unit 4.43s):
+`node ops/run-tests.mjs tests/sdlc/behavior-test-evidence.test.mjs tests/persistence.test.mjs --test-name-pattern='fixed N2 product-harness mapping|saved process task requests are linked, idempotent, dependency-gated, and durable'`.
+TAP `/tmp/orgward-tests-WTZ5E8/node-test.tap.log`; syntax checks and
+`git diff --check` passed. An earlier run was interrupted while these fixes
+were being completed and is not counted (`/tmp/orgward-tests-XPDPPO/node-test.tap.log`).
+No task checkbox, cursor or release-gate status changed. The next increment is
+still fixed fixture reservation/dispatch and an immutable per-subcase receipt.
+
+Sol historical-read follow-up: verification no longer equates a mapping's
+original requester with the case's current accountable owner. New mapping
+requests still require the current owner; retained request actor/time/command
+remain bound to their immutable event and audit. Thus a later legitimate owner
+change does not rewrite or invalidate the earlier mapping history. Focused
+rerun passed 2/2, 0 failures/skips; TAP suite duration 59.67s (journey 59.13s,
+mapping unit 7.44ms):
+`node ops/run-tests.mjs tests/sdlc/behavior-test-evidence.test.mjs tests/persistence.test.mjs --test-name-pattern='fixed N2 product-harness mapping|saved process task requests are linked, idempotent, dependency-gated, and durable'`.
+TAP `/tmp/orgward-tests-Rwo1Er/node-test.tap.log`; `git diff --check` passed.
+No statuses changed. Fresh Sol follow-up requested.
+
+PR-15/T-91 N2.AUTHORIZATION read-integrity projection follow-up (2026-10-08):
+the execution verifier now returns validated reservation/receipt ID and hash
+pins without mutating persisted records. Read handlers attach those pins only
+to a transient projection marker; the API projection derives
+`integrityStatus: VALID` only for a matching receipt hash. Known legacy
+`integrityStatus` annotations are excluded from the immutable reservation and
+receipt cores. The unit projection test also asserts that projecting status
+does not mutate its input records. Scenario execution remains `NOT_EXECUTED`,
+the negative suite remains `INCOMPLETE`, business truth remains `UNVERIFIED`,
+and runtime verification remains `NOT_EXECUTED`.
+
+`node --test tests/sdlc/behavior-test-evidence.test.mjs` passed 7/7 (0
+failures/skips; TAP duration 0.26s); `git diff --check` passed. The settled
+focused persistence journey was run once after the pure-verifier change:
+`node ops/run-tests.mjs '--test-name-pattern=saved process task requests are linked, idempotent, dependency-gated, and durable' tests/persistence.test.mjs`.
+It failed 1/1 after 41.28s (TAP duration 43.01s), log
+`/tmp/orgward-tests-gPKM7y/node-test.tap.log`, at the later Chromium evidence
+review assertion (`tests/persistence.test.mjs:11832`): the review submission
+reported “The case changed before the evidence review could be recorded.” The
+same journey had already passed the N2.AUTHORIZATION reservation, concurrent
+duplicate, fixed-route HTTP 400/no-mutation receipt, replay, changed-pin
+denials, and API readback assertions before reaching that unrelated browser
+assertion. This persistence journey is not counted as passing; no retry or
+full suite was run. No task checkbox, cursor, or release gate changed.
+
+T-91 N2.AUTHORIZATION persistence journey follow-up (2026-10-08): supersedes
+the immediately preceding failed run. Sol traced its browser evidence-review
+conflict to Bob's page retaining the pre-reservation case version after the
+N2 execution advanced the case. The fixture now reloads Bob's session and
+restores the Requirements tab after N2 receipt readback. That run then exposed
+a test-only scope error at restart verification (`n2Receipt` was local to the
+browser callback); the test now carries the receipt into the restart assertion
+scope. No production version fence was changed.
+
+Final focused command passed 1/1, 0 failures/skips; TAP subtest duration
+60.58s and TAP total duration 61.01s (wrapper elapsed 62.17s):
+`node ops/run-tests.mjs '--test-name-pattern=saved process task requests are linked, idempotent, dependency-gated, and durable' tests/persistence.test.mjs`.
+TAP `/tmp/orgward-tests-Z13rNb/node-test.tap.log`; `git diff --check` passed.
+This journey verifies the N2.AUTHORIZATION fixed-route HTTP 400/no-mutation
+receipt, durable reservation/idempotency/replay, verified API/restart readback,
+and later browser evidence review. It does not execute customer scenarios or
+establish business truth: scenario execution remains `NOT_EXECUTED`, the
+negative suite remains `INCOMPLETE`, and business truth remains `UNVERIFIED`.
+No task checkbox, cursor, or release-gate status changed.
+
+T-91 N2.AUTHORIZATION fixed product-path integrity follow-up (2026-10-08):
+the named persistence journey now passes after fixing the missing store import
+for the fixed harness contract. The fixture seeds a persisted synthetic case
+through normal APIs, proves a valid nonempty-assertion control plan is accepted,
+then observes the empty-assertion route denial. The observation now requires
+case version/event/plan counters plus case-scoped audit-log and outbox counts;
+missing counters classify INCONCLUSIVE, and contradictory complete counts
+classify FAIL. Receipt schema v3 stores the terminal classification input, and
+older v1/v2 receipts remain readable as INCONCLUSIVE historical results. Mapping,
+review, and execution mutation responses preserve the current harness capability
+so the owner UI does not incorrectly switch to disabled after a save.
+
+`node --test tests/sdlc/behavior-test-evidence.test.mjs` passed 9/9 (0
+failures/skips; TAP duration 0.23s). The final named persistence command passed
+1/1 (0 failures/skips; subtest duration 61.57s; TAP duration 61.98s; wrapper
+elapsed 63.05s):
+`node ops/run-tests.mjs --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable' tests/persistence.test.mjs`.
+TAP `/tmp/orgward-tests-0lkVCC/node-test.tap.log`; `git diff --check` passed.
+Earlier attempts in this slice remain historical and are superseded: one
+stalled while waiting for dispatch before releasing its test gate, one exposed
+the missing `T91_N2_AUTHORIZATION_HARNESS` import (`ReferenceError`), and one
+exposed a test diagnostic body-read issue. The final journey covers only the
+fixed N2.AUTHORIZATION subcase. The normal app still fails closed with
+`PRODUCT_HARNESS_UNAVAILABLE` unless an isolated provider is configured; this
+test's dispatcher is injected into its disposable fixture. Customer scenario
+execution remains `NOT_EXECUTED`, negative suite coverage remains `INCOMPLETE`,
+and business truth remains `UNVERIFIED`. No task checkbox, cursor, or release
+gate status changed.
+
+T-91 N2.AUTHORIZATION configured-provider journey (2026-10-08): supersedes the
+prior persistence receipt as evidence for normal configured-provider execution.
+The named persistence journey now configured the ordinary `createApp` instance
+with a separate temporary fixture PostgreSQL cluster and no injected product
+harness dispatcher. The owner-created N2.AUTHORIZATION mapping was independently
+reviewed, reserved, dispatched through the fixed provider, and returned a schema
+v4 receipt bound to the reservation hash, generated fixture invocation ID, and
+registered synthetic fixture-template hash. Readback/replay retained the same
+receipt hash and VALID integrity; fixture DB cleanup was independently asserted
+by the real provider/runner test. The fixture used real isolated APIs: a valid
+control plan returned 201, then the empty-assertion plan request returned 400
+with unchanged case version, events, plans, audit-log count, outbox count, and
+canonical digest. A second independently reviewed mapping exercised the same
+configured path and also read back/replayed successfully.
+
+Focused commands passed: `node --test tests/sdlc/product-harness.test.mjs
+tests/platform/t91-n2-product-fixture.test.mjs` (2/2, 0 failures/skips; TAP
+11.48s; includes the two-cluster real runner/provider and v4 classification
+regressions); `node ops/run-tests.mjs
+--test-name-pattern='saved process task requests are linked, idempotent,
+dependency-gated, and durable' tests/persistence.test.mjs` (1/1, 0
+failures/skips; subtest 73.68s; TAP duration 74.09s; wrapper reported 75.23s).
+TAP `/tmp/orgward-tests-33b2YJ/node-test.tap.log`; `git diff --check` passed.
+Older schema v1-v3 receipt verification retains its prior hash/classifier rules;
+new writes use schema v4 and cannot PASS without matching invocation, template,
+and reservation pins. The product-path receipt covers N2.AUTHORIZATION only;
+N2.MISSING_ASSERTION, N1, N3, R1, and R2 remain unexecuted, the negative suite
+remains INCOMPLETE, customer scenario execution remains NOT_EXECUTED, business
+truth remains UNVERIFIED, and runtime verification remains NOT_EXECUTED. No
+task checkbox, queue cursor, or release gate changed.
+
+T-91 N2.MISSING_ASSERTION owner feedback slice (2026-10-08): the real
+process-run evidence-link rejection now returns bounded evaluated assertion
+details (assertion ID, exact test name, `UNKNOWN`/`TEST_FAIL`, and safe reason)
+with `BEHAVIOR_CANDIDATE_REJECTED`. The owner form keeps an inline `aria-live`
+message stating no link was saved and directs the owner to update that exact
+test, rerun the check, then link the new run. The browser API helper retains
+HTTP status, error code and structured details on its Error object.
+
+The existing persistence/browser journey passed 1/1 (0 failures/skips; subtest
+70.40s; TAP duration 70.95s; wrapper reported 72.13s):
+`node ops/run-tests.mjs --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable' tests/persistence.test.mjs`.
+It asserts the exact absent assertion name/status/reason, 409 code, unchanged
+case version/event history, no link/evaluation/review, and unchanged audit and
+outbox counts. Browser submission confirms the inline message is visible and
+accessible. TAP `/tmp/orgward-tests-ibKesL/node-test.tap.log`; syntax checks and
+`git diff --check` passed. This proves the real evidence-link denial and owner
+remediation UX; the separate reviewed product-harness mapping/reservation/
+receipt for N2.MISSING_ASSERTION has not been implemented or claimed. N1/N3/R1/R2
+remain unexecuted; task/cursor/release-gate statuses are unchanged.
+
+T-91 N2.MISSING_ASSERTION isolated execution fixture checkpoint (2026-10-08):
+the private synthetic fixture now stages, validates, and activates a fresh
+loopback-only OpenAI credential through the supported secret APIs, then uses
+the real task creation, independent approval, ExecutionService execution, and
+pinned TAP check routes. It posts the actual evidence-link request and confirms
+the expected 409 `BEHAVIOR_CANDIDATE_REJECTED`, exact assertion `UNKNOWN` /
+`ASSERTION_RESULT_NOT_FOUND`, and unchanged case/evidence/evaluation/review/
+audit/outbox observations. A safe bounded assertion diagnostic exposed and
+helped fix the fixture's generated patch newline; the final focused run passed:
+`node --test --test-name-pattern='N2.MISSING_ASSERTION fixture' tests/platform/t91-n2-product-fixture.test.mjs`
+(1/1, 0 failures/skips; TAP duration 11.16s; subtest 5.70s). `node --check
+src/platform/t91-n2-product-fixture.mjs` and `git diff --check` passed. This is
+direct isolated fixture evidence only; the owner-triggered missing-assertion
+mapping/review/reservation/receipt readback/replay journey is still unverified.
+N2.MISSING_ASSERTION is not complete; N1/N3/R1/R2 remain unexecuted, the
+negative suite remains INCOMPLETE, business truth remains UNVERIFIED, and no
+task checkbox, cursor, or release gate changed.
+
+T-91 owner execution and dispatch-failure readback follow-up (2026-10-08): the
+focused persistence journey now runs the configured-provider browser/API owner
+flow without restarting or navigating its browser app. The owner-selected
+N2.MISSING_ASSERTION mapping was independently reviewed, executed through the
+configured isolated fixture provider, and read back with VALID integrity; exact
+same-body replay returned the same receipt hash without another event/receipt.
+The journey also confirms the separate AUTHORIZATION owner receipt remains
+PASS, while scenario execution is NOT_EXECUTED and business truth is UNVERIFIED.
+
+A named API-only nested persistence test starts a second injected-dispatcher app
+against the same disposable test database after the browser flow. Its synthetic
+dispatch interruption persists an INCONCLUSIVE schema-v4 receipt with no run;
+GET derives VALID integrity and same-key replay returns the same receipt hash.
+It does not use the configured provider or claim a customer scenario execution.
+The failing dispatcher gate is released before dispatch, and the test keeps the
+two app/browser lifecycles separate.
+
+`node ops/run-tests.mjs --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable' tests/persistence.test.mjs`
+passed 2/2 (0 failures/skips; nested dispatch-failure subtest 1.57s; parent
+test 74.82s; TAP duration 75.28s; wrapper reported 76.35s). TAP
+`/tmp/orgward-tests-kTbn6m/node-test.tap.log`. `node --check
+tests/persistence.test.mjs` and `git diff --check` passed. Earlier failed runs
+remain historical and are superseded by this result; they exposed toast timing,
+cookie-origin/CDP isolation, stale-plan placement, and replay body-version test
+setup issues that were corrected. N2.AUTHORIZATION and N2.MISSING_ASSERTION are
+the only exercised product-path subcases; N1/N3/R1/R2 remain unexecuted, the
+negative suite remains INCOMPLETE, runtime verification remains NOT_EXECUTED,
+business truth remains UNVERIFIED, and task/cursor/release-gate statuses are
+unchanged.
+
+T-91 cross-subcase reservation fence (2026-10-08): Sol's read-only review found
+that the execution write boundary validated mapping/review integrity but did not
+require the request's subcase ID to equal the reviewed mapping's subcase. The
+store now rejects mismatches before writing a reservation and readback requires
+receipt, reservation, and mapping subcase IDs to match. A browser/API persistence
+regression uses an independently reviewed N2.MISSING_ASSERTION mapping with an
+N2.AUTHORIZATION execution request and asserts 409
+`PRODUCT_HARNESS_EXECUTION_NOT_APPROVED`, unchanged case version/events, and no
+reservation or receipt for that mapping.
+
+`node ops/run-tests.mjs --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable' tests/persistence.test.mjs`
+passed 2/2 (0 failures/skips; nested dispatch-failure subtest 1.69s; parent
+test 76.62s; TAP duration 77.10s; wrapper 78.22s). TAP
+`/tmp/orgward-tests-Xvuj6G/node-test.tap.log`. `node --check
+src/platform/postgres-stores.mjs`, `node --check tests/persistence.test.mjs`, and
+`git diff --check` passed. Product-harness execution status remains scoped to
+the registered N2.AUTHORIZATION and N2.MISSING_ASSERTION checks; other defined
+cases are unexecuted, the negative suite remains INCOMPLETE, customer scenario
+execution remains NOT_EXECUTED, business truth remains UNVERIFIED, and no task,
+cursor, or release-gate status changed.
+
+T-91 N1 orphan-path owner journey (2026-10-08): the owner requested the fixed
+`src/unmapped.mjs` case, a distinct reviewer approved the exact mapping, and the
+configured isolated fixture ran the real ExecutionService candidate path. The
+candidate contained exactly one added path with matching hash and a tree digest
+different from the source. The real service returned
+`BEHAVIOR_CANDIDATE_ORPHAN_PATH` before verifier adapter construction; the
+fixture's count wraps `app.executionService.commandAdapterFactory` at that
+boundary and the immutable receipt records `verifierDispatchCount: 0`. The
+journey confirms one reservation/event/receipt, a duplicate request returned
+202 while the first execution was RUNNING, and same-body replay returned the
+same receipt hash without another event or receipt. Readback integrity is
+VALID. The case status is limited to N1; it does not complete the negative
+suite or establish business truth.
+
+`node --test --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable' tests/persistence.test.mjs`
+passed 2/2 (0 failures/skips; nested dispatch-failure subtest 1.77s; parent
+test 82.03s; TAP duration 82.55s). `node --check` passed for touched sources and
+tests, and `git diff --check` passed. A preceding run exposed a test-only
+use-before-initialization in the replay assertion; the assertion now follows
+the readback request and this passing run supersedes that failure. N3/R1/R2
+remain unexecuted, the negative suite remains INCOMPLETE, business truth remains
+UNVERIFIED, runtime verification remains NOT_EXECUTED, and no task checkbox,
+cursor, or release gate changed.
+
+T-91 N3 owner mapping/review foundation (2026-10-08): using Sol's delegated
+acceptance definition, the fixed N3 mapping builder and API/readback verifier
+bind the parent negative definition, exact N3 dataset/oracle, criterion contract
+and plan/source pins, plus the registered `tests/learning.test.js` path, pinned
+failing-source bytes hash, expected source exit code 1, and deletion/pre-verifier
+oracle. The owner UI can request the distinct mapping; reviewer UI shows the
+exact path and source hash and records a separate decision. N3 fixture capability
+is explicitly UNAVAILABLE, so there is no execution action or reservation.
+Altered paths or contradictory oracle definitions are rejected. Focused tests
+passed 2/2 (`node --test --test-name-pattern='N3 mapping pins|N1 receipt wording'
+tests/sdlc/product-harness.test.mjs`; TAP duration 151ms); syntax and
+`git diff --check` passed. Source TAP execution, candidate deletion, N3
+reservation/receipt/readback/replay remain unimplemented and unclaimed. N3
+remains NOT_EXECUTED; no task checkbox, cursor, or release gate changed.
+
+T-91 N1 receipt wording correction (2026-10-08): Sol's read-only review found
+that an INCONCLUSIVE receipt could use copy claiming the candidate was rejected
+before verifier dispatch. Receipt statements are now selected from the verified
+outcome: only PASS claims rejection; FAIL describes contradictory evidence; and
+INCONCLUSIVE says the result could not be confirmed, claims no rejection/pass,
+and directs the owner to restore the isolated fixture and rerun. Focused wording
+regression passed 1/1 (`node --test --test-name-pattern='N1 receipt wording'
+tests/sdlc/product-harness.test.mjs`; TAP duration 129ms). Syntax checks for the
+changed module/store/test and `git diff --check` passed. No task checkbox, cursor,
+or release gate changed.
+
+T-91 N3 owner execution and v4 failure-receipt compatibility follow-up
+(2026-10-08): the owner UI now uses the accepted stage labels “Original test
+fails” and “Unauthorized deletion is rejected.” A failed dispatcher with no
+fixture invocation now stores a null invocation ID and null template hash as a
+paired v4 pin; the shared receipt verifier applies this pair rule for N2 and N3.
+This fixes the preceding API readback 503, where the failure receipt had no
+invocation ID but retained a nonnull template hash.
+
+The named persistence/browser journey passed 2/2 (0 failures/skips; nested
+N2.AUTHORIZATION dispatch-failure readback 1.85s; parent journey 86.33s; TAP
+duration 86.78s; wrapper 87.90s):
+`node ops/run-tests.mjs --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable' tests/persistence.test.mjs`.
+It confirms the N2 INCONCLUSIVE schema-v4 receipt is readable and replayable,
+then completes the N3 owner mapping/review/execution path: pinned source bytes
+for `tests/learning.test.js` produce TAP exit 1; deleting exactly that path is
+rejected with `BEHAVIOR_CANDIDATE_ORPHAN_PATH`; verifier dispatch count is zero;
+receipt readback integrity is VALID and replay does not add an event or receipt.
+The negative suite remains INCOMPLETE, business truth UNVERIFIED, runtime
+verification NOT_EXECUTED, and no task checkbox, cursor, or release gate
+changed. TAP `/tmp/orgward-tests-fSX8YY/node-test.tap.log`.
+
+Focused `node --test tests/sdlc/product-harness.test.mjs` passed 8/8 (TAP
+duration 140.61ms); syntax checks for the changed server/store/module/test and
+`git diff --check` passed. This focused test covers the shared N2/N3
+invocation/template pair predicate; the named persistence journey above is the
+actual PostgreSQL/API receipt readback evidence. The prior failed readback run
+is historical and superseded by this pass.
+
+T-91 N3 pre-invocation failure receipt readback follow-up (2026-10-08): Sol's
+read-only review found that N3 readback still required observed template and
+fixture-case pins even when dispatch failed before a fixture invocation. The
+store now keeps registered mapping/reservation pins strict, accepts absent
+observed template/case pins only for a correctly classified pre-invocation
+INCONCLUSIVE receipt, and continues to require the full observed pins for PASS.
+The persistence journey adds a separately reviewed N3 mapping, injects a
+pre-invocation failure, and confirms API GET returns integrity VALID and exact
+same-key replay returns the same receipt hash. The existing N3 owner happy path
+also remains passing: source TAP exit 1, exact test deletion rejected, zero
+verifier dispatch, valid receipt readback and replay.
+
+`node ops/run-tests.mjs --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable' tests/persistence.test.mjs`
+passed 2/2 (0 failures/skips; nested dispatch-failure subtest 3.12s; parent
+journey 92.35s; TAP duration 92.79s; wrapper 93.84s). TAP
+`/tmp/orgward-tests-oXs03u/node-test.tap.log`. `node --check
+src/platform/postgres-stores.mjs`, `node --check tests/persistence.test.mjs`, and
+`git diff --check` passed. This verifies the N3 pre-invocation INCONCLUSIVE
+receipt path only; no negative-suite or business-truth completion is claimed.
+N3 remains a scoped safeguard result; the negative suite remains INCOMPLETE,
+business truth UNVERIFIED, runtime verification NOT_EXECUTED, and no task,
+cursor, or release-gate status changed.
+
+T-91 N3 provider-allocated pre-fixture receipt verifier regression (2026-10-08):
+added `tests/platform/t91-n3-receipt-readback.test.mjs` with a schema-v4
+INCONCLUSIVE receipt carrying the provider-annotated nonnull invocation ID and
+registered N3 template hash, but no fixture case, plan, source stage, candidate,
+or run. The fixture uses the reservation command/hash for the immutable receipt,
+then calls the store's product-mapping and execution integrity verifiers with
+matching audit-event rows. Focused command
+`node --test tests/platform/t91-n3-receipt-readback.test.mjs` passed 1/1
+(TAP duration 230.84ms); syntax checks and `git diff --check` passed. This is a
+store-verifier regression with mocked audit query rows, not a standalone
+PostgreSQL/API record-and-replay journey; the existing named persistence journey
+continues to cover the earlier null-invocation N3 failure receipt. No task,
+cursor, or release-gate status changed.
+
+T-91 N3 provider-allocated INCONCLUSIVE API readback resolution (2026-10-08):
+the N3 owner-flow failure was in the test provider wrapper: it referenced
+`T91_N3_PRODUCT_FIXTURE_TEMPLATE_HASH` without importing the symbol, causing a
+`ReferenceError` after invocation allocation and therefore an INCONCLUSIVE
+receipt with no fixture observations. Added the missing import. The N1 duplicate
+fixture now gates the configured provider's `runFixture` callback after
+reservation/allocation; the test sends the duplicate at that point, expects
+202/RUNNING, then releases the original dispatch for its 201/PASS receipt.
+The N3 owner execution and separately mapped provider-style failure receipt
+journey passed: N3 source TAP exit 1 and exact-path deletion guard PASS; failure
+receipt carried invocation/template with null fixture case, read back integrity
+VALID, and same-key replay returned its hash.
+
+`node --check tests/persistence.test.mjs`, `git diff --check`, and the direct
+N3 fixture test passed (1/1; TAP duration 11.53s total). The named journey
+`node ops/run-tests.mjs --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable' tests/persistence.test.mjs`
+passed 2/2 (0 failures/skips; nested receipt subtest 3.70s; parent journey
+96.36s; TAP duration 96.84s; wrapper 98.06s). TAP
+`/tmp/orgward-tests-YGLKdL/node-test.tap.log`. Prior failed runs remain
+historical and are superseded by this pass. N3 remains a scoped safeguard
+receipt only: the negative suite remains INCOMPLETE, business truth UNVERIFIED,
+runtime verification NOT_EXECUTED; no task, cursor, or release-gate status
+changed.
+
+T-91 N3 receipt-aware stage copy (2026-10-08): the N3 owner note now derives
+from the saved execution receipt. Before execution it says neither stage has
+run; PASS copy requires exact pinned source path/hash, exit 1 and TAP failure,
+plus deletion of that same path rejected with zero verifier dispatch. An
+INCONCLUSIVE receipt says both stages could not be confirmed and claims no stage
+result. Focused regression passed 1/1:
+`node --test --test-name-pattern='N3 stage copy follows saved receipt evidence' tests/sdlc/server.test.mjs`
+(TAP duration 327ms). `node --check public/sdlc-view.mjs`, `node --check
+public/sdlc.js`, `node --check tests/sdlc/server.test.mjs`, and
+`git diff --check` passed. No persistence rerun was needed; task, cursor, and
+release-gate status are unchanged.
+
+T-91 R1 criterion-baseline regeneration UX and stale-execution fence
+(2026-10-08): stale saved plans now expose `Regenerate vN plan` and `Create vN
+plan` actions. Owner copy explains that the old plan remains pinned to its
+original criterion version, its evidence is stale, and it cannot authorize
+execution. The R1 persistence journey now proves that executing v1 after the
+v2 baseline is saved returns 409 `BEHAVIOR_TEST_PLAN_STALE` without changing
+case version/events, execution-run count, case audit/outbox counts, or the old
+plan/link hashes. The existing journey then independently approves a distinct
+v2 run and links that run to the v2 plan while retaining the v1 evidence.
+
+Focused command passed 3/3 (0 failures/skips; TAP duration 90.57s):
+`node ops/run-tests.mjs --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable|behavior plan recovery presentation retains old revision pins and calls for regeneration' tests/persistence.test.mjs tests/sdlc/server.test.mjs`
+TAP `/tmp/orgward-tests-uYyM3s/node-test.tap.log`. Earlier attempts exposed
+test-fixture path assumptions and are superseded by this passing run. Syntax
+checks for the changed JS files and `git diff --check` passed. This slice does
+not add the separate registered R1 recovery mapping/receipt/readback/replay;
+R1 and the broader negative/recovery suite remain incomplete, business truth is
+UNVERIFIED, and no task, cursor, or release-gate status changed.
+
+T-91 R1 registered criterion recovery mapping, review, and receipt (2026-10-08):
+added a distinct fixed R1 mapping pinned to the immutable v1 plan, passing link,
+criterion contract, source tree, owner-authored R1 dataset/oracle, and fixed
+fixture template. A distinct integrity-valid reviewer approves those pins. The
+owner action invokes the private two-version fixture through real plan, task-run,
+approval, execution-check, and evidence-link APIs. It records the v1 stale-plan
+409 and unchanged before/after counters, then a distinct v2 plan/run/link while
+preserving both fixture v1 history and the owner's v1 hash. The receipt is
+immutable, schema-v4, and bound to the reservation, fixture invocation/template,
+review, mapping, old evidence, and complete recovery observations; GET verifies
+it and same-key replay returns the same hash without changing case version or
+events. The owner UI shows the exact stale-denial contract, an approval-gated
+R1 action, and the receipt status/pins. Business truth remains UNVERIFIED,
+runtime verification NOT_EXECUTED, and the other recovery case remains open.
+
+The direct private fixture command
+`node --test --test-name-pattern='R1 fixed product fixture uses real APIs' tests/platform/t91-n2-product-fixture.test.mjs`
+passed 1/1 (test duration 7.25s; command duration 10.98s), proving actual v1
+link, stale 409 with equal counters, v2 successful check and distinct evidence,
+PASS classification, and generated database cleanup. The focused classifier
+command `node --test tests/sdlc/product-harness.test.mjs` passed 11/11 (TAP
+duration 191.70ms), including missing/malformed R1 fixture-case pins classifying
+INCONCLUSIVE. The named owner journey
+`node --test --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable' tests/persistence.test.mjs`
+passed 2/2 (0 failures/skips; nested dispatch-failure receipt subtest 3.55s;
+parent journey 98.06s; node duration 98.59s). It proves the R1 API reservation,
+PASS receipt, persisted GET integrity VALID, exact old owner plan hash, and
+same-key replay with no extra event/version. The direct commands emitted TAP
+to the captured command output; no TAP file log was generated. `node --check`
+for changed JS files and `git diff --check` passed. Earlier fixture/profile and
+test-scope failures are superseded by these passing results. No task checkbox,
+cursor, or release-gate status changed; R1 is a scoped recovery-path result and
+does not complete the broader recovery suite or business truth.
+
+T-91 R1 dispatch-failure readback and standalone owner action (2026-10-08):
+the R1 execution verifier now permits absent observed invocation/template pins
+only when the receipt is non-PASS and those observed pins are absent; mapping
+and reservation template pins remain mandatory, and PASS still requires the
+full observed invocation/template/case pins. The owner form is now gated by its
+own eligible v1 plan plus passing evidence link, independently of N2/N3
+definitions. Regression coverage confirms an R1-only owner sees the R1 action
+while N2/N3 controls remain hidden, and malformed/pre-invocation R1 observation
+classifies INCONCLUSIVE. `node --test tests/sdlc/server.test.mjs
+tests/sdlc/product-harness.test.mjs` passed 47/47 (TAP duration 3817.06ms);
+`node --check public/sdlc.js`, `node --check src/platform/postgres-stores.mjs`,
+and `git diff --check` passed. The named owner persistence journey
+`node --test --test-name-pattern='saved process task requests are linked,
+idempotent, dependency-gated, and durable' tests/persistence.test.mjs` passed
+2/2 (0 failures/skips; nested receipt subtest 3.55s; parent journey
+100.22s; TAP duration 100.71s). It reconfirms persisted R1 PASS GET integrity
+and same-key replay. A separate persisted R1 pre-invocation INCONCLUSIVE
+GET/replay fixture was not added in this slice; that exact branch remains a
+test-coverage limitation. No task checkbox, cursor, or release-gate status
+changed, and this does not complete R1 or the broader recovery suite.
+
+T-91 R1 pre-invocation store readback regression (2026-10-08): following the
+limitation above, added a focused persisted-record fixture with an integrity-
+valid R1 mapping, independent review, reservation and event, plus schema-v4
+INCONCLUSIVE receipt with null observed invocation/template/case pins. The
+PostgreSQL store verifier returns the receipt as INCONCLUSIVE without mutating
+its hash; a resealed reservation whose template diverges from its mapping and
+immutable event is rejected. `node --test
+tests/platform/t91-r1-receipt-readback.test.mjs` passed 1/1 (test duration
+14.54ms; TAP duration 227.44ms). This uses the store's persisted aggregate and
+an audit-query mock returning matching immutable event rows; the separate R1
+PASS owner API journey remains the evidence for actual GET and same-key replay.
+The focused test closes the R1 null/null verifier branch without rerunning the
+100s parent journey. No task, cursor, or release-gate status changed.
+
+Saved-process requirement distinctness follow-up (2026-10-08): the append
+handler now rejects a statement that duplicates an existing requirement after
+case and whitespace normalization, before appending or advancing the shared
+draft. The focused API test submits the existing statement in uppercase with
+expanded whitespace, then verifies HTTP 409 and unchanged case version/events.
+`node --test --test-name-pattern='owner can append a requirement from the saved process trace' tests/sdlc/server.test.mjs`
+passed 1/1 (TAP duration 751.73ms). `git diff --check` passed. This is
+distinct-statement validation only; it does not complete the R2 recovery
+journey. Task checkboxes, cursor, and release gates are unchanged.
+
+T-91 R2 shared-draft recovery owner-path increment (2026-10-08): the
+shared-draft persistence fixture now creates requirement B through the normal
+owner `add-requirement` API with exact selected process trace refs, verifies A
+is unchanged, creates a fresh A plan/run/link after the shared draft edit, and
+requests/reviews/executes the distinct R2 mapping through the configured
+provider. Its assertions cover the separate PASS receipt, GET integrity VALID,
+and same-key replay without another event/version; R2 fixture assertions were
+reached and passed in the named run. The direct fixed R2 fixture test also
+passed 1/1 (TAP duration 11.08s), and focused owner append/R2 mapping tests
+passed 2/2 (TAP duration 1.05s). The named persistence journey did not complete
+green: after reaching the R2 receipt and replay assertions it failed later in
+an existing model-prompt assertion because its expected selected file was
+`test/scenario-contract.test.mjs` while the actual pinned GitHub request uses
+`test/process-contract.test.mjs`. The expected path was corrected to match the
+saved `behaviorPlanSelectedPaths`, but that correction has not been rerun and
+is not counted as a passing persistence check. The earlier run also exposed a
+test-only comparison against an API-derived requirement projection; it was
+corrected to compare the raw persisted requirement row. No full suite was run.
+At the time of this receipt, the R2 owner journey was not yet a complete passing
+check; business truth remains UNVERIFIED and runtime verification NOT_EXECUTED. Task checkboxes,
+cursor, and release gates remain unchanged.
+
+T-91 R2 immutable-history and currentness follow-up (2026-10-08): the R2
+mapping now contains the exact selected/other requirement snapshots and hashes
+plus the pinned draft revision; its immutable request event binds both snapshot
+hashes. Historical mapping verification rebuilds from those snapshots, while
+review and new execution require the currently saved selected and other
+requirements and draft revision to match. This preserves the R2 mapping and
+receipt as valid history after a later B edit, while denying a fresh execution
+command against that stale mapping. The owner journey verifies the later edit,
+GET integrity for the original mapping and PASS receipt, stale-command
+no-mutation, and same-key replay of the original receipt without a new event or
+version. It also creates B through the normal owner API and proves A's saved
+requirement remains unchanged before the first R2 plan/run/link.
+
+Final named command passed 2/2, 0 failures/skips; parent journey TAP duration
+102.72s and overall TAP duration 103.30s:
+`node --test --test-name-pattern='saved process task requests are linked, idempotent, dependency-gated, and durable' tests/persistence.test.mjs`.
+The command returned TAP directly; no separate log file was captured. The
+focused product-harness unit command `node --test tests/sdlc/product-harness.test.mjs`
+passed 12/12 (TAP duration 248.64ms). `node --check` passed for the changed
+store, harness, and persistence test files, and `git diff --check` passed.
+Earlier persistence attempts failed at test-only projection/prompt/count
+assertions and are superseded by this passing run. R2 is scoped recovery-path
+evidence only; truth remains UNVERIFIED, runtime verification NOT_EXECUTED,
+and the broader recovery suite remains open. No task checkbox, cursor, or
+release-gate status changed.
+
+T-91 owner-reviewed saved-scenario execution slice (2026-10-09): the existing
+scenario runner now executes one saved POSITIVE, NEGATIVE, or RECOVERY case at
+a time using its exact owner-selected TEST path, named assertion, pinned dataset
+and oracle. The owner view shows the saved case details and separate run actions;
+new executions require the latest applicable independent review. Saved receipts
+preserve their review pins, currentness, replay identity, and honest separation
+from suite completion and business truth. New receipt schema v2 includes the
+criterion hash; hash-valid historical v1 receipts without that field remain
+readable without rewriting them. TAP selection anchors the exact escaped test
+name and accepts one selected assertion after skipped records.
+
+The named PostgreSQL owner journey passed 2/2 tests, 0 failures or skips
+(112.57s). It covers partial-review denial without mutation; separate positive,
+expected-rejection negative, and criterion-revision recovery executions; legacy
+v1 receipt readback; latest unsupported review denial followed by later latest
+support; authenticated readback/replay/reload; and dataset/oracle mutation
+checks. The focused TAP tests passed 2/2, including an exact overlapping-name
+case and duplicate-name inconclusive result. Changed-file `node --check` checks
+and `git diff --check` passed. Sol 6.1 High reviewed the implementation and
+reported no remaining must-fixes.
+
+This is scoped T-91 functionality evidence only. Business truth remains
+UNVERIFIED, runtime verification remains NOT_EXECUTED, and PR-15 stays open for
+the remaining customer scenarios. No task checkbox, queue cursor, or release
+gate changed; no broad suite was run.

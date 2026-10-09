@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import https from 'node:https';
 import { digest, persistedDigest } from '../sdlc/contracts.mjs';
@@ -13,6 +13,7 @@ import { githubCheckToolDigestsMatch, parseGitHubCheckPlan, parseGitHubVerifierP
 import { parseGitHubBuildPlan } from './github-build-plan.mjs';
 import { readWorkspaceArtifact } from './artifact-file.mjs';
 import { linkedRunOutcomeCategory } from './linked-run-outcome-category.mjs';
+import { candidateChangesCoveredByPathMap, verifyProcessBehaviorTestPlan } from '../sdlc/behavior-test-evidence.mjs';
 import { allowlistedProviderTransportFailureClass, classifyProviderTransportFailure } from './provider-transport-diagnostic.mjs';
 import { buildProcessTaskProposalPromptForRun, createGeneratedBlueprintProposal, createProcessTaskGuidanceSnapshot,
   MAX_BLUEPRINT_PROPOSAL_PROMPT_BYTES,
@@ -27,6 +28,53 @@ import {
 import { ExecutionRunStore } from './store.mjs';
 
 const WORKER_LEASE_MS = 5_000;
+
+export function classifyReviewedScenarioTap({ status, exitCode, stdout, stdoutTruncated = false, stderrTruncated = false }, selectedName) {
+  const source = String(stdout ?? '');
+  const records = source.split(/\r?\n/).flatMap((line) => {
+    const match = line.match(/^(ok|not ok)\s+(\d+)(?:\s+-\s+(.*?))?(?:\s+#\s*(SKIP|TODO)\b.*)?\s*$/);
+    if (!match) return [];
+    const directive = line.match(/\s+#\s*(SKIP|TODO)\b/iu)?.[1]?.toUpperCase() ?? null;
+    return [{ outcome: match[1], number: Number(match[2]), name: (match[3] ?? '').trim(), directive, line }];
+  });
+  const matching = records.filter((record) => record.name === selectedName);
+  const selected = matching.length === 1 ? matching[0] : null;
+  const count = (name) => {
+    const value = source.match(new RegExp(`^# ${name} (\\d+)\\s*$`, 'm'))?.[1];
+    return value === undefined ? null : Number(value);
+  };
+  const counts = { tests: count('tests'), passed: count('pass'), failed: count('fail'),
+    cancelled: count('cancelled') ?? 0, skipped: count('skipped') ?? 0, todo: count('todo') ?? 0 };
+  const terminalSummaryPresent = /(?:^|\n)# duration_ms \d+(?:\.\d+)?\s*$/.test(source);
+  const completeOutput = stdoutTruncated !== true && stderrTruncated !== true;
+  const terminalResult = status === 'COMPLETED' && exitCode === 0
+    || status === 'FAILED' && Number.isInteger(exitCode) && exitCode !== 0;
+  const skippedRecords = records.filter((record) => record.directive === 'SKIP').length;
+  const todoRecords = records.filter((record) => record.directive === 'TODO').length;
+  const executed = records.filter((record) => !record.directive);
+  const summaryConsistent = Number.isSafeInteger(counts.tests) && counts.tests === records.length
+    && Number.isSafeInteger(counts.passed) && Number.isSafeInteger(counts.failed)
+    && counts.passed === executed.filter((record) => record.outcome === 'ok').length
+    && counts.failed === executed.filter((record) => record.outcome === 'not ok').length
+    && counts.skipped === skippedRecords && counts.todo === todoRecords
+    && counts.cancelled === 0;
+  const validTerminal = completeOutput && terminalSummaryPresent && terminalResult && summaryConsistent;
+  const oneSelectedExecution = matching.length === 1 && selected?.directive === null
+    && executed.length === 1 && executed[0] === selected;
+  const result = validTerminal && oneSelectedExecution && selected.outcome === 'ok'
+    && status === 'COMPLETED' && exitCode === 0 && counts.passed === 1 && counts.failed === 0 ? 'PASS'
+    : validTerminal && oneSelectedExecution && selected.outcome === 'not ok'
+      && status === 'FAILED' && counts.failed === 1 ? 'FAIL' : 'INCONCLUSIVE';
+  return { result, assertionLine: selected?.line ?? null, terminalSummaryPresent, completeOutput,
+    tests: Number.isFinite(counts.tests) ? counts.tests : null,
+    passed: Number.isFinite(counts.passed) ? counts.passed : null,
+    failed: Number.isFinite(counts.failed) ? counts.failed : null };
+}
+
+export function reviewedScenarioTestNamePattern(testName) {
+  const escaped = String(testName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return `^${escaped}$`;
+}
 const PROVIDER_WORKER_LEASE_MS = 30_000;
 const isModelProvider = (profile) => Boolean(profile?.dynamicOpenAi || profile?.dynamicDeepSeek);
 const resolveModelCredentialBinding = (secretStore, profile, options) => profile.dynamicOpenAi
@@ -384,13 +432,15 @@ function evidencePlanHash(plan) {
 
 export class ExecutionService {
   constructor({ runDirectory, store = null, profiles = [], secretStore = null, localRepositories = [], githubSourceStore = null,
-    githubVerifierProfile = null, githubBuildPlan = null, commandAdapterFactory = (options) => new CommandExecutionAdapter(options) }) {
+    githubVerifierProfile = null, githubBuildPlan = null, githubCandidateSnapshotAdapter = null,
+    commandAdapterFactory = (options) => new CommandExecutionAdapter(options) }) {
     this.store = store ?? new ExecutionRunStore(runDirectory);
     this.githubCandidateWorkspaceRoot = path.resolve(runDirectory, 'github-candidate-workspaces');
     this.githubBuildArtifactRoot = path.resolve(runDirectory, 'github-build-artifacts');
     this.secretStore = secretStore;
     this.commandAdapterFactory = commandAdapterFactory;
     this.githubSourceStore = githubSourceStore;
+    this.githubCandidateSnapshotAdapter = githubCandidateSnapshotAdapter;
     this.githubCheckPlan = parseGitHubCheckPlan(githubVerifierProfile);
     this.githubBuildPlan = parseGitHubBuildPlan(githubBuildPlan);
     this.githubVerifierProfile = this.githubCheckPlan ? {
@@ -614,6 +664,132 @@ export class ExecutionService {
       throw principalScopeUnavailable();
     }
     return readAndDeliver(await this.store.get(id, tenantId));
+  }
+  async executeReviewedBehaviorScenario({ tenantId, principal, authzGeneration, context, commandId }) {
+    const fail = (code, message, statusCode = 409) => Object.assign(new Error(message), { code, statusCode, retryable: false });
+    if (!context || !['POSITIVE', 'NEGATIVE', 'RECOVERY'].includes(context.caseType) || !context.runId
+      || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{7,119}$/.test(commandId ?? '')
+      || typeof this.store.readGitHubCandidateVerificationRun !== 'function') {
+      throw fail('SCENARIO_EXECUTION_UNAVAILABLE', 'The approved scenario or isolated run reader is unavailable.', 503);
+    }
+    const { plan, definition, assertion } = context;
+    const mapping = definition?.executionMapping;
+    if (!verifyProcessBehaviorTestPlan(plan) || definition.status !== 'NOT_EXECUTED'
+      || mapping?.status !== 'OWNER_PROPOSED_UNVERIFIED' || !definition.dataset || !definition.expectedOutput
+      || mapping.assertionId !== assertion?.id || mapping.testName !== assertion?.testName
+      || typeof mapping.testPath !== 'string' || !mapping.testPath
+      || mapping.testFileHash !== context.testFileHash
+      || mapping.repositorySnapshotId !== plan.repository?.snapshotId
+      || mapping.repositoryTreeDigest !== plan.repository?.treeDigest) {
+      throw fail('SCENARIO_PIN_STALE', 'The approved scenario mapping no longer matches its immutable plan.');
+    }
+    const runContext = await this.store.readGitHubCandidateVerificationRun({ tenantId,
+      runId: context.runId, principal, authzGeneration });
+    const run = runContext?.run;
+    const candidate = run?.execution?.repositoryCandidate;
+    const selection = run?.githubPatchSelection;
+    if (!run || run.status !== 'SUCCEEDED' || !candidate || !selection
+      || run.processTaskRef?.behaviorTestPlan?.planId !== plan.id
+      || run.processTaskRef?.behaviorTestPlan?.planHash !== plan.planHash
+      || run.id !== context.runId || selection.sourceSnapshot?.snapshotId !== plan.repository?.snapshotId
+      || selection.repositoryTreeDigest !== plan.repository?.treeDigest
+      || candidate.treeDigest !== context.candidateTreeDigest
+      || !candidate.candidateEvidence?.hash || candidate.candidateEvidence.hash !== run.execution?.evidenceHash) {
+      throw fail('SCENARIO_RUN_PIN_STALE', 'The selected run does not match the approved plan and candidate pins.');
+    }
+    const sourceRecord = await this.githubSourceStore?.resolveSnapshotForExecution?.({ tenantId,
+      projectId: run.projectId, principal, authzGeneration, snapshotId: selection.sourceSnapshot.snapshotId });
+    if (!sourceRecord) throw fail('SCENARIO_SOURCE_UNAVAILABLE', 'The approved repository snapshot is unavailable.');
+    const sourceContext = buildGitHubSnapshotTextContext({ binding: sourceRecord.binding, snapshot: sourceRecord.snapshot,
+      snapshotId: selection.sourceSnapshot.snapshotId, selectedPaths: selection.selectedFiles.map((entry) => entry.path) });
+    if (digest(sourceContext.sourceSnapshot) !== digest(selection.sourceSnapshot)) {
+      throw fail('SCENARIO_SOURCE_STALE', 'The repository source snapshot no longer matches the approved run.');
+    }
+    const selectedHashes = sourceContext.files.map(({ path: filePath, mode, text, contentHash }) => ({
+      path: filePath, mode, size: Buffer.byteLength(text, 'utf8'), contentHash,
+    }));
+    if (digest(selectedHashes) !== digest(selection.selectedFiles)) throw fail('SCENARIO_SOURCE_STALE', 'Selected repository files changed.');
+    let snapshot = githubCandidateSourceSnapshot(sourceRecord.snapshot, sourceContext.sourceSnapshot);
+    if (snapshot.treeDigest !== plan.repository.treeDigest) throw fail('SCENARIO_TREE_STALE', 'The pinned repository tree changed.');
+    const files = snapshot.files.map((entry) => ({ ...entry }));
+    for (const artifact of run.execution.changedArtifacts ?? []) {
+      if (artifact.hashAlgorithm !== 'sha256-raw' || !selection.selectedFiles.some((entry) => entry.path === artifact.path)) {
+        throw fail('SCENARIO_CANDIDATE_INVALID', 'A saved candidate artifact is outside the approved selected-file set.');
+      }
+      const bytes = await readWorkspaceArtifact({ configuredRoot: this.githubCandidateWorkspaceRoot, runId: run.id,
+        segments: artifact.path.split('/'), expectedHash: artifact.contentHash, hashAlgorithm: 'sha256-raw' });
+      const target = files.find((entry) => entry.path === artifact.path);
+      if (!bytes || !target) throw fail('SCENARIO_CANDIDATE_INVALID', 'A saved candidate file failed its exact content pin.');
+      target.contentBase64 = bytes.toString('base64');
+      target.contentHash = createHash('sha256').update(bytes).digest('hex');
+      target.size = bytes.length;
+    }
+    const candidateTreeDigest = githubCandidateTreeDigest(files);
+    if (candidateTreeDigest !== candidate.treeDigest || candidateTreeDigest !== context.candidateTreeDigest) {
+      throw fail('SCENARIO_TREE_STALE', 'The reconstructed candidate tree does not match the immutable run receipt.');
+    }
+    snapshot = { ...snapshot, files, treeDigest: candidateTreeDigest,
+      fileCount: files.length, totalBytes: files.reduce((sum, entry) => sum + entry.size, 0) };
+    const testFile = files.find((entry) => entry.path === mapping.testPath);
+    if (!testFile || testFile.contentHash !== mapping.testFileHash || testFile.contentHash !== context.testFileHash) {
+      throw fail('SCENARIO_TEST_FILE_STALE', 'The selected scenario test file no longer matches its plan hash.');
+    }
+    const args = ['--test', '--test-reporter=tap', `--test-name-pattern=${reviewedScenarioTestNamePattern(assertion.testName)}`, mapping.testPath];
+    const runner = { executable: process.execPath, nodeVersion: process.versions.node, args,
+      datasetEnvironment: 'ORGWARD_SCENARIO_DATASET_FILE', oracleEnvironment: 'ORGWARD_SCENARIO_ORACLE_FILE',
+      sandbox: 'bubblewrap-unshare-all-workspace-read-only-v1', criterionHash: assertion.criterionHash,
+      caseType: context.caseType, caseDefinitionHash: digest(definition), datasetHash: digest(definition.dataset),
+      oracleHash: digest(definition.expectedOutput), assertionHash: mapping.assertionHash,
+      testFileHash: mapping.testFileHash, sourceSnapshotId: plan.repository.snapshotId,
+      sourceTreeDigest: plan.repository.treeDigest, candidateTreeDigest };
+    const runnerHash = digest(runner);
+    await mkdir(this.githubCandidateWorkspaceRoot, { recursive: true, mode: 0o700 });
+    const workspace = await mkdtemp(path.join(this.githubCandidateWorkspaceRoot, `${run.id}-scenario-`));
+    try {
+      await materializeLocalRepositorySnapshot(snapshot, workspace);
+      const inputs = path.join(workspace, '.orgward-scenario');
+      await mkdir(inputs, { mode: 0o700 });
+      const datasetBytes = Buffer.from(`${JSON.stringify(definition.dataset)}\n`);
+      const oracleBytes = Buffer.from(`${JSON.stringify(definition.expectedOutput)}\n`);
+      await writeFile(path.join(inputs, 'dataset.json'), datasetBytes, { mode: 0o400, flag: 'wx' });
+      await writeFile(path.join(inputs, 'oracle.json'), oracleBytes, { mode: 0o400, flag: 'wx' });
+      const before = await captureLocalRepositorySnapshot(workspace, { excludeGitDirectory: false });
+      const adapter = this.commandAdapterFactory({ executable: process.execPath, args, timeoutMs: 30_000,
+        name: 'orgward-reviewed-scenario', version: '1', environment: {
+          ORGWARD_SCENARIO_DATASET_FILE: '/workspace/.orgward-scenario/dataset.json',
+          ORGWARD_SCENARIO_ORACLE_FILE: '/workspace/.orgward-scenario/oracle.json',
+        }, maxOutputBytes: 20_000, sandbox: { executable: '/usr/bin/bwrap', workspaceReadOnly: true,
+          readOnlyFiles: [], allowedEnvironment: ['ORGWARD_SCENARIO_DATASET_FILE', 'ORGWARD_SCENARIO_ORACLE_FILE'] } });
+      let result;
+      try {
+        result = await adapter.execute({ id: `scenario-${context.caseId}`, objective: `Run the independently reviewed ${context.caseType.toLowerCase()} case.` },
+          { caseId: context.caseId, planHash: plan.planHash, candidateTreeDigest }, { workspace });
+      } catch (error) {
+        result = { status: 'INCONCLUSIVE', exitCode: null, stdout: '', stderr: redact(error?.message ?? 'Scenario execution did not complete.'),
+          stdoutTruncated: false, stderrTruncated: false };
+      }
+      const after = await captureLocalRepositorySnapshot(workspace, { excludeGitDirectory: false });
+      if (before.treeDigest !== after.treeDigest) throw fail('SCENARIO_WORKSPACE_MUTATED', 'The isolated scenario worker changed its read-only workspace.');
+      const stdout = redact(result.stdout ?? '');
+      const stderr = redact(result.stderr ?? '');
+      const classifiedTap = classifyReviewedScenarioTap({ ...result, stdout }, assertion.testName);
+      const tapStatus = classifiedTap.result;
+      return { schemaVersion: 2, result: tapStatus, runId: run.id, runAggregateHash: digest(run),
+        planId: plan.id, planHash: plan.planHash, caseId: definition.id, caseType: definition.type,
+        caseDefinitionHash: digest(definition), mappingHash: digest(mapping), criterionHash: assertion.criterionHash,
+        datasetHash: digest(definition.dataset),
+        oracleHash: digest(definition.expectedOutput), assertionId: assertion.id, assertionHash: mapping.assertionHash,
+        testName: assertion.testName, testPath: mapping.testPath, testFileHash: testFile.contentHash,
+        sourceSnapshotId: selection.sourceSnapshot.snapshotId, sourceTreeDigest: plan.repository.treeDigest,
+        candidateTreeDigest, runner, runnerHash,
+        tap: { status: tapStatus, exitCode: result.exitCode, executionStatus: result.status,
+          outputHash: digest({ stdout, stderr }), assertionLine: classifiedTap.assertionLine,
+          tests: classifiedTap.tests, passed: classifiedTap.passed, failed: classifiedTap.failed,
+          stdoutTruncated: result.stdoutTruncated === true,
+          stderrTruncated: result.stderrTruncated === true, terminalSummaryPresent: classifiedTap.terminalSummaryPresent },
+        businessTruthStatus: 'UNVERIFIED', runtimeVerificationStatus: 'NOT_EXECUTED',
+        workspaceReadOnlyVerified: before.treeDigest === after.treeDigest };
+    } finally { await rm(workspace, { recursive: true, force: true }); }
   }
   async repeatGitHubCandidateVerification({ id, tenantId, principal, authzGeneration, commandId }) {
     if (!/^execution-run-[0-9a-f-]{36}$/.test(id ?? '')
@@ -1117,6 +1293,7 @@ export class ExecutionService {
     const requestHash = digest({
       projectId: input.projectId, planId: input.planId, revision: input.revision,
       planInstanceId: input.planInstanceId ?? null, taskId: input.taskId, profileId: input.profileId,
+      behaviorTestCaseId: input.behaviorTestCaseId ?? null, behaviorTestPlanId: input.behaviorTestPlanId ?? null,
       ...(input.parentRunId ? { parentRunId: input.parentRunId } : {}),
       ...(repositoryBinding ? { repository: repositoryBinding, repositoryRefId: input.repositoryRefId ?? null,
         repositoryCommitOid: input.repositoryCommitOid ?? null } : {}),
@@ -1138,7 +1315,16 @@ export class ExecutionService {
       parentRunId: input.parentRunId,
       commandId: input.commandId, requestHash,
       repositoryRef: repositoryBinding,
-      buildRun: async ({ project, plan, task, processTaskRef, client, delegatedContext }) => {
+      behaviorTestCaseId: input.behaviorTestCaseId ?? null,
+      behaviorTestPlanId: input.behaviorTestPlanId ?? null,
+      behaviorCheckPlan: this.githubCheckPlan,
+      buildRun: async ({ project, plan, task, processTaskRef, client, delegatedContext, behaviorTestPlan }) => {
+        if (behaviorTestPlan && (!githubPatchContext || !this.githubCheckPlan
+          || behaviorTestPlan.checkPlanHash !== this.githubCheckPlan.planHash)) {
+          throw Object.assign(new Error('A behavior test plan requires its exact configured repository check execution.'), {
+            statusCode: 409, code: 'BEHAVIOR_CHECK_PLAN_MISMATCH', retryable: false,
+          });
+        }
         let repositorySnapshot = null;
         if (repository) {
           repositorySnapshot = repository.kind === 'git'
@@ -1210,6 +1396,31 @@ export class ExecutionService {
       },
     });
     return result ? { ...result, run: executionRunView(result.run) } : null;
+  }
+  async resolveBehaviorTestRepositorySelection({ tenantId, projectId, principal, authzGeneration, snapshotId, selectedPaths }) {
+    if (!this.githubCheckPlan || !this.githubSourceStore?.resolveSnapshotForExecution
+      || !/^[a-f0-9]{64}$/.test(snapshotId ?? '') || !Array.isArray(selectedPaths)
+      || selectedPaths.length < 1 || selectedPaths.length > 8 || new Set(selectedPaths).size !== selectedPaths.length) {
+      throw Object.assign(new Error('A fixed repository check plan and exact saved GitHub snapshot selection are required.'), {
+        statusCode: 409, code: 'BEHAVIOR_CHECK_SOURCE_UNAVAILABLE', retryable: false,
+      });
+    }
+    const resolved = await this.githubSourceStore.resolveSnapshotForExecution({ tenantId, projectId, principal,
+      authzGeneration, snapshotId });
+    if (!resolved) throw Object.assign(new Error('The selected GitHub snapshot is unavailable in this project.'), {
+      statusCode: 404, code: 'GITHUB_SNAPSHOT_NOT_FOUND', retryable: false,
+    });
+    const context = buildGitHubSnapshotTextContext({ binding: resolved.binding, snapshot: resolved.snapshot,
+      snapshotId, selectedPaths });
+    const selectedFiles = context.files.map(({ path: relativePath, mode, contentHash, text }) => ({
+      path: relativePath, mode, contentHash, size: Buffer.byteLength(text, 'utf8'),
+    }));
+    const sourceSnapshot = githubCandidateSourceSnapshot(resolved.snapshot, context.sourceSnapshot);
+    return { id: `github-${context.sourceSnapshot.repositoryId}`, kind: 'github-app', snapshotId,
+      treeDigest: sourceSnapshot.treeDigest, source: { type: 'github-app', ...context.sourceSnapshot },
+      selectedFiles, verification: { id: this.githubVerifierProfile.id, version: this.githubVerifierProfile.version,
+        profileHash: this.githubVerifierProfile.profileHash }, checkPlan: structuredClone(this.githubCheckPlan),
+      buildPlan: structuredClone(this.githubBuildPlan) };
   }
   async listLocalRepositories({ tenantId, projectId, principal, authzGeneration }) {
     if (typeof this.store.authorizeProjectForPrincipal !== 'function') throw principalScopeUnavailable();
@@ -1745,6 +1956,10 @@ export class ExecutionService {
             statusCode: 409, code: 'GITHUB_SNAPSHOT_SELECTION_STALE', retryable: false,
           });
         }
+        if (typeof this.githubCandidateSnapshotAdapter === 'function') {
+          repositoryBefore = await this.githubCandidateSnapshotAdapter({ phase: 'source', run: structuredClone(run),
+            snapshot: repositoryBefore }) ?? repositoryBefore;
+        }
         await materializeLocalRepositorySnapshot(repositoryBefore, workspace);
       } else if (run.processTaskRef?.repository) {
         if (!run.repositorySnapshot || run.repositorySnapshot.treeDigest !== run.processTaskRef.repository.treeDigest) {
@@ -1858,9 +2073,24 @@ export class ExecutionService {
         result = { ...result, stdout: `Applied bounded updates to ${updates.length} selected file${updates.length === 1 ? '' : 's'}.`,
           evidenceHash: digest({ patchHashes: updates.map(({ path: relativePath, contentHash }) => ({ path: relativePath, contentHash })),
             modelUsage: result.modelUsage ?? null }) };
+        if (typeof this.githubCandidateSnapshotAdapter === 'function') {
+          await this.githubCandidateSnapshotAdapter({ phase: 'candidate', run: structuredClone(run),
+            sourceSnapshot: repositoryBefore, workspace });
+        }
       }
       if (repositoryBefore && result.status === 'COMPLETED') {
         const repositoryAfter = await captureLocalRepositorySnapshot(workspace, { excludeGitDirectory: false });
+        const changes = localRepositoryDiff(repositoryBefore, repositoryAfter);
+        const behaviorTestPlan = run.processTaskRef?.behaviorTestPlan;
+        if (behaviorTestPlan) {
+          if (!Array.isArray(behaviorTestPlan.fileMappings)
+            || digest(behaviorTestPlan.fileMappings) !== behaviorTestPlan.fileMappingsHash
+            || !candidateChangesCoveredByPathMap(behaviorTestPlan.fileMappings, changes)) {
+            throw Object.assign(new Error('Every changed, deleted, renamed or mode-changed candidate path must match the pre-authorized criterion map.'), {
+              code: 'BEHAVIOR_CANDIDATE_ORPHAN_PATH', statusCode: 409, retryable: false,
+            });
+          }
+        }
         const repositoryConfig = run.githubPatchSelection ? null
           : this.localRepositories.get(`${tenantId}\n${run.projectId}\n${run.processTaskRef.repository.id}`);
         if (!run.githubPatchSelection && !repositoryConfig) throw Object.assign(new Error('The pinned local repository binding is no longer configured.'), { code: 'LOCAL_REPOSITORY_NOT_FOUND' });
@@ -2002,7 +2232,6 @@ export class ExecutionService {
             result = { ...result, status: 'FAILED', exitCode: 1 };
           }
         }
-        const changes = localRepositoryDiff(repositoryBefore, repositoryAfter);
         const repositoryCandidate = {
           repositoryId: run.processTaskRef.repository.id, snapshotId: repositoryBefore.snapshotId,
           sourceTreeDigest: repositoryBefore.treeDigest, treeDigest: candidateTreeDigest,
@@ -2106,7 +2335,7 @@ export class ExecutionService {
         }
       } else {
         const interrupted = Boolean(active.cancelReason)
-          || ['EXECUTION_REVOKED', 'ACTION_FORBIDDEN', 'EXECUTION_APPROVAL_STALE'].includes(error.code);
+          || ['EXECUTION_REVOKED', 'ACTION_FORBIDDEN', 'EXECUTION_APPROVAL_STALE', 'PROCESS_PLAN_BLUEPRINT_STALE'].includes(error.code);
         terminalAttempted = true;
         try {
           terminalRun = await this.#finalizeTerminal(run, {
@@ -2117,7 +2346,8 @@ export class ExecutionService {
               || (error.code === 'PROVIDER_OUTPUT_QUARANTINED' && ['reported', 'unreported'].includes(active.modelAttemptEvidence?.usageStatus))
               ? active.modelAttemptEvidence : null,
             reason: active.cancelReason ?? (error.code === 'EXECUTION_APPROVAL_STALE'
-              ? 'execution_approval_stale' : interrupted ? 'authorization_revoked' : undefined),
+              ? 'execution_approval_stale' : error.code === 'PROCESS_PLAN_BLUEPRINT_STALE'
+                ? 'process_plan_blueprint_stale' : interrupted ? 'authorization_revoked' : undefined),
           });
         } catch (finalizeError) {
           if (command.scopePrincipal && active.cancelReason === 'dispatch_commit_unknown') preserveLeaseForRecovery = true;
@@ -2219,7 +2449,7 @@ export class ExecutionService {
       return typeof response === 'string' ? { output: response, modelUsage: null } : response;
     } catch (error) {
       if (error?.code === 'PROVIDER_OUTPUT_QUARANTINED') throw error;
-      if (['PROCESS_INSTANCE_PAUSED', 'PROVIDER_ATTEMPT_CANCELLED'].includes(error?.code)) throw error;
+      if (['PROCESS_INSTANCE_PAUSED', 'PROVIDER_ATTEMPT_CANCELLED', 'PROCESS_PLAN_BLUEPRINT_STALE'].includes(error?.code)) throw error;
       if (['TENANT_MODEL_HANDOFF_ACTIVE', 'TENANT_MODEL_OUTPUT_BUDGET_EXCEEDED'].includes(error?.code)) throw error;
       if (error?.code === 'PROVIDER_OUTCOME_UNKNOWN') {
         active.modelAttemptEvidence = modelAttemptEvidence(modelBudgetEnvelope, { status: 'outcome_unknown' });
@@ -2260,6 +2490,7 @@ export class ExecutionService {
     };
     const failed = () => build('FAILED', {
       status: 'FAILED', error: redact(failure?.message ?? 'Execution failed.'),
+      ...(failure?.code === 'BEHAVIOR_CANDIDATE_ORPHAN_PATH' ? { errorCode: failure.code } : {}),
       completedAt: new Date().toISOString(), changedArtifacts: [],
       ...(modelUsage ? { modelUsage } : {}),
       ...(attemptEvidence ? { modelAttemptEvidence: attemptEvidence } : {}),

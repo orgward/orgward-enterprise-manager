@@ -171,6 +171,21 @@ test('historical process plans link directly to the current saved process for re
   assert.deepEqual(processPlanFreshness({ ...plan, source: { ...plan.source, blueprintVersion: 5 } }, project), {
     historical: false, link: null,
   });
+  const compatibleManualPlan = { ...plan, kind: 'manual_process_flow_plan', blueprintApplicability: {
+    status: 'CURRENT_VIEW_ONLY_COMPATIBLE', pinnedBlueprintId: oldBlueprint.id, pinnedBlueprintVersion: 4,
+  } };
+  assert.deepEqual(processPlanFreshness(compatibleManualPlan, project), {
+    historical: false, compatible: true, link: null,
+    explanation: 'Only process-step titles or display order changed; this plan remains pinned to its original blueprint.',
+  });
+  const materialStale = processPlanFreshness({ ...compatibleManualPlan, blueprintApplicability: { status: 'STALE' } }, project);
+  assert.equal(materialStale.historical, true);
+  assert.equal(materialStale.compatible, false);
+  assert.equal(materialStale.link.label, 'Plan current Customer intake in Execution');
+  const recoveryRoute = new URL(materialStale.link.href, 'http://orgward.local');
+  assert.equal(recoveryRoute.pathname, '/execution.html');
+  assert.equal(recoveryRoute.searchParams.get('process'), processId);
+  assert.deepEqual(compatibleManualPlan.source, plan.source, 'compatible usability preserves the original source pins');
   assert.deepEqual(processPlanFreshness(plan, { ...project, latestBlueprint: { ...latestBlueprint, areas: {} } }), {
     historical: true, link: null,
   });

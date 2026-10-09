@@ -25,7 +25,7 @@ test('GitHub bindings and snapshots survive store restart and require tenant-adm
     const now = new Date().toISOString();
     const projectState = { id: projectId, tenantId, name: 'Fixture project', version: 0, createdAt: now, updatedAt: now,
       createdBy: principal, updatedBy: principal, conversation: [], events: [], memberships: [] };
-    const stateHash = 'a'.repeat(64);
+    const stateHash = contentHash(projectState);
     await persistence.query(`insert into orgward.oidc_principals (principal,issuer,tenant_id,actor_type,display_name,roles)
       values ($1,'https://identity.example.test','github-onboarding-test','human','Owner',array['tenant-admin']),
              ($2,'https://identity.example.test','github-onboarding-test','human','Editor',array['workspace-write']),
@@ -41,7 +41,7 @@ test('GitHub bindings and snapshots survive store restart and require tenant-adm
              ('125',$1,'456','incomplete-fixture-account','Organization',$2,now(),null,null,null)`, [tenantId, principal]);
     const byteProjectState = { ...projectState, id: byteProjectId, name: 'Byte bound fixture' };
     await persistence.query(`insert into orgward.aggregates (tenant_id,aggregate_kind,aggregate_id,version,state,state_hash,updated_at)
-      values ($1,'project',$2,0,$3::jsonb,$4,$5)`, [tenantId, byteProjectId, JSON.stringify(byteProjectState), 'b'.repeat(64), now]);
+      values ($1,'project',$2,0,$3::jsonb,$4,$5)`, [tenantId, byteProjectId, JSON.stringify(byteProjectState), contentHash(byteProjectState), now]);
     await persistence.query(`insert into orgward.project_memberships (tenant_id,project_id,principal,access,granted_by)
       values ($1,$2,$3,'owner',$3),($1,$2,$4,'editor',$3)`, [tenantId, byteProjectId, principal, editor]);
 
@@ -350,7 +350,7 @@ test('GitHub bindings and snapshots survive store restart and require tenant-adm
     await persistence.query(`insert into orgward.oidc_principals (principal,issuer,tenant_id,actor_type,display_name,roles)
       values ($1,'https://identity.example.test',$2,'human','Other tenant owner',array['tenant-admin'])`, [otherPrincipal, otherTenant]);
     await persistence.query(`insert into orgward.aggregates (tenant_id,aggregate_kind,aggregate_id,version,state,state_hash,updated_at)
-      values ($1,'project',$2,0,$3::jsonb,$4,$5)`, [otherTenant, otherProjectId, JSON.stringify(otherProjectState), '9'.repeat(64), now]);
+      values ($1,'project',$2,0,$3::jsonb,$4,$5)`, [otherTenant, otherProjectId, JSON.stringify(otherProjectState), contentHash(otherProjectState), now]);
     await persistence.query(`insert into orgward.project_memberships (tenant_id,project_id,principal,access,granted_by)
       values ($1,$2,$3,'owner',$3)`, [otherTenant, otherProjectId, otherPrincipal]);
     assert.deepEqual(await restartedStore.listTenantInstallations({ tenantId: otherTenant, projectId: otherProjectId,

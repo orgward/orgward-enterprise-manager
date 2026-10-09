@@ -63,10 +63,13 @@ export class ProjectStore {
     return (await this.listWithDiagnosticsForPrincipal(tenantId, principal)).records;
   }
 
-  async getForPrincipal(id, tenantId, principal) {
+  async getForPrincipal(id, tenantId, principal, { minimumProjectAccess = null } = {}) {
     const project = await this.get(id);
     if (!project || (project.tenantId ?? 'tenant-reference-bank') !== tenantId
       || !project.memberships?.some((member) => member.principal === principal && member.revokedAt === null)) return null;
+    const access = project.memberships.find((member) => member.principal === principal && member.revokedAt === null)?.access;
+    if (minimumProjectAccess === 'owner' && access !== 'owner') return null;
+    if (minimumProjectAccess === 'editor' && !['owner', 'editor'].includes(access)) return null;
     return project;
   }
 

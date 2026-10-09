@@ -47,7 +47,7 @@ import { setDomAttributes } from './dom-attributes.mjs';
 import { boundedLineDiff, readBoundedUtf8Response } from './repository-text-diff.mjs';
 import { renderProtectedRelease } from './protected-release.mjs';
 import { renderOutcomeInbox } from './outcomes.mjs';
-import { encodeExecutionRoute, encodeMyWorkRoute, encodeStudioRoute, executionProcessTarget, executionProjectContext, executionRunRouteTarget } from './shared-interactions.mjs';
+import { encodeExecutionRoute, encodeMyWorkRoute, encodeStudioRoute, executionBehaviorPlanTarget, executionProcessTarget, executionProjectContext, executionRunRouteTarget } from './shared-interactions.mjs';
 import { enterpriseRequestPath } from './enterprise.mjs';
 import { currentProcessPlanFocusTarget, linkedPlanInstanceRouteTarget, linkedProcessPlanTarget, processPlanFreshness, processPlanRevisionFocusTarget, selectLinkedProcessPlanInstance, sourceProcessDesignLink } from './process-plan-navigation.mjs';
 
@@ -57,6 +57,7 @@ const state = {
   githubSnapshotHandoffId: /^[a-f0-9]{64}$/.test(requestedGithubSnapshotHandoffId ?? '') ? requestedGithubSnapshotHandoffId : null,
   githubFileManifests: new Map(), githubFileSelections: new Map(), githubRepositorySelections: new Map(), run: null, runProject: null, runPinnedIntegrity: null, proposalMembershipAccess: null, authenticated: false, currentPrincipal: null, planningProject: null, projectContextId: null,
   actorBindingRows: [], actorBindingProjectId: null, actorBindingReadAvailable: false,
+  behaviorTestSelection: null,
   selectedPlanInstances: new Map(),
   processTaskStatuses: new Map(),
 };
@@ -449,7 +450,7 @@ function showNew({ planTarget = null, preferredProcessId = null, preserveProcess
   const selectedProjectId = planTarget?.projectId ?? (state.projectContextId
     && state.projects.some((project) => project.id === state.projectContextId) ? state.projectContextId : projectContext.projectId);
   if (planTarget) state.selectedPlanInstances.set(planTarget.selectionKey, planTarget.planInstanceId);
-  else if (!preserveProcessRoute) syncExecutionRoute(selectedProjectId);
+  else if (!preserveProcessRoute && !state.behaviorTestSelection) syncExecutionRoute(selectedProjectId);
   if (selectedProjectId) {
     state.projectContextId = selectedProjectId;
     projectSelect.value = selectedProjectId;
@@ -810,6 +811,7 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
     const softwareDeliveryPlan = plan.kind === 'software_delivery_runtime_plan';
     const canStartNewInstances = !softwareDeliveryPlan && allowNewInstances && !freshness.historical;
     if (softwareDeliveryPlan) card.append(el('p', { className: 'muted', text: 'Owner-promoted human checkpoint snapshot · each task remains a separately assigned human action. Agent execution requires a separate software output contract.' }));
+    if (freshness.compatible) card.append(el('p', { className: 'muted compatible-process-plan', text: `Current for this plan · ${freshness.explanation} Original blueprint v${plan.source.blueprintVersion} remains pinned.` }));
     if (freshness.historical) {
       card.append(el('p', { className: 'muted historical-process-plan', text: `Historical plan · pinned to blueprint v${plan.source.blueprintVersion}; the current saved design is v${project.latestBlueprint.version}. This plan cannot start new work.` }));
       if (freshness.link) planControls.append(el('a', { className: 'button', text: freshness.link.label, attrs: { href: freshness.link.href } }));
@@ -952,7 +954,7 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
       el('p', { className: 'muted', text: 'The blueprint agent binding is recorded for traceability. A selected configured profile runs through the OrgWard worker after separate approval; it does not execute as or impersonate the bound workload.' }),
     );
     const list = el('ol');
-    for (const task of plan.tasks) {
+      for (const task of plan.tasks) {
       const dependencies = task.dependencies.map((id) => tasks.get(id)?.title).filter(Boolean);
       const inputs = task.inputs.map((item) => item.label).join(', ') || 'None specified';
       const outputs = task.outputs.map((item) => item.label).join(', ') || 'None specified';
@@ -1275,6 +1277,13 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
         item.append(el('p', { className: 'muted', text: 'This process instance is cancelled. No further task work can start.' }));
       } else {
         const assignment = currentTaskAssignment(task, plan, project, selectedInstance !== 'new');
+        const behaviorSelection = state.behaviorTestSelection;
+        const behaviorPlan = behaviorSelection?.plan ?? null;
+        const behaviorTaskMatches = !behaviorSelection || (behaviorSelection.projectId === project.id
+          && behaviorPlan?.processPlan?.id === plan.id && Number(behaviorPlan?.processPlan?.revision) === Number(plan.revision)
+          && behaviorPlan?.processPlan?.taskId === task.id);
+        const behaviorRepository = behaviorSelection && behaviorTaskMatches
+          ? state.localRepositories.find((entry) => entry.kind === 'github' && entry.snapshotId === behaviorPlan?.repository?.snapshotId) : null;
         const hasProposalInputs = task.inputs?.length > 0 && task.outputs?.some((output) => output.type === 'information');
         const profileOptions = (state.meta?.profiles ?? []).filter((profile) => !['provider-openai', 'provider-deepseek'].includes(profile.kind) || hasProposalInputs);
         const canStartNew = canStartNewInstances && selectedInstance === 'new'
@@ -1284,6 +1293,7 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
         const eligibleInInstance = selectedInstance !== 'new' && (isManualFlowPlan(plan)
           ? manualFlowAgentRequestReady(plan, selectedRuntimes, task, selectedInstance) : dependenciesSucceeded);
         const canRequest = state.authenticated && !instanceFenced && assignment.available && profileOptions.length > 0
+          && behaviorTaskMatches && (!behaviorSelection || Boolean(behaviorRepository))
           && (canStartNew || eligibleInInstance);
         const requestLookup = {
           tenantId: project.tenantId, principal: state.currentPrincipal, projectId: project.id, planId: plan.id,
@@ -1316,6 +1326,10 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
           item.append(el('p', { className: 'muted', text: 'No execution profile is configured. Ask an OrgWard administrator to configure one before requesting approval.' }));
         } else if (!profileOptions.length && !recoverableRequest) {
           item.append(el('p', { className: 'muted', text: 'No configured execution profile supports this task. Model profiles need at least one input and one information output; add those to the task or ask an OrgWard administrator to configure a non-model profile.' }));
+        } else if (behaviorSelection && !behaviorTaskMatches) {
+          item.append(el('p', { className: 'muted', text: 'This behavior plan is pinned to a different process task. Open the exact task from the requirement trace.' }));
+        } else if (behaviorSelection && !behaviorRepository) {
+          item.append(el('p', { className: 'muted', text: 'The exact GitHub snapshot pinned by this plan is unavailable to this project; no alternate repository can be used.' }));
         } else if (canRequest || recoverableRequest) {
           if (recoverableRequest && !canRequest) item.append(el('p', { className: 'muted', text: 'Recover the original saved approval request only. Its profile, task occurrence and instance intent remain locked; current readiness does not authorize a new request.' }));
           if (pendingRequest) state.pendingTaskRuns.set(requestKey, pendingRequest);
@@ -1365,7 +1379,18 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
               attrs: { value: '__saved_repository_unavailable__', disabled: true, selected: true },
             }));
           }
-          const repositorySelectionKey = `${project.id}\n${plan.id}\n${task.id}`;
+        const repositorySelectionKey = `${project.id}\n${plan.id}\n${task.id}`;
+          if (behaviorSelection && behaviorTaskMatches && behaviorPlan?.repository?.snapshotId) {
+            const pinnedRepository = behaviorRepository;
+            const pinnedSelectionId = pinnedRepository?.selectionId ?? pinnedRepository?.id;
+            if (pinnedSelectionId) {
+              repositorySelect.value = pinnedSelectionId;
+              state.githubRepositorySelections.set(repositorySelectionKey, pinnedSelectionId);
+              const selectionKey = `${project.id}\n${plan.id}\n${task.id}\n${pinnedRepository.snapshotId}`;
+              state.githubFileSelections.set(selectionKey, new Set(behaviorPlan.repository.selectedFiles.map((entry) => entry.path)));
+              repositorySelect.disabled = true;
+            }
+          }
           if (!requestPresentation.locked) {
             if (state.githubRepositorySelections.has(repositorySelectionKey)) {
               repositorySelect.value = state.githubRepositorySelections.get(repositorySelectionKey);
@@ -1426,7 +1451,8 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
             }
             for (const file of eligible) {
               const checkbox = el('input', { attrs: { type: 'checkbox', value: file.path,
-                ...(selectedPaths.has(file.path) ? { checked: true } : {}) } });
+                ...(selectedPaths.has(file.path) ? { checked: true } : {}),
+                ...(behaviorSelection && behaviorTaskMatches ? { disabled: true } : {}) } });
               checkbox.addEventListener('change', () => {
                 const next = new Set(selectedPaths);
                 if (checkbox.checked) next.add(file.path);
@@ -1502,7 +1528,8 @@ function renderProcessPlans(container, plans, project, { allowNewInstances = tru
           requestButton.addEventListener('click', () => {
             void requestTaskApproval({ project, plan, task, selectedInstance, profileId: profileSelect.value,
               parentRunId: parentRunSelect.value || undefined,
-              repositorySelectionId: repositorySelect.value, requestButton, profileSelect, repositorySelect, requestStatus, requestKey });
+              repositorySelectionId: repositorySelect.value, behaviorTestSelection: behaviorSelection,
+              requestButton, profileSelect, repositorySelect, requestStatus, requestKey });
           });
           item.append(
             profileDisclosure, el('label', { text: 'Configured execution profile' }, profileSelect),
@@ -2282,7 +2309,7 @@ function currentTaskAssignment(task, plan, project, pinnedInstance = false) {
 }
 
 async function requestTaskApproval({ project, plan, task, selectedInstance, profileId, parentRunId, repositorySelectionId,
-  requestButton, profileSelect, repositorySelect, requestStatus, requestKey }) {
+  behaviorTestSelection = null, requestButton, profileSelect, repositorySelect, requestStatus, requestKey }) {
   const requestPrincipal = state.currentPrincipal;
   const selectionKey = `${plan.id}\n${plan.revision}`;
   const selectionAtStart = state.selectedPlanInstances.get(selectionKey) ?? selectedInstance;
@@ -2330,6 +2357,23 @@ async function requestTaskApproval({ project, plan, task, selectedInstance, prof
         ...(parentRunId ? { parentRunId } : {}),
         ...(selectedInstance !== 'new' ? { planInstanceId: selectedInstance } : {}),
       };
+      if (behaviorTestSelection) {
+        const authorized = behaviorTestSelection.plan;
+        if (behaviorTestSelection.projectId !== project.id || authorized?.processPlan?.id !== plan.id
+          || Number(authorized?.processPlan?.revision) !== Number(plan.revision) || authorized?.processPlan?.taskId !== task.id
+          || authorized?.status !== 'AUTHORIZED_BEFORE_EXECUTION') {
+          throw new Error('This task does not match the exact preauthorized behavior plan. Return to the requirement and reopen its pinned task.');
+        }
+        const plannedPaths = (authorized.repository?.selectedFiles ?? []).map((entry) => entry.path).sort();
+        const selectedRepository = state.localRepositories.find((entry) => (entry.selectionId ?? entry.id) === repositorySelectionId);
+        if (!selectedRepository || selectedRepository.kind !== 'github'
+          || selectedRepository.snapshotId !== authorized.repository?.snapshotId
+          || plannedPaths.length < 1 || plannedPaths.length > MAX_GITHUB_SELECTED_FILES) {
+          throw new Error('The exact GitHub snapshot or selected files pinned by this behavior plan are unavailable.');
+        }
+        payload.behaviorTestCaseId = behaviorTestSelection.caseId;
+        payload.behaviorTestPlanId = authorized.id;
+      }
       const selectedProfile = state.meta?.profiles?.find((entry) => entry.id === profileId);
       if (Number.isSafeInteger(selectedProfile?.catalogRevision)) payload.profileRevision = selectedProfile.catalogRevision;
       if (repositorySelectionId) {
@@ -2339,6 +2383,13 @@ async function requestTaskApproval({ project, plan, task, selectedInstance, prof
           const selectionKey = `${project.id}\n${plan.id}\n${task.id}\n${repository.snapshotId}`;
           const selectedPaths = [...(state.githubFileSelections.get(selectionKey) ?? [])].sort();
           if (!selectedPaths.length || selectedPaths.length > MAX_GITHUB_SELECTED_FILES) throw new Error('Select one to eight bounded text files for the GitHub candidate.');
+          if (behaviorTestSelection) {
+            const plannedPaths = (behaviorTestSelection.plan.repository?.selectedFiles ?? []).map((entry) => entry.path).sort();
+            if (repository.snapshotId !== behaviorTestSelection.plan.repository?.snapshotId
+              || JSON.stringify(selectedPaths) !== JSON.stringify(plannedPaths)) {
+              throw new Error('The selected repository files no longer match the immutable behavior plan. Reopen its exact task route.');
+            }
+          }
           payload.githubSnapshotId = repository.snapshotId;
           payload.githubSelectedPaths = selectedPaths;
         } else {
@@ -3546,6 +3597,7 @@ try {
   state.meta = meta; state.projects = projectResult.data; state.authenticated = session.authenticated;
   state.currentPrincipal = session.principal ?? null;
   const projectContext = executionProjectContext(window.location.href, state.projects);
+  const behaviorRoute = executionBehaviorPlanTarget(window.location.href, state.projects);
   const routePlan = linkedPlanInstanceRouteTarget(window.location.href, state.projects);
   const routeProcess = executionProcessTarget(window.location.href, state.projects);
   const planTarget = routePlan.target;
@@ -3553,6 +3605,16 @@ try {
   state.projectContextId = planTarget?.projectId ?? processTarget?.projectId ?? projectContext.projectId;
   syncEnterpriseDesignNavigation();
   await refresh();
+  if (behaviorRoute.requested && behaviorRoute.target && state.authenticated) {
+    try {
+      const changeCase = await api(`/api/sdlc/cases/${encodeURIComponent(behaviorRoute.target.caseId)}`);
+      const behaviorPlan = (changeCase.artifacts?.processBehaviorTestPlans ?? []).find((entry) => entry.id === behaviorRoute.target.planId);
+      if (changeCase.projectId === behaviorRoute.target.projectId && changeCase.tenantId === state.projects.find((entry) => entry.id === changeCase.projectId)?.tenantId
+        && behaviorPlan?.projectId === changeCase.projectId && behaviorPlan?.status === 'AUTHORIZED_BEFORE_EXECUTION') {
+        state.behaviorTestSelection = { ...behaviorRoute.target, plan: behaviorPlan };
+      } else notify('The authorized behavior plan is unavailable or does not match this project.');
+    } catch (error) { notify(`The authorized behavior plan could not be loaded: ${error.message}`); }
+  } else if (behaviorRoute.requested) notify('Sign in and open the authorized plan from its requirement to request the exact check.');
   const routeRun = executionRunRouteTarget(window.location.href, state.runs);
   const myWorkView = new URLSearchParams(window.location.search).get('view') === 'my-work';
   if (routePlan.requested && !planTarget) notify('The linked plan revision or instance is no longer available.');
@@ -3565,6 +3627,7 @@ try {
   else if (routeRun.target) await load(routeRun.target.runId);
   else if (routeRun.requested) showNew();
   else if (projectContext.projectId) showNew();
+  else if (state.behaviorTestSelection) showNew();
   else if (state.runs.length) await load(state.runs[0].id);
   else showNew();
 } catch (error) { notify(error.message); }

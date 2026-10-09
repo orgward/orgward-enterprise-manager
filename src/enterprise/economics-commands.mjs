@@ -7,6 +7,7 @@ import { projectEnterprise } from './projections.mjs';
 import { ECONOMIC_LIMITS, economicModelErrors, economicModelRelations, normalizeEconomicScenario,
   normalizeResourcePlan, normalizeValueLifecycle } from './economics-model.mjs';
 import { evaluateEconomicScenario } from './economics-scenario.mjs';
+import { buildEconomicInputManifest } from './derived-input-provenance.mjs';
 
 export const ENTERPRISE_ECONOMIC_KINDS = new Set(['define-economic-scenario', 'define-resource-plan', 'define-value-lifecycle', 'evaluate-economic-scenario']);
 const definitions = { 'define-economic-scenario': ['economicScenario', 'economics'], 'define-resource-plan': ['resourcePlan', 'resource'],
@@ -87,8 +88,13 @@ function saveEvaluation(project, command, actor, at) {
     ...calculation.resources.flatMap((entry) => entry.allocations.map((allocation) => allocation.processId))]);
   const binding = { projectId: project.id, blueprintId: source.id, blueprintVersion: source.version, snapshotHash: digest(source),
     branchId: command.branchId ?? null, branchRevision: command.branchRevision ?? null, proposalId: command.proposalId ?? null };
+  const inputManifest = buildEconomicInputManifest(project.id, source, object.id);
+  if (!inputManifest || inputManifest.source.snapshotHash !== binding.snapshotHash) {
+    fail('ECONOMIC_INPUTS_UNTRACKED', 'The exact economic calculation inputs could not be resolved to immutable records; no evaluation was saved.', 409);
+  }
   const sourceLabels = { records: Object.fromEntries(objects.filter((entry) => referenced.has(entry.id)).map((entry) => [entry.id, entry.name])) };
-  const core = { ...calculation, source: binding, sourceLabels };
+  const core = { ...calculation, source: binding, sourceLabels,
+    inputProvenance: { status: 'TRACKED', manifestHash: digest(inputManifest), manifest: inputManifest } };
   if (Buffer.byteLength(JSON.stringify(core), 'utf8') > 262144) fail('ECONOMIC_EVALUATION_TOO_LARGE', 'The explainable evaluation exceeds its 256 KiB limit.', 409);
   const evaluation = { ...core, resultHash: digest(core), id: `economic-evaluation-${randomUUID()}`, createdAt: at, createdBy: actor, reason: command.reason };
   project.enterpriseEconomicEvaluations ??= []; project.enterpriseEconomicEvaluations.push(evaluation);

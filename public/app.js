@@ -9,12 +9,14 @@ import { apiErrorFrom, decodeStudioRoute, encodeExecutionRoute, encodeMyWorkRout
 import { coverageAreaStateLabel, coverageForBlueprint } from './coverage-dashboard.mjs';
 import { compareBlueprintObjectVersions } from './blueprint-comparison.mjs';
 import { renderBlueprintImpactPreview } from './blueprint-impact-preview.mjs';
-import { renderBlueprintPublicationWatermark } from './blueprint-publication.mjs';
+import { renderBlueprintPublicationConsistency, renderBlueprintPublicationStatus, renderBlueprintPublicationWatermark } from './blueprint-publication.mjs';
+import { renderBlueprintPublicationImpact } from './blueprint-publication-impact.mjs';
 import { renderChatBlueprintEdit } from './chat-blueprint-edit.mjs';
 import { renderOutcomeInbox } from './outcomes.mjs';
 import { enterpriseContextFailure, enterpriseContextReadOnly, enterpriseStateSummary, enterpriseSourceAligned, hasEnterpriseContext, enterpriseQuery, enterpriseRequestPath, persistEnterpriseCommand, restoreEnterpriseCommand, persistEnterpriseInterchangeDraft, restoreEnterpriseInterchangeDraft, submitEnterpriseCommand, renderEnterpriseContext, renderEnterpriseObject, renderEnterpriseObjectHeader, renderEnterpriseStewardshipPanel } from './enterprise.mjs';
 import { downloadPortfolioDesign, downloadPortfolioInventory, portfolioImportWorkspaceRoute, readPortfolioImportFile, renderProjectPortfolio } from './project-portfolio.mjs';
 import { conceptRecordSuccessMessage } from './enterprise-concepts.mjs';
+import { renderRiskProcessScopePicker } from './risk-process-scope.mjs';
 
 const state = {
   projects: [],
@@ -1004,15 +1006,16 @@ function renderBlueprintPublication(coverage) {
   const latest = state.project.latestBlueprint;
   const publication = (state.project.blueprintPublications ?? []).at(-1) ?? null;
   if (publication) {
-    section.append(element('p', { text: latest.version > publication.blueprintVersion
-      ? `Published internal design baseline: blueprint v${publication.blueprintVersion}. Newer proposed draft: v${latest.version}.`
-      : `Published internal design baseline: blueprint v${publication.blueprintVersion}.` }));
+    section.append(renderBlueprintPublicationStatus(state.project.blueprintPublicationStatus, element));
     section.append(renderBlueprintPublicationWatermark(publication, element));
   } else {
     section.append(element('p', { text: 'No internal design baseline has been published. This record will not mean complete, verified, ready, or operational.' }));
   }
+  section.append(renderBlueprintPublicationConsistency(state.project.blueprintPublicationConsistency, element));
   section.append(element('p', { text: `Review proposed blueprint v${latest.version} (${latest.title}) and these disclosures before publishing the internal baseline.` }));
   section.append(element('p', { className: 'edit-help', text: 'Publication remains inside this private project. It does not verify evidence, grant permissions, enable assignments, or change operational status.' }));
+  const impactManifest = state.project.blueprintPublicationImpact;
+  section.append(renderBlueprintPublicationImpact(impactManifest, element));
 
   const areas = Object.entries(latest.areas ?? {});
   const unknownAreas = areas.filter(([, area]) => area.status === 'unknown');
@@ -1034,6 +1037,10 @@ function renderBlueprintPublication(coverage) {
   section.append(disclosures);
   if (state.projectAccess !== 'owner' || !state.sessionPrincipal || !state.sessionRoles.includes('workspace-write')) return section;
 
+  if (impactManifest?.status !== 'COMPUTED') {
+    section.append(element('p', { className: 'edit-help', text: 'Publication is unavailable until the declared flow impact traversal completes.' }));
+    return section;
+  }
   const form = element('form', { className: 'publication-acknowledgment' });
   const acknowledgmentId = 'publication-disclosure-acknowledgment';
   const checkbox = element('input', { attrs: { id: acknowledgmentId, name: 'acknowledgeDisclosures', type: 'checkbox', required: '' } });
@@ -1047,7 +1054,8 @@ function renderBlueprintPublication(coverage) {
     event.preventDefault();
     if (!checkbox.checked) return;
     const projectId = state.project.id;
-    const payload = { blueprintId: latest.id, blueprintVersion: latest.version, acknowledgeDisclosures: true };
+    const payload = { blueprintId: latest.id, blueprintVersion: latest.version, acknowledgeDisclosures: true,
+      impactHash: impactManifest.impactHash };
     const existing = state.pendingBlueprintPublication?.projectId === projectId
       && state.pendingBlueprintPublication.payload.blueprintId === latest.id ? state.pendingBlueprintPublication : null;
     const pending = existing ?? {
@@ -1072,7 +1080,8 @@ function renderBlueprintPublication(coverage) {
     } catch (failure) {
       message.textContent = `${failure.message}${failure.correlationId ? ` Reference ${failure.correlationId}.` : ''}`;
       submit.disabled = false;
-      if (failure.code === 'VERSION_CONFLICT' || failure.code === 'BLUEPRINT_PUBLICATION_NOT_LATEST') {
+      if (failure.code === 'VERSION_CONFLICT' || failure.code === 'BLUEPRINT_PUBLICATION_NOT_LATEST'
+        || failure.code === 'BLUEPRINT_PUBLICATION_IMPACT_STALE') {
         state.pendingBlueprintPublication = null;
         const reload = element('button', { className: 'button ghost', text: 'Reload the latest blueprint', attrs: { type: 'button' } });
         reload.addEventListener('click', () => loadProject(projectId, { history: 'replace', route: { view: 'coverage' } }));
@@ -1707,6 +1716,7 @@ function renderBlueprintEditForm(node) {
   let linkedMetric = null;
   let linkedFeedbackLoop = null;
   let mitigatingControl = null;
+  let riskProcesses = null;
   let assignedRoles = null;
   let strategyGoals = null;
   let decisionMaker = null;
@@ -1936,6 +1946,11 @@ function renderBlueprintEditForm(node) {
       : draft && Object.hasOwn(draft, 'mitigatingControlId') ? draft.mitigatingControlId ?? '' : object.control ?? '';
     form.append(element('label', { text: 'Mitigating control', attrs: { for: mitigatingControl.id } }), mitigatingControl,
       element('p', { className: 'edit-help', text: 'Choose one existing control or clear the proposed link. This does not accept the risk or grant authority.', attrs: { id: `mitigating-control-help-${node.id}` } }));
+    const processes = Object.values(sourceBlueprint.areas).flatMap((entry) => entry.items).filter((item) => item.type === 'process');
+    const selectedProcessIds = pendingPayload?.processIds ?? draft?.processIds
+      ?? (object.processIds ?? []).filter((id) => processes.some((item) => item.id === id));
+    riskProcesses = renderRiskProcessScopePicker({ riskId: node.id, processes, selectedIds: selectedProcessIds, el: element });
+    form.append(riskProcesses);
   }
   if (editsMetricLink) {
     const group = element('fieldset', { className: 'goal-economics-metric-select', attrs: { 'aria-describedby': `metric-link-help-${node.id}` } });
@@ -2027,6 +2042,7 @@ function renderBlueprintEditForm(node) {
     ...(linkedMetric ? { metricId: linkedMetric.value || null } : {}),
     ...(linkedFeedbackLoop ? { consumerLoopId: linkedFeedbackLoop.value || null } : {}),
     ...(mitigatingControl ? { mitigatingControlId: mitigatingControl.value || null } : {}),
+    ...(riskProcesses ? { processIds: [...riskProcesses.querySelectorAll('input[name="processIds"]:checked')].map((control) => control.value).sort() } : {}),
     ...(decisionMaker ? { decisionMakerRoleId: decisionMaker.value || null } : {}),
     ...(decisionScope ? { decisionScopeIds: [...decisionScope.querySelectorAll('input[name="decisionScopeIds"]:checked')].map((control) => control.value).sort() } : {}),
     ...(strategyGoals ? { strategyGoalIds: [...strategyGoals.querySelectorAll('input[name="strategyGoalIds"]:checked')].map((control) => control.value).sort() } : {}),
@@ -2062,6 +2078,7 @@ function renderBlueprintEditForm(node) {
       && (!linkedMetric || payload.metricId === (current.metric ?? null))
       && (!linkedFeedbackLoop || payload.consumerLoopId === (current.consumerLoop ?? null))
       && (!mitigatingControl || payload.mitigatingControlId === (current.control ?? null))
+      && (!riskProcesses || JSON.stringify(payload.processIds) === JSON.stringify([...(current.processIds ?? [])].filter((id) => blueprintItem(sourceBlueprint, id)?.type === 'process').sort()))
       && (!decisionMaker || payload.decisionMakerRoleId === (current.by ?? null))
       && (!decisionScope || JSON.stringify(payload.decisionScopeIds) === JSON.stringify([...(current.scope ?? []).filter((id) => ['goal', 'strategy', 'customer', 'offering', 'economics', 'capability', 'process', 'resource', 'information', 'system', 'risk', 'control', 'metric', 'feedback-loop', 'lifecycle'].includes(blueprintItem(sourceBlueprint, id)?.type))].sort()))
       && (!strategyGoals || JSON.stringify(payload.strategyGoalIds) === JSON.stringify([...(current.goals ?? []).filter((id) => blueprintItem(sourceBlueprint, id)?.type === 'goal')].sort()))

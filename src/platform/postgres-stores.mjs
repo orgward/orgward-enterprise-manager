@@ -10,11 +10,34 @@ import {
   verifyAggregateRow,
   verifyCommandRow,
 } from './postgres.mjs';
-import { pinProjectSourceObject, releaseApprovalCandidate, sourceBindingSelection, verifyAcceptedG6Plan, verifyContextManifest, verifySourceBinding } from '../sdlc/engine.mjs';
+import { addRequirementFromSavedProcess as addSavedProcessRequirement, commandRequestHash, pinProjectSourceObject, releaseApprovalCandidate,
+  sourceBindingSelection, verifyAcceptedG6Plan, verifyContextManifest, verifySourceBinding } from '../sdlc/engine.mjs';
 import { digest } from '../sdlc/contracts.mjs';
 import { latestBlueprint } from '../model.mjs';
 import { SOFTWARE_PLAN_COMPILER_VERSION, verifySoftwareDeliveryDraft } from '../sdlc/software-plan-compiler.mjs';
 import { providerOutcomeDiagnosticForAttempt } from '../execution/provider-transport-diagnostic.mjs';
+import { buildProcessBehaviorTestPlan, candidateChangesCoveredByPathMap, deriveScenarioMappingEvidence, parseNodeTestAssertions, processBehaviorCandidateDisposition, verifyProcessBehaviorTestPlan } from '../sdlc/behavior-test-evidence.mjs';
+import { buildT91N1OrphanPathMapping, buildT91N2AuthorizationMapping, buildT91N2MissingAssertionMapping,
+  buildT91N3DeletedFailingTestMapping, buildT91R1RecoveryMapping, buildT91R2RecoveryMapping, classifyT91R1RecoveryObservation,
+  classifyT91R2RecoveryObservation,
+  t91R1RecoveryFixtureHash, t91R1RecoveryReceiptStatement, T91_R1_CRITERION_RECOVERY_HARNESS,
+  t91R2RecoveryFixtureHash, t91R2RecoveryReceiptStatement, T91_R2_SHARED_DRAFT_RECOVERY_HARNESS,
+  isSupportedT91R2RecoveryDefinition,
+  isIndependentT91N2MappingReviewer,
+  T91_N2_AUTHORIZATION_HARNESS, T91_N2_MISSING_ASSERTION_HARNESS, t91N2AuthorizationFixtureHash,
+  T91_N1_ORPHAN_PATH_HARNESS, T91_N3_DELETED_FAILING_TEST_HARNESS, classifyT91N1OrphanPathObservation,
+  classifyT91N3DeletedFailingTestObservation, t91N3DeletedFailingTestFixtureHash,
+  t91N3DeletedFailingTestReceiptStatement, T91_N3_PRODUCT_FIXTURE_TEMPLATE_HASH,
+  isValidT91ProductHarnessInvocationPair, isValidT91N3ReceiptObservedPins,
+  t91N1OrphanPathFixtureHash, t91N1OrphanPathReceiptStatement,
+  T91_N2_PRODUCT_FIXTURE_TEMPLATE_HASH, t91N2AuthorizationInvocationFixtureHash,
+  projectT91N2AuthorizationExecutionIntegrity, classifyT91N2AuthorizationObservation,
+  classifyT91N2MissingAssertionObservation, isSupportedT91N1OrphanPathDefinition, isSupportedT91N2AuthorizationDefinition,
+  isSupportedT91N2MissingAssertionDefinition, isSupportedT91N3DeletedFailingTestDefinition, isSupportedT91R1RecoveryDefinition,
+  t91N2MissingAssertionFixtureHash, verifyT91N2AuthorizationReservationPins,
+  verifyT91N2AuthorizationMapping } from '../sdlc/product-harness.mjs';
+import { verifyRequirementCriterionContract } from '../sdlc/criterion-contract.mjs';
+import { isViewOnlyProcessFlowSuccessor } from '../enterprise/process-flow-sensitivity.mjs';
 import { isValidEnterpriseIntegrityAssessment } from '../enterprise/integrity.mjs';
 import { softwareRuntimePlanSnapshot, verifySoftwareRuntimePlanSnapshot } from '../sdlc/software-runtime-plan.mjs';
 import { buildBlueprintProposalPrompt, buildLegacyBlueprintProposalPrompt } from '../execution/proposals.mjs';
@@ -80,6 +103,19 @@ function conflict(message, currentVersion = null, code = 'VERSION_CONFLICT') {
       : [],
   });
   return error;
+}
+
+function processPlanUsesCurrentOrViewOnlyBlueprint(project, plan) {
+  const currentBlueprint = project?.blueprintVersions?.at(-1);
+  if (!currentBlueprint || project.id !== plan?.source?.projectId) return false;
+  if (currentBlueprint.version === plan.source.blueprintVersion
+    && currentBlueprint.id === plan.source.blueprintId) return true;
+  return isViewOnlyProcessFlowSuccessor({ plan,
+    sourceBlueprint: project.blueprintVersions.find((entry) => entry.id === plan.source.blueprintId
+      && entry.version === plan.source.blueprintVersion),
+    currentBlueprint,
+    blueprintHistory: project.blueprintVersions,
+  });
 }
 
 function projectAccessDenied() {
@@ -852,6 +888,82 @@ function verifiedRepositoryCheckEvidence(run, ref, trace) {
     outputHash: receipt.outputHash }));
 }
 
+export function behaviorEvaluationVersionFields(behaviorPlan, scenarioMappings = [], persistedSchemaVersion = null) {
+  const defaultVersion = behaviorPlan?.schemaVersion >= 4 ? 2 : 1;
+  const schemaVersion = persistedSchemaVersion ?? defaultVersion;
+  const supported = behaviorPlan?.schemaVersion >= 4 ? [1, 2] : [1];
+  if (!supported.includes(schemaVersion)) return null;
+  return { schemaVersion,
+    ...(schemaVersion === 2 ? { scenarioMappings } : {}) };
+}
+
+function evaluateAuthorizedBehaviorPlan(run, behaviorPlan, trace, persistedSchemaVersion = null) {
+  const selected = run.processTaskRef?.behaviorTestPlan;
+  if (!selected || selected.caseId !== behaviorPlan.caseId || selected.planId !== behaviorPlan.id
+    || selected.planHash !== behaviorPlan.planHash || selected.requirementId !== behaviorPlan.requirementId
+    || selected.requirementHash !== behaviorPlan.requirementHash || selected.draftRevision !== behaviorPlan.draftRevision
+    || selected.traceHash !== behaviorPlan.traceHash || selected.createdAt !== behaviorPlan.createdAt
+    || selected.checkPlanHash !== behaviorPlan.checkPlan?.hash
+    || selected.criterionContractVersion !== behaviorPlan.criterionContractVersion
+    || selected.criterionContractHash !== behaviorPlan.criterionContractHash
+    || selected.fileMappingsHash !== contentHash(behaviorPlan.fileMappings)
+    || contentHash(selected.fileMappings) !== contentHash(behaviorPlan.fileMappings)
+    || contentHash(run.processTaskRef?.repository ?? null) !== contentHash(behaviorPlan.repository)) return null;
+  const repositorySelection = run.githubPatchSelection;
+  if (!repositorySelection || repositorySelection.sourceSnapshot?.snapshotId !== behaviorPlan.repository.source?.snapshotId
+    || repositorySelection.repositoryTreeDigest !== behaviorPlan.repository.treeDigest
+    || contentHash(repositorySelection.selectedFiles) !== contentHash(behaviorPlan.repository.selectedFiles)
+    || contentHash(repositorySelection.checkPlan) !== contentHash(behaviorPlan.repository.checkPlan)) return null;
+  const requested = (run.events ?? []).filter((event) => event.type === 'ExecutionRequested');
+  if (requested.length !== 1 || requested[0].timestamp <= behaviorPlan.createdAt) return null;
+  const terminal = (run.events ?? []).filter((event) => ['ExecutionSucceeded', 'ExecutionFailed'].includes(event.type));
+  if (terminal.length !== 1) return null;
+  const checkEvidence = verifiedRepositoryCheckEvidence(run, run.processTaskRef, trace);
+  const candidate = run.execution?.repositoryCandidate;
+  if (!candidate || !candidateChangesCoveredByPathMap(behaviorPlan.fileMappings, candidate.changes ?? [])) return null;
+  const checkReceipts = candidate?.checkReceipts;
+  const mappingAwareEvaluation = behaviorPlan.schemaVersion >= 4;
+  const evaluationFields = behaviorEvaluationVersionFields(behaviorPlan, [], persistedSchemaVersion);
+  if (!evaluationFields) return null;
+  const unknownAssertions = (reason) => behaviorPlan.assertions.map((assertion) => ({ id: assertion.id,
+    testName: assertion.testName, criterionIndex: assertion.criterionIndex, status: 'UNKNOWN', reason }));
+  if (!checkEvidence || !Array.isArray(checkReceipts) || !checkReceipts.length) {
+    return { ...behaviorEvaluationVersionFields(behaviorPlan, deriveScenarioMappingEvidence({ plan: behaviorPlan, assertionResults: [], candidate,
+      checkEvidenceVerified: false }), persistedSchemaVersion), status: 'NOT_EXECUTED', scope: 'NOT_EXECUTED', result: 'UNKNOWN',
+      assertions: unknownAssertions('CHECK_RECEIPT_UNAVAILABLE'), planId: behaviorPlan.id, planHash: behaviorPlan.planHash,
+      terminalEventHash: contentHash(terminal[0]), candidateEvidenceHash: candidate?.candidateEvidence?.hash ?? null,
+      businessTruthStatus: 'UNVERIFIED', reason: 'The selected run has no verifiable per-assertion repository-check receipt.' };
+  }
+  const check = behaviorPlan.assertions[0].check;
+  const receipt = checkReceipts.find((entry) => entry.checkId === check.id);
+  if (!receipt || checkReceipts.filter((entry) => entry.checkId === check.id).length !== 1) return null;
+  const results = parseNodeTestAssertions(receipt.stdout ?? '', behaviorPlan, receipt);
+  if (!results) return null;
+  const assertions = results.map((result) => ({ ...result,
+    criterionIndex: behaviorPlan.assertions.find((entry) => entry.id === result.id).criterionIndex }));
+  const scenarioMappings = mappingAwareEvaluation && evaluationFields.schemaVersion === 2 ? deriveScenarioMappingEvidence({ plan: behaviorPlan, assertionResults: assertions,
+    candidate: { ...candidate, sourceSnapshotId: candidate.snapshotId }, checkEvidenceVerified: true }) : null;
+  const statuses = assertions.map((entry) => entry.status);
+  const result = statuses.includes('TEST_FAIL') ? 'TEST_FAIL'
+    : statuses.length && statuses.every((status) => status === 'TEST_PASS') ? 'TEST_PASS' : 'UNKNOWN';
+  const riskCoverage = behaviorPlan.assertions.every((assertion) => assertion.risk?.status === 'LINKED') ? 'LINKED' : 'UNKNOWN';
+  // Reaching this point means a verified, completed check receipt was parsed.
+  // An absent/skipped planned assertion is still an evaluated candidate and
+  // must be rejected by the admission guard rather than downgraded to
+  // NOT_EXECUTED.
+  const executed = true;
+  return { ...behaviorEvaluationVersionFields(behaviorPlan, scenarioMappings ?? [], persistedSchemaVersion), status: executed ? 'CHECKED_BEHAVIOR' : 'NOT_EXECUTED',
+    scope: executed ? 'CHECKED_BEHAVIOR' : 'NOT_EXECUTED', result: riskCoverage === 'LINKED' ? result : 'UNKNOWN',
+    assertionResult: result, riskCoverage, assertions,
+    planId: behaviorPlan.id, planHash: behaviorPlan.planHash,
+    checkId: receipt.checkId, checkVersion: receipt.checkVersion, commandHash: receipt.commandHash,
+    checkPlanHash: receipt.planHash, candidateTreeDigest: receipt.candidateTreeDigest,
+    candidateEvidenceHash: candidate?.candidateEvidence?.hash ?? null,
+    outputHash: receipt.outputHash, terminalEventHash: contentHash(terminal[0]),
+    businessTruthStatus: 'UNVERIFIED',
+    reason: 'Per-assertion code checks are scoped evidence; they do not establish real-world business truth.' };
+}
+
 async function syncProcessTaskRuntimeFromRun(client, run, { commandId = null } = {}) {
   const ref = run.processTaskRef;
   if (!ref) return;
@@ -1058,7 +1170,12 @@ class PostgresDocumentStore {
 
   async withPrincipalAuthority({
     id, tenantId, principal, minimumProjectAccess = 'reader',
-    requiredPrincipalRoles = [], anyPrincipalRoleGroups = [], authzGeneration, operation,
+    requiredPrincipalRoles = [], anyPrincipalRoleGroups = [], authzGeneration,
+    verifyProcessEvidenceReviews = false, verifyProcessBehaviorTestPlans = false,
+    verifyProcessBehaviorEvaluations = false, verifyRepositoryCheckObservations = false,
+    verifyProcessIntentEvaluationAcceptances = false, verifyProcessBehaviorScenarioExecutions = false,
+    verifyProcessBehaviorProductHarnessMappings = false,
+    verifyT91N2AuthorizationExecutions = false, operation,
   }) {
     if (!id || !tenantId || !principal || typeof operation !== 'function') return null;
     return this.persistence.transaction(async (client) => {
@@ -1093,6 +1210,36 @@ class PostgresDocumentStore {
         throw persistenceIntegrity('Aggregate project scope does not match aggregate state.');
       }
       state.projectId = projectId;
+      if (verifyProcessEvidenceReviews && this.kind === 'change_case' && typeof this.verifyProcessEvidenceReviews === 'function') {
+        await this.verifyProcessEvidenceReviews(state, client);
+      }
+      if (verifyProcessBehaviorTestPlans && this.kind === 'change_case' && typeof this.verifyProcessBehaviorTestPlans === 'function') {
+        await this.verifyProcessBehaviorTestPlans(state, client);
+      }
+      if (verifyProcessBehaviorEvaluations && this.kind === 'change_case' && typeof this.verifyProcessBehaviorEvaluations === 'function') {
+        await this.verifyProcessBehaviorEvaluations(state, client);
+      }
+      if (verifyRepositoryCheckObservations && this.kind === 'change_case' && typeof this.verifyRepositoryCheckObservations === 'function') {
+        await this.verifyRepositoryCheckObservations(state, client);
+      }
+      if (verifyProcessIntentEvaluationAcceptances && this.kind === 'change_case'
+        && typeof this.verifyProcessIntentEvaluationAcceptances === 'function') {
+        await this.verifyProcessIntentEvaluationAcceptances(state, client);
+      }
+      if (verifyProcessBehaviorScenarioExecutions && this.kind === 'change_case'
+        && typeof this.verifyProcessBehaviorScenarioExecutions === 'function') {
+        await this.verifyProcessBehaviorScenarioExecutions(state, client);
+      }
+      if (verifyProcessBehaviorProductHarnessMappings && this.kind === 'change_case'
+        && typeof this.verifyProcessBehaviorProductHarnessMappings === 'function') {
+        await this.verifyProcessBehaviorProductHarnessMappings(state, client);
+      }
+      if (verifyT91N2AuthorizationExecutions && this.kind === 'change_case'
+        && typeof this.verifyT91N2AuthorizationExecutions === 'function') {
+        const verified = await this.verifyT91N2AuthorizationExecutions(state, client);
+        state.artifacts ??= {};
+        state.artifacts.processBehaviorProductHarnessExecutionIntegrity = verified.receipts;
+      }
       return operation(state, { projectId, ...membershipAuthority });
     });
   }
@@ -1309,7 +1456,8 @@ class PostgresDocumentStore {
         await recordEvent(client, {
           tenantId: state.tenantId, kind: this.kind, id: state.id,
           version: event.aggregateVersion ?? event.version ?? state.version,
-          commandId: event.causationId ?? null, event,
+          commandId: event.type === 'RequirementCriterionBaselineRevised'
+            ? event.data?.commandId ?? null : event.causationId ?? null, event,
         });
       }
       if (this.kind === 'execution_run' && state.processTaskRef) {
@@ -1338,7 +1486,19 @@ class PostgresDocumentStore {
         throw conflict('Execution dispatch no longer matches the authorized run version.', hint.version, 'DISPATCH_CONFLICT');
       }
       if (hint.processTaskRef) {
-        await client.query(`select aggregate_id from orgward.aggregates where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2 for share`, [tenantId, projectId]);
+        const currentProjectResult = await client.query(`select * from orgward.aggregates
+          where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2 for share`, [tenantId, projectId]);
+        if (!currentProjectResult.rowCount) throw projectAccessDenied();
+        const currentProject = verifyAggregateRow(currentProjectResult.rows[0]);
+        const linkedPlan = await resolveRuntimeProcessPlan(client, {
+          tenantId, projectId, project: currentProject,
+          planId: hint.processTaskRef.processPlanId, revision: hint.processTaskRef.revision,
+        });
+        if (linkedPlan?.kind === 'manual_process_flow_plan'
+          && !processPlanUsesCurrentOrViewOnlyBlueprint(currentProject, linkedPlan)) {
+          throw conflict('The linked process plan is stale against the current saved blueprint; start a new instance from a current plan.',
+            currentProject.version, 'PROCESS_PLAN_BLUEPRINT_STALE');
+        }
         const control = await lockProcessTaskControl(client, tenantId, hint.processTaskRef.planInstanceId);
         if (!control) throw persistenceIntegrity('A linked process task has no durable instance control record.');
         requireActiveProcessTaskControl(control, hint.version);
@@ -1840,17 +2000,27 @@ export class PostgresProjectStore extends PostgresDocumentStore {
     return (await this.listWithDiagnosticsForPrincipal(tenantId, principal)).records;
   }
 
-  async getForPrincipal(id, tenantId, principal) {
-    const result = await this.persistence.query(`
-      select a.* from orgward.aggregates a
-      join orgward.project_memberships m
-        on m.tenant_id = a.tenant_id and m.project_kind = a.aggregate_kind and m.project_id = a.aggregate_id
-      join orgward.oidc_principals p
-        on p.principal = m.principal and p.tenant_id = m.tenant_id
-      where a.tenant_id = $1 and a.aggregate_kind = 'project' and a.aggregate_id = $2
-        and m.principal = $3 and m.revoked_at is null and p.status = 'active'
-    `, [tenantId, id, principal]);
-    return result.rowCount ? verifyAggregateRow(result.rows[0]) : null;
+  async getForPrincipal(id, tenantId, principal, {
+    minimumProjectAccess = null, requiredPrincipalRoles = null, authzGeneration = null,
+  } = {}) {
+    const read = async (client) => {
+      if (requiredPrincipalRoles) await requirePrincipalAuthority(client, {
+        tenantId, principal, roles: requiredPrincipalRoles, authzGeneration,
+      });
+      const result = await client.query(`
+        select a.* from orgward.aggregates a
+        join orgward.project_memberships m
+          on m.tenant_id = a.tenant_id and m.project_kind = a.aggregate_kind and m.project_id = a.aggregate_id
+        join orgward.oidc_principals p
+          on p.principal = m.principal and p.tenant_id = m.tenant_id
+        where a.tenant_id = $1 and a.aggregate_kind = 'project' and a.aggregate_id = $2
+          and m.principal = $3 and m.revoked_at is null and p.status = 'active'
+          and ($4::text is null or ($4 = 'owner' and m.access = 'owner')
+            or ($4 = 'editor' and m.access in ('owner', 'editor')))
+      `, [tenantId, id, principal, minimumProjectAccess]);
+      return result.rowCount ? verifyAggregateRow(result.rows[0]) : null;
+    };
+    return requiredPrincipalRoles ? this.persistence.transaction(read) : read(this.persistence);
   }
 
   async listMembers(tenantId, projectId, actor, { actorAuthzGeneration = null, operation = null } = {}) {
@@ -2555,8 +2725,1966 @@ export function projectPortfolioIntegritySummary(project) {
     integrityBlueprintVersion: assessment.source.blueprintVersion, integrityProjectionIncomplete: false };
 }
 
+function processEvidenceReviewConflict(criteria) {
+  const business = criteria.filter((entry) => entry.criterionType === 'BUSINESS');
+  const technical = criteria.filter((entry) => entry.criterionType === 'TECHNICAL');
+  const businessSupported = business.filter((entry) => entry.disposition === 'SUPPORTED');
+  const businessContradicted = business.filter((entry) => entry.disposition === 'CONTRADICTED');
+  const technicalSupported = technical.filter((entry) => entry.disposition === 'SUPPORTED');
+  const technicalContradicted = technical.filter((entry) => entry.disposition === 'CONTRADICTED');
+  const conflict = (businessSupported.length > 0 && technicalContradicted.length > 0)
+    || (businessContradicted.length > 0 && technicalSupported.length > 0);
+  const conflictBusinessCriterionIds = conflict
+    ? [...new Set([...businessSupported, ...businessContradicted].map((entry) => entry.criterionId))].sort() : [];
+  const conflictTechnicalCriterionIds = conflict
+    ? [...new Set([...technicalSupported, ...technicalContradicted].map((entry) => entry.criterionId))].sort() : [];
+  const failedMandatoryCriterionIds = criteria.filter((entry) => entry.mandatory && entry.disposition === 'CONTRADICTED')
+    .map((entry) => entry.criterionId).filter(Boolean).sort();
+  return { conflict, conflictBusinessCriterionIds, conflictTechnicalCriterionIds, failedMandatoryCriterionIds,
+    requiresResolution: conflict || failedMandatoryCriterionIds.length > 0 };
+}
+
+function processEvidenceReviewState(changeCase, requirement, review) {
+  if (!requirement || !review || typeof review.id !== 'string' || !/^process-evidence-review-[0-9a-f-]{36}$/i.test(review.id)) return null;
+  const { reviewHash, integrityStatus: _integrityStatus, applicability: _applicability, ...reviewCore } = review;
+  if (![1, 2, 3, 4].includes(review.schemaVersion) || contentHash(reviewCore) !== reviewHash || review.status !== 'HUMAN_REVIEWED'
+    || review.verificationStatus !== 'NOT_EXECUTED' || review.truthStatus !== 'UNVERIFIED') return null;
+  if (review.schemaVersion === 2 || review.schemaVersion === 3 || review.schemaVersion === 4) {
+    const conflict = processEvidenceReviewConflict(review.criteria ?? []);
+    const acceptanceStatus = conflict.failedMandatoryCriterionIds.length
+      ? 'BLOCKED_MANDATORY_FAILURE' : 'REVIEW_ONLY_NOT_ACCEPTED';
+    const resolution = review.conflictResolution;
+    if (contentHash(review.failedMandatoryCriterionIds) !== contentHash(conflict.failedMandatoryCriterionIds)
+      || review.acceptanceStatus !== acceptanceStatus
+      || conflict.requiresResolution !== Boolean(resolution)
+      || (resolution && (resolution.schemaVersion !== 1 || resolution.decision !== 'PRESERVE_CRITERION_OUTCOMES'
+        || typeof resolution.rationale !== 'string' || !resolution.rationale.trim()
+        || resolution.recordedBy !== review.reviewerPrincipal || resolution.recordedAt !== review.reviewedAt
+        || contentHash(resolution.businessCriterionIds) !== contentHash(conflict.conflictBusinessCriterionIds)
+        || contentHash(resolution.technicalCriterionIds) !== contentHash(conflict.conflictTechnicalCriterionIds)
+        || contentHash(resolution.failedMandatoryCriterionIds) !== contentHash(conflict.failedMandatoryCriterionIds)))) return null;
+    if (review.criterionContractVersion === null) {
+      if (review.criterionContractHash !== null) return null;
+    } else {
+      const contract = requirement.criterionContractHistory?.find((entry) => entry.version === review.criterionContractVersion);
+      if (!contract || contract.contentHash !== review.criterionContractHash) return null;
+      const declared = contract.criteria.map((entry, index) => ({ index, criterion: entry.text, criterionHash: digest(entry),
+        criterionId: entry.id, criterionType: entry.type, mandatory: entry.mandatory, source: entry.source, scope: entry.scope }));
+      const reviewed = (review.criteria ?? []).map(({ disposition: _disposition, note: _note, ...entry }) => entry);
+      if (contentHash(reviewed) !== contentHash(declared)) return null;
+    }
+  }
+  const artifact = changeCase.artifacts?.requirements;
+  const retained = (requirement.processRunEvidenceReviews ?? []).filter((entry) => entry.id === review.id);
+  const aggregateCopies = (artifact?.processRunEvidenceReviews ?? []).filter((entry) => entry.id === review.id);
+  const persistedReviewCore = (entry) => Object.fromEntries(Object.entries(entry ?? {})
+    .filter(([key]) => !['integrityStatus', 'applicability'].includes(key)));
+  if (retained.length !== 1 || aggregateCopies.length !== 1
+    || contentHash(persistedReviewCore(retained[0])) !== contentHash(persistedReviewCore(aggregateCopies[0]))) return null;
+  const linkMatches = (requirement.processRunEvidenceLinks ?? []).filter((entry) => entry.id === review.linkId);
+  if (linkMatches.length !== 1) return null;
+  const link = linkMatches[0];
+  const { linkHash, applicability: _linkApplicability, ...linkCore } = link;
+  if (contentHash(linkCore) !== linkHash || review.linkHash !== linkHash
+    || review.tenantId !== changeCase.tenantId || review.projectId !== changeCase.projectId
+    || review.caseId !== changeCase.id || review.requirementId !== requirement.id
+    || review.requirementHash !== link.requirementHash || review.traceHash !== link.traceHash
+    || review.contractHash !== link.contractHash || review.draftRevision !== link.draftRevision
+    || contentHash(review.source) !== contentHash(link.source)
+    || contentHash(review.plan) !== contentHash(link.plan)
+    || contentHash(review.instance) !== contentHash(link.instance)
+    || contentHash(review.outputPins) !== contentHash(link.outputs)
+    || contentHash(review.outputEvidenceHashes) !== contentHash((link.outputEvidence ?? []).map((entry) => entry.recordHash ?? null))) return null;
+  if (review.schemaVersion === 3 || review.schemaVersion === 4) {
+    const plan = (changeCase.artifacts?.processBehaviorTestPlans ?? []).find((entry) => entry.id === review.behaviorPlanId);
+    if (!verifyProcessBehaviorTestPlan(plan) || plan.planHash !== review.behaviorPlanHash
+      || plan.planHash !== link.behaviorEvaluation?.planHash || plan.id !== link.behaviorEvaluation?.planId
+      || review.evaluationContextHash !== contentHash(plan.evaluationContext)
+      || review.caseDefinitionsHash !== contentHash(plan.caseDefinitions)
+      || review.scenarioCases?.length !== 3
+      || review.scenarioCases.some((entry) => {
+        const definition = plan.caseDefinitions.cases.find((candidate) => candidate.type === entry.type);
+        const { disposition, note, executionDecision, executionReviewStatus, ...pinned } = entry;
+        const allowedKeys = review.schemaVersion === 4
+          ? ['type', 'definitionHash', 'definition', 'disposition', 'note', 'executionDecision', 'executionReviewStatus']
+          : ['type', 'definitionHash', 'definition', 'disposition', 'note'];
+        return !definition || entry.definitionHash !== digest(definition)
+          || Object.keys(entry).some((key) => !allowedKeys.includes(key))
+          || contentHash(pinned.definition) !== contentHash(definition)
+          || !['SUPPORTED', 'CONTRADICTED', 'INCONCLUSIVE'].includes(disposition)
+          || typeof note !== 'string' || !note.trim()
+          || (review.schemaVersion === 3 && (executionDecision !== undefined || executionReviewStatus !== undefined))
+          || (review.schemaVersion === 4 && (!['APPROVE_FOR_TEST_EXECUTION', 'REQUEST_CHANGES'].includes(executionDecision)
+            || executionReviewStatus !== (executionDecision === 'APPROVE_FOR_TEST_EXECUTION'
+              ? 'REVIEWED_FOR_TEST_EXECUTION' : 'CHANGES_REQUESTED')
+            || (executionDecision === 'APPROVE_FOR_TEST_EXECUTION'
+              && (definition.executionMapping?.status !== 'OWNER_PROPOSED_UNVERIFIED'
+                || !definition.dataset || !definition.expectedOutput))));
+      })) return null;
+  }
+  const matchingEvents = (changeCase.events ?? []).filter((event) => event.type === 'ProcessRunEvidenceReviewed'
+    && event.data?.reviewId === review.id);
+  if (matchingEvents.length !== 1) return null;
+  const event = matchingEvents[0];
+  const expectedData = { reviewId: review.id, reviewHash, linkId: link.id, linkHash,
+    requirementId: requirement.id, requirementHash: review.requirementHash, traceHash: review.traceHash,
+    contractHash: review.contractHash, sourceHash: contentHash(review.source), planHash: contentHash(review.plan),
+    instanceHash: contentHash(review.instance), outputPinsHash: contentHash(review.outputPins),
+    criteriaHash: contentHash(review.criteria), disposition: review.disposition,
+    reviewerPrincipal: review.reviewerPrincipal, requestHash: review.requestHash, recordedVersion: review.recordedVersion,
+    status: 'HUMAN_REVIEWED',
+    verificationStatus: 'NOT_EXECUTED', truthStatus: 'UNVERIFIED' };
+  if (review.schemaVersion === 2) Object.assign(expectedData, { reviewSchemaVersion: 2,
+    conflictResolutionHash: contentHash(review.conflictResolution),
+    criterionContractVersion: review.criterionContractVersion,
+    criterionContractHash: review.criterionContractHash,
+    failedMandatoryCriterionIds: review.failedMandatoryCriterionIds,
+    acceptanceStatus: review.acceptanceStatus });
+  if (review.schemaVersion === 3 || review.schemaVersion === 4) Object.assign(expectedData, { reviewSchemaVersion: review.schemaVersion,
+    conflictResolutionHash: contentHash(review.conflictResolution),
+    criterionContractVersion: review.criterionContractVersion, criterionContractHash: review.criterionContractHash,
+    failedMandatoryCriterionIds: review.failedMandatoryCriterionIds, acceptanceStatus: review.acceptanceStatus,
+    behaviorPlanId: review.behaviorPlanId, behaviorPlanHash: review.behaviorPlanHash,
+    evaluationContextHash: review.evaluationContextHash, caseDefinitionsHash: review.caseDefinitionsHash,
+    scenarioCasesHash: contentHash(review.scenarioCases) });
+  if (contentHash(event.data) !== contentHash(expectedData) || event.actor !== review.reviewerPrincipal
+    || event.timestamp !== review.reviewedAt || event.tenantId !== changeCase.tenantId
+    || ([2, 3, 4].includes(review.schemaVersion) && event.schemaVersion !== 2)
+    || (review.schemaVersion === 1 && event.schemaVersion !== undefined && event.schemaVersion !== 1)
+    || event.contentHash !== contentHash({ type: 'ProcessRunEvidenceReviewed', tenantId: changeCase.tenantId, data: expectedData })) return null;
+  const idempotency = changeCase.idempotency?.[event.causationId];
+  if (!idempotency || idempotency.action !== 'review-process-run-evidence'
+    || idempotency.reviewId !== review.id || idempotency.requestHash !== review.requestHash
+    || idempotency.at !== review.reviewedAt || Number(idempotency.version) !== Number(review.recordedVersion)
+    || !/^[a-f0-9]{64}$/.test(idempotency.requestHash ?? '') || !Number.isSafeInteger(review.recordedVersion)) return null;
+  return { event, idempotency };
+}
+
+function processIntentEvaluationAcceptanceState(changeCase, requirement, acceptance) {
+  const invalid = () => null;
+  if (!requirement || !acceptance || acceptance.schemaVersion !== 1
+    || !/^intent-evaluation-acceptance-[0-9a-f-]{36}$/i.test(acceptance.id ?? '')) return invalid('identity');
+  const { acceptanceHash, applicability: _applicability, integrityStatus: _integrityStatus, ...core } = acceptance;
+  if (!/^[a-f0-9]{64}$/.test(acceptanceHash ?? '') || contentHash(core) !== acceptanceHash
+    || acceptance.status !== 'ACCEPTED' || acceptance.verificationStatus !== 'NOT_EXECUTED'
+    || acceptance.truthStatus !== 'UNVERIFIED') return invalid('record-core');
+  const aggregate = (changeCase.artifacts?.processIntentEvaluationAcceptances ?? []).filter((entry) => entry.id === acceptance.id);
+  if (aggregate.length !== 1) return invalid('aggregate-copy');
+  const link = (requirement.processRunEvidenceLinks ?? []).find((entry) => entry.id === acceptance.linkId);
+  const review = (requirement.processRunEvidenceReviews ?? []).find((entry) => entry.id === acceptance.reviewId);
+  if (!link || !review || review.integrityStatus !== 'VALID'
+    || processEvidenceReviewState(changeCase, requirement, review) === null) return invalid('review-state');
+  const { linkHash, applicability: _linkApplicability, ...linkCore } = link;
+  const { reviewHash, integrityStatus: _reviewIntegrity, applicability: _reviewApplicability, ...reviewCore } = review;
+  const historicalContract = requirement.criterionContractHistory?.find((entry) => entry.version === acceptance.criterionContractVersion
+    && entry.contentHash === acceptance.criterionContractHash);
+  const evaluation = link.behaviorEvaluation;
+  const behaviorPlan = (changeCase.artifacts?.processBehaviorTestPlans ?? []).find((entry) => entry.id === evaluation?.planId);
+  const declarations = historicalContract?.criteria ?? [];
+  const traceHash = link.traceHash;
+  if (contentHash(linkCore) !== linkHash || acceptance.linkHash !== linkHash
+    || contentHash(reviewCore) !== reviewHash || acceptance.reviewHash !== reviewHash
+    || acceptance.tenantId !== changeCase.tenantId || acceptance.projectId !== changeCase.projectId
+    || acceptance.caseId !== changeCase.id || acceptance.requirementId !== requirement.id
+    || !historicalContract || !verifyRequirementCriterionContract(requirement, historicalContract, { historical: true })
+    || acceptance.requirementHash !== link.requirementHash || acceptance.traceHash !== traceHash
+    || acceptance.draftRevision !== link.draftRevision
+    || contentHash(acceptance.source) !== contentHash(link.source)
+    || review.requirementHash !== acceptance.requirementHash || review.draftRevision !== acceptance.draftRevision
+    || review.traceHash !== acceptance.traceHash || review.criterionContractVersion !== acceptance.criterionContractVersion
+    || review.criterionContractHash !== acceptance.criterionContractHash
+    || review.linkId !== link.id || review.linkHash !== linkHash
+    || review.acceptanceStatus !== 'REVIEW_ONLY_NOT_ACCEPTED'
+    || review.criteria.length !== declarations.length || review.criteria.some((entry) => entry.disposition !== 'SUPPORTED')
+    || declarations.some((entry) => !review.criteria.some((reviewed) => reviewed.criterionId === entry.id
+      && reviewed.criterionHash === digest(entry) && reviewed.disposition === 'SUPPORTED'))
+    || !evaluation || evaluation.status !== 'CHECKED_BEHAVIOR' || evaluation.result !== 'TEST_PASS'
+    || evaluation.businessTruthStatus !== 'UNVERIFIED' || evaluation.assertions.length !== declarations.length
+    || !verifyProcessBehaviorTestPlan(behaviorPlan) || behaviorPlan.planHash !== evaluation.planHash
+    || behaviorPlan.requirementId !== requirement.id || behaviorPlan.requirementHash !== acceptance.requirementHash
+    || behaviorPlan.draftRevision !== acceptance.draftRevision || behaviorPlan.traceHash !== acceptance.traceHash
+    || behaviorPlan.criterionContractVersion !== acceptance.criterionContractVersion
+    || behaviorPlan.criterionContractHash !== acceptance.criterionContractHash
+    || evaluation.assertions.some((entry) => entry.status !== 'TEST_PASS'
+      || !behaviorPlan.assertions.some((planned) => planned.id === entry.id
+        && declarations.some((criterion) => criterion.id === planned.criterionId
+          && digest(criterion) === planned.criterionHash)))
+    || acceptance.evaluationHash !== contentHash(evaluation)
+    || link.status !== 'UNVERIFIED' || link.verificationStatus !== 'NOT_EXECUTED') return invalid('evidence-core');
+  const matchingEvents = (changeCase.events ?? []).filter((event) => event.type === 'IntentEvaluationAccepted'
+    && event.data?.acceptanceId === acceptance.id);
+  if (matchingEvents.length !== 1) return invalid('event-count');
+  const event = matchingEvents[0];
+  const expectedData = { acceptanceId: acceptance.id, acceptanceHash, requirementId: requirement.id,
+    requirementHash: acceptance.requirementHash, draftRevision: acceptance.draftRevision, traceHash: acceptance.traceHash,
+    criterionContractVersion: acceptance.criterionContractVersion, criterionContractHash: acceptance.criterionContractHash,
+    linkId: link.id, linkHash, reviewId: review.id, reviewHash, evaluationHash: contentHash(evaluation),
+    acceptedBy: acceptance.acceptedBy, requestHash: acceptance.requestHash, recordedVersion: acceptance.recordedVersion,
+    status: 'ACCEPTED', verificationStatus: 'NOT_EXECUTED', truthStatus: 'UNVERIFIED' };
+  if (contentHash(event.data) !== contentHash(expectedData) || event.actor !== acceptance.acceptedBy
+    || event.timestamp !== acceptance.acceptedAt || event.tenantId !== changeCase.tenantId
+    || event.contentHash !== contentHash({ type: 'IntentEvaluationAccepted', tenantId: changeCase.tenantId, data: expectedData })) return invalid('event-data');
+  const idempotency = changeCase.idempotency?.[event.causationId];
+  if (!idempotency || idempotency.action !== 'accept-intent-evaluation'
+    || idempotency.acceptanceId !== acceptance.id || idempotency.requestHash !== acceptance.requestHash
+    || idempotency.at !== acceptance.acceptedAt || Number(idempotency.version) !== Number(acceptance.recordedVersion)
+    || !Number.isSafeInteger(acceptance.recordedVersion)) return invalid('idempotency');
+  return { event, idempotency };
+}
+
+function approvedProcessBehaviorScenario(changeCase, { requirementId, linkId, planId, caseType = 'POSITIVE', reviewId = null }) {
+  const type = String(caseType ?? '').toUpperCase();
+  const requirement = (changeCase.artifacts?.requirements?.requirements ?? []).find((entry) => entry.id === requirementId);
+  const link = requirement?.processRunEvidenceLinks?.find((entry) => entry.id === linkId);
+  const plan = (changeCase.artifacts?.processBehaviorTestPlans ?? []).find((entry) => entry.id === planId);
+  if (!requirement || !link || !plan || !['POSITIVE', 'NEGATIVE', 'RECOVERY'].includes(type) || !verifyProcessBehaviorTestPlan(plan)
+    || link.behaviorEvaluation?.planId !== plan.id || link.behaviorEvaluation?.planHash !== plan.planHash
+    || link.status !== 'UNVERIFIED' || link.verificationStatus !== 'NOT_EXECUTED'
+    || plan.caseId !== changeCase.id || plan.requirementId !== requirement.id
+    || plan.draftRevision !== link.draftRevision || plan.requirementHash !== link.requirementHash) return null;
+  const definition = plan.caseDefinitions?.cases?.find((entry) => entry.type === type);
+  const assertion = plan.assertions?.find((entry) => entry.id === definition?.executionMapping?.assertionId);
+  const mapping = definition?.executionMapping;
+  if (!definition || !assertion || definition.status !== 'NOT_EXECUTED' || !definition.dataset || !definition.expectedOutput
+    || mapping?.status !== 'OWNER_PROPOSED_UNVERIFIED'
+    || !plan.repository?.selectedFiles?.some((entry) => entry.path === mapping.testPath && entry.contentHash === mapping.testFileHash)
+    || mapping.repositorySnapshotId !== plan.repository.snapshotId || mapping.repositoryTreeDigest !== plan.repository.treeDigest) return null;
+  const matchingReviews = (requirement.processRunEvidenceReviews ?? []).filter((entry) => entry.schemaVersion === 4
+    && entry.linkId === link.id && entry.behaviorPlanId === plan.id && entry.behaviorPlanHash === plan.planHash
+    && (!reviewId || entry.id === reviewId) && processEvidenceReviewState(changeCase, requirement, entry));
+  const review = reviewId ? matchingReviews[0] : matchingReviews.sort((left, right) =>
+    Number(left.recordedVersion ?? 0) - Number(right.recordedVersion ?? 0)
+      || String(left.reviewedAt ?? '').localeCompare(String(right.reviewedAt ?? ''))
+      || String(left.id).localeCompare(String(right.id))).at(-1);
+  const scenarioReview = review?.scenarioCases?.find((scenario) => scenario.type === type);
+  const linkCore = Object.fromEntries(Object.entries(link).filter(([key]) => key !== 'linkHash' && key !== 'applicability'));
+  if (!review || review.integrityStatus !== 'VALID' || review.reviewerPrincipal === plan.createdBy || !link.run?.id
+    || scenarioReview?.executionDecision !== 'APPROVE_FOR_TEST_EXECUTION'
+    || scenarioReview.executionReviewStatus !== 'REVIEWED_FOR_TEST_EXECUTION'
+    || scenarioReview.definitionHash !== digest(definition) || contentHash(scenarioReview.definition) !== contentHash(definition)
+    || contentHash(linkCore) !== link.linkHash) return null;
+  return { requirement, link, plan, definition, mapping, assertion, review };
+}
+
 export class PostgresChangeCaseStore extends PostgresDocumentStore {
   constructor(persistence) { super(persistence, 'change_case'); }
+  async verifyRequirementCriterionContracts(current, client = null) {
+    const query = client ? client.query.bind(client) : this.persistence.query.bind(this.persistence);
+    for (const requirement of current.artifacts?.requirements?.requirements ?? []) {
+      const history = requirement.criterionContractHistory ?? [];
+      if (!requirement.criterionContract && !history.length) continue; // historical string-only criteria remain explicitly unclassified
+      if (!Array.isArray(history) || !history.length || requirement.criterionContract?.contentHash !== history.at(-1)?.contentHash
+        || history.length !== requirement.criterionContract.version) throw persistenceIntegrity('A versioned criterion contract has incomplete immutable history.');
+      let priorFloor = [];
+      for (let index = 0; index < history.length; index += 1) {
+        const contract = history[index];
+        if (contract.version !== index + 1 || !verifyRequirementCriterionContract(requirement, contract, { historical: true })
+          || priorFloor.some((id) => !contract.mandatoryFloor.includes(id))) throw persistenceIntegrity('A requirement criterion revision failed its immutable version or mandatory-floor check.');
+        priorFloor = contract.mandatoryFloor;
+        const events = (current.events ?? []).filter((event) => event.type === 'RequirementCriterionBaselineRevised'
+          && event.data?.requirementId === requirement.id && event.data?.criterionContractVersion === contract.version);
+        if (events.length !== 1 || events[0].data.criterionContractHash !== contract.contentHash
+          || events[0].data.draftRevision !== contract.draftRevision
+          || !/^[a-f0-9]{64}$/.test(events[0].data.commandRequestHash ?? '')
+          || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{7,159}$/.test(events[0].data.commandId ?? '')
+          || events[0].contentHash !== contentHash({ type: events[0].type, tenantId: current.tenantId, data: events[0].data })) {
+          throw persistenceIntegrity('A versioned requirement criterion has no unique matching revision event.');
+        }
+        const event = events[0];
+        const audit = await query(`select event_hash,command_id,actor,aggregate_version,event from orgward.audit_log
+          where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 and event_hash=$3`,
+        [current.tenantId, current.id, contentHash(event)]);
+        const row = audit.rows[0];
+        const commandId = event.data.commandId;
+        const command = typeof commandId === 'string' ? current.idempotency?.[commandId] : null;
+        if (!command || command.action !== 'edit-requirements' || command.requestHash !== event.data.commandRequestHash
+          || Number(command.version) !== Number(event.aggregateVersion ?? row?.aggregate_version)) {
+          throw persistenceIntegrity('A requirement criterion revision has no exact matching command record.');
+        }
+        if (audit.rowCount !== 1 || row.command_id !== commandId || row.actor !== event.actor
+          || Number(row.aggregate_version) !== Number(event.aggregateVersion ?? command.version) || contentHash(row.event) !== contentHash(event)) {
+          throw persistenceIntegrity('A requirement criterion revision has no matching durable audit record.');
+        }
+      }
+    }
+    for (const requirement of current.artifacts?.requirements?.requirements ?? []) {
+      if (requirement.criterionContract && !verifyRequirementCriterionContract(requirement)) {
+        throw persistenceIntegrity('The current criterion contract no longer matches the requirement priority or acceptance text.');
+      }
+    }
+    return current;
+  }
+  async verifyProcessBehaviorTestPlans(current, client = null) {
+    const plans = current.artifacts?.processBehaviorTestPlans ?? [];
+    await PostgresChangeCaseStore.prototype.verifyRequirementCriterionContracts.call(this, current, client);
+    if (!plans.length) return current;
+    const query = client ? client.query.bind(client) : this.persistence.query.bind(this.persistence);
+    const seen = new Set();
+    for (const plan of plans) {
+      if (!verifyProcessBehaviorTestPlan(plan) || seen.has(plan.id) || plan.tenantId !== current.tenantId
+        || plan.projectId !== current.projectId || plan.caseId !== current.id) throw persistenceIntegrity('A process behavior test plan failed its immutable identity or hash check.');
+      seen.add(plan.id);
+      const requirement = (current.artifacts?.requirements?.requirements ?? []).find((entry) => entry.id === plan.requirementId);
+      const historicalContract = requirement?.criterionContractHistory?.find((entry) => entry.version === plan.criterionContractVersion
+        && entry.contentHash === plan.criterionContractHash);
+      if (!requirement || !historicalContract || !verifyRequirementCriterionContract(requirement, historicalContract, { historical: true })
+        || plan.assertions.length !== historicalContract.criteria.length
+        || plan.assertions.some((assertion) => {
+          const criterion = historicalContract.criteria.find((entry) => entry.id === assertion.criterionId);
+          return !criterion || assertion.criterionHash !== contentHash(criterion)
+            || assertion.criterionContractVersion !== historicalContract.version;
+        })) throw persistenceIntegrity('A process behavior plan does not cover its exact retained criterion contract.');
+      if (plan.schemaVersion >= 3) {
+        const trace = requirement.processTrace;
+        const context = plan.evaluationContext;
+        const cases = plan.caseDefinitions?.cases ?? [];
+        const tracedRefs = new Map([
+          [trace.process.id, { type: 'process', snapshotHash: trace.source.processSnapshotHash }],
+          ...(trace.process.inputs ?? []).map((entry) => [entry.id, { type: 'input', snapshotHash: entry.snapshotHash }]),
+          ...(trace.process.outputs ?? []).map((entry) => [entry.id, { type: 'output', snapshotHash: entry.snapshotHash }]),
+          ...(trace.scope.capabilityRefs ?? []).map((entry) => [entry.id, { type: entry.type, snapshotHash: entry.snapshotHash }]),
+          ...(trace.scope.systemRefs ?? []).map((entry) => [entry.id, { type: entry.type, snapshotHash: entry.snapshotHash }]),
+          ...(trace.scope.resourceRefs ?? []).map((entry) => [entry.id, { type: entry.type, snapshotHash: entry.snapshotHash }]),
+          ...(trace.risk.refs ?? []).map((entry) => [entry.id, { type: 'risk', snapshotHash: entry.snapshotHash }]),
+          ...(trace.outcome.metricRefs ?? []).map((entry) => [entry.id, { type: 'metric', snapshotHash: entry.snapshotHash }]),
+        ]);
+        const caseTypes = new Map([['POSITIVE', ['output', 'metric']], ['NEGATIVE', ['risk']],
+          ['RECOVERY', ['process', 'input', 'output']]]);
+        const casesValid = cases.length === 3 && [...caseTypes.keys()].every((type) => {
+          const entry = cases.find((candidate) => candidate.type === type);
+          const ref = tracedRefs.get(entry?.sourceRef?.id);
+          const criterion = historicalContract.criteria.find((candidate) => candidate.id === entry?.criterionId);
+          return entry?.status === 'NOT_EXECUTED' && entry.authoredBy === plan.createdBy
+            && entry.sourceRef?.type === ref?.type && entry.sourceRef?.snapshotHash === ref?.snapshotHash
+            && caseTypes.get(type).includes(ref?.type) && criterion && digest(criterion) === entry.criterionHash;
+        });
+        const timeSource = tracedRefs.get(context?.effectiveTime?.sourceRef?.id);
+        if (context?.workspace?.projectId !== plan.projectId || context.workspace.blueprintId !== trace.source.blueprintId
+          || context.workspace.blueprintVersion !== trace.source.blueprintVersion
+          || context.workspace.processId !== trace.process.id || context.workspace.processTraceHash !== trace.traceHash
+          || context.branch?.snapshotId !== plan.repository.source?.snapshotId
+          || context.branch?.repositoryId !== plan.repository.source?.repositoryId
+          || context.branch?.branchRef !== plan.repository.source?.branchRef
+          || context.branch?.commitOid !== plan.repository.source?.commitOid
+          || context.branch?.treeDigest !== plan.repository.treeDigest
+          || context.effectiveTime?.status !== 'OWNER_ASSERTED' || context.effectiveTime.assertedBy !== plan.createdBy
+          || timeSource?.type !== 'input' || context.effectiveTime.sourceRef.type !== 'input'
+          || context.effectiveTime.sourceRef.snapshotHash !== timeSource.snapshotHash || !casesValid) {
+          throw persistenceIntegrity('A process behavior plan context or scenario case is not bound to the exact saved project/process trace.');
+        }
+      }
+      const events = (current.events ?? []).filter((event) => event.type === 'ProcessBehaviorTestPlanAuthorized' && event.data?.planId === plan.id);
+      const expectedEventData = { planId: plan.id, planHash: plan.planHash, requirementId: plan.requirementId,
+        requirementHash: plan.requirementHash, draftRevision: plan.draftRevision, traceHash: plan.traceHash,
+        criterionContractVersion: plan.criterionContractVersion, criterionContractHash: plan.criterionContractHash,
+        processPlanId: plan.processPlan.id, processPlanRevision: plan.processPlan.revision,
+        taskId: plan.processPlan.taskId, repositoryHash: plan.repositoryHash,
+        repositorySnapshotId: plan.repository.source?.snapshotId, repositoryTreeDigest: plan.repository.treeDigest,
+        checkPlanHash: plan.checkPlan.hash, fileMappingsHash: contentHash(plan.fileMappings) };
+      if (plan.schemaVersion >= 3) Object.assign(expectedEventData, {
+        evaluationContextHash: contentHash(plan.evaluationContext), caseDefinitionsHash: contentHash(plan.caseDefinitions),
+      });
+      if (events.length !== 1 || contentHash(events[0].data) !== contentHash(expectedEventData)
+        || events[0].contentHash !== contentHash({ type: 'ProcessBehaviorTestPlanAuthorized', tenantId: current.tenantId, data: events[0].data })) {
+        throw persistenceIntegrity('A process behavior test plan has no unique matching authorization event.');
+      }
+      const event = events[0];
+      const command = current.idempotency?.[event.causationId];
+      if (!command || command.action !== 'authorize-process-behavior-test-plan' || command.planId !== plan.id
+        || command.requestHash !== plan.requestHash || command.at !== plan.createdAt
+        || Number(command.version) !== Number(event.aggregateVersion ?? command.version)
+        || event.actor !== plan.createdBy || event.timestamp !== plan.createdAt) throw persistenceIntegrity('A process behavior test plan has no matching idempotent command.');
+      const audit = await query(`select event_hash,command_id,actor,aggregate_version,event from orgward.audit_log
+        where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 and event_hash=$3`,
+      [current.tenantId, current.id, contentHash(event)]);
+      const row = audit.rows[0];
+      if (audit.rowCount !== 1 || row.command_id !== event.causationId || row.actor !== event.actor
+        || Number(row.aggregate_version) !== Number(command.version) || contentHash(row.event) !== contentHash(event)) {
+        throw persistenceIntegrity('A process behavior test plan authorization event has no matching durable audit command.');
+      }
+    }
+    return current;
+  }
+  async verifyProcessBehaviorEvaluations(current, client = null) {
+    const query = client ? client.query.bind(client) : this.persistence.query.bind(this.persistence);
+    for (const requirement of current.artifacts?.requirements?.requirements ?? []) {
+      for (const link of requirement.processRunEvidenceLinks ?? []) {
+        if (!link.behaviorEvaluation) continue;
+        const { linkHash, applicability: _applicability, ...linkCore } = link;
+        if (!/^[a-f0-9]{64}$/.test(linkHash ?? '') || contentHash(linkCore) !== linkHash
+          || link.status !== 'UNVERIFIED' || link.verificationStatus !== 'NOT_EXECUTED') throw persistenceIntegrity('A behavior evidence link failed its content or status verification.');
+        const behaviorPlan = (current.artifacts?.processBehaviorTestPlans ?? []).find((entry) => entry.id === link.behaviorEvaluation.planId);
+        if (!verifyProcessBehaviorTestPlan(behaviorPlan) || behaviorPlan.planHash !== link.behaviorEvaluation.planHash
+          || behaviorPlan.caseId !== current.id || behaviorPlan.requirementId !== requirement.id) throw persistenceIntegrity('A behavior evaluation has no matching retained owner-authorized plan.');
+        const runRow = await query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2`,
+          [current.tenantId, link.run?.id]);
+        if (!runRow.rowCount) throw persistenceIntegrity('A behavior evaluation has no retained execution run.');
+        const run = verifyAggregateRow(runRow.rows[0]);
+        const expectedRunPlan = { caseId: current.id, planId: behaviorPlan.id, planHash: behaviorPlan.planHash,
+          requirementId: behaviorPlan.requirementId, requirementHash: behaviorPlan.requirementHash,
+          draftRevision: behaviorPlan.draftRevision, traceHash: behaviorPlan.traceHash, createdAt: behaviorPlan.createdAt,
+          checkPlanHash: behaviorPlan.checkPlan.hash, criterionContractVersion: behaviorPlan.criterionContractVersion,
+          criterionContractHash: behaviorPlan.criterionContractHash, fileMappings: behaviorPlan.fileMappings,
+          fileMappingsHash: contentHash(behaviorPlan.fileMappings) };
+        if (run.tenantId !== current.tenantId || run.projectId !== current.projectId
+          || contentHash(run) !== link.run.aggregateHash
+          || contentHash(run.processTaskRef?.behaviorTestPlan) !== contentHash(expectedRunPlan)) throw persistenceIntegrity('The retained execution run no longer matches its behavior-plan or link aggregate pin.');
+        const runAudit = await query(`select count(*)::int as count from orgward.audit_log where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2 and event_hash = any($3::text[])`,
+          [current.tenantId, run.id, (run.events ?? []).map((event) => contentHash(event))]);
+        if (Number(runAudit.rows[0]?.count) !== (run.events ?? []).length) throw persistenceIntegrity('A behavior evaluation run event is missing its durable audit record.');
+        const expectedEvaluation = evaluateAuthorizedBehaviorPlan(run, behaviorPlan, requirement.processTrace,
+          link.behaviorEvaluation.schemaVersion);
+        if (!expectedEvaluation || contentHash(expectedEvaluation) !== contentHash(link.behaviorEvaluation)) throw persistenceIntegrity('The stored behavior evaluation no longer matches the persisted per-assertion run output.');
+        const linkEvents = (current.events ?? []).filter((event) => event.type === 'ProcessRunEvidenceLinked' && event.data?.linkId === link.id);
+        if (linkEvents.length !== 1 || linkEvents[0].data.linkHash !== linkHash
+          || linkEvents[0].contentHash !== contentHash({ type: 'ProcessRunEvidenceLinked', tenantId: current.tenantId, data: linkEvents[0].data })) throw persistenceIntegrity('The behavior link has no unique matching append-only event.');
+        const linkAudit = await query(`select count(*)::int as count from orgward.audit_log where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 and event_hash=$3`,
+          [current.tenantId, current.id, contentHash(linkEvents[0])]);
+        if (Number(linkAudit.rows[0]?.count) !== 1) throw persistenceIntegrity('The behavior link event has no durable audit record.');
+      }
+    }
+    return current;
+  }
+  async verifyProcessEvidenceReviews(current, client = null) {
+    const query = client ? client.query.bind(client) : this.persistence.query.bind(this.persistence);
+    for (const requirement of current.artifacts?.requirements?.requirements ?? []) {
+      for (const review of requirement.processRunEvidenceReviews ?? []) {
+        const verified = processEvidenceReviewState(current, requirement, review);
+        const audit = verified ? await query(`select event_hash,command_id,actor,aggregate_version,event
+          from orgward.audit_log where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 and event_hash=$3`,
+        [current.tenantId, current.id, contentHash(verified.event)]) : { rowCount: 0, rows: [] };
+        const auditRow = audit.rows[0];
+        review.integrityStatus = verified && audit.rowCount === 1
+          && auditRow.event_hash === contentHash(verified.event)
+          && contentHash(auditRow.event) === contentHash(verified.event)
+          && auditRow.actor === verified.event.actor && auditRow.command_id === verified.event.causationId
+          && Number(auditRow.aggregate_version) === Number(verified.event.aggregateVersion ?? verified.idempotency.version)
+          ? 'VALID' : 'INVALID';
+      }
+    }
+    return current;
+  }
+  async verifyProcessIntentEvaluationAcceptances(current, client = null) {
+    const query = client ? client.query.bind(client) : this.persistence.query.bind(this.persistence);
+    for (const acceptance of current.artifacts?.processIntentEvaluationAcceptances ?? []) {
+        const requirement = (current.artifacts?.requirements?.requirements ?? [])
+          .find((entry) => entry.id === acceptance.requirementId);
+        const verified = processIntentEvaluationAcceptanceState(current, requirement, acceptance);
+        const audit = verified ? await query(`select event_hash,command_id,actor,aggregate_version,event
+          from orgward.audit_log where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 and event_hash=$3`,
+        [current.tenantId, current.id, contentHash(verified.event)]) : { rowCount: 0, rows: [] };
+        const row = audit.rows[0];
+        acceptance.integrityStatus = verified && audit.rowCount === 1
+          && row.event_hash === contentHash(verified.event) && contentHash(row.event) === contentHash(verified.event)
+          && row.actor === verified.event.actor && row.command_id === verified.event.causationId
+          && Number(row.aggregate_version) === Number(verified.idempotency.version) ? 'VALID' : 'INVALID';
+    }
+    return current;
+  }
+  async acceptIntentEvaluation({ id: caseId, tenantId, principal, authzGeneration, requirementId,
+    linkId, reviewId, expectedVersion, expectedDraftRevision, reason, commandId }) {
+    if (!principal || !/^REQ-PROC-[a-f0-9]{12}$/.test(requirementId ?? '')
+      || !/^process-run-link-[0-9a-f-]{36}$/i.test(linkId ?? '')
+      || !/^process-evidence-review-[0-9a-f-]{36}$/i.test(reviewId ?? '')
+      || !Number.isSafeInteger(expectedVersion) || !Number.isSafeInteger(expectedDraftRevision)
+      || typeof reason !== 'string' || !reason.trim() || reason.length > 1000
+      || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{7,119}$/.test(commandId ?? '')) throw projectAccessDenied();
+    const operation = 'sdlc.accept-intent-evaluation';
+    const requestHash = contentHash({ caseId, requirementId, linkId, reviewId, expectedVersion,
+      expectedDraftRevision, reason: reason.trim(), principal });
+    return this.persistence.transaction(async (client) => {
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${tenantId}:${operation}:${commandId}`]);
+      await lockIdentityRows(client, tenantId, [principal]);
+      await requirePrincipalAuthority(client, { tenantId, principal, roles: ['workspace-write'], authzGeneration, actorType: 'human' });
+      const hintRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2`, [tenantId, caseId]);
+      if (!hintRow.rowCount) return null;
+      const hint = verifyAggregateRow(hintRow.rows[0]);
+      if (!hint.projectId) throw projectAccessDenied();
+      await lockProjectAccess(client, { tenantId, projectId: hint.projectId, principal, minimum: 'owner' });
+      const caseRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 for update`, [tenantId, caseId]);
+      if (!caseRow.rowCount) return null;
+      const current = verifyAggregateRow(caseRow.rows[0]);
+      if (current.projectId !== hint.projectId) throw conflict('The case project scope changed during acceptance.', current.version, 'PROJECT_SCOPE_CONFLICT');
+      if (current.accountableOwner !== principal) throw projectAccessDenied();
+      await this.verifyProcessEvidenceReviews(current, client);
+      await this.verifyProcessBehaviorTestPlans(current, client);
+      await this.verifyProcessBehaviorEvaluations(current, client);
+      await this.verifyProcessIntentEvaluationAcceptances(current, client);
+      const prior = current.idempotency?.[commandId];
+      if (prior) {
+        if (prior.action !== 'accept-intent-evaluation' || prior.requestHash !== requestHash) throw conflict('This command ID was already used with different acceptance input.', current.version, 'IDEMPOTENCY_CONFLICT');
+        const acceptance = current.artifacts?.processIntentEvaluationAcceptances?.find((entry) => entry.id === prior.acceptanceId);
+        const requirement = current.artifacts?.requirements?.requirements?.find((entry) => entry.id === acceptance?.requirementId);
+        const verified = processIntentEvaluationAcceptanceState(current, requirement, acceptance);
+        const audit = verified ? await client.query(`select event_hash,command_id,actor,aggregate_version,event
+          from orgward.audit_log where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 and event_hash=$3`,
+        [tenantId, current.id, contentHash(verified.event)]) : { rowCount: 0, rows: [] };
+        const row = audit.rows[0];
+        if (!verified || audit.rowCount !== 1 || row.event_hash !== contentHash(verified.event)
+          || contentHash(row.event) !== contentHash(verified.event) || row.actor !== verified.event.actor
+          || row.command_id !== verified.event.causationId || Number(row.aggregate_version) !== Number(verified.idempotency.version)) {
+          throw persistenceIntegrity('Acceptance replay does not match its retained review, evaluation, event, and audit pins.');
+        }
+        acceptance.integrityStatus = 'VALID';
+        return { changeCase: current, acceptance, replayed: true };
+      }
+      if (current.version !== expectedVersion) throw conflict('The case changed before evaluation acceptance.', current.version);
+      if (!current.sourceBinding || current.tenantId !== tenantId || !current.projectId
+        || verifySourceBinding(current.sourceBinding).valid !== true) throw projectAccessDenied();
+      const manifest = verifyContextManifest(current);
+      if (!current.artifacts?.context || manifest.valid !== true) throw persistenceIntegrity('The saved context manifest is invalid; intent evaluation cannot be accepted.');
+      const artifact = current.artifacts?.requirements;
+      if (!artifact || artifact.acceptedBaseline || current.currentStage !== 'S4'
+        || artifact.draftRevision !== expectedDraftRevision) throw conflict('The requirement draft changed or is no longer open.', current.version, 'REQUIREMENT_DRAFT_STALE');
+      const requirement = artifact.requirements?.find((entry) => entry.id === requirementId && entry.processTrace && entry.criterionContract);
+      if (!requirement) throw conflict('A current typed process requirement is required for acceptance.', current.version, 'PROCESS_REQUIREMENT_NOT_FOUND');
+      const requirementCore = Object.fromEntries(Object.entries(requirement)
+        .filter(([key]) => !['processRunEvidenceLinks', 'processRunEvidenceReviews', 'processIntentEvaluationAcceptances'].includes(key)));
+      const requirementHash = contentHash(requirementCore);
+      if ((current.artifacts?.processIntentEvaluationAcceptances ?? []).some((entry) => entry.requirementId === requirementId
+        && entry.draftRevision === expectedDraftRevision && entry.requirementHash === requirementHash)) {
+        throw conflict('This exact requirement revision already has an accepted intent evaluation.', current.version, 'INTENT_EVALUATION_ALREADY_ACCEPTED');
+      }
+      const link = requirement.processRunEvidenceLinks?.find((entry) => entry.id === linkId);
+      const review = requirement.processRunEvidenceReviews?.find((entry) => entry.id === reviewId);
+      const currentPlanId = link?.behaviorEvaluation?.planId;
+      const currentPlanHash = link?.behaviorEvaluation?.planHash;
+      const latestIndependentReview = requirement.processRunEvidenceReviews
+        ?.filter((entry) => [3, 4].includes(entry.schemaVersion) && entry.linkId === link?.id
+          && entry.behaviorPlanId === currentPlanId && entry.behaviorPlanHash === currentPlanHash
+          && entry.integrityStatus === 'VALID' && entry.reviewerPrincipal !== principal
+          && processEvidenceReviewState(current, requirement, entry))
+        .sort((left, right) => Number(left.recordedVersion ?? 0) - Number(right.recordedVersion ?? 0)
+          || String(left.reviewedAt ?? '').localeCompare(String(right.reviewedAt ?? ''))
+          || String(left.id).localeCompare(String(right.id))).at(-1);
+      if (!link || link.draftRevision !== expectedDraftRevision || link.requirementHash !== requirementHash
+        || link.traceHash !== requirement.processTrace.traceHash || !link.behaviorEvaluation) throw conflict('Current checked behavior evidence is required.', current.version, 'INTENT_EVALUATION_EVIDENCE_INCOMPLETE');
+      if (!review || review.id !== latestIndependentReview?.id || review.linkId !== link.id || review.requirementHash !== requirementHash
+        || review.draftRevision !== expectedDraftRevision || review.traceHash !== requirement.processTrace.traceHash
+        || review.integrityStatus !== 'VALID'
+        || review.acceptanceStatus !== 'REVIEW_ONLY_NOT_ACCEPTED' || review.conflictResolution
+        || review.criteria.some((entry) => entry.disposition !== 'SUPPORTED')
+        || review.reviewerPrincipal === principal) throw conflict('A current independent review supporting every criterion is required.', current.version, 'INTENT_EVALUATION_REVIEW_INCOMPLETE');
+      const evaluation = link.behaviorEvaluation;
+      const declarations = requirement.criterionContract.criteria;
+      const behaviorPlan = (current.artifacts?.processBehaviorTestPlans ?? []).find((entry) => entry.id === evaluation.planId);
+      if (evaluation.status !== 'CHECKED_BEHAVIOR' || evaluation.result !== 'TEST_PASS'
+        || evaluation.businessTruthStatus !== 'UNVERIFIED' || evaluation.assertions.length !== declarations.length
+        || !verifyProcessBehaviorTestPlan(behaviorPlan) || behaviorPlan.planHash !== evaluation.planHash
+        || evaluation.assertions.some((assertion) => assertion.status !== 'TEST_PASS'
+          || !behaviorPlan.assertions.some((planned) => planned.id === assertion.id
+            && declarations.some((entry) => entry.id === planned.criterionId && digest(entry) === planned.criterionHash)))
+        || review.criteria.length !== declarations.length
+        || declarations.some((entry) => !review.criteria.some((reviewed) => reviewed.criterionId === entry.id
+          && reviewed.criterionHash === digest(entry) && reviewed.disposition === 'SUPPORTED'))) {
+        throw conflict('Every exact declared criterion needs a passing preauthorized behavior result and independent supporting review.', current.version, 'INTENT_EVALUATION_CRITERIA_INCOMPLETE');
+      }
+      const sourceIntegrity = verifySourceBinding(current.sourceBinding);
+      if (sourceIntegrity.valid !== true) throw persistenceIntegrity('The saved source binding is invalid.');
+      const trace = requirement.processTrace;
+      const blueprintRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2 for share`, [tenantId, current.projectId]);
+      if (!blueprintRow.rowCount) throw projectAccessDenied();
+      const project = verifyAggregateRow(blueprintRow.rows[0]);
+      const blueprint = latestBlueprint(project);
+      if (!blueprint || blueprint.id !== trace.source.blueprintId || blueprint.version !== trace.source.blueprintVersion
+        || contentHash(blueprint) !== trace.source.blueprintSnapshotHash
+        || trace.source.bindingHash !== current.sourceBinding.bindingHash) throw conflict('The exact saved project source is stale.', current.version, 'PROCESS_SOURCE_STALE');
+      const acceptor = principal;
+      const acceptedAt = new Date().toISOString();
+      const artifactRecord = { schemaVersion: 1, id: `intent-evaluation-acceptance-${randomUUID()}`,
+        tenantId, projectId: current.projectId, caseId: current.id, requirementId,
+        draftRevision: expectedDraftRevision, requirementHash, traceHash: trace.traceHash,
+        criterionContractVersion: requirement.criterionContract.version,
+        criterionContractHash: requirement.criterionContract.contentHash,
+        source: structuredClone(link.source), linkId: link.id, linkHash: link.linkHash,
+        reviewId: review.id, reviewHash: review.reviewHash, evaluationHash: contentHash(evaluation),
+        acceptedBy: acceptor, acceptedAt, reason: reason.trim(), requestHash,
+        recordedVersion: current.version + 1, status: 'ACCEPTED',
+        verificationStatus: 'NOT_EXECUTED', truthStatus: 'UNVERIFIED',
+        statement: 'This accepts the current scoped intent evaluation record only. It does not establish external business truth or runtime verification.' };
+      const acceptance = { ...artifactRecord, acceptanceHash: contentHash(artifactRecord) };
+      current.artifacts.processIntentEvaluationAcceptances ??= [];
+      current.artifacts.processIntentEvaluationAcceptances.push(acceptance);
+      current.version += 1; current.updatedAt = acceptedAt;
+      current.idempotency ??= {};
+      current.idempotency[commandId] = { action: 'accept-intent-evaluation', requestHash,
+        acceptanceId: acceptance.id, version: current.version, at: acceptedAt };
+      const eventData = { acceptanceId: acceptance.id, acceptanceHash: acceptance.acceptanceHash,
+        requirementId, requirementHash, draftRevision: expectedDraftRevision, traceHash: trace.traceHash,
+        criterionContractVersion: acceptance.criterionContractVersion, criterionContractHash: acceptance.criterionContractHash,
+        linkId: link.id, linkHash: link.linkHash, reviewId: review.id, reviewHash: review.reviewHash,
+        evaluationHash: acceptance.evaluationHash, acceptedBy: principal, requestHash,
+        recordedVersion: acceptance.recordedVersion, status: 'ACCEPTED',
+        verificationStatus: 'NOT_EXECUTED', truthStatus: 'UNVERIFIED' };
+      current.events.push({ id: `event-${randomUUID()}`, type: 'IntentEvaluationAccepted', schemaVersion: 1,
+        tenantId, actor: principal, correlationId: current.correlationId, causationId: commandId,
+        timestamp: acceptedAt, data: eventData,
+        contentHash: contentHash({ type: 'IntentEvaluationAccepted', tenantId, data: eventData }) });
+      await this.saveInTransaction(client, current, { expectedVersion, principal,
+        requiredPrincipalRoles: ['workspace-write'], authzGeneration });
+      acceptance.integrityStatus = 'VALID';
+      return { changeCase: current, acceptance, replayed: false };
+    });
+  }
+  async verifyRepositoryCheckObservations(current, client = null) {
+    const observations = current.artifacts?.repositoryCheckObservations ?? [];
+    if (!observations.length) return current;
+    const query = client ? client.query.bind(client) : this.persistence.query.bind(this.persistence);
+    const observationIds = new Set();
+    const proposals = current.artifacts?.repositoryCheckProposals ?? [];
+    for (const observation of observations) {
+      if (!observation || observationIds.has(observation.id)) throw persistenceIntegrity('A repository-check observation has a duplicate or missing identity.');
+      observationIds.add(observation.id);
+      const { contentHash: recordHash, ...recordCore } = observation;
+      if (!/^[a-f0-9]{64}$/.test(recordHash ?? '') || contentHash(recordCore) !== recordHash
+        || observation.tenantId !== current.tenantId || observation.projectId !== current.projectId
+        || observation.caseId !== current.id || observation.category !== 'REPOSITORY_CHECK'
+        || observation.businessTruthStatus !== 'UNVERIFIED' || observation.verificationStatus !== 'NOT_EXECUTED'
+        || observation.causality !== 'HYPOTHESIS') throw persistenceIntegrity('A persisted repository-check observation failed its content or scope verification.');
+      const retainedLink = (current.artifacts?.requirements?.requirements ?? []).flatMap((requirement) => requirement.processRunEvidenceLinks ?? [])
+        .find((link) => link.id === observation.linkId && link.linkHash === observation.linkHash);
+      if (!retainedLink || retainedLink.tenantId !== current.tenantId || retainedLink.projectId !== current.projectId
+        || retainedLink.run?.id !== observation.runId || retainedLink.repositoryCheckEvidenceStatus !== 'AVAILABLE'
+        || contentHash(retainedLink.repositoryCheckEvidence) !== contentHash(observation.checks)) {
+        throw persistenceIntegrity('A repository-check observation no longer matches its retained evidence link.');
+      }
+      const events = (current.events ?? []).filter((event) => event.type === 'RepositoryCheckObserved' && event.data?.observationId === observation.id);
+      if (events.length !== 1) throw persistenceIntegrity('A repository-check observation has no unique append-only event.');
+      const event = events[0];
+      const proposal = proposals.find((entry) => entry.id === event.data?.proposalId);
+      if (event.data.observationHash !== recordHash || event.data.linkId !== observation.linkId
+        || event.data.linkHash !== observation.linkHash || event.data.runId !== observation.runId
+        || event.data.runAggregateHash !== observation.runAggregateHash
+        || event.data.verificationStatus !== 'NOT_EXECUTED' || event.data.businessTruthStatus !== 'UNVERIFIED'
+        || event.contentHash !== contentHash({ type: 'RepositoryCheckObserved', tenantId: current.tenantId, data: event.data })) {
+        throw persistenceIntegrity('The repository-check observation event does not match its evidence pins.');
+      }
+      if (!proposal || proposal.type !== 'DESIGN_CORRECTION_CLAIM' || proposal.status !== 'PROPOSED_NOT_APPLIED'
+        || proposal.authorityRequired !== true || proposal.businessTruthStatus !== 'UNVERIFIED'
+        || proposal.verificationStatus !== 'NOT_EXECUTED' || proposal.causality !== 'HYPOTHESIS'
+        || proposal.evidence?.observationId !== observation.id || proposal.evidence?.observationHash !== recordHash
+        || proposal.evidence?.runId !== observation.runId || proposal.evidence?.runAggregateHash !== observation.runAggregateHash
+        || proposal.evidence?.terminalEventHash !== observation.terminalEventHash
+        || contentHash(proposal.evidence?.checks) !== contentHash(observation.checks)) {
+        throw persistenceIntegrity('The repository-check proposal does not match its non-authorizing observation.');
+      }
+      const { contentHash: proposalHash, ...proposalCore } = proposal;
+      if (!/^[a-f0-9]{64}$/.test(proposalHash ?? '') || contentHash(proposalCore) !== proposalHash
+        || event.data.proposalHash !== proposalHash) throw persistenceIntegrity('The repository-check proposal failed its content or event binding verification.');
+      const idempotency = current.idempotency?.[event.causationId];
+      if (!idempotency || idempotency.action !== 'observe-repository-check' || idempotency.observationId !== observation.id) {
+        throw persistenceIntegrity('The repository-check observation has no matching idempotency record.');
+      }
+      const audit = await query(`select event_hash,command_id,actor,aggregate_version,event from orgward.audit_log
+        where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 and event_hash=$3`,
+      [current.tenantId, current.id, contentHash(event)]);
+      const auditRow = audit.rows[0];
+      if (audit.rowCount !== 1 || auditRow.event_hash !== contentHash(event)
+        || contentHash(auditRow.event) !== contentHash(event) || auditRow.command_id !== event.causationId
+        || auditRow.actor !== event.actor || Number(auditRow.aggregate_version) !== Number(idempotency.version)) {
+        throw persistenceIntegrity('The repository-check observation event has no matching durable audit command.');
+      }
+    }
+    return current;
+  }
+  async get(id, tenantId = null) {
+    const current = await super.get(id, tenantId);
+    if (!current) return null;
+    await this.verifyProcessEvidenceReviews(current);
+    await this.verifyProcessBehaviorTestPlans(current);
+    await this.verifyProcessBehaviorEvaluations(current);
+    await this.verifyProcessIntentEvaluationAcceptances(current);
+    await this.verifyRepositoryCheckObservations(current);
+    await this.verifyProcessBehaviorScenarioExecutions(current);
+    await this.verifyProcessBehaviorProductHarnessMappings(current);
+    const verifiedProductHarnessExecutions = await this.verifyT91N2AuthorizationExecutions(current);
+    current.artifacts ??= {};
+    current.artifacts.processBehaviorProductHarnessExecutionIntegrity = verifiedProductHarnessExecutions.receipts;
+    return current;
+  }
+  async verifyProcessBehaviorProductHarnessMappings(current, client = null) {
+    const query = client ? client.query.bind(client) : this.persistence.query.bind(this.persistence);
+    const mappings = current.artifacts?.processBehaviorProductHarnessMappings ?? [];
+    const reviews = current.artifacts?.processBehaviorProductHarnessMappingReviews ?? [];
+    if (!Array.isArray(mappings) || !Array.isArray(reviews)) throw persistenceIntegrity('Product-harness mapping records are malformed.');
+    const requirements = current.artifacts?.requirements?.requirements ?? [];
+    const eventFor = (type, id) => {
+      const found = current.events.filter((event) => event.type === type && event.data?.recordId === id);
+      return found.length === 1 ? found[0] : null;
+    };
+    const auditEvent = async (event, actor, commandId, version) => {
+      if (!event || event.actor !== actor || event.causationId !== commandId
+        || event.contentHash !== contentHash({ type: event.type, tenantId: current.tenantId, data: event.data })) return false;
+      const result = await query(`select event_hash,command_id,actor,aggregate_version,event from orgward.audit_log
+        where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 and event_hash=$3`,
+      [current.tenantId, current.id, contentHash(event)]);
+      const row = result.rows[0];
+      return result.rowCount === 1 && row.event_hash === contentHash(event) && contentHash(row.event) === contentHash(event)
+        && row.command_id === commandId && row.actor === actor && Number(row.aggregate_version) === Number(version);
+    };
+    const seen = new Set();
+    for (const mapping of mappings) {
+      const plan = (current.artifacts?.processBehaviorTestPlans ?? []).find((entry) => entry.id === mapping.planId);
+      const requirement = requirements.find((entry) => entry.id === mapping.requirementId);
+      const expected = mapping?.subcaseId === 'N1'
+        ? buildT91N1OrphanPathMapping({ changeCase: current, requirement, plan })
+        : mapping?.subcaseId === 'R1'
+        ? buildT91R1RecoveryMapping({ changeCase: current, requirement, plan })
+        : mapping?.subcaseId === 'R2'
+        ? buildT91R2RecoveryMapping({ changeCase: current, requirement, plan,
+          selectedRequirementSnapshot: mapping.selectedRequirementSnapshot,
+          otherRequirementSnapshot: mapping.otherRequirementSnapshot })
+        : mapping?.subcaseId === 'N3'
+        ? buildT91N3DeletedFailingTestMapping({ changeCase: current, requirement, plan })
+        : mapping?.subcaseId === 'N2.MISSING_ASSERTION'
+        ? buildT91N2MissingAssertionMapping({ changeCase: current, requirement, plan })
+        : buildT91N2AuthorizationMapping({ changeCase: current, requirement, plan });
+      const { mappingHash, integrityStatus: _integrityStatus, ...core } = mapping ?? {};
+      const command = current.idempotency?.[mapping?.commandId];
+      const event = eventFor('ProcessBehaviorProductHarnessMappingRequested', mapping?.id);
+      if (!expected || seen.has(mapping.id) || !/^product-behavior-harness-mapping-[0-9a-f-]{36}$/i.test(mapping.id ?? '')
+        || !verifyT91N2AuthorizationMapping({ ...core, mappingHash }, expected)
+        || mapping.mappingHash !== event?.data?.mappingHash || event?.data?.requestedBy !== mapping.requestedBy
+        || event?.data?.requestedAt !== mapping.requestedAt || event?.timestamp !== mapping.requestedAt
+        || event?.data?.commandId !== mapping.commandId || event?.data?.requestHash !== mapping.requestHash
+        || (mapping.subcaseId === 'R2' && (event?.data?.draftRevision !== mapping.draftRevision
+          || event?.data?.selectedRequirementSnapshotHash !== mapping.selectedRequirementHash
+          || event?.data?.otherRequirementSnapshotHash !== mapping.otherRequirementSnapshotHash
+          || mapping.selectedRequirementSnapshotHash !== mapping.selectedRequirementHash))
+        || !command || command.action !== 'request-product-behavior-harness-mapping'
+        || command.requestHash !== mapping.requestHash || command.mappingId !== mapping.id
+        || !await auditEvent(event, mapping.requestedBy, mapping.commandId, command.version)) {
+        throw persistenceIntegrity('A product-harness mapping failed its exact parent pins, event, command, or audit verification.');
+      }
+      mapping.integrityStatus = 'VALID';
+      const matchingReviews = reviews.filter((entry) => entry.mappingId === mapping.id);
+      if (matchingReviews.length > 1) throw persistenceIntegrity('A product-harness mapping has multiple review decisions.');
+      const mappingDefinition = plan?.caseDefinitions?.cases?.find((entry) => entry.type
+        === (['R1', 'R2'].includes(mapping.subcaseId) ? 'RECOVERY' : 'NEGATIVE'));
+      for (const review of matchingReviews) {
+        const { reviewHash, integrityStatus: _reviewIntegrity, ...reviewCore } = review;
+        const reviewCommand = current.idempotency?.[review.commandId];
+        const reviewEvent = eventFor('ProcessBehaviorProductHarnessMappingReviewed', review.id);
+        if (review.schemaVersion !== 1 || contentHash(reviewCore) !== reviewHash
+          || review.mappingHash !== mapping.mappingHash || review.mappingId !== mapping.id
+          || !isIndependentT91N2MappingReviewer({ reviewerPrincipal: review.reviewerPrincipal,
+            mappingRequester: mapping.requestedBy, planAuthor: plan?.createdBy, definitionAuthor: mappingDefinition?.authoredBy })
+          || !['APPROVE_FOR_TEST_EXECUTION', 'REQUEST_CHANGES'].includes(review.decision)
+          || reviewEvent?.data?.reviewerPrincipal !== review.reviewerPrincipal || reviewEvent?.data?.reviewedAt !== review.reviewedAt
+          || reviewEvent?.timestamp !== review.reviewedAt || reviewEvent?.data?.commandId !== review.commandId
+          || reviewEvent?.data?.requestHash !== review.requestHash || reviewEvent?.data?.status !== review.status
+          || reviewCommand?.action !== 'review-product-behavior-harness-mapping'
+          || reviewCommand.requestHash !== review.requestHash || reviewCommand.reviewId !== review.id
+          || reviewEvent?.data?.reviewHash !== reviewHash
+          || !await auditEvent(reviewEvent, review.reviewerPrincipal, review.commandId, reviewCommand.version)) {
+          throw persistenceIntegrity('A product-harness mapping review failed its immutable pins or independent audit verification.');
+        }
+        review.integrityStatus = 'VALID';
+      }
+      seen.add(mapping.id);
+    }
+    for (const event of current.events.filter((entry) => ['ProcessBehaviorProductHarnessMappingRequested', 'ProcessBehaviorProductHarnessMappingReviewed'].includes(entry.type))) {
+      const records = event.type === 'ProcessBehaviorProductHarnessMappingRequested' ? mappings : reviews;
+      if (records.filter((entry) => entry.id === event.data?.recordId).length !== 1) throw persistenceIntegrity('A product-harness mapping event has no unique persisted record.');
+    }
+    return current;
+  }
+  async verifyT91N2AuthorizationExecutions(current, client = null) {
+    const query = client ? client.query.bind(client) : this.persistence.query.bind(this.persistence);
+    const reservations = current.artifacts?.processBehaviorProductHarnessExecutionReservations ?? [];
+    const receipts = current.artifacts?.processBehaviorProductHarnessExecutions ?? [];
+    if (!Array.isArray(reservations) || !Array.isArray(receipts)) throw persistenceIntegrity('Product-harness execution records are malformed.');
+    const eventFor = (type, id) => {
+      const found = current.events.filter((event) => event.type === type && event.data?.recordId === id);
+      return found.length === 1 ? found[0] : null;
+    };
+    const audited = async (event, actor, commandId, version) => {
+      if (!event || event.actor !== actor || event.causationId !== commandId
+        || event.contentHash !== contentHash({ type: event.type, tenantId: current.tenantId, data: event.data })) return false;
+      const rows = await query(`select event_hash,command_id,actor,aggregate_version,event from orgward.audit_log
+        where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 and event_hash=$3`,
+      [current.tenantId, current.id, contentHash(event)]);
+      const row = rows.rows[0];
+      return rows.rowCount === 1 && row.event_hash === contentHash(event) && contentHash(row.event) === contentHash(event)
+        && row.command_id === commandId && row.actor === actor && Number(row.aggregate_version) === Number(version);
+    };
+    const reservationIds = new Set();
+    for (const reservation of reservations) {
+      const { reservationHash, integrityStatus: _integrityStatus, ...core } = reservation ?? {};
+      const mapping = (current.artifacts?.processBehaviorProductHarnessMappings ?? []).find((entry) => entry.id === reservation?.mappingId);
+      const review = (current.artifacts?.processBehaviorProductHarnessMappingReviews ?? []).find((entry) => entry.mappingId === reservation?.mappingId);
+      const command = current.idempotency?.[reservation?.commandId];
+      const event = eventFor('ProcessBehaviorProductHarnessExecutionReserved', reservation?.id);
+      if (reservationIds.has(reservation?.id) || contentHash(core) !== reservationHash
+        || reservation.schemaVersion !== 1 || !['N1', 'N2.AUTHORIZATION', 'N2.MISSING_ASSERTION', 'N3', 'R1', 'R2'].includes(reservation.subcaseId)
+        || reservation.subcaseId !== mapping?.subcaseId
+        || (reservation.subcaseId === 'N1' && (reservation.candidatePath !== mapping.candidatePath
+          || event?.data?.candidatePath !== mapping.candidatePath))
+        || (reservation.subcaseId === 'N3' && (reservation.candidatePath !== mapping.candidatePath
+          || reservation.sourceTestBytesHash !== mapping.sourceTestBytesHash
+          || reservation.sourceExpectedExitCode !== mapping.sourceExpectedExitCode
+          || reservation.fixtureTemplateHash !== mapping.fixtureTemplateHash
+          || event?.data?.candidatePath !== mapping.candidatePath
+          || event?.data?.sourceTestBytesHash !== mapping.sourceTestBytesHash
+          || event?.data?.fixtureTemplateHash !== mapping.fixtureTemplateHash))
+        || (reservation.subcaseId === 'R1' && (reservation.oldPlanId !== mapping.oldPlanId
+          || reservation.oldPlanHash !== mapping.oldPlanHash || reservation.oldLinkId !== mapping.oldLinkId
+          || reservation.oldLinkHash !== mapping.oldLinkHash || reservation.oldRunId !== mapping.oldRunId
+          || reservation.fixtureTemplateHash !== mapping.fixtureTemplateHash
+          || event?.data?.oldPlanHash !== mapping.oldPlanHash || event?.data?.oldLinkHash !== mapping.oldLinkHash
+          || event?.data?.fixtureTemplateHash !== mapping.fixtureTemplateHash))
+        || (reservation.subcaseId === 'R2' && (reservation.oldPlanId !== mapping.oldPlanId
+          || reservation.oldPlanHash !== mapping.oldPlanHash || reservation.oldLinkId !== mapping.oldLinkId
+          || reservation.oldLinkHash !== mapping.oldLinkHash || reservation.oldRunId !== mapping.oldRunId
+          || reservation.selectedRequirementHash !== mapping.selectedRequirementHash
+          || reservation.otherRequirementId !== mapping.otherRequirementId
+          || reservation.otherRequirementHash !== mapping.otherRequirementHash
+          || reservation.fixtureTemplateHash !== mapping.fixtureTemplateHash
+          || event?.data?.oldPlanHash !== mapping.oldPlanHash || event?.data?.oldLinkHash !== mapping.oldLinkHash
+          || event?.data?.selectedRequirementHash !== mapping.selectedRequirementHash
+          || event?.data?.otherRequirementId !== mapping.otherRequirementId
+          || event?.data?.otherRequirementHash !== mapping.otherRequirementHash
+          || event?.data?.fixtureTemplateHash !== mapping.fixtureTemplateHash))
+        || !verifyT91N2AuthorizationReservationPins({ reservation, event, mapping, review, current })
+        || reservation.mappingHash !== event?.data?.mappingHash || reservation.requestHash !== event?.data?.requestHash
+        || (reservation.subcaseId === 'N2.MISSING_ASSERTION' && (reservation.requiredPlanAssertionId !== event?.data?.requiredPlanAssertionId
+          || reservation.requiredPlanAssertionName !== event?.data?.requiredPlanAssertionName
+          || reservation.requiredPlanAssertionHash !== event?.data?.requiredPlanAssertionHash))
+        || reservation.fixtureRequestHash !== event?.data?.fixtureRequestHash
+        || !/^[a-f0-9]{64}$/.test(reservation.fixtureRequestHash ?? '')
+        || event?.timestamp !== reservation.reservedAt || event?.data?.reservedAt !== reservation.reservedAt
+        || event?.data?.commandId !== reservation.commandId || event?.data?.aggregateVersion !== reservation.reservationVersion
+        || command?.action !== 'execute-product-behavior-harness-subcase'
+        || command.requestHash !== reservation.requestHash || command.reservationId !== reservation.id
+        || !await audited(event, reservation.requestedBy, reservation.commandId, reservation.reservationVersion)) {
+        throw persistenceIntegrity('A product-harness execution reservation failed immutable event, command, or audit verification.');
+      }
+      reservationIds.add(reservation.id);
+    }
+    const receiptIds = new Set();
+    for (const receipt of receipts) {
+      const { receiptHash, integrityStatus: _integrityStatus, ...core } = receipt ?? {};
+      const reservation = reservations.find((entry) => entry.id === receipt?.reservationId);
+      const mapping = (current.artifacts?.processBehaviorProductHarnessMappings ?? []).find((entry) => entry.id === receipt?.mappingId);
+      const review = (current.artifacts?.processBehaviorProductHarnessMappingReviews ?? []).find((entry) => entry.mappingId === receipt?.mappingId);
+      const command = current.idempotency?.[receipt?.commandId];
+      const event = eventFor('ProcessBehaviorProductHarnessSubcaseExecuted', receipt?.id);
+      const legacyReceipt = [1, 2].includes(receipt?.schemaVersion);
+      const invocationReceipt = receipt?.schemaVersion === 4;
+      const supportedReceiptSubcase = receipt?.schemaVersion === 4
+        ? ['N1', 'N2.AUTHORIZATION', 'N2.MISSING_ASSERTION', 'N3', 'R1', 'R2'].includes(receipt?.subcaseId)
+        : receipt?.subcaseId === 'N2.AUTHORIZATION';
+      const classification = legacyReceipt || !mapping || !reservation ? null
+        : receipt?.subcaseId === 'R1' ? classifyT91R1RecoveryObservation({
+          observation: { terminal: receipt?.terminal === true, fixtureHash: receipt?.fixtureHash,
+            fixtureTemplateHash: receipt?.fixtureTemplateHash, invocationId: receipt?.fixtureInvocationId,
+            reservationHash: receipt?.reservationHash, fixtureCaseId: receipt?.fixtureCaseId,
+            old: receipt?.recovery?.old,
+            staleAttempt: receipt?.recovery?.staleAttempt, fresh: receipt?.recovery?.fresh }, mapping,
+          requestHash: reservation?.fixtureRequestHash, fixtureTemplateHash: mapping?.fixtureTemplateHash,
+          invocationId: receipt?.fixtureInvocationId, reservationHash: receipt?.reservationHash ?? 'missing',
+        }) : receipt?.subcaseId === 'R2' ? classifyT91R2RecoveryObservation({
+          observation: { terminal: receipt?.terminal === true, fixtureHash: receipt?.fixtureHash,
+            fixtureTemplateHash: receipt?.fixtureTemplateHash, invocationId: receipt?.fixtureInvocationId,
+            reservationHash: receipt?.reservationHash, fixtureCaseId: receipt?.fixtureCaseId,
+            old: receipt?.recovery?.old, staleAttempt: receipt?.recovery?.staleAttempt,
+            fresh: receipt?.recovery?.fresh }, mapping,
+          requestHash: reservation?.fixtureRequestHash, fixtureTemplateHash: mapping?.fixtureTemplateHash,
+          invocationId: receipt?.fixtureInvocationId, reservationHash: receipt?.reservationHash ?? 'missing',
+        }) : receipt?.subcaseId === 'N1' ? classifyT91N1OrphanPathObservation({
+          observation: { terminal: receipt?.terminal === true, fixtureHash: receipt?.fixtureHash,
+            fixtureTemplateHash: receipt?.fixtureTemplateHash, invocationId: receipt?.fixtureInvocationId,
+            reservationHash: receipt?.reservationHash, source: receipt?.source, candidate: receipt?.candidate,
+            run: receipt?.run, verifierDispatchCount: receipt?.verifierDispatchCount }, mapping,
+          requestHash: reservation?.fixtureRequestHash, fixtureTemplateHash: receipt?.fixtureTemplateHash,
+          invocationId: receipt?.fixtureInvocationId, reservationHash: receipt?.reservationHash ?? 'missing',
+        }) : receipt?.subcaseId === 'N3' ? classifyT91N3DeletedFailingTestObservation({
+          observation: { terminal: receipt?.terminal === true, fixtureHash: receipt?.fixtureHash,
+            fixtureTemplateHash: receipt?.fixtureTemplateHash, invocationId: receipt?.fixtureInvocationId,
+            reservationHash: receipt?.reservationHash, sourceStage: receipt?.sourceStage,
+            candidate: receipt?.candidate, run: receipt?.run, verifierDispatchCount: receipt?.verifierDispatchCount }, mapping,
+          requestHash: reservation?.fixtureRequestHash, fixtureTemplateHash: receipt?.fixtureTemplateHash,
+          invocationId: receipt?.fixtureInvocationId, reservationHash: receipt?.reservationHash ?? 'missing',
+        }) : receipt?.subcaseId === 'N2.MISSING_ASSERTION' ? classifyT91N2MissingAssertionObservation({
+          observation: { terminal: receipt?.terminal === true, fixtureHash: receipt?.fixtureHash,
+            fixtureTemplateHash: receipt?.fixtureTemplateHash, invocationId: receipt?.fixtureInvocationId,
+            reservationHash: receipt?.reservationHash, fixturePlan: receipt?.fixturePlan,
+            run: receipt?.run, attempt: receipt?.attempt }, mapping,
+          requestHash: reservation?.fixtureRequestHash, fixtureTemplateHash: receipt?.fixtureTemplateHash,
+          invocationId: receipt?.fixtureInvocationId, reservationHash: receipt?.reservationHash ?? 'missing',
+        }) : classifyT91N2AuthorizationObservation({
+        observation: { terminal: receipt?.terminal === true, fixtureHash: receipt?.fixtureHash,
+          fixtureTemplateHash: receipt?.fixtureTemplateHash, invocationId: receipt?.fixtureInvocationId,
+          reservationHash: receipt?.reservationHash,
+          control: receipt?.control, attempt: receipt?.attempt }, mapping,
+        requestHash: reservation?.fixtureRequestHash,
+        ...(invocationReceipt ? { fixtureTemplateHash: receipt?.fixtureTemplateHash,
+          invocationId: receipt?.fixtureInvocationId, reservationHash: receipt?.reservationHash ?? 'missing' } : {}),
+      });
+      const expectedFixtureHash = receipt?.subcaseId === 'R1'
+        ? t91R1RecoveryFixtureHash({ mapping, requestHash: reservation?.fixtureRequestHash,
+          fixtureTemplateHash: receipt?.fixtureTemplateHash, invocationId: receipt?.fixtureInvocationId })
+        : receipt?.subcaseId === 'R2'
+        ? t91R2RecoveryFixtureHash({ mapping, requestHash: reservation?.fixtureRequestHash,
+          fixtureTemplateHash: receipt?.fixtureTemplateHash, invocationId: receipt?.fixtureInvocationId })
+        : receipt?.subcaseId === 'N1'
+        ? t91N1OrphanPathFixtureHash({ mapping, requestHash: reservation?.fixtureRequestHash,
+          fixtureTemplateHash: receipt?.fixtureTemplateHash, invocationId: receipt?.fixtureInvocationId })
+        : receipt?.subcaseId === 'N3'
+        ? t91N3DeletedFailingTestFixtureHash({ mapping, requestHash: reservation?.fixtureRequestHash,
+          fixtureTemplateHash: receipt?.fixtureTemplateHash, invocationId: receipt?.fixtureInvocationId })
+        : receipt?.subcaseId === 'N2.MISSING_ASSERTION'
+        ? t91N2MissingAssertionFixtureHash({ mapping, requestHash: reservation?.fixtureRequestHash,
+          fixtureTemplateHash: receipt?.fixtureTemplateHash, invocationId: receipt?.fixtureInvocationId })
+        : invocationReceipt && typeof receipt?.fixtureInvocationId === 'string'
+        && receipt.fixtureTemplateHash === T91_N2_PRODUCT_FIXTURE_TEMPLATE_HASH
+        ? t91N2AuthorizationInvocationFixtureHash({ mapping, requestHash: reservation?.fixtureRequestHash,
+          fixtureTemplateHash: T91_N2_PRODUCT_FIXTURE_TEMPLATE_HASH, invocationId: receipt.fixtureInvocationId })
+        : t91N2AuthorizationFixtureHash({ mapping, requestHash: reservation?.fixtureRequestHash });
+      const pinnedTemplateHash = receipt?.subcaseId === 'R1' ? mapping?.fixtureTemplateHash
+        : receipt?.subcaseId === 'R2' ? mapping?.fixtureTemplateHash
+        : receipt?.subcaseId === 'N3'
+        ? mapping?.fixtureTemplateHash : T91_N2_PRODUCT_FIXTURE_TEMPLATE_HASH;
+      if (!reservation || !mapping || !review || review.integrityStatus !== 'VALID'
+        || receiptIds.has(receipt?.id) || ![1, 2, 3, 4].includes(receipt.schemaVersion) || !supportedReceiptSubcase
+        || contentHash(core) !== receiptHash || receipt.mappingHash !== mapping.mappingHash
+        || reservation.tenantId !== current.tenantId || reservation.projectId !== current.projectId
+        || reservation.caseId !== current.id || reservation.mappingId !== mapping.id
+        || reservation.subcaseId !== receipt.subcaseId || receipt.subcaseId !== mapping.subcaseId
+        || reservation.mappingHash !== mapping.mappingHash || reservation.reviewId !== review.id
+        || reservation.reviewHash !== review.reviewHash || reservation.planId !== mapping.planId
+        || reservation.planHash !== mapping.planHash || contentHash(reservation.sourceRef) !== contentHash(mapping.sourceRef)
+        || reservation.repositorySnapshotId !== mapping.repositorySnapshotId
+        || reservation.repositoryTreeDigest !== mapping.repositoryTreeDigest
+        || reservation.criterionId !== mapping.criterionId || reservation.criterionHash !== mapping.criterionHash
+        || reservation.criterionContractVersion !== mapping.criterionContractVersion
+        || reservation.criterionContractHash !== mapping.criterionContractHash
+        || reservation.parentDefinitionHash !== mapping.parentDefinitionHash
+        || reservation.datasetHash !== mapping.datasetHash || reservation.oracleHash !== mapping.oracleHash
+        || reservation.harnessId !== mapping.harnessId || reservation.harnessVersion !== mapping.harnessVersion
+        || reservation.harnessHash !== mapping.harnessHash || reservation.assertionId !== mapping.assertionId
+        || reservation.assertionHash !== mapping.assertionHash
+        || (reservation.subcaseId === 'N1' && (reservation.candidatePath !== mapping.candidatePath
+          || receipt.candidatePath !== mapping.candidatePath || event?.data?.candidatePath !== mapping.candidatePath))
+        || (reservation.subcaseId === 'N3' && (reservation.candidatePath !== mapping.candidatePath
+          || receipt.candidatePath !== mapping.candidatePath || event?.data?.candidatePath !== mapping.candidatePath
+          || reservation.sourceTestBytesHash !== mapping.sourceTestBytesHash
+          || receipt.sourceTestBytesHash !== mapping.sourceTestBytesHash
+          || receipt.sourceExpectedExitCode !== mapping.sourceExpectedExitCode
+          || reservation.fixtureTemplateHash !== mapping.fixtureTemplateHash
+          || !isValidT91N3ReceiptObservedPins(receipt, mapping)
+          || event?.data?.sourceTestBytesHash !== mapping.sourceTestBytesHash
+          || event?.data?.fixtureTemplateHash !== receipt.fixtureTemplateHash
+          || contentHash(event?.data?.sourceStage ?? null) !== contentHash(receipt.sourceStage ?? null)
+          || contentHash(event?.data?.candidate ?? null) !== contentHash(receipt.candidate ?? null)))
+        || (reservation.subcaseId === 'R1' && (reservation.oldPlanId !== mapping.oldPlanId
+          || reservation.oldPlanHash !== mapping.oldPlanHash || reservation.oldLinkId !== mapping.oldLinkId
+          || reservation.oldLinkHash !== mapping.oldLinkHash || reservation.oldRunId !== mapping.oldRunId
+          || reservation.fixtureTemplateHash !== mapping.fixtureTemplateHash
+          || receipt.oldPlanId !== mapping.oldPlanId || receipt.oldPlanHash !== mapping.oldPlanHash
+          || receipt.oldLinkId !== mapping.oldLinkId || receipt.oldLinkHash !== mapping.oldLinkHash
+          || receipt.oldRunId !== mapping.oldRunId
+          || (receipt.fixtureInvocationId !== null && receipt.fixtureTemplateHash !== mapping.fixtureTemplateHash)
+          || contentHash(event?.data?.recovery ?? null) !== contentHash(receipt.recovery ?? null)
+          || event?.data?.oldPlanHash !== mapping.oldPlanHash || event?.data?.oldLinkHash !== mapping.oldLinkHash
+          || (receipt.fixtureInvocationId !== null && event?.data?.fixtureTemplateHash !== mapping.fixtureTemplateHash)))
+        || (reservation.subcaseId === 'R2' && (reservation.oldPlanId !== mapping.oldPlanId
+          || reservation.oldPlanHash !== mapping.oldPlanHash || reservation.oldLinkId !== mapping.oldLinkId
+          || reservation.oldLinkHash !== mapping.oldLinkHash || reservation.oldRunId !== mapping.oldRunId
+          || reservation.selectedRequirementHash !== mapping.selectedRequirementHash
+          || reservation.otherRequirementId !== mapping.otherRequirementId
+          || reservation.otherRequirementHash !== mapping.otherRequirementHash
+          || reservation.fixtureTemplateHash !== mapping.fixtureTemplateHash
+          || receipt.oldPlanId !== mapping.oldPlanId || receipt.oldPlanHash !== mapping.oldPlanHash
+          || receipt.oldLinkId !== mapping.oldLinkId || receipt.oldLinkHash !== mapping.oldLinkHash
+          || receipt.oldRunId !== mapping.oldRunId
+          || receipt.selectedRequirementHash !== mapping.selectedRequirementHash
+          || receipt.otherRequirementId !== mapping.otherRequirementId
+          || receipt.otherRequirementHash !== mapping.otherRequirementHash
+          || (receipt.fixtureInvocationId !== null && receipt.fixtureTemplateHash !== mapping.fixtureTemplateHash)
+          || contentHash(event?.data?.recovery ?? null) !== contentHash(receipt.recovery ?? null)
+          || event?.data?.oldPlanHash !== mapping.oldPlanHash || event?.data?.oldLinkHash !== mapping.oldLinkHash
+          || event?.data?.selectedRequirementHash !== mapping.selectedRequirementHash
+          || event?.data?.otherRequirementId !== mapping.otherRequirementId
+          || event?.data?.otherRequirementHash !== mapping.otherRequirementHash
+          || (receipt.fixtureInvocationId !== null && event?.data?.fixtureTemplateHash !== mapping.fixtureTemplateHash)))
+        || (reservation.subcaseId === 'N2.MISSING_ASSERTION' && (reservation.requiredPlanAssertionId !== mapping.requiredPlanAssertionId
+          || reservation.requiredPlanAssertionName !== mapping.requiredPlanAssertionName
+          || reservation.requiredPlanAssertionHash !== mapping.requiredPlanAssertionHash))
+        || receipt.reviewHash !== review.reviewHash || receipt.planHash !== mapping.planHash
+        || receipt.parentDefinitionHash !== mapping.parentDefinitionHash || receipt.datasetHash !== mapping.datasetHash
+        || receipt.oracleHash !== mapping.oracleHash || receipt.harnessHash !== mapping.harnessHash
+        || receipt.assertionHash !== mapping.assertionHash || receipt.status !== receipt.outcome
+        || receipt.expectedFixtureHash !== expectedFixtureHash
+        || (invocationReceipt && ((receipt.reservationHash ?? null) !== reservation.reservationHash
+          || (receipt.reservationHash ?? null) !== event?.data?.reservationHash
+          || event?.data?.fixtureInvocationId !== receipt.fixtureInvocationId
+          || event?.data?.fixtureTemplateHash !== receipt.fixtureTemplateHash
+          || (receipt.fixtureTemplateHash !== null && receipt.fixtureTemplateHash !== pinnedTemplateHash)
+          || (receipt.fixtureInvocationId !== null && typeof receipt.fixtureInvocationId !== 'string')
+          || !isValidT91ProductHarnessInvocationPair(receipt.fixtureInvocationId, receipt.fixtureTemplateHash)))
+        || (invocationReceipt && receipt.status === 'PASS'
+          && (receipt.reservationHash !== reservation.reservationHash
+            || typeof receipt.fixtureInvocationId !== 'string'
+            || receipt.fixtureTemplateHash !== pinnedTemplateHash))
+        || (receipt.status === 'PASS' && receipt.fixtureHash !== receipt.expectedFixtureHash)
+        || (receipt.subcaseId === 'N2.MISSING_ASSERTION' && (receipt.requiredPlanAssertionId !== mapping.requiredPlanAssertionId
+          || receipt.requiredPlanAssertionName !== mapping.requiredPlanAssertionName
+          || receipt.requiredPlanAssertionHash !== mapping.requiredPlanAssertionHash
+          || (receipt.run?.assertion && (receipt.run.assertion.id !== mapping.requiredPlanAssertionId
+            || receipt.run.assertion.name !== mapping.requiredPlanAssertionName))
+          || (receipt.status === 'PASS' && (!receipt.run?.assertion
+            || receipt.run.assertion.id !== mapping.requiredPlanAssertionId
+            || receipt.run.assertion.name !== mapping.requiredPlanAssertionName))))
+        || (!legacyReceipt && (!classification || classification.status !== receipt.status
+          || classification.noMutationVerified !== receipt.noMutationVerified
+          || receipt.fixtureCaseId !== (receipt.subcaseId === 'N1' || receipt.subcaseId === 'N3' || receipt.subcaseId === 'R1' || receipt.subcaseId === 'R2' ? (receipt.fixtureCaseId ?? null)
+            : receipt.subcaseId === 'N2.MISSING_ASSERTION'
+              ? (receipt.attempt?.fixtureCaseId ?? null) : (receipt.control?.fixtureCaseId ?? null))
+          || (receipt.subcaseId === 'N3' && !isValidT91N3ReceiptObservedPins(receipt, mapping))
+          || event?.data?.fixtureCaseId !== receipt.fixtureCaseId))
+        || !['PASS', 'FAIL', 'INCONCLUSIVE'].includes(receipt.status)
+        || receipt.businessTruthStatus !== 'UNVERIFIED' || receipt.runtimeVerificationStatus !== 'NOT_EXECUTED'
+        || receipt.negativeSuiteStatus !== 'INCOMPLETE' || receipt.scenarioExecutionStatus !== 'NOT_EXECUTED'
+        || command?.action !== 'execute-product-behavior-harness-subcase' || command.receiptId !== receipt.id
+        || event?.data?.receiptHash !== receiptHash || event?.data?.mappingHash !== mapping.mappingHash
+        || event?.data?.reviewHash !== review.reviewHash || event?.timestamp !== receipt.recordedAt
+        || event?.data?.recordedAt !== receipt.recordedAt || event?.data?.commandId !== receipt.commandId
+        || !await audited(event, receipt.recordedBy, receipt.commandId, command.version)) {
+        throw persistenceIntegrity('A product-harness subcase receipt failed its fixed pins, status, event, command, or audit verification.');
+      }
+      receiptIds.add(receipt.id);
+    }
+    for (const event of current.events.filter((entry) => ['ProcessBehaviorProductHarnessExecutionReserved', 'ProcessBehaviorProductHarnessSubcaseExecuted'].includes(entry.type))) {
+      const records = event.type === 'ProcessBehaviorProductHarnessExecutionReserved' ? reservations : receipts;
+      if (records.filter((entry) => entry.id === event.data?.recordId).length !== 1) throw persistenceIntegrity('A product-harness execution event has no unique record.');
+    }
+    return {
+      reservations: reservations.map(({ id, reservationHash }) => ({ id, reservationHash })),
+      receipts: receipts.map(({ id, receiptHash, schemaVersion, status }) => ({ id, receiptHash,
+        status: schemaVersion < 3 ? 'INCONCLUSIVE' : status,
+        ...(schemaVersion < 3 ? { historicalOutcome: status } : {}) })),
+    };
+  }
+  async prepareT91N2AuthorizationExecution({ id: caseId, tenantId, principal, authzGeneration, mappingId, mappingHash,
+    subcaseId, expectedVersion, commandId }) {
+    if (!principal || !/^product-behavior-harness-mapping-[0-9a-f-]{36}$/i.test(mappingId ?? '')
+        || !/^[a-f0-9]{64}$/.test(mappingHash ?? '') || !['N1', 'N2.AUTHORIZATION', 'N2.MISSING_ASSERTION', 'N3', 'R1', 'R2'].includes(subcaseId)
+      || !Number.isSafeInteger(expectedVersion) || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{7,119}$/.test(commandId ?? '')) throw projectAccessDenied();
+    const requestHash = contentHash({ caseId, mappingId, mappingHash, subcaseId, principal });
+    return this.persistence.transaction(async (client) => {
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${tenantId}:sdlc.product-harness-execute:${commandId}`]);
+      await lockIdentityRows(client, tenantId, [principal]);
+      await requirePrincipalAuthority(client, { tenantId, principal, roles: ['workspace-write'], authzGeneration, actorType: 'human' });
+      const hintResult = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2`, [tenantId, caseId]);
+      if (!hintResult.rowCount) return null;
+      const hint = verifyAggregateRow(hintResult.rows[0]);
+      await lockProjectAccess(client, { tenantId, projectId: hint.projectId, principal, minimum: 'owner' });
+      const row = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 for update`, [tenantId, caseId]);
+      if (!row.rowCount) return null;
+      const current = verifyAggregateRow(row.rows[0]);
+      if (current.projectId !== hint.projectId || current.accountableOwner !== principal) throw projectAccessDenied();
+      await this.verifyProcessBehaviorTestPlans(current, client);
+      await this.verifyProcessBehaviorProductHarnessMappings(current, client);
+      await this.verifyT91N2AuthorizationExecutions(current, client);
+      const prior = current.idempotency?.[commandId];
+      if (prior) {
+        if (prior.action !== 'execute-product-behavior-harness-subcase' || prior.requestHash !== requestHash
+          || prior.mappingHash !== mappingHash || prior.subcaseId !== subcaseId || prior.expectedCaseVersion !== expectedVersion) {
+          throw conflict('The execution command ID is already bound to different pins.', current.version, 'IDEMPOTENCY_CONFLICT');
+        }
+        if (prior.receiptId) {
+          const receipt = (current.artifacts?.processBehaviorProductHarnessExecutions ?? []).find((entry) => entry.id === prior.receiptId);
+          if (!receipt) throw persistenceIntegrity('A product-harness execution replay has no receipt.');
+          return { replayed: true, receipt, changeCase: current };
+        }
+        const reservation = (current.artifacts?.processBehaviorProductHarnessExecutionReservations ?? []).find((entry) => entry.id === prior.reservationId);
+        if (!reservation) throw persistenceIntegrity('A product-harness execution reservation has no saved record.');
+        return { reserved: true, reservationId: reservation.id, changeCase: current };
+      }
+      if (current.version !== expectedVersion || current.artifacts?.requirements?.draftRevision == null) throw conflict('The current owner case changed before fixed harness execution.', current.version, 'PRODUCT_HARNESS_EXECUTION_STALE');
+      const mapping = (current.artifacts?.processBehaviorProductHarnessMappings ?? []).find((entry) => entry.id === mappingId);
+      const review = (current.artifacts?.processBehaviorProductHarnessMappingReviews ?? []).find((entry) => entry.mappingId === mappingId);
+      const plan = (current.artifacts?.processBehaviorTestPlans ?? []).find((entry) => entry.id === mapping?.planId);
+      const requirement = (current.artifacts?.requirements?.requirements ?? []).find((entry) => entry.id === mapping?.requirementId);
+      if (!mapping || mapping.subcaseId !== subcaseId || mapping.mappingHash !== mappingHash
+        || mapping.integrityStatus !== 'VALID' || !review
+        || review.integrityStatus !== 'VALID' || review.decision !== 'APPROVE_FOR_TEST_EXECUTION'
+        || !await this.isCurrentProductHarnessPlan(current, plan, requirement, client)
+        || !this.isCurrentT91R2RecoveryMapping(current, mapping, requirement)) {
+        throw conflict('Execution requires the exact current mapping and an integrity-valid independent approval.', current.version, 'PRODUCT_HARNESS_EXECUTION_NOT_APPROVED');
+      }
+      const supportedDefinition = subcaseId === 'N1'
+        ? isSupportedT91N1OrphanPathDefinition({ mapping, plan })
+        : subcaseId === 'R1'
+        ? isSupportedT91R1RecoveryDefinition({ mapping, plan })
+        : subcaseId === 'R2'
+        ? isSupportedT91R2RecoveryDefinition({ mapping, plan })
+        : subcaseId === 'N3'
+        ? isSupportedT91N3DeletedFailingTestDefinition({ mapping, plan })
+        : subcaseId === 'N2.MISSING_ASSERTION'
+        ? isSupportedT91N2MissingAssertionDefinition({ mapping, plan })
+        : isSupportedT91N2AuthorizationDefinition({ mapping, plan });
+      if (!supportedDefinition) {
+        throw conflict(`The saved ${subcaseId} dataset, oracle, or assertion does not match the fixed product-harness contract.`, current.version,
+          'PRODUCT_HARNESS_ORACLE_UNSUPPORTED');
+      }
+      if ((current.artifacts?.processBehaviorProductHarnessExecutions ?? []).some((entry) => entry.mappingId === mappingId)
+        || (current.artifacts?.processBehaviorProductHarnessExecutionReservations ?? []).some((entry) => entry.mappingId === mappingId)) {
+        throw conflict('This fixed mapping already has an execution reservation; use its original command key to replay.', current.version, 'PRODUCT_HARNESS_EXECUTION_ALREADY_RESERVED');
+      }
+      const harness = subcaseId === 'N1' ? T91_N1_ORPHAN_PATH_HARNESS
+        : subcaseId === 'R1' ? T91_R1_CRITERION_RECOVERY_HARNESS
+        : subcaseId === 'R2' ? T91_R2_SHARED_DRAFT_RECOVERY_HARNESS
+        : subcaseId === 'N3' ? T91_N3_DELETED_FAILING_TEST_HARNESS
+        : subcaseId === 'N2.MISSING_ASSERTION' ? T91_N2_MISSING_ASSERTION_HARNESS : T91_N2_AUTHORIZATION_HARNESS;
+      const fixtureRequest = { schemaVersion: 1, fixtureProfileId: `t91-${subcaseId.toLowerCase().replaceAll('.', '-')}-local-product-path-v1`,
+        subcaseId,
+        mappingId: mapping.id, mappingHash: mapping.mappingHash, planId: mapping.planId, planHash: mapping.planHash,
+        sourceTreeDigest: mapping.repositoryTreeDigest, criterionId: mapping.criterionId, criterionHash: mapping.criterionHash,
+        parentDefinitionHash: mapping.parentDefinitionHash, datasetHash: mapping.datasetHash, oracleHash: mapping.oracleHash,
+        subcaseId, harnessId: mapping.harnessId, harnessVersion: mapping.harnessVersion, harnessHash: mapping.harnessHash,
+        assertionId: mapping.assertionId, assertionHash: mapping.assertionHash,
+        route: harness.contract.route, method: harness.contract.method,
+        assertions: subcaseId === 'N2.AUTHORIZATION' ? [] : ['N1', 'N3', 'R1', 'R2'].includes(subcaseId)
+          ? [mapping.assertionId] : [mapping.requiredPlanAssertionId],
+        ...(['N1', 'N3'].includes(subcaseId) ? { candidatePath: mapping.candidatePath } : {}), expectedStatus: harness.contract.expectedStatus };
+      if (subcaseId === 'R1') Object.assign(fixtureRequest, { oldPlanId: mapping.oldPlanId, oldPlanHash: mapping.oldPlanHash,
+        oldLinkId: mapping.oldLinkId, oldLinkHash: mapping.oldLinkHash, oldRunId: mapping.oldRunId,
+        fixtureTemplateHash: mapping.fixtureTemplateHash });
+      if (subcaseId === 'R2') Object.assign(fixtureRequest, { oldPlanId: mapping.oldPlanId, oldPlanHash: mapping.oldPlanHash,
+        oldLinkId: mapping.oldLinkId, oldLinkHash: mapping.oldLinkHash, oldRunId: mapping.oldRunId,
+        selectedRequirementHash: mapping.selectedRequirementHash, otherRequirementId: mapping.otherRequirementId,
+        otherRequirementHash: mapping.otherRequirementHash, fixtureTemplateHash: mapping.fixtureTemplateHash });
+      if (subcaseId === 'N3') Object.assign(fixtureRequest, { sourceTestBytesHash: mapping.sourceTestBytesHash,
+        sourceExpectedExitCode: mapping.sourceExpectedExitCode, fixtureTemplateHash: mapping.fixtureTemplateHash });
+      const reservedAt = new Date().toISOString();
+      const id = `product-behavior-harness-reservation-${randomUUID()}`;
+      const reservationCore = { schemaVersion: 1, id, tenantId, projectId: current.projectId, caseId: current.id,
+        mappingId, mappingHash, reviewId: review.id, reviewHash: review.reviewHash, planId: plan.id, planHash: plan.planHash,
+        subcaseId, harnessId: mapping.harnessId, harnessVersion: mapping.harnessVersion, harnessHash: mapping.harnessHash,
+        assertionId: mapping.assertionId, assertionHash: mapping.assertionHash, sourceRef: structuredClone(mapping.sourceRef),
+        repositorySnapshotId: mapping.repositorySnapshotId, repositoryTreeDigest: mapping.repositoryTreeDigest,
+        criterionId: mapping.criterionId, criterionHash: mapping.criterionHash, criterionContractVersion: mapping.criterionContractVersion,
+        criterionContractHash: mapping.criterionContractHash, parentDefinitionHash: mapping.parentDefinitionHash,
+        datasetHash: mapping.datasetHash, oracleHash: mapping.oracleHash, fixtureRequestHash: contentHash(fixtureRequest),
+        ...(['N1', 'N3'].includes(subcaseId) ? { candidatePath: mapping.candidatePath } : {}),
+        ...(subcaseId === 'N3' ? { sourceTestBytesHash: mapping.sourceTestBytesHash,
+          sourceExpectedExitCode: mapping.sourceExpectedExitCode, fixtureTemplateHash: mapping.fixtureTemplateHash } : {}),
+        ...(subcaseId === 'N2.MISSING_ASSERTION' ? { requiredPlanAssertionId: mapping.requiredPlanAssertionId,
+          requiredPlanAssertionName: mapping.requiredPlanAssertionName, requiredPlanAssertionHash: mapping.requiredPlanAssertionHash } : {}),
+        ...(subcaseId === 'R1' ? { oldPlanId: mapping.oldPlanId, oldPlanHash: mapping.oldPlanHash,
+          oldLinkId: mapping.oldLinkId, oldLinkHash: mapping.oldLinkHash, oldRunId: mapping.oldRunId,
+          fixtureTemplateHash: mapping.fixtureTemplateHash } : {}),
+        ...(subcaseId === 'R2' ? { oldPlanId: mapping.oldPlanId, oldPlanHash: mapping.oldPlanHash,
+          oldLinkId: mapping.oldLinkId, oldLinkHash: mapping.oldLinkHash, oldRunId: mapping.oldRunId,
+          selectedRequirementHash: mapping.selectedRequirementHash, otherRequirementId: mapping.otherRequirementId,
+          otherRequirementHash: mapping.otherRequirementHash, fixtureTemplateHash: mapping.fixtureTemplateHash } : {}),
+        requestedBy: principal, commandId, requestHash, reservationVersion: current.version + 1,
+        reservedAt, expectedCaseVersion: current.version, status: 'RUNNING' };
+      const reservation = { ...reservationCore, reservationHash: contentHash(reservationCore) };
+      current.artifacts.processBehaviorProductHarnessExecutionReservations ??= [];
+      current.artifacts.processBehaviorProductHarnessExecutionReservations.push(reservation);
+      current.version += 1; current.updatedAt = reservedAt; current.idempotency ??= {};
+      current.idempotency[commandId] = { action: 'execute-product-behavior-harness-subcase', requestHash, mappingHash, subcaseId,
+        expectedCaseVersion: expectedVersion, reservationId: id, reservationStatus: 'RUNNING', version: current.version, at: reservedAt };
+      const eventData = { recordId: id, mappingId, mappingHash, reviewId: review.id, reviewHash: review.reviewHash,
+        planHash: plan.planHash, subcaseId, requestHash, fixtureRequestHash: reservation.fixtureRequestHash, commandId,
+        reservationHash: reservation.reservationHash, tenantId, projectId: current.projectId, caseId: current.id,
+        planId: plan.id, sourceRef: reservation.sourceRef, repositorySnapshotId: reservation.repositorySnapshotId,
+        repositoryTreeDigest: reservation.repositoryTreeDigest, criterionId: reservation.criterionId,
+        criterionHash: reservation.criterionHash, criterionContractVersion: reservation.criterionContractVersion,
+        criterionContractHash: reservation.criterionContractHash, parentDefinitionHash: reservation.parentDefinitionHash,
+        datasetHash: reservation.datasetHash, oracleHash: reservation.oracleHash, harnessId: reservation.harnessId,
+        harnessVersion: reservation.harnessVersion, harnessHash: reservation.harnessHash,
+        ...(['N1', 'N3'].includes(subcaseId) ? { candidatePath: reservation.candidatePath } : {}),
+        ...(subcaseId === 'N3' ? { sourceTestBytesHash: reservation.sourceTestBytesHash,
+          fixtureTemplateHash: reservation.fixtureTemplateHash } : {}),
+        assertionId: reservation.assertionId, assertionHash: reservation.assertionHash,
+        ...(subcaseId === 'N2.MISSING_ASSERTION' ? { requiredPlanAssertionId: reservation.requiredPlanAssertionId,
+          requiredPlanAssertionName: reservation.requiredPlanAssertionName, requiredPlanAssertionHash: reservation.requiredPlanAssertionHash } : {}),
+        ...(subcaseId === 'R1' ? { oldPlanHash: reservation.oldPlanHash, oldLinkHash: reservation.oldLinkHash,
+          fixtureTemplateHash: reservation.fixtureTemplateHash } : {}),
+        ...(subcaseId === 'R2' ? { oldPlanHash: reservation.oldPlanHash, oldLinkHash: reservation.oldLinkHash,
+          selectedRequirementHash: reservation.selectedRequirementHash, otherRequirementId: reservation.otherRequirementId,
+          otherRequirementHash: reservation.otherRequirementHash, fixtureTemplateHash: reservation.fixtureTemplateHash } : {}),
+        reservedAt, aggregateVersion: reservation.reservationVersion };
+      current.events.push({ id: `event-${randomUUID()}`, type: 'ProcessBehaviorProductHarnessExecutionReserved', schemaVersion: 1,
+        tenantId, actor: principal, correlationId: current.correlationId, causationId: commandId, timestamp: reservedAt,
+        aggregateVersion: current.version, data: eventData,
+        contentHash: contentHash({ type: 'ProcessBehaviorProductHarnessExecutionReserved', tenantId, data: eventData }) });
+      await this.saveInTransaction(client, current, { expectedVersion, principal, requiredPrincipalRoles: ['workspace-write'], authzGeneration });
+      return { replayed: false, reservationId: id, reservationToken: id, requestHash, expectedVersion: current.version,
+        changeCase: current, fixtureRequest, harness, fixturePins: { planHash: plan.planHash, mappingHash, reviewHash: review.reviewHash,
+          datasetHash: mapping.datasetHash, oracleHash: mapping.oracleHash, harnessHash: mapping.harnessHash,
+          harnessId: mapping.harnessId, harnessVersion: mapping.harnessVersion, assertionId: mapping.assertionId,
+          assertionHash: mapping.assertionHash, sourceTreeDigest: mapping.repositoryTreeDigest,
+          fixtureRequestHash: reservation.fixtureRequestHash, reservationHash: reservation.reservationHash,
+          ...(subcaseId === 'N2.MISSING_ASSERTION' ? { requiredPlanAssertionId: mapping.requiredPlanAssertionId,
+            requiredPlanAssertionName: mapping.requiredPlanAssertionName, requiredPlanAssertionHash: mapping.requiredPlanAssertionHash } : {}),
+          ...(subcaseId === 'R1' ? { oldPlanId: mapping.oldPlanId, oldPlanHash: mapping.oldPlanHash,
+            oldLinkId: mapping.oldLinkId, oldLinkHash: mapping.oldLinkHash, oldRunId: mapping.oldRunId,
+            fixtureTemplateHash: mapping.fixtureTemplateHash } : {}),
+          ...(subcaseId === 'R2' ? { oldPlanId: mapping.oldPlanId, oldPlanHash: mapping.oldPlanHash,
+            oldLinkId: mapping.oldLinkId, oldLinkHash: mapping.oldLinkHash, oldRunId: mapping.oldRunId,
+            selectedRequirementHash: mapping.selectedRequirementHash, otherRequirementId: mapping.otherRequirementId,
+            otherRequirementHash: mapping.otherRequirementHash, fixtureTemplateHash: mapping.fixtureTemplateHash } : {}),
+          ...(subcaseId === 'N3' ? { sourceTestBytesHash: mapping.sourceTestBytesHash,
+            sourceExpectedExitCode: mapping.sourceExpectedExitCode, fixtureTemplateHash: mapping.fixtureTemplateHash } : {}),
+          subcaseId } };
+    });
+  }
+  async recordT91N2AuthorizationExecution({ id: caseId, tenantId, principal, authzGeneration, mappingId, mappingHash,
+    subcaseId, expectedVersion, commandId, reservationToken, reservationId, observation }) {
+    return this.persistence.transaction(async (client) => {
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${tenantId}:sdlc.product-harness-execute:${commandId}`]);
+      await lockIdentityRows(client, tenantId, [principal]);
+      await requirePrincipalAuthority(client, { tenantId, principal, roles: ['workspace-write'], authzGeneration, actorType: 'human' });
+      const hintResult = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2`, [tenantId, caseId]);
+      if (!hintResult.rowCount) return null;
+      const hint = verifyAggregateRow(hintResult.rows[0]);
+      await lockProjectAccess(client, { tenantId, projectId: hint.projectId, principal, minimum: 'owner' });
+      const row = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 for update`, [tenantId, caseId]);
+      if (!row.rowCount) return null;
+      const current = verifyAggregateRow(row.rows[0]);
+      await this.verifyProcessBehaviorProductHarnessMappings(current, client);
+      await this.verifyT91N2AuthorizationExecutions(current, client);
+      const prior = current.idempotency?.[commandId];
+      if (!prior || prior.action !== 'execute-product-behavior-harness-subcase' || prior.requestHash !== contentHash({ caseId, mappingId, mappingHash, subcaseId, principal })
+        || prior.reservationId !== reservationId || prior.reservationStatus !== 'RUNNING' || reservationToken !== reservationId) throw conflict('The fixed subcase reservation is stale or does not match its command.', current.version, 'PRODUCT_HARNESS_RESERVATION_STALE');
+      if (prior.receiptId) {
+        const receipt = (current.artifacts?.processBehaviorProductHarnessExecutions ?? []).find((entry) => entry.id === prior.receiptId);
+        if (!receipt) throw persistenceIntegrity('A completed fixed subcase command has no receipt.');
+        return { changeCase: current, receipt, replayed: true };
+      }
+      const reservation = (current.artifacts?.processBehaviorProductHarnessExecutionReservations ?? []).find((entry) => entry.id === reservationId);
+      const mapping = (current.artifacts?.processBehaviorProductHarnessMappings ?? []).find((entry) => entry.id === mappingId);
+      const review = (current.artifacts?.processBehaviorProductHarnessMappingReviews ?? []).find((entry) => entry.mappingId === mappingId);
+      if (!reservation || !mapping || mapping.mappingHash !== mappingHash || !review || review.integrityStatus !== 'VALID'
+        || review.decision !== 'APPROVE_FOR_TEST_EXECUTION') throw conflict('The mapping or its approval changed during fixed harness dispatch.', current.version, 'PRODUCT_HARNESS_EXECUTION_STALE');
+      const fixtureInvocationId = typeof observation?.invocationId === 'string' ? observation.invocationId : null;
+      const deletedFailingTestSubcase = subcaseId === 'N3';
+      const recoverySubcase = subcaseId === 'R1';
+      const sharedDraftRecoverySubcase = subcaseId === 'R2';
+      const fixtureTemplateHash = deletedFailingTestSubcase || recoverySubcase || sharedDraftRecoverySubcase
+        ? observation?.fixtureTemplateHash === mapping.fixtureTemplateHash ? mapping.fixtureTemplateHash : null
+        : observation?.fixtureTemplateHash === T91_N2_PRODUCT_FIXTURE_TEMPLATE_HASH ? T91_N2_PRODUCT_FIXTURE_TEMPLATE_HASH : null;
+      const orphanPathSubcase = subcaseId === 'N1';
+      const missingAssertionSubcase = subcaseId === 'N2.MISSING_ASSERTION';
+      const expectedFixtureHash = sharedDraftRecoverySubcase
+        ? t91R2RecoveryFixtureHash({ mapping, requestHash: reservation.fixtureRequestHash,
+          fixtureTemplateHash, invocationId: fixtureInvocationId })
+        : recoverySubcase
+        ? t91R1RecoveryFixtureHash({ mapping, requestHash: reservation.fixtureRequestHash,
+          fixtureTemplateHash, invocationId: fixtureInvocationId })
+        : deletedFailingTestSubcase
+        ? t91N3DeletedFailingTestFixtureHash({ mapping, requestHash: reservation.fixtureRequestHash,
+          fixtureTemplateHash, invocationId: fixtureInvocationId })
+        : orphanPathSubcase
+        ? t91N1OrphanPathFixtureHash({ mapping, requestHash: reservation.fixtureRequestHash,
+          fixtureTemplateHash, invocationId: fixtureInvocationId })
+        : missingAssertionSubcase
+        ? t91N2MissingAssertionFixtureHash({ mapping, requestHash: reservation.fixtureRequestHash,
+          fixtureTemplateHash, invocationId: fixtureInvocationId })
+        : fixtureInvocationId && fixtureTemplateHash === T91_N2_PRODUCT_FIXTURE_TEMPLATE_HASH
+        ? t91N2AuthorizationInvocationFixtureHash({ mapping, requestHash: reservation.fixtureRequestHash,
+          fixtureTemplateHash, invocationId: fixtureInvocationId })
+        : t91N2AuthorizationFixtureHash({ mapping, requestHash: reservation.fixtureRequestHash });
+      const classification = sharedDraftRecoverySubcase
+        ? classifyT91R2RecoveryObservation({ observation, mapping, requestHash: reservation.fixtureRequestHash,
+          fixtureTemplateHash, invocationId: fixtureInvocationId, reservationHash: reservation.reservationHash })
+        : recoverySubcase
+        ? classifyT91R1RecoveryObservation({ observation, mapping, requestHash: reservation.fixtureRequestHash,
+          fixtureTemplateHash, invocationId: fixtureInvocationId, reservationHash: reservation.reservationHash })
+        : deletedFailingTestSubcase
+        ? classifyT91N3DeletedFailingTestObservation({ observation, mapping, requestHash: reservation.fixtureRequestHash,
+          fixtureTemplateHash, invocationId: fixtureInvocationId, reservationHash: reservation.reservationHash })
+        : orphanPathSubcase
+        ? classifyT91N1OrphanPathObservation({ observation, mapping, requestHash: reservation.fixtureRequestHash,
+          fixtureTemplateHash, invocationId: fixtureInvocationId, reservationHash: reservation.reservationHash })
+        : missingAssertionSubcase
+        ? classifyT91N2MissingAssertionObservation({ observation, mapping, requestHash: reservation.fixtureRequestHash,
+          fixtureTemplateHash, invocationId: fixtureInvocationId, reservationHash: reservation.reservationHash })
+        : classifyT91N2AuthorizationObservation({ observation, mapping,
+          requestHash: reservation.fixtureRequestHash, fixtureTemplateHash, invocationId: fixtureInvocationId,
+          reservationHash: reservation.reservationHash });
+      const noMutation = classification.noMutationVerified;
+      const invocationPinsComplete = typeof fixtureInvocationId === 'string'
+        && fixtureTemplateHash === (deletedFailingTestSubcase || recoverySubcase || sharedDraftRecoverySubcase ? mapping.fixtureTemplateHash : T91_N2_PRODUCT_FIXTURE_TEMPLATE_HASH)
+        && observation?.reservationHash === reservation.reservationHash;
+      const status = classification.status === 'PASS' && !invocationPinsComplete ? 'INCONCLUSIVE' : classification.status;
+      const recordedAt = new Date().toISOString();
+      const core = { schemaVersion: 4, id: `product-behavior-harness-execution-${randomUUID()}`, tenantId, projectId: current.projectId,
+        caseId, mappingId, mappingHash, reviewId: review.id, reviewHash: review.reviewHash, reservationId, commandId,
+        subcaseId, planId: reservation.planId, planHash: reservation.planHash, sourceRef: structuredClone(reservation.sourceRef),
+        repositorySnapshotId: reservation.repositorySnapshotId, repositoryTreeDigest: reservation.repositoryTreeDigest,
+        criterionId: reservation.criterionId, criterionHash: reservation.criterionHash,
+        criterionContractVersion: reservation.criterionContractVersion, criterionContractHash: reservation.criterionContractHash,
+        parentDefinitionHash: reservation.parentDefinitionHash, datasetHash: reservation.datasetHash, oracleHash: reservation.oracleHash,
+        harnessId: reservation.harnessId, harnessVersion: reservation.harnessVersion, harnessHash: reservation.harnessHash,
+        assertionId: reservation.assertionId, assertionHash: reservation.assertionHash,
+        ...(orphanPathSubcase ? { candidatePath: reservation.candidatePath } : {}),
+        ...(deletedFailingTestSubcase ? { candidatePath: reservation.candidatePath,
+          sourceTestBytesHash: reservation.sourceTestBytesHash, sourceExpectedExitCode: reservation.sourceExpectedExitCode } : {}),
+        ...(missingAssertionSubcase ? { requiredPlanAssertionId: reservation.requiredPlanAssertionId,
+          requiredPlanAssertionName: reservation.requiredPlanAssertionName, requiredPlanAssertionHash: reservation.requiredPlanAssertionHash } : {}),
+        ...(recoverySubcase ? { oldPlanId: reservation.oldPlanId, oldPlanHash: reservation.oldPlanHash,
+          oldLinkId: reservation.oldLinkId, oldLinkHash: reservation.oldLinkHash, oldRunId: reservation.oldRunId,
+          recovery: { old: observation?.old ?? null, staleAttempt: observation?.staleAttempt ?? null,
+            fresh: observation?.fresh ?? null } } : {}),
+        ...(sharedDraftRecoverySubcase ? { oldPlanId: reservation.oldPlanId, oldPlanHash: reservation.oldPlanHash,
+          oldLinkId: reservation.oldLinkId, oldLinkHash: reservation.oldLinkHash, oldRunId: reservation.oldRunId,
+          selectedRequirementHash: reservation.selectedRequirementHash, otherRequirementId: reservation.otherRequirementId,
+          otherRequirementHash: reservation.otherRequirementHash,
+          recovery: { old: observation?.old ?? null, staleAttempt: observation?.staleAttempt ?? null,
+            fresh: observation?.fresh ?? null } } : {}),
+        fixtureRequestHash: reservation.fixtureRequestHash, reservationHash: reservation.reservationHash,
+        fixtureInvocationId, fixtureTemplateHash, expectedFixtureHash,
+        fixtureHash: observation?.fixtureHash ?? null,
+        terminal: observation?.terminal === true,
+        fixtureCaseId: observation?.fixtureCaseId ?? observation?.attempt?.fixtureCaseId ?? observation?.control?.fixtureCaseId ?? null,
+        ...(orphanPathSubcase ? { source: observation?.source ?? null, candidate: observation?.candidate ?? null,
+          verifierDispatchCount: observation?.verifierDispatchCount ?? null } : {}),
+        ...(deletedFailingTestSubcase ? { sourceStage: observation?.sourceStage ?? null,
+          candidate: observation?.candidate ?? null, verifierDispatchCount: observation?.verifierDispatchCount ?? null } : {}),
+        fixturePlan: observation?.fixturePlan ?? null,
+        run: observation?.run ?? null,
+        acceptedControlPlanHash: observation?.control?.acceptedPlanHash ?? null,
+        control: observation?.control ?? null, attempt: observation?.attempt ?? null,
+        before: observation?.attempt?.before ?? null, after: observation?.attempt?.after ?? null,
+        httpStatus: observation?.attempt?.httpStatus ?? null, errorCode: observation?.attempt?.errorCode ?? null,
+        noMutationVerified: noMutation === true,
+        outcome: status, status, recordedBy: principal, recordedAt, requestHash: prior.requestHash,
+        scenarioExecutionStatus: 'NOT_EXECUTED', negativeSuiteStatus: 'INCOMPLETE', businessTruthStatus: 'UNVERIFIED',
+        runtimeVerificationStatus: 'NOT_EXECUTED', statement: sharedDraftRecoverySubcase
+          ? t91R2RecoveryReceiptStatement({ status }) : recoverySubcase
+          ? t91R1RecoveryReceiptStatement({ status })
+          : deletedFailingTestSubcase
+          ? t91N3DeletedFailingTestReceiptStatement({ status })
+          : orphanPathSubcase
+          ? t91N1OrphanPathReceiptStatement({ status, candidatePath: reservation.candidatePath })
+          : missingAssertionSubcase
+          ? 'This fixed local product-path check covers N2.MISSING_ASSERTION only; other N2 cases, recovery cases, and business truth remain unverified.'
+          : 'This fixed local product-path denial result covers N2.AUTHORIZATION only; customer scenario execution, the remaining N2 cases, and business truth remain unverified.' };
+      const receipt = { ...core, receiptHash: contentHash(core) };
+      current.artifacts.processBehaviorProductHarnessExecutions ??= [];
+      current.artifacts.processBehaviorProductHarnessExecutions.push(receipt);
+      current.version += 1; current.updatedAt = recordedAt;
+      current.idempotency[commandId] = { ...prior, reservationStatus: 'COMPLETED', receiptId: receipt.id, version: current.version, at: recordedAt };
+      const eventData = { recordId: receipt.id, receiptHash: receipt.receiptHash, mappingId, mappingHash,
+        reviewId: review.id, reviewHash: review.reviewHash, reservationId, reservationHash: receipt.reservationHash,
+        fixtureInvocationId: receipt.fixtureInvocationId, fixtureTemplateHash: receipt.fixtureTemplateHash,
+        ...(orphanPathSubcase ? { candidatePath: receipt.candidatePath, source: receipt.source, candidate: receipt.candidate,
+          verifierDispatchCount: receipt.verifierDispatchCount } : {}),
+        ...(deletedFailingTestSubcase ? { candidatePath: receipt.candidatePath, sourceStage: receipt.sourceStage,
+          candidate: receipt.candidate, sourceTestBytesHash: receipt.sourceTestBytesHash,
+          sourceExpectedExitCode: receipt.sourceExpectedExitCode, verifierDispatchCount: receipt.verifierDispatchCount } : {}),
+        ...(recoverySubcase ? { oldPlanId: receipt.oldPlanId, oldPlanHash: receipt.oldPlanHash,
+          oldLinkId: receipt.oldLinkId, oldLinkHash: receipt.oldLinkHash, oldRunId: receipt.oldRunId,
+          recovery: receipt.recovery } : {}),
+        ...(sharedDraftRecoverySubcase ? { oldPlanId: receipt.oldPlanId, oldPlanHash: receipt.oldPlanHash,
+          oldLinkId: receipt.oldLinkId, oldLinkHash: receipt.oldLinkHash, oldRunId: receipt.oldRunId,
+          selectedRequirementHash: receipt.selectedRequirementHash, otherRequirementId: receipt.otherRequirementId,
+          otherRequirementHash: receipt.otherRequirementHash, recovery: receipt.recovery } : {}),
+        planHash: receipt.planHash, subcaseId,
+        fixtureCaseId: receipt.fixtureCaseId,
+        outcome: status, noMutationVerified: noMutation === true, commandId, requestHash: prior.requestHash, recordedAt,
+        scenarioExecutionStatus: 'NOT_EXECUTED', negativeSuiteStatus: 'INCOMPLETE', businessTruthStatus: 'UNVERIFIED',
+        runtimeVerificationStatus: 'NOT_EXECUTED' };
+      current.events.push({ id: `event-${randomUUID()}`, type: 'ProcessBehaviorProductHarnessSubcaseExecuted', schemaVersion: 1,
+        tenantId, actor: principal, correlationId: current.correlationId, causationId: commandId, timestamp: recordedAt,
+        aggregateVersion: current.version, data: eventData,
+        contentHash: contentHash({ type: 'ProcessBehaviorProductHarnessSubcaseExecuted', tenantId, data: eventData }) });
+      await this.saveInTransaction(client, current, { expectedVersion: current.version - 1, principal,
+        requiredPrincipalRoles: ['workspace-write'], authzGeneration });
+      receipt.integrityStatus = 'VALID';
+      return { changeCase: current, receipt, replayed: false };
+    });
+  }
+  async isCurrentProductHarnessPlan(current, plan, requirement, client) {
+    const requirementDraft = current.artifacts?.requirements;
+    if (!plan || !requirement || !requirementDraft || plan.regenerationStatus === 'REGENERATION_REQUIRED'
+      || plan.draftRevision !== requirementDraft.draftRevision
+      || plan.criterionContractVersion !== requirement.criterionContract?.version
+      || plan.criterionContractHash !== requirement.criterionContract?.contentHash
+      || plan.traceHash !== requirement.processTrace?.traceHash
+      || plan.source?.bindingHash !== current.sourceBinding?.bindingHash) return false;
+    const requirementHash = contentHash(Object.fromEntries(Object.entries(requirement).filter(([key]) =>
+      !['processRunEvidenceLinks', 'processRunEvidenceReviews', 'behaviorTestPlans'].includes(key))));
+    if (requirementHash !== plan.requirementHash) return false;
+    const query = client.query.bind(client);
+    const projectRow = await query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2 for share`,
+      [current.tenantId, current.projectId]);
+    if (!projectRow.rowCount) return false;
+    const project = verifyAggregateRow(projectRow.rows[0]);
+    const blueprint = latestBlueprint(project);
+    const source = requirement.processTrace.source;
+    return Boolean(blueprint && source?.projectId === current.projectId && source.blueprintId === blueprint.id
+      && source.blueprintVersion === blueprint.version && source.blueprintSnapshotHash === contentHash(blueprint));
+  }
+  isCurrentT91R2RecoveryMapping(current, mapping, requirement) {
+    if (mapping?.subcaseId !== 'R2') return true;
+    const requirements = current.artifacts?.requirements?.requirements ?? [];
+    const otherRequirement = requirements.find((entry) => entry.id === mapping.otherRequirementId);
+    return Number.isSafeInteger(mapping.draftRevision)
+      && mapping.draftRevision === current.artifacts?.requirements?.draftRevision
+      && requirement?.id === mapping.requirementId
+      && digest(requirement) === mapping.selectedRequirementHash
+      && digest(mapping.selectedRequirementSnapshot) === mapping.selectedRequirementHash
+      && otherRequirement?.id === mapping.otherRequirementId
+      && digest(otherRequirement) === mapping.otherRequirementHash
+      && digest(mapping.otherRequirementSnapshot) === mapping.otherRequirementHash;
+  }
+  async addRequirementFromSavedProcessCommand({ id: caseId, tenantId, principal, authzGeneration, expectedVersion,
+    expectedDraftRevision, statement, rationale, acceptanceCriteria, traceRefIds, commandId }) {
+    if (!principal || !Number.isSafeInteger(expectedVersion) || !Number.isSafeInteger(expectedDraftRevision)
+      || typeof statement !== 'string' || typeof rationale !== 'string' || !Array.isArray(acceptanceCriteria)
+      || !Array.isArray(traceRefIds) || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{7,119}$/.test(commandId ?? '')) {
+      throw projectAccessDenied();
+    }
+    const command = { version: expectedVersion, expectedDraftRevision, statement, rationale,
+      acceptanceCriteria, traceRefIds, actor: principal, idempotencyKey: commandId };
+    const requestHash = commandRequestHash(command);
+    return this.persistence.transaction(async (client) => {
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${tenantId}:sdlc.add-saved-process-requirement:${commandId}`]);
+      await lockIdentityRows(client, tenantId, [principal]);
+      await requirePrincipalAuthority(client, { tenantId, principal, roles: ['workspace-write'], authzGeneration, actorType: 'human' });
+      const hintResult = await client.query(`select * from orgward.aggregates
+        where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2`, [tenantId, caseId]);
+      if (!hintResult.rowCount) return null;
+      const hint = verifyAggregateRow(hintResult.rows[0]);
+      await lockProjectAccess(client, { tenantId, projectId: hint.projectId, principal, minimum: 'owner' });
+      const projectResult = await client.query(`select * from orgward.aggregates
+        where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2 for share`, [tenantId, hint.projectId]);
+      if (!projectResult.rowCount) throw conflict('The saved project source is no longer available.', hint.version, 'PROCESS_SOURCE_STALE');
+      const project = verifyAggregateRow(projectResult.rows[0]);
+      const blueprint = latestBlueprint(project);
+      const row = await client.query(`select * from orgward.aggregates
+        where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 for update`, [tenantId, caseId]);
+      if (!row.rowCount) return null;
+      const current = verifyAggregateRow(row.rows[0]);
+      const prior = current.idempotency?.[commandId];
+      if (prior) {
+        if (prior.action !== 'add-requirement-from-saved-process' || prior.requestHash !== requestHash) {
+          throw conflict('This idempotency key is already bound to a different requirement command.', current.version, 'IDEMPOTENCY_CONFLICT');
+        }
+        const event = current.events.find((entry) => entry.causationId === commandId && entry.type === 'RequirementAddedFromSavedProcess');
+        if (!event?.data?.requirementId) throw persistenceIntegrity('A saved-process requirement replay has no immutable creation event.');
+        return { changeCase: current, requirementId: event.data.requirementId, replayed: true };
+      }
+      if (current.version !== expectedVersion || current.accountableOwner !== principal
+        || current.artifacts?.requirements?.draftRevision !== expectedDraftRevision) {
+        throw conflict('The owner case or shared requirements draft changed. Reload the case and review the current draft before adding this requirement.',
+          current.version, 'REQUIREMENT_DRAFT_STALE');
+      }
+      const binding = current.sourceBinding;
+      const trace = current.processRequirementTrace;
+      if (!binding || !trace || blueprint?.id !== binding.blueprintId || blueprint.version !== binding.blueprintVersion
+        || contentHash(blueprint) !== (trace.source?.blueprintSnapshotHash ?? null)
+        || trace.source?.projectId !== current.projectId || trace.source?.processId !== binding.objectId
+        || trace.source?.bindingHash !== binding.bindingHash) {
+        throw conflict('The pinned saved process changed. Select the current saved process before adding a requirement.', current.version, 'PROCESS_SOURCE_STALE');
+      }
+      const result = addSavedProcessRequirement(current, command);
+      const requirementId = current.events.at(-1)?.data?.requirementId ?? null;
+      await this.saveInTransaction(client, result.changeCase, { expectedVersion, principal,
+        requiredPrincipalRoles: ['workspace-write'], authzGeneration });
+      return { changeCase: result.changeCase, requirementId, replayed: false };
+    });
+  }
+  async requestProcessBehaviorProductHarnessMapping({ id: caseId, tenantId, principal, authzGeneration, planId,
+    subcaseId, expectedVersion, commandId }) {
+    if (!principal || !['N1', 'N2.AUTHORIZATION', 'N2.MISSING_ASSERTION', 'N3', 'R1', 'R2'].includes(subcaseId)
+      || !/^behavior-test-plan-[0-9a-f-]{36}$/i.test(planId ?? '')
+      || !Number.isSafeInteger(expectedVersion) || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{7,119}$/.test(commandId ?? '')) throw projectAccessDenied();
+    const requestHash = contentHash({ caseId, planId, subcaseId, principal });
+    return this.persistence.transaction(async (client) => {
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${tenantId}:sdlc.product-harness-map:${commandId}`]);
+      await lockIdentityRows(client, tenantId, [principal]);
+      await requirePrincipalAuthority(client, { tenantId, principal, roles: ['workspace-write'], authzGeneration, actorType: 'human' });
+      const hintRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2`, [tenantId, caseId]);
+      if (!hintRow.rowCount) return null;
+      const hint = verifyAggregateRow(hintRow.rows[0]);
+      await lockProjectAccess(client, { tenantId, projectId: hint.projectId, principal, minimum: 'owner' });
+      const row = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 for update`, [tenantId, caseId]);
+      if (!row.rowCount) return null;
+      const current = verifyAggregateRow(row.rows[0]);
+      await this.verifyProcessBehaviorTestPlans(current, client);
+      await this.verifyProcessBehaviorProductHarnessMappings(current, client);
+      const prior = current.idempotency?.[commandId];
+      if (prior) {
+        if (prior.action !== 'request-product-behavior-harness-mapping' || prior.requestHash !== requestHash) throw conflict('The mapping command ID is already bound to different pins.', current.version, 'IDEMPOTENCY_CONFLICT');
+        const mapping = (current.artifacts?.processBehaviorProductHarnessMappings ?? []).find((entry) => entry.id === prior.mappingId);
+        if (!mapping) throw persistenceIntegrity('A mapping replay has no saved record.');
+        return { changeCase: current, mapping, replayed: true };
+      }
+      if (current.version !== expectedVersion || current.accountableOwner !== principal) throw conflict('Only the current accountable owner may request a fixed product-harness mapping at the current case version.', current.version, 'OWNER_AUTHORITY_REQUIRED');
+      const plan = (current.artifacts?.processBehaviorTestPlans ?? []).find((entry) => entry.id === planId);
+      const requirement = current.artifacts?.requirements?.requirements?.find((entry) => entry.id === plan?.requirementId);
+      if (!await this.isCurrentProductHarnessPlan(current, plan, requirement, client)) throw conflict('The saved plan is stale for the current requirement or source; regenerate it before requesting product-harness review.', current.version, 'PRODUCT_HARNESS_PLAN_STALE');
+      const mappingCore = subcaseId === 'N1'
+        ? buildT91N1OrphanPathMapping({ changeCase: current, requirement, plan })
+        : subcaseId === 'R1'
+        ? buildT91R1RecoveryMapping({ changeCase: current, requirement, plan })
+        : subcaseId === 'R2'
+        ? buildT91R2RecoveryMapping({ changeCase: current, requirement, plan })
+        : subcaseId === 'N3'
+        ? buildT91N3DeletedFailingTestMapping({ changeCase: current, requirement, plan })
+        : subcaseId === 'N2.MISSING_ASSERTION'
+        ? buildT91N2MissingAssertionMapping({ changeCase: current, requirement, plan })
+        : buildT91N2AuthorizationMapping({ changeCase: current, requirement, plan });
+      if (!mappingCore) throw conflict(`The saved ${subcaseId} definition or its exact historical pins are unavailable for the fixed harness.`, current.version, 'PRODUCT_HARNESS_MAPPING_UNAVAILABLE');
+      const requestedAt = new Date().toISOString();
+      const mapping = { ...mappingCore, id: `product-behavior-harness-mapping-${randomUUID()}`,
+        requestedBy: principal, requestedAt, commandId, requestHash };
+      current.artifacts ??= {};
+      current.artifacts.processBehaviorProductHarnessMappings ??= [];
+      current.artifacts.processBehaviorProductHarnessMappings.push(mapping);
+      current.version += 1; current.updatedAt = requestedAt;
+      current.idempotency ??= {};
+      current.idempotency[commandId] = { action: 'request-product-behavior-harness-mapping', requestHash, mappingId: mapping.id, version: current.version, at: requestedAt };
+      const eventData = { recordId: mapping.id, mappingHash: mapping.mappingHash, planId, planHash: mapping.planHash,
+        subcaseId, requestedBy: principal, requestedAt, commandId, requestHash };
+      if (subcaseId === 'R2') Object.assign(eventData, { draftRevision: mapping.draftRevision,
+        selectedRequirementSnapshotHash: mapping.selectedRequirementHash,
+        otherRequirementSnapshotHash: mapping.otherRequirementHash });
+      current.events.push({ id: `event-${randomUUID()}`, type: 'ProcessBehaviorProductHarnessMappingRequested', schemaVersion: 1,
+        tenantId, actor: principal, correlationId: current.correlationId, causationId: commandId, timestamp: requestedAt, data: eventData,
+        contentHash: contentHash({ type: 'ProcessBehaviorProductHarnessMappingRequested', tenantId, data: eventData }) });
+      await this.saveInTransaction(client, current, { expectedVersion, principal, requiredPrincipalRoles: ['workspace-write'], authzGeneration });
+      mapping.integrityStatus = 'VALID';
+      return { changeCase: current, mapping, replayed: false };
+    });
+  }
+  async reviewProcessBehaviorProductHarnessMapping({ id: caseId, tenantId, principal, authzGeneration, mappingId,
+    mappingHash, decision, expectedVersion, commandId }) {
+    if (!principal || !/^product-behavior-harness-mapping-[0-9a-f-]{36}$/i.test(mappingId ?? '')
+      || !/^[a-f0-9]{64}$/.test(mappingHash ?? '') || !['APPROVE_FOR_TEST_EXECUTION', 'REQUEST_CHANGES'].includes(decision)
+      || !Number.isSafeInteger(expectedVersion) || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{7,119}$/.test(commandId ?? '')) throw projectAccessDenied();
+    const requestHash = contentHash({ caseId, mappingId, mappingHash, decision, principal });
+    return this.persistence.transaction(async (client) => {
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${tenantId}:sdlc.product-harness-review:${commandId}`]);
+      await lockIdentityRows(client, tenantId, [principal]);
+      await requirePrincipalAuthority(client, { tenantId, principal, roles: ['workspace-write'], authzGeneration, actorType: 'human' });
+      const hintRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2`, [tenantId, caseId]);
+      if (!hintRow.rowCount) return null;
+      const hint = verifyAggregateRow(hintRow.rows[0]);
+      await lockProjectAccess(client, { tenantId, projectId: hint.projectId, principal, minimum: 'editor' });
+      const row = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 for update`, [tenantId, caseId]);
+      if (!row.rowCount) return null;
+      const current = verifyAggregateRow(row.rows[0]);
+      await this.verifyProcessBehaviorTestPlans(current, client);
+      await this.verifyProcessBehaviorProductHarnessMappings(current, client);
+      const prior = current.idempotency?.[commandId];
+      if (prior) {
+        if (prior.action !== 'review-product-behavior-harness-mapping' || prior.requestHash !== requestHash) throw conflict('The mapping-review command ID is already bound to different pins.', current.version, 'IDEMPOTENCY_CONFLICT');
+        const review = (current.artifacts?.processBehaviorProductHarnessMappingReviews ?? []).find((entry) => entry.id === prior.reviewId);
+        if (!review) throw persistenceIntegrity('A mapping-review replay has no saved record.');
+        return { changeCase: current, review, replayed: true };
+      }
+      if (current.version !== expectedVersion) throw conflict('The case changed before the mapping review.', current.version);
+      const mapping = (current.artifacts?.processBehaviorProductHarnessMappings ?? []).find((entry) => entry.id === mappingId);
+      if (!mapping || mapping.mappingHash !== mappingHash || mapping.integrityStatus !== 'VALID'
+        || mapping.requestedBy === principal) throw conflict('Review requires the exact valid mapping and a distinct authorized human.', current.version, 'PRODUCT_HARNESS_REVIEW_DENIED');
+      const plan = (current.artifacts?.processBehaviorTestPlans ?? []).find((entry) => entry.id === mapping.planId);
+      const requirement = current.artifacts?.requirements?.requirements?.find((entry) => entry.id === mapping.requirementId);
+      if (!await this.isCurrentProductHarnessPlan(current, plan, requirement, client)) throw conflict('The saved plan became stale before independent mapping review.', current.version, 'PRODUCT_HARNESS_PLAN_STALE');
+      if (!this.isCurrentT91R2RecoveryMapping(current, mapping, requirement)) throw conflict('The selected or unrelated requirement changed before R2 mapping review.', current.version, 'PRODUCT_HARNESS_PLAN_STALE');
+      const mappingDefinition = plan?.caseDefinitions?.cases?.find((entry) => entry.type
+        === (['R1', 'R2'].includes(mapping.subcaseId) ? 'RECOVERY' : 'NEGATIVE'));
+      if (!isIndependentT91N2MappingReviewer({ reviewerPrincipal: principal, mappingRequester: mapping.requestedBy,
+        planAuthor: plan?.createdBy, definitionAuthor: mappingDefinition?.authoredBy })) {
+        throw conflict('The fixed product-harness mapping reviewer must be distinct from the plan and case-definition author.', current.version, 'PRODUCT_HARNESS_AUTHOR_SELF_REVIEW');
+      }
+      if ((current.artifacts?.processBehaviorProductHarnessMappingReviews ?? []).some((entry) => entry.mappingId === mappingId)) throw conflict('This exact mapping already has a review decision.', current.version, 'PRODUCT_HARNESS_MAPPING_ALREADY_REVIEWED');
+      const reviewedAt = new Date().toISOString();
+      const reviewCore = { schemaVersion: 1, id: `product-behavior-harness-review-${randomUUID()}`, tenantId,
+        projectId: current.projectId, caseId, mappingId, mappingHash, decision, reviewerPrincipal: principal,
+        reviewedAt, commandId, requestHash, status: decision === 'APPROVE_FOR_TEST_EXECUTION' ? 'REVIEWED_FOR_TEST_EXECUTION' : 'CHANGES_REQUESTED',
+        businessTruthStatus: 'UNVERIFIED', scenarioStatus: 'NOT_EXECUTED' };
+      const review = { ...reviewCore, reviewHash: contentHash(reviewCore) };
+      current.artifacts ??= {};
+      current.artifacts.processBehaviorProductHarnessMappingReviews ??= [];
+      current.artifacts.processBehaviorProductHarnessMappingReviews.push(review);
+      current.version += 1; current.updatedAt = reviewedAt;
+      current.idempotency ??= {};
+      current.idempotency[commandId] = { action: 'review-product-behavior-harness-mapping', requestHash, reviewId: review.id, version: current.version, at: reviewedAt };
+      const eventData = { recordId: review.id, mappingId, mappingHash, reviewHash: review.reviewHash, decision,
+        status: review.status, reviewerPrincipal: principal, reviewedAt, commandId, requestHash };
+      current.events.push({ id: `event-${randomUUID()}`, type: 'ProcessBehaviorProductHarnessMappingReviewed', schemaVersion: 1,
+        tenantId, actor: principal, correlationId: current.correlationId, causationId: commandId, timestamp: reviewedAt, data: eventData,
+        contentHash: contentHash({ type: 'ProcessBehaviorProductHarnessMappingReviewed', tenantId, data: eventData }) });
+      await this.saveInTransaction(client, current, { expectedVersion, principal, requiredPrincipalRoles: ['workspace-write'], authzGeneration });
+      review.integrityStatus = 'VALID';
+      return { changeCase: current, review, replayed: false };
+    });
+  }
+  async prepareProcessBehaviorScenarioExecution({ id: caseId, tenantId, principal, authzGeneration, requirementId,
+    linkId, planId, caseType = 'POSITIVE', expectedVersion, expectedDraftRevision, commandId, reservationToken = null }) {
+    if (!principal || !/^REQ-PROC-[a-f0-9]{12}$/.test(requirementId ?? '')
+      || !/^process-run-link-[0-9a-f-]{36}$/i.test(linkId ?? '')
+      || !/^behavior-test-plan-[0-9a-f-]{36}$/i.test(planId ?? '') || !['POSITIVE', 'NEGATIVE', 'RECOVERY'].includes(caseType)
+      || !Number.isSafeInteger(expectedVersion) || !Number.isSafeInteger(expectedDraftRevision)
+      || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{7,119}$/.test(commandId ?? '')) throw projectAccessDenied();
+    const requestHash = contentHash({ caseId, requirementId, linkId, planId, caseType, principal });
+    return this.persistence.transaction(async (client) => {
+      await lockIdentityRows(client, tenantId, [principal]);
+      await requirePrincipalAuthority(client, { tenantId, principal, roles: ['workspace-write'], authzGeneration, actorType: 'human' });
+      const hintRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2`, [tenantId, caseId]);
+      if (!hintRow.rowCount) return null;
+      const hint = verifyAggregateRow(hintRow.rows[0]);
+      if (!hint.projectId) throw projectAccessDenied();
+      await lockProjectAccess(client, { tenantId, projectId: hint.projectId, principal, minimum: 'owner' });
+      const row = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 for update`, [tenantId, caseId]);
+      if (!row.rowCount) return null;
+      const current = verifyAggregateRow(row.rows[0]);
+      if (current.projectId !== hint.projectId || current.accountableOwner !== principal) throw projectAccessDenied();
+      await this.verifyProcessEvidenceReviews(current, client);
+      await this.verifyProcessBehaviorTestPlans(current, client);
+      await this.verifyProcessBehaviorEvaluations(current, client);
+      await this.verifyProcessBehaviorScenarioExecutions(current, client);
+      const prior = current.idempotency?.[commandId];
+      let ownsReservation = false;
+      let reservationId = prior?.reservationId ?? null;
+      let activeReservationToken = reservationToken;
+      if (prior) {
+        if (prior.action !== 'execute-process-behavior-scenario' || prior.requestHash !== requestHash) {
+          throw conflict('This command ID is already bound to different scenario pins.', current.version, 'IDEMPOTENCY_CONFLICT');
+        }
+        if (prior.receiptId) {
+          const receipt = (current.artifacts?.processBehaviorScenarioExecutions ?? []).find((entry) => entry.id === prior.receiptId);
+          if (!receipt) throw persistenceIntegrity('A scenario execution replay has no retained receipt.');
+          return { replayed: true, receipt, changeCase: current };
+        }
+        if (prior.reservationStatus !== 'RUNNING' || !prior.reservationToken) throw persistenceIntegrity('A scenario execution reservation is malformed.');
+        if (reservationToken !== prior.reservationToken) return { reserved: true, changeCase: current,
+          reservationId: prior.reservationId, requestHash };
+        ownsReservation = true;
+      }
+      if (!ownsReservation && current.version !== expectedVersion) throw conflict('The case changed before scenario execution.', current.version);
+      const requirements = current.artifacts?.requirements;
+      if (!requirements || requirements.acceptedBaseline || current.currentStage !== 'S4'
+        || requirements.draftRevision !== expectedDraftRevision) throw conflict('The current requirement draft is unavailable for scenario execution.', current.version, 'REQUIREMENT_DRAFT_STALE');
+      const selected = approvedProcessBehaviorScenario(current, { requirementId, linkId, planId, caseType });
+      if (!selected || selected.review.reviewerPrincipal === principal) throw conflict('The exact scenario lacks a distinct current approval for test execution.', current.version, 'SCENARIO_NOT_REVIEWED_FOR_EXECUTION');
+      const currentRequirementHash = contentHash(Object.fromEntries(Object.entries(selected.requirement)
+        .filter(([key]) => !['processRunEvidenceLinks', 'processRunEvidenceReviews', 'processIntentEvaluationAcceptances', 'behaviorTestPlans'].includes(key))));
+      if (selected.plan.draftRevision !== requirements.draftRevision || selected.plan.requirementHash !== currentRequirementHash
+        || selected.link.draftRevision !== requirements.draftRevision || selected.link.requirementHash !== currentRequirementHash) {
+        throw conflict('The scenario plan and link are stale for the current requirement draft.', current.version, 'SCENARIO_PLAN_STALE');
+      }
+      const runRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2`,
+        [tenantId, selected.link.run.id]);
+      if (!runRow.rowCount) throw conflict('The reviewed scenario run is unavailable.', current.version, 'SCENARIO_RUN_NOT_FOUND');
+      const run = verifyAggregateRow(runRow.rows[0]);
+      if (run.projectId !== current.projectId || run.tenantId !== tenantId || run.status !== 'SUCCEEDED'
+        || contentHash(run) !== selected.link.run.aggregateHash
+        || run.processTaskRef?.behaviorTestPlan?.planId !== selected.plan.id
+        || run.processTaskRef?.behaviorTestPlan?.planHash !== selected.plan.planHash
+        || run.execution?.repositoryCandidate?.treeDigest == null) throw conflict('The runtime run no longer matches the approved plan and candidate.', current.version, 'SCENARIO_RUN_PIN_STALE');
+      const runEvents = run.events ?? [];
+      const audit = await client.query(`select count(*)::int as count from orgward.audit_log where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2 and event_hash = any($3::text[])`,
+        [tenantId, run.id, runEvents.map((event) => contentHash(event))]);
+      if (Number(audit.rows[0]?.count) !== runEvents.length) throw persistenceIntegrity('The selected scenario run is missing durable event audit rows.');
+      if (!ownsReservation) {
+        activeReservationToken = randomUUID();
+        reservationId = `process-behavior-scenario-reservation-${randomUUID()}`;
+        const reservedAt = new Date().toISOString();
+        current.version += 1; current.updatedAt = reservedAt;
+        current.idempotency ??= {};
+        current.idempotency[commandId] = { action: 'execute-process-behavior-scenario', requestHash,
+          reservationId, reservationToken: activeReservationToken, reservationStatus: 'RUNNING', version: current.version, at: reservedAt };
+        const eventData = { reservationId, requestHash, requirementId, linkId, planId, caseType,
+          caseId: selected.definition.id, caseDefinitionHash: digest(selected.definition), mappingHash: digest(selected.mapping),
+          criterionHash: selected.assertion.criterionHash, assertionHash: selected.mapping.assertionHash,
+          testPath: selected.mapping.testPath, testFileHash: selected.mapping.testFileHash,
+          datasetHash: digest(selected.definition.dataset), oracleHash: digest(selected.definition.expectedOutput),
+          sourceSnapshotId: selected.plan.repository.snapshotId, sourceTreeDigest: selected.plan.repository.treeDigest,
+          planHash: selected.plan.planHash, reviewId: selected.review.id, reviewHash: selected.review.reviewHash,
+          actor: principal, reservedAt };
+        const event = { id: `event-${randomUUID()}`, type: 'ProcessBehaviorScenarioExecutionReserved', schemaVersion: 1,
+          tenantId, actor: principal, correlationId: current.correlationId, causationId: commandId,
+          timestamp: reservedAt, aggregateVersion: current.version, data: eventData,
+          contentHash: contentHash({ type: 'ProcessBehaviorScenarioExecutionReserved', tenantId, data: eventData }) };
+        current.events.push(event);
+        await this.saveInTransaction(client, current, { expectedVersion, principal,
+          requiredPrincipalRoles: ['workspace-write'], authzGeneration });
+        ownsReservation = true;
+      }
+      return { replayed: false, claimed: !prior, claimOwned: true, reservationToken: activeReservationToken, reservationId,
+        changeCase: current, caseId, requirementId, linkId, planId, caseType, expectedVersion: current.version,
+        runId: run.id, runAggregateHash: contentHash(run), candidateTreeDigest: run.execution.repositoryCandidate.treeDigest,
+        testFileHash: selected.mapping.testFileHash, criterionHash: selected.assertion.criterionHash,
+        assertionHash: selected.mapping.assertionHash, sourceSnapshotId: selected.plan.repository.snapshotId,
+        sourceTreeDigest: selected.plan.repository.treeDigest, datasetHash: digest(selected.definition.dataset),
+        oracleHash: digest(selected.definition.expectedOutput), caseDefinitionHash: digest(selected.definition),
+        mappingHash: digest(selected.mapping), plan: structuredClone(selected.plan),
+        definition: structuredClone(selected.definition), assertion: structuredClone(selected.assertion),
+        reviewId: selected.review.id, reviewHash: selected.review.reviewHash, linkHash: selected.link.linkHash,
+        expectedDraftRevision, requestHash };
+    });
+  }
+  async recordProcessBehaviorScenarioExecution({ id: caseId, tenantId, principal, authzGeneration, requirementId,
+    linkId, planId, caseType = 'POSITIVE', expectedVersion, expectedDraftRevision, commandId, expectedPinsHash, execution, reservationToken }) {
+    const prepared = await this.prepareProcessBehaviorScenarioExecution({ id: caseId, tenantId, principal, authzGeneration,
+      requirementId, linkId, planId, caseType, expectedVersion, expectedDraftRevision, commandId, reservationToken });
+    if (!prepared) return null;
+    if (prepared.replayed) return prepared;
+    if (!prepared.claimOwned) throw conflict('This scenario execution command already has an active worker reservation.', expectedVersion, 'SCENARIO_EXECUTION_IN_PROGRESS');
+    if (!execution || ![1, 2].includes(execution.schemaVersion) || execution.result !== execution.tap?.status
+      || !['PASS', 'FAIL', 'INCONCLUSIVE'].includes(execution.result)
+      || execution.businessTruthStatus !== 'UNVERIFIED' || execution.runtimeVerificationStatus !== 'NOT_EXECUTED'
+      || execution.planHash !== prepared.plan.planHash || execution.runId !== prepared.runId
+      || execution.runAggregateHash !== prepared.runAggregateHash || execution.candidateTreeDigest !== prepared.candidateTreeDigest
+      || execution.caseType !== prepared.definition.type
+      || (execution.schemaVersion >= 2 && execution.criterionHash !== prepared.criterionHash)
+      || (execution.criterionHash !== undefined && execution.criterionHash !== prepared.criterionHash)
+      || execution.testFileHash !== prepared.testFileHash || execution.caseId !== prepared.definition.id
+      || execution.caseDefinitionHash !== digest(prepared.definition) || execution.mappingHash !== digest(prepared.definition.executionMapping)
+      || execution.datasetHash !== digest(prepared.definition.dataset) || execution.oracleHash !== digest(prepared.definition.expectedOutput)
+      || !/^[a-f0-9]{64}$/.test(execution.runnerHash ?? '')
+      || execution.assertionId !== prepared.assertion.id || execution.assertionHash !== prepared.definition.executionMapping.assertionHash
+      || execution.testPath !== prepared.definition.executionMapping.testPath
+      || execution.sourceSnapshotId !== prepared.plan.repository.snapshotId
+      || execution.sourceTreeDigest !== prepared.plan.repository.treeDigest
+      || expectedPinsHash !== contentHash({ planHash: prepared.plan.planHash, criterionHash: prepared.criterionHash,
+        assertionHash: prepared.assertionHash, testFileHash: prepared.testFileHash,
+        sourceSnapshotId: prepared.sourceSnapshotId, sourceTreeDigest: prepared.sourceTreeDigest,
+        candidateTreeDigest: prepared.candidateTreeDigest, caseId: prepared.definition.id, caseType: prepared.definition.type,
+        caseDefinitionHash: prepared.caseDefinitionHash, mappingHash: prepared.mappingHash,
+        datasetHash: prepared.datasetHash, oracleHash: prepared.oracleHash,
+        runAggregateHash: prepared.runAggregateHash, reviewId: prepared.reviewId,
+        reviewHash: prepared.reviewHash, linkHash: prepared.linkHash })) {
+      throw conflict('The scenario result does not match the exact approved execution pins.', expectedVersion, 'SCENARIO_EXECUTION_PIN_MISMATCH');
+    }
+    const requestHash = prepared.requestHash;
+    return this.persistence.transaction(async (client) => {
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${tenantId}:sdlc.process-behavior-scenario:${commandId}`]);
+      await lockIdentityRows(client, tenantId, [principal]);
+      await requirePrincipalAuthority(client, { tenantId, principal, roles: ['workspace-write'], authzGeneration, actorType: 'human' });
+      const hintRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2`, [tenantId, caseId]);
+      if (!hintRow.rowCount) return null;
+      const hint = verifyAggregateRow(hintRow.rows[0]);
+      if (!hint.projectId) throw projectAccessDenied();
+      await lockProjectAccess(client, { tenantId, projectId: hint.projectId, principal, minimum: 'owner' });
+      const row = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 for update`, [tenantId, caseId]);
+      if (!row.rowCount) return null;
+      const current = verifyAggregateRow(row.rows[0]);
+      if (current.projectId !== hint.projectId || current.accountableOwner !== principal) throw projectAccessDenied();
+      await this.verifyProcessEvidenceReviews(current, client);
+      await this.verifyProcessBehaviorTestPlans(current, client);
+      await this.verifyProcessBehaviorEvaluations(current, client);
+      await this.verifyProcessBehaviorScenarioExecutions(current, client);
+      const prior = current.idempotency?.[commandId];
+      if (prior) {
+        if (prior.action !== 'execute-process-behavior-scenario' || prior.requestHash !== requestHash) throw conflict('This command ID was already used with different scenario pins.', current.version, 'IDEMPOTENCY_CONFLICT');
+        if (prior.receiptId) {
+          const receipt = (current.artifacts?.processBehaviorScenarioExecutions ?? []).find((entry) => entry.id === prior.receiptId);
+          if (!receipt) throw persistenceIntegrity('A scenario execution replay has no retained receipt.');
+          return { changeCase: current, receipt, replayed: true };
+        }
+        if (prior.reservationToken !== reservationToken || prior.reservationStatus !== 'RUNNING') throw conflict('The scenario execution reservation is stale or owned by another request.', current.version, 'SCENARIO_EXECUTION_IN_PROGRESS');
+      }
+      if (current.version !== expectedVersion) throw conflict('The case changed while the isolated scenario was running.', current.version);
+      const selected = approvedProcessBehaviorScenario(current, { requirementId, linkId, planId, caseType });
+      if (!selected || selected.review.id !== prepared.reviewId || selected.review.reviewHash !== prepared.reviewHash
+        || selected.link.linkHash !== prepared.linkHash || selected.plan.planHash !== prepared.plan.planHash
+        || current.artifacts.requirements.draftRevision !== expectedDraftRevision) throw conflict('The approved scenario changed while it was running; no receipt was written.', current.version, 'SCENARIO_EXECUTION_STALE');
+      const recordedAt = new Date().toISOString();
+      const receiptCore = { ...structuredClone(execution), id: `process-behavior-scenario-execution-${randomUUID()}`,
+        schemaVersion: execution.schemaVersion, tenantId, projectId: current.projectId, caseId: current.id, requirementId, linkId,
+        linkHash: selected.link.linkHash, reviewId: selected.review.id, reviewHash: selected.review.reviewHash,
+        planId: selected.plan.id, planHash: selected.plan.planHash, recordedBy: principal, recordedAt,
+        expectedVersion, requestHash, status: execution.result,
+        statement: `The saved ${caseType.toLowerCase()} assertion ${execution.result === 'PASS' ? 'passed' : execution.result === 'FAIL' ? 'failed' : 'was inconclusive'} against the pinned dataset and oracle; this single case does not establish suite completion, business truth or runtime verification.` };
+      const receipt = { ...receiptCore, receiptHash: contentHash(receiptCore) };
+      current.artifacts.processBehaviorScenarioExecutions ??= [];
+      current.artifacts.processBehaviorScenarioExecutions.push(receipt);
+      current.version += 1; current.updatedAt = recordedAt;
+      current.idempotency ??= {};
+      current.idempotency[commandId] = { ...current.idempotency[commandId], action: 'execute-process-behavior-scenario', requestHash,
+        reservationStatus: 'COMPLETED', receiptId: receipt.id, version: current.version, at: recordedAt };
+      const eventData = { receiptId: receipt.id, receiptHash: receipt.receiptHash, requirementId, linkId,
+        linkHash: receipt.linkHash, reviewId: receipt.reviewId, reviewHash: receipt.reviewHash,
+        planId, planHash: receipt.planHash, caseId: receipt.caseId, caseType, runId: receipt.runId,
+        runAggregateHash: receipt.runAggregateHash, candidateTreeDigest: receipt.candidateTreeDigest,
+        result: receipt.result, status: receipt.status, businessTruthStatus: 'UNVERIFIED',
+        runtimeVerificationStatus: 'NOT_EXECUTED', actor: principal, recordedAt, requestHash };
+      const event = { id: `event-${randomUUID()}`, type: 'ProcessBehaviorScenarioExecuted', schemaVersion: 1,
+        tenantId, actor: principal, correlationId: current.correlationId, causationId: commandId,
+        timestamp: recordedAt, data: eventData,
+        contentHash: contentHash({ type: 'ProcessBehaviorScenarioExecuted', tenantId, data: eventData }) };
+      current.events.push(event);
+      await this.saveInTransaction(client, current, { expectedVersion, principal, requiredPrincipalRoles: ['workspace-write'], authzGeneration });
+      receipt.integrityStatus = 'VALID';
+      return { changeCase: current, receipt, replayed: false };
+    });
+  }
+  async verifyProcessBehaviorScenarioExecutions(current, client = null) {
+    const query = client ? client.query.bind(client) : this.persistence.query.bind(this.persistence);
+    const receipts = current.artifacts?.processBehaviorScenarioExecutions ?? [];
+    if (!Array.isArray(receipts)) throw persistenceIntegrity('Scenario execution receipts are malformed.');
+    const seen = new Set();
+    for (const receipt of receipts) {
+      const { receiptHash, integrityStatus: _integrityStatus, ...core } = receipt ?? {};
+      const selected = approvedProcessBehaviorScenario(current, { requirementId: receipt?.requirementId,
+        linkId: receipt?.linkId, planId: receipt?.planId, caseType: receipt?.caseType ?? 'POSITIVE', reviewId: receipt?.reviewId });
+      const events = (current.events ?? []).filter((event) => event.type === 'ProcessBehaviorScenarioExecuted'
+        && event.data?.receiptId === receipt?.id);
+      if (!selected || seen.has(receipt?.id) || ![1, 2].includes(receipt.schemaVersion)
+        || !/^process-behavior-scenario-execution-[0-9a-f-]{36}$/i.test(receipt.id ?? '')
+        || !/^[a-f0-9]{64}$/.test(receiptHash ?? '') || contentHash(core) !== receiptHash
+        || receipt.tenantId !== current.tenantId || receipt.projectId !== current.projectId || receipt.caseId !== current.id
+        || receipt.planHash !== selected.plan.planHash || receipt.caseType !== selected.definition.type
+        || receipt.caseDefinitionHash !== digest(selected.definition)
+        || (receipt.schemaVersion >= 2 && receipt.criterionHash !== selected.assertion.criterionHash)
+        || (receipt.criterionHash !== undefined && receipt.criterionHash !== selected.assertion.criterionHash)
+        || receipt.mappingHash !== digest(selected.mapping) || receipt.datasetHash !== digest(selected.definition.dataset)
+        || receipt.oracleHash !== digest(selected.definition.expectedOutput) || receipt.testFileHash !== selected.mapping.testFileHash
+        || !/^[a-f0-9]{64}$/.test(receipt.runnerHash ?? '')
+        || receipt.assertionId !== selected.assertion.id || receipt.assertionHash !== selected.mapping.assertionHash
+        || receipt.testPath !== selected.mapping.testPath || receipt.sourceSnapshotId !== selected.plan.repository.snapshotId
+        || receipt.sourceTreeDigest !== selected.plan.repository.treeDigest || receipt.result !== receipt.status
+        || receipt.result !== receipt.tap?.status || !['PASS', 'FAIL', 'INCONCLUSIVE'].includes(receipt.result)
+        || receipt.businessTruthStatus !== 'UNVERIFIED' || receipt.runtimeVerificationStatus !== 'NOT_EXECUTED'
+        || receipt.workspaceReadOnlyVerified !== true
+        || events.length !== 1) throw persistenceIntegrity('A scenario execution receipt failed its immutable plan, mapping, result, or event verification.');
+      const event = events[0];
+      const expectedEvent = { receiptId: receipt.id, receiptHash, requirementId: receipt.requirementId,
+        linkId: receipt.linkId, linkHash: receipt.linkHash, reviewId: receipt.reviewId, reviewHash: receipt.reviewHash,
+        planId: receipt.planId, planHash: receipt.planHash, caseId: receipt.caseId, caseType: receipt.caseType,
+        runId: receipt.runId, runAggregateHash: receipt.runAggregateHash, candidateTreeDigest: receipt.candidateTreeDigest,
+        result: receipt.result, status: receipt.status, businessTruthStatus: 'UNVERIFIED',
+        runtimeVerificationStatus: 'NOT_EXECUTED', actor: receipt.recordedBy, recordedAt: receipt.recordedAt,
+        requestHash: receipt.requestHash };
+      const idempotency = current.idempotency?.[event.causationId];
+      if (event.schemaVersion !== 1 || contentHash(event.data) !== contentHash(expectedEvent)
+        || event.actor !== receipt.recordedBy || event.timestamp !== receipt.recordedAt || event.tenantId !== current.tenantId
+        || event.contentHash !== contentHash({ type: event.type, tenantId: current.tenantId, data: expectedEvent })
+        || !idempotency || idempotency.action !== 'execute-process-behavior-scenario'
+        || idempotency.receiptId !== receipt.id || idempotency.requestHash !== receipt.requestHash
+        || idempotency.at !== receipt.recordedAt || Number(idempotency.version) !== Number(event.aggregateVersion ?? idempotency.version)) {
+        throw persistenceIntegrity('A scenario receipt has no unique matching event or idempotent command.');
+      }
+      const runRow = await query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2`,
+        [current.tenantId, receipt.runId]);
+      if (!runRow.rowCount) throw persistenceIntegrity('A scenario receipt has no retained run.');
+      const run = verifyAggregateRow(runRow.rows[0]);
+      if (contentHash(run) !== receipt.runAggregateHash || receipt.runId !== selected.link.run.id
+        || receipt.runAggregateHash !== selected.link.run.aggregateHash
+        || run.execution?.repositoryCandidate?.treeDigest !== receipt.candidateTreeDigest) throw persistenceIntegrity('A scenario receipt no longer matches the retained run and candidate tree.');
+      const audit = await query(`select event_hash,command_id,actor,aggregate_version,event from orgward.audit_log
+        where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 and event_hash=$3`,
+      [current.tenantId, current.id, contentHash(event)]);
+      const row = audit.rows[0];
+      if (audit.rowCount !== 1 || row.event_hash !== contentHash(event) || contentHash(row.event) !== contentHash(event)
+        || row.command_id !== event.causationId || row.actor !== event.actor
+        || Number(row.aggregate_version) !== Number(idempotency.version)) throw persistenceIntegrity('A scenario execution event has no matching durable audit command.');
+      receipt.integrityStatus = 'VALID'; seen.add(receipt.id);
+    }
+    for (const event of (current.events ?? []).filter((entry) => entry.type === 'ProcessBehaviorScenarioExecuted')) {
+      if (!seen.has(event.data?.receiptId)) throw persistenceIntegrity('A scenario execution event has no retained receipt.');
+    }
+    for (const event of (current.events ?? []).filter((entry) => entry.type === 'ProcessBehaviorScenarioExecutionReserved')) {
+      const claim = current.idempotency?.[event.causationId];
+      const data = event.data ?? {};
+      if (event.schemaVersion !== 1 || claim?.action !== 'execute-process-behavior-scenario'
+        || claim.reservationId !== data.reservationId || claim.requestHash !== data.requestHash
+        || !['RUNNING', 'COMPLETED'].includes(claim.reservationStatus)
+        || event.actor !== data.actor || event.timestamp !== data.reservedAt
+        || event.contentHash !== contentHash({ type: event.type, tenantId: current.tenantId, data })
+        || !/^[a-f0-9]{64}$/.test(data.requestHash ?? '')) throw persistenceIntegrity('A scenario execution reservation failed immutable command verification.');
+      const audit = await query(`select event_hash,command_id,actor,aggregate_version,event from orgward.audit_log
+        where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 and event_hash=$3`,
+      [current.tenantId, current.id, contentHash(event)]);
+      const row = audit.rows[0];
+      if (audit.rowCount !== 1 || row.event_hash !== contentHash(event) || contentHash(row.event) !== contentHash(event)
+        || row.command_id !== event.causationId || row.actor !== event.actor
+        || Number(row.aggregate_version) !== Number(event.aggregateVersion)) throw persistenceIntegrity('A scenario execution reservation has no matching durable audit command.');
+    }
+    return current;
+  }
+  async authorizeProcessBehaviorTestPlan({ id: caseId, tenantId, principal, authzGeneration,
+    requirementId, planId, revision, taskId, assertions, fileMappings, evaluationContext, caseDefinitions,
+    checkPlan, repositoryRef, expectedVersion, expectedDraftRevision, commandId }) {
+    if (!principal || !/^REQ-PROC-[a-f0-9]{12}$/.test(requirementId ?? '')
+      || !/^process-plan-[0-9a-f-]{36}$/i.test(planId ?? '') || !Number.isSafeInteger(revision) || revision < 1
+      || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{1,119}$/.test(taskId ?? '')
+      || !Number.isSafeInteger(expectedVersion) || !Number.isSafeInteger(expectedDraftRevision)
+      || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{7,119}$/.test(commandId ?? '')) throw projectAccessDenied();
+    const operation = 'sdlc.process-behavior-test-plan';
+    const requestHash = contentHash({ caseId, requirementId, planId, revision, taskId, assertions, fileMappings,
+      evaluationContext, caseDefinitions,
+      checkPlanHash: checkPlan?.planHash ?? null, repositoryHash: repositoryRef ? contentHash(repositoryRef) : null,
+      expectedVersion, expectedDraftRevision, principal });
+    return this.persistence.transaction(async (client) => {
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${tenantId}:${operation}:${commandId}`]);
+      await lockIdentityRows(client, tenantId, [principal]);
+      await requirePrincipalAuthority(client, { tenantId, principal, roles: ['workspace-write'], authzGeneration, actorType: 'human' });
+      const row = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 for update`, [tenantId, caseId]);
+      if (!row.rowCount) return null;
+      const current = verifyAggregateRow(row.rows[0]);
+      if (!current.projectId || current.tenantId !== tenantId) throw projectAccessDenied();
+      await lockProjectAccess(client, { tenantId, projectId: current.projectId, principal, minimum: 'owner' });
+      if (current.accountableOwner !== principal) throw projectAccessDenied();
+      await this.verifyProcessBehaviorTestPlans(current, client);
+      const previous = current.idempotency?.[commandId];
+      if (previous) {
+        if (previous.action !== 'authorize-process-behavior-test-plan' || previous.requestHash !== requestHash) throw conflict('This command ID was reused with different behavior plan input.', current.version, 'IDEMPOTENCY_CONFLICT');
+        const saved = current.artifacts?.processBehaviorTestPlans?.find((entry) => entry.id === previous.planId);
+        if (!saved) throw persistenceIntegrity('The behavior plan replay has no retained plan.');
+        return { changeCase: current, plan: saved, replayed: true };
+      }
+      if (current.version !== expectedVersion) throw conflict('The change case changed before authorizing the behavior test plan.', current.version);
+      const reqs = current.artifacts?.requirements;
+      if (!reqs || reqs.acceptedBaseline || current.currentStage !== 'S4' || reqs.draftRevision !== expectedDraftRevision) throw conflict('The requirement draft changed or is no longer editable.', current.version, 'REQUIREMENT_DRAFT_STALE');
+      if (!current.sourceBinding || verifySourceBinding(current.sourceBinding).valid !== true || verifyContextManifest(current).valid !== true) throw persistenceIntegrity('The pinned requirement source or context manifest is invalid.');
+      const requirement = reqs.requirements?.find((entry) => entry.id === requirementId && entry.processTrace && entry.verificationContract);
+      if (!requirement) throw conflict('The selected process requirement is unavailable.', current.version, 'PROCESS_REQUIREMENT_NOT_FOUND');
+      if (!verifyRequirementCriterionContract(requirement)) throw conflict('Legacy string criteria remain unclassified; the accountable owner must authorize a versioned obligation baseline before planning checks.', current.version, 'REQUIREMENT_CRITERIA_UNCLASSIFIED');
+      const projectRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2 for share`, [tenantId, current.projectId]);
+      if (!projectRow.rowCount) throw projectAccessDenied();
+      const project = verifyAggregateRow(projectRow.rows[0]);
+      const plan = await resolveRuntimeProcessPlan(client, { tenantId, projectId: project.id, project, planId, revision });
+      if (!plan) throw conflict('Choose an exact saved process plan revision.', current.version, 'PROCESS_PLAN_REVISION_NOT_FOUND');
+      const task = plan.tasks.find((entry) => entry.id === taskId);
+      if (!task || task.sourceProcessId !== requirement.processTrace.process.id
+        || plan.source?.blueprintId !== requirement.processTrace.source.blueprintId
+        || Number(plan.source?.blueprintVersion) !== Number(requirement.processTrace.source.blueprintVersion)) throw conflict('The task plan does not match the exact traced process source.', current.version, 'PROCESS_PLAN_SOURCE_MISMATCH');
+      if (!checkPlan || !Array.isArray(checkPlan.requiredChecks) || !checkPlan.requiredChecks.length || !/^[a-f0-9]{64}$/.test(checkPlan.planHash ?? '')) throw conflict('This bounded behavior evaluation requires a configured repository assertion check.', current.version, 'BEHAVIOR_CHECK_PLAN_UNAVAILABLE');
+      if (!repositoryRef || repositoryRef.kind !== 'github-app' || repositoryRef.checkPlan?.planHash !== checkPlan.planHash
+        || !/^[a-f0-9]{64}$/.test(repositoryRef.treeDigest ?? '') || !Array.isArray(repositoryRef.selectedFiles)
+        || !repositoryRef.selectedFiles.length) throw conflict('Pin one exact saved repository snapshot and selected files before authorizing assertions.', current.version, 'BEHAVIOR_CHECK_SOURCE_UNAVAILABLE');
+      const requirementHash = contentHash(Object.fromEntries(Object.entries(requirement)
+        .filter(([key]) => !['processRunEvidenceLinks', 'processRunEvidenceReviews', 'processIntentEvaluationAcceptances', 'behaviorTestPlans'].includes(key))));
+      let behaviorPlan;
+      try { behaviorPlan = buildProcessBehaviorTestPlan({ request: { assertions, fileMappings, evaluationContext, caseDefinitions }, changeCase: current, requirement, project, plan, task, checkPlan, repository: repositoryRef, principal }); }
+      catch (error) { throw Object.assign(new Error(error.message), { statusCode: 400, code: 'INVALID_PROCESS_BEHAVIOR_TEST_PLAN', retryable: false }); }
+      if (behaviorPlan.requirementHash !== requirementHash) throw persistenceIntegrity('The behavior plan requirement hash changed during authorization.');
+      behaviorPlan.requestHash = requestHash;
+      behaviorPlan.planHash = contentHash(Object.fromEntries(Object.entries(behaviorPlan).filter(([key]) => key !== 'planHash')));
+      current.artifacts.processBehaviorTestPlans ??= [];
+      current.artifacts.processBehaviorTestPlans.push(behaviorPlan);
+      current.version += 1;
+      current.updatedAt = behaviorPlan.createdAt;
+      current.idempotency ??= {};
+      current.idempotency[commandId] = { action: 'authorize-process-behavior-test-plan', requestHash, planId: behaviorPlan.id, version: current.version, at: behaviorPlan.createdAt };
+      const eventData = { planId: behaviorPlan.id, planHash: behaviorPlan.planHash, requirementId,
+        requirementHash: behaviorPlan.requirementHash, draftRevision: expectedDraftRevision, traceHash: behaviorPlan.traceHash,
+        criterionContractVersion: behaviorPlan.criterionContractVersion, criterionContractHash: behaviorPlan.criterionContractHash,
+        processPlanId: planId, processPlanRevision: revision, taskId, repositoryHash: behaviorPlan.repositoryHash,
+        repositorySnapshotId: behaviorPlan.repository.source?.snapshotId, repositoryTreeDigest: behaviorPlan.repository.treeDigest,
+        checkPlanHash: behaviorPlan.checkPlan.hash, fileMappingsHash: contentHash(behaviorPlan.fileMappings) };
+      eventData.evaluationContextHash = contentHash(behaviorPlan.evaluationContext);
+      eventData.caseDefinitionsHash = contentHash(behaviorPlan.caseDefinitions);
+      const event = { id: `event-${randomUUID()}`, type: 'ProcessBehaviorTestPlanAuthorized', schemaVersion: 1, tenantId,
+        actor: principal, correlationId: current.correlationId, causationId: commandId, timestamp: behaviorPlan.createdAt,
+        data: eventData, contentHash: contentHash({ type: 'ProcessBehaviorTestPlanAuthorized', tenantId, data: eventData }) };
+      current.events.push(event);
+      await this.saveInTransaction(client, current, { expectedVersion, principal, requiredPrincipalRoles: ['workspace-write'], authzGeneration });
+      return { changeCase: current, plan: behaviorPlan, replayed: false };
+    });
+  }
   async linkPersistedProcessRun({ id: caseId, tenantId, principal, authzGeneration, runId, planInstanceId, taskId, requirementId, expectedVersion, expectedDraftRevision, commandId }) {
     const humanSelector = !runId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(planInstanceId ?? '')
       && /^[a-zA-Z0-9][a-zA-Z0-9._:-]{1,119}$/.test(taskId ?? '');
@@ -2579,6 +4707,8 @@ export class PostgresChangeCaseStore extends PostgresDocumentStore {
       if (!caseRow.rowCount) return null;
       const current = verifyAggregateRow(caseRow.rows[0]);
       if (current.projectId !== hint.projectId) throw conflict('The case project scope changed during the command.', current.version, 'PROJECT_SCOPE_CONFLICT');
+      await this.verifyProcessBehaviorTestPlans(current, client);
+      await this.verifyProcessBehaviorEvaluations(current, client);
       const prior = current.idempotency?.[commandId];
       if (prior) {
         if (prior.action !== 'link-process-run-evidence' || prior.requestHash !== requestHash) throw conflict('This command ID was already used with different input.', current.version, 'IDEMPOTENCY_CONFLICT');
@@ -2633,6 +4763,7 @@ export class PostgresChangeCaseStore extends PostgresDocumentStore {
         const expectedRequestedRef = { processPlanId: ref.processPlanId, revision: ref.revision, planInstanceId: ref.planInstanceId,
           taskId: ref.taskId, blueprintId: ref.blueprintId, blueprintVersion: ref.blueprintVersion,
           ...(ref.flowBinding ? { flowBinding: ref.flowBinding } : {}), ...(ref.delegation ? { delegation: ref.delegation } : {}),
+          ...(ref.behaviorTestPlan ? { behaviorTestPlan: ref.behaviorTestPlan } : {}),
           ...(ref.repository ? { repository: ref.repository } : {}) };
         if (!validRunEvents || requestedEvents.length !== 1 || contentHash(requestedRef ?? null) !== contentHash(expectedRequestedRef)) {
           throw persistenceIntegrity('The persisted run request event does not authenticate its process-task reference.');
@@ -2691,6 +4822,7 @@ export class PostgresChangeCaseStore extends PostgresDocumentStore {
       let outputEvidence;
       let repositoryCheckEvidence = [];
       let repositoryCheckEvidenceStatus = 'NOT_APPLICABLE';
+      let behaviorEvaluation = null;
       if (run) {
         outputEvidence = trace.outcome.outputRefs.map(({ id, type, snapshotHash }) => ({ id, type, snapshotHash, status: 'UNAVAILABLE' }));
         const candidate = run.execution?.repositoryCandidate;
@@ -2705,6 +4837,42 @@ export class PostgresChangeCaseStore extends PostgresDocumentStore {
         repositoryCheckEvidenceStatus = repositoryCheckEvidence.length ? 'AVAILABLE'
           : configuredChecks && activeRun ? 'PENDING'
             : configuredChecks ? 'NOT_PRODUCED' : 'NOT_CONFIGURED';
+        if (ref.behaviorTestPlan) {
+          if (ref.behaviorTestPlan.caseId !== current.id) throw conflict('The authorized behavior plan belongs to another case.', current.version, 'BEHAVIOR_TEST_PLAN_SCOPE_MISMATCH');
+          const behaviorPlan = (current.artifacts?.processBehaviorTestPlans ?? []).find((entry) => entry.id === ref.behaviorTestPlan.planId);
+          const currentRequirementHash = contentHash(Object.fromEntries(Object.entries(requirement)
+            .filter(([key]) => !['processRunEvidenceLinks', 'processRunEvidenceReviews', 'processIntentEvaluationAcceptances', 'behaviorTestPlans'].includes(key))));
+          if (!behaviorPlan || !verifyProcessBehaviorTestPlan(behaviorPlan)
+            || behaviorPlan.planHash !== ref.behaviorTestPlan.planHash || behaviorPlan.requirementId !== requirement.id
+            || behaviorPlan.requirementHash !== currentRequirementHash || behaviorPlan.traceHash !== trace.traceHash
+            || behaviorPlan.draftRevision !== requirements.draftRevision
+            || behaviorPlan.processPlan?.id !== plan.id || Number(behaviorPlan.processPlan?.revision) !== Number(plan.revision)
+            || behaviorPlan.processPlan?.taskId !== task.id || behaviorPlan.source?.processSnapshotHash !== trace.source.processSnapshotHash) {
+            throw conflict('The authorized assertion plan is stale or does not match this exact requirement and task.', current.version, 'BEHAVIOR_TEST_PLAN_STALE');
+          }
+          behaviorEvaluation = evaluateAuthorizedBehaviorPlan(run, behaviorPlan, trace);
+          if (!behaviorEvaluation) throw persistenceIntegrity('The linked run does not contain valid preauthorized per-assertion evidence.');
+          const disposition = processBehaviorCandidateDisposition({ evaluationStatus: behaviorEvaluation.status,
+            riskCoverage: behaviorEvaluation.riskCoverage, assertions: behaviorEvaluation.assertions });
+          if (disposition !== 'PENDING_INDEPENDENT_REVIEW') {
+            if (disposition === 'REJECTED') {
+              const failedAssertions = (behaviorEvaluation.assertions ?? []).filter((entry) => entry?.status !== 'TEST_PASS')
+                .slice(0, 20).map((entry) => ({
+                  id: typeof entry.id === 'string' ? entry.id.slice(0, 120) : 'unknown-assertion',
+                  name: typeof entry.testName === 'string' ? entry.testName.slice(0, 180) : 'Unnamed assertion',
+                  status: ['TEST_FAIL', 'UNKNOWN'].includes(entry.status) ? entry.status : 'UNKNOWN',
+                  ...(typeof entry.reason === 'string' ? { reason: entry.reason.slice(0, 120) } : {}),
+                }));
+              const summary = failedAssertions.map((entry) => `${entry.name} (${entry.status}${entry.reason ? `: ${entry.reason}` : ''})`).join('; ');
+              const error = conflict(`No evidence link was saved. The candidate was rejected because ${summary || 'a declared assertion did not pass'}.`,
+                current.version, 'BEHAVIOR_CANDIDATE_REJECTED');
+              error.details = { failedAssertions };
+              throw error;
+            }
+            throw conflict('Independent assurance cannot admit this candidate until exact linked-risk and executed assertion evidence are available.',
+              current.version, 'BEHAVIOR_CANDIDATE_INCOMPLETE');
+          }
+        }
       } else {
         verifyPersistedOutputRecords(runtime);
         const completedEvents = runtimeEvents.filter((event) => event.type === 'HumanTaskCompleted'
@@ -2770,7 +4938,8 @@ export class PostgresChangeCaseStore extends PostgresDocumentStore {
         reason: run ? 'The persisted run and task are pinned; no authorized typed human output record is attached to this workload run.'
           : 'The exact human-reported output records are pinned to the completion, but human reports are not truth-verified and no behavior verification was executed.',
         tenantId, projectId: current.projectId, caseId, requirementId: requirement.id, draftRevision: requirements.draftRevision,
-        requirementHash: contentHash(Object.fromEntries(Object.entries(requirement).filter(([key]) => key !== 'processRunEvidenceLinks'))),
+        requirementHash: contentHash(Object.fromEntries(Object.entries(requirement)
+          .filter(([key]) => !['processRunEvidenceLinks', 'processRunEvidenceReviews'].includes(key)))),
         traceHash: trace.traceHash, contractHash: requirement.verificationContract.contractHash,
         source: { projectId: project.id, projectVersion: trace.source.projectVersion, blueprintId: trace.source.blueprintId,
           blueprintVersion: trace.source.blueprintVersion, blueprintSnapshotHash: trace.source.blueprintSnapshotHash,
@@ -2781,11 +4950,13 @@ export class PostgresChangeCaseStore extends PostgresDocumentStore {
         outputEvidence,
         repositoryCheckEvidence,
         repositoryCheckEvidenceStatus,
+        ...(behaviorEvaluation ? { behaviorEvaluation } : {}),
         instance: { id: ref.planInstanceId, taskId: ref.taskId, version: Number(runtime.version), status: runtime.status,
           runtimeHash: contentHash({ ...runtime, started_at: runtime.started_at?.toISOString?.() ?? runtime.started_at,
             completed_at: runtime.completed_at?.toISOString?.() ?? runtime.completed_at, created_at: runtime.created_at?.toISOString?.() ?? runtime.created_at,
             updated_at: runtime.updated_at?.toISOString?.() ?? runtime.updated_at }), eventHashes: runtimeEvents.map((event) => contentHash(event)) },
-        ...(run ? { run: { id: run.id, version: run.version, status: run.status, aggregateHash: contentHash(run), eventHashes: runEvents.map((event) => contentHash(event)) } }
+        ...(run ? { run: { id: run.id, version: run.version, status: run.status, requestedBy: run.requestedBy,
+          aggregateHash: contentHash(run), eventHashes: runEvents.map((event) => contentHash(event)) } }
           : { runtimeSource: { kind: 'human-task-completion', planInstanceId: ref.planInstanceId, taskId: ref.taskId,
             completionEventId: outputEvidence[0]?.completionEventId ?? runtimeEvents.find((event) => event.type === 'HumanTaskCompleted')?.id,
             completionEventHash: outputEvidence[0]?.completionEventHash ?? contentHash(runtimeEvents.find((event) => event.type === 'HumanTaskCompleted')) } }),
@@ -2807,6 +4978,448 @@ export class PostgresChangeCaseStore extends PostgresDocumentStore {
       current.events.push(event);
       await this.saveInTransaction(client, current, { expectedVersion, principal, requiredPrincipalRoles: ['workspace-write'], authzGeneration });
       return { changeCase: current, link, replayed: false };
+    });
+  }
+  async observePersistedRepositoryCheck({ id: caseId, tenantId, principal, authzGeneration, requirementId, linkId, expectedVersion, expectedDraftRevision, commandId }) {
+    if (!principal || !/^REQ-PROC-[a-f0-9]{12}$/.test(requirementId ?? '')
+      || !/^process-run-link-[0-9a-f-]{36}$/i.test(linkId ?? '')
+      || !Number.isSafeInteger(expectedVersion) || !Number.isSafeInteger(expectedDraftRevision)
+      || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{7,119}$/.test(commandId ?? '')) throw projectAccessDenied();
+    const operation = 'sdlc.repository-check-observation';
+    const requestHash = contentHash({ caseId, requirementId, linkId, expectedVersion, expectedDraftRevision, principal });
+    return this.persistence.transaction(async (client) => {
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${tenantId}:${operation}:${commandId}`]);
+      await lockIdentityRows(client, tenantId, [principal]);
+      await requirePrincipalAuthority(client, { tenantId, principal, roles: ['workspace-write'], authzGeneration, actorType: 'human' });
+      const hintRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2`, [tenantId, caseId]);
+      if (!hintRow.rowCount) return null;
+      const hint = verifyAggregateRow(hintRow.rows[0]);
+      if (!hint.projectId) throw projectAccessDenied();
+      await lockProjectAccess(client, { tenantId, projectId: hint.projectId, principal, minimum: 'editor' });
+      const caseRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 for update`, [tenantId, caseId]);
+      if (!caseRow.rowCount) return null;
+      const current = verifyAggregateRow(caseRow.rows[0]);
+      if (current.projectId !== hint.projectId || current.tenantId !== tenantId) throw conflict('The case project scope changed during the observation.', current.version, 'PROJECT_SCOPE_CONFLICT');
+      const prior = current.idempotency?.[commandId];
+      if (prior) {
+        if (prior.action !== 'observe-repository-check' || prior.requestHash !== requestHash) throw conflict('This command ID was already used with different observation input.', current.version, 'IDEMPOTENCY_CONFLICT');
+        await this.verifyRepositoryCheckObservations(current, client);
+        const observations = current.artifacts?.repositoryCheckObservations ?? [];
+        const result = observations.find((entry) => entry.id === prior.observationId);
+        if (!result || result.contentHash !== contentHash(Object.fromEntries(Object.entries(result).filter(([key]) => key !== 'contentHash')))) throw persistenceIntegrity('A repository-check observation replay has no valid retained record.');
+        const events = (current.events ?? []).filter((event) => event.type === 'RepositoryCheckObserved' && event.data?.observationId === result.id);
+        const replayAudit = events.length === 1 ? await client.query(`select event_hash,command_id,actor,aggregate_version,event
+          from orgward.audit_log where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 and event_hash=$3`,
+        [tenantId, current.id, contentHash(events[0])]) : { rowCount: 0, rows: [] };
+        const replayEvent = events[0]; const replayAuditRow = replayAudit.rows[0];
+        if (events.length !== 1 || replayEvent.data.observationHash !== result.contentHash
+          || replayEvent.causationId !== commandId || !replayAuditRow || replayAudit.rowCount !== 1
+          || contentHash(replayAuditRow.event) !== contentHash(replayEvent) || replayAuditRow.actor !== principal
+          || replayAuditRow.command_id !== commandId || Number(replayAuditRow.aggregate_version) !== Number(prior.version)) {
+          throw persistenceIntegrity('A repository-check observation replay has no matching append-only event and audit.');
+        }
+        let replayProposal = null;
+        if (replayEvent.data.proposalId) {
+          replayProposal = (current.artifacts.repositoryCheckProposals ?? []).find((entry) => entry.id === replayEvent.data.proposalId);
+          const retainedProposal = replayProposal;
+          if (!retainedProposal || retainedProposal.contentHash !== contentHash(Object.fromEntries(Object.entries(retainedProposal).filter(([key]) => key !== 'contentHash')))) {
+            throw persistenceIntegrity('A repository-check correction proposal failed replay integrity verification.');
+          }
+        }
+        return { changeCase: current, observation: result, proposal: replayProposal, replayed: true };
+      }
+      if (current.version !== expectedVersion) throw conflict('The change case changed before repository-check evidence could be observed.', current.version);
+      const reqs = current.artifacts?.requirements;
+      if (!reqs || reqs.acceptedBaseline || current.currentStage !== 'S4' || reqs.draftRevision !== expectedDraftRevision) throw conflict('The requirement draft changed; relink current evidence.', current.version, 'REQUIREMENT_DRAFT_STALE');
+      if (!current.sourceBinding || verifySourceBinding(current.sourceBinding).valid !== true || verifyContextManifest(current).valid !== true) throw persistenceIntegrity('The case source binding or context manifest is invalid.');
+      const requirement = reqs.requirements?.find((entry) => entry.id === requirementId && entry.processTrace);
+      const link = requirement?.processRunEvidenceLinks?.find((entry) => entry.id === linkId);
+      if (!requirement || !link || link.repositoryCheckEvidenceStatus !== 'AVAILABLE' || !link.repositoryCheckEvidence?.length) throw conflict('The selected link has no available repository-check receipts.', current.version, 'REPOSITORY_CHECK_NOT_AVAILABLE');
+      const requirementCore = Object.fromEntries(Object.entries(requirement).filter(([key]) => !['processRunEvidenceLinks', 'processRunEvidenceReviews'].includes(key)));
+      const requirementHash = contentHash(requirementCore);
+      const trace = requirement.processTrace;
+      const { traceHash, ...traceCore } = trace;
+      const { contractHash, ...contractCore } = requirement.verificationContract ?? {};
+      const { linkHash, ...linkCore } = link;
+      const expectedSource = { projectId: trace.source.projectId, projectVersion: trace.source.projectVersion,
+        blueprintId: trace.source.blueprintId, blueprintVersion: trace.source.blueprintVersion,
+        blueprintSnapshotHash: trace.source.blueprintSnapshotHash, processId: trace.process.id,
+        processSnapshotHash: trace.source.processSnapshotHash, bindingHash: trace.source.bindingHash };
+      if (contentHash(linkCore) !== linkHash || link.status !== 'UNVERIFIED' || link.verificationStatus !== 'NOT_EXECUTED'
+        || link.tenantId !== tenantId || link.projectId !== current.projectId || link.caseId !== caseId
+        || link.requirementId !== requirementId || link.draftRevision !== expectedDraftRevision || link.requirementHash !== requirementHash
+        || link.traceHash !== traceHash || traceHash !== current.processRequirementTrace?.traceHash || contentHash(traceCore) !== traceHash
+        || !contractHash || digest(contractCore) !== contractHash || link.contractHash !== contractHash
+        || contentHash(link.source) !== contentHash(expectedSource)
+        || contentHash(link.outputs) !== contentHash(trace.outcome.outputRefs.map(({ id, type, snapshotHash }) => ({ id, type, snapshotHash })))
+        || link.plan?.taskId !== link.instance?.taskId || !link.run?.id) throw persistenceIntegrity('The repository-check link does not match its exact requirement and source pins.');
+      if ((current.artifacts.repositoryCheckObservations ?? []).some((entry) => entry.linkId === link.id && entry.linkHash === link.linkHash)) {
+        throw conflict('This immutable repository-check link already has an observation. Replay the original command to retrieve it.', current.version, 'REPOSITORY_CHECK_ALREADY_OBSERVED');
+      }
+      const linkEvent = (current.events ?? []).filter((event) => event.type === 'ProcessRunEvidenceLinked' && event.data?.linkId === link.id);
+      if (linkEvent.length !== 1 || linkEvent[0].data.linkHash !== link.linkHash || linkEvent[0].data.runId !== link.run.id) throw persistenceIntegrity('The repository-check link has no unique matching run event.');
+      const linkAudit = await client.query(`select count(*)::int as count from orgward.audit_log where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 and event_hash=$3`, [tenantId, caseId, contentHash(linkEvent[0])]);
+      if (Number(linkAudit.rows[0]?.count) !== 1) throw persistenceIntegrity('The repository-check link has no durable audit record.');
+      const projectRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2 for share`, [tenantId, current.projectId]);
+      if (!projectRow.rowCount) throw projectAccessDenied();
+      const project = verifyAggregateRow(projectRow.rows[0]);
+      const blueprint = (project.blueprintVersions ?? []).find((entry) => entry.id === link.source.blueprintId && entry.version === link.source.blueprintVersion);
+      if (!blueprint || contentHash(blueprint) !== link.source.blueprintSnapshotHash) throw conflict('The selected design source is stale.', current.version, 'PROCESS_SOURCE_STALE');
+      const latest = latestBlueprint(project);
+      if (!latest || latest.id !== blueprint.id || latest.version !== blueprint.version || contentHash(latest) !== contentHash(blueprint)) throw conflict('The selected design source is no longer current.', current.version, 'PROCESS_SOURCE_STALE');
+      const runRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2 for share`, [tenantId, link.run.id]);
+      if (!runRow.rowCount) throw conflict('The linked execution run is unavailable.', current.version, 'PROCESS_RUN_NOT_FOUND');
+      const run = verifyAggregateRow(runRow.rows[0]);
+      const ref = run.processTaskRef;
+      if (run.projectId !== current.projectId || !ref || ref.planInstanceId !== link.instance.id || ref.taskId !== link.plan.taskId
+        || ref.processPlanId !== link.plan.id || Number(ref.revision) !== Number(link.plan.revision)
+        || ref.blueprintId !== link.source.blueprintId || Number(ref.blueprintVersion) !== Number(link.source.blueprintVersion)) throw persistenceIntegrity('The stored run does not match the linked process identity.');
+      if (link.run.aggregateHash !== contentHash(run) || Number(link.run.version) !== Number(run.version)
+        || link.run.status !== run.status || contentHash(link.run.eventHashes) !== contentHash((run.events ?? []).map((event) => contentHash(event)))) {
+        throw persistenceIntegrity('The run aggregate no longer matches the linked run pins.');
+      }
+      const plan = await resolveRuntimeProcessPlan(client, { tenantId, projectId: current.projectId, project, planId: ref.processPlanId, revision: Number(ref.revision) });
+      const task = plan?.tasks?.find((entry) => entry.id === ref.taskId);
+      if (!plan || (plan.snapshotHash ?? contentHash(plan)) !== link.plan.snapshotHash || !task
+        || contentHash(task) !== link.plan.taskHash || task.sourceProcessId !== trace.process.id
+        || plan.source?.processId !== ref.processId || plan.source?.blueprintId !== blueprint.id
+        || Number(plan.source?.blueprintVersion) !== Number(blueprint.version)) throw persistenceIntegrity('The linked plan/task no longer resolves to its exact pinned source.');
+      const runtimeResult = await client.query(`select * from orgward.process_task_instances
+        where tenant_id=$1 and project_id=$2 and plan_instance_id=$3 and task_id=$4 for share`,
+      [tenantId, current.projectId, ref.planInstanceId, ref.taskId]);
+      if (!runtimeResult.rowCount) throw persistenceIntegrity('The linked run has no canonical process-task runtime row.');
+      const runtime = runtimeResult.rows[0];
+      assertLinkedWorkloadRuntime(runtime, run);
+      const runtimeHash = contentHash({ ...runtime, started_at: runtime.started_at?.toISOString?.() ?? runtime.started_at,
+        completed_at: runtime.completed_at?.toISOString?.() ?? runtime.completed_at, created_at: runtime.created_at?.toISOString?.() ?? runtime.created_at,
+        updated_at: runtime.updated_at?.toISOString?.() ?? runtime.updated_at });
+      if (runtimeHash !== link.instance.runtimeHash || Number(runtime.version) !== Number(link.instance.version)
+        || contentHash((runtime.events ?? []).map((event) => contentHash(event))) !== contentHash(link.instance.eventHashes)) throw persistenceIntegrity('The canonical runtime row no longer matches the linked instance pins.');
+      const runtimeEvents = runtime.events ?? [];
+      if (!runtimeEvents.length || !runtimeEvents.every((event) => { const { contentHash: hash, ...core } = event ?? {}; return /^[a-f0-9]{64}$/.test(hash ?? '') && contentHash(core) === hash; })) {
+        throw persistenceIntegrity('The canonical process-task event history is invalid.');
+      }
+      const runtimeAudit = await client.query(`select count(*)::int as count from orgward.audit_log
+        where tenant_id=$1 and aggregate_kind='process_task_instance' and aggregate_id=$2 and event_hash = any($3::text[])`,
+      [tenantId, `${runtime.plan_instance_id}:${runtime.task_id}`, runtimeEvents.map((event) => contentHash(event))]);
+      if (Number(runtimeAudit.rows[0]?.count) !== runtimeEvents.length) throw persistenceIntegrity('The canonical process-task events lack durable audit records.');
+      const receipts = verifiedRepositoryCheckEvidence(run, ref, { source: { projectId: current.projectId } });
+      if (!receipts?.length || contentHash(receipts) !== contentHash(link.repositoryCheckEvidence)) throw persistenceIntegrity('The stored repository-check receipts no longer match the linked evidence.');
+      const runEvents = run.events ?? [];
+      const terminal = runEvents.filter((event) => ['ExecutionSucceeded', 'ExecutionFailed'].includes(event.type));
+      if (terminal.length !== 1 || terminal[0].data?.candidateEvidenceHash !== run.execution?.evidenceHash
+        || !runEvents.every((event) => { const { contentHash: hash, ...core } = event ?? {}; return /^[a-f0-9]{64}$/.test(hash ?? '') && contentHash(core) === hash; })) throw persistenceIntegrity('The execution run terminal evidence is invalid.');
+      const audit = await client.query(`select count(*)::int as count from orgward.audit_log where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2 and event_hash = any($3::text[])`, [tenantId, run.id, runEvents.map((event) => contentHash(event))]);
+      if (Number(audit.rows[0]?.count) !== runEvents.length) throw persistenceIntegrity('The execution run is missing durable event audit records.');
+      const observationCore = { id: `repository-check-observation-${randomUUID()}`, schemaVersion: 1, category: 'REPOSITORY_CHECK',
+        tenantId, projectId: current.projectId, caseId, requirementId, requirementHash, draftRevision: expectedDraftRevision,
+        linkId, linkHash, runId: run.id, runVersion: run.version, runAggregateHash: contentHash(run),
+        projectVersion: project.version, blueprintId: blueprint.id, blueprintVersion: blueprint.version, blueprintHash: contentHash(blueprint),
+        planId: link.plan.id, planRevision: link.plan.revision, planHash: link.plan.snapshotHash,
+        instanceId: link.instance.id, taskId: link.plan.taskId, taskHash: link.plan.taskHash,
+        candidateEvidenceHash: run.execution.evidenceHash, terminalEventHash: contentHash(terminal[0]),
+        runOutcome: run.status,
+        verifierResult: run.execution.repositoryCandidate.verification ? {
+          id: run.execution.repositoryCandidate.verification.id, version: run.execution.repositoryCandidate.verification.version,
+          profileHash: run.githubPatchSelection?.verifier?.profileHash ?? null,
+          commandHash: run.execution.repositoryCandidate.verification.commandHash,
+          treeDigest: run.execution.repositoryCandidate.verification.treeDigest,
+          status: run.execution.repositoryCandidate.verification.status,
+          exitCode: run.execution.repositoryCandidate.verification.exitCode,
+          outputHash: run.execution.repositoryCandidate.verification.outputHash,
+        } : null,
+        checks: receipts, observedAt: new Date().toISOString(), observedBy: principal,
+        businessTruthStatus: 'UNVERIFIED', verificationStatus: 'NOT_EXECUTED', causality: 'HYPOTHESIS',
+        scope: 'Pinned repository candidate code and the configured check results only.' };
+      const observation = { ...observationCore, contentHash: contentHash(observationCore) };
+      const proposals = current.artifacts.repositoryCheckProposals ?? [];
+      const failedChecks = receipts.filter((receipt) => receipt.status !== 'PASSED');
+      const proposalCore = { id: `repository-check-proposal-${randomUUID()}`, type: 'DESIGN_CORRECTION_CLAIM',
+          title: failedChecks.length ? 'Review code associated with a failed repository check' : 'Review design implications of repository checks',
+          proposedClaim: failedChecks.length
+            ? `Review the pinned candidate code and check configuration for ${failedChecks.map((entry) => entry.id).join(', ')}. This is a code-check hypothesis, not a business-behavior finding.`
+            : `Review whether the passing checks for the pinned candidate code have any design implications. Passing checks do not establish business behavior.`,
+          scope: observation.scope, derivedFrom: [observation.id, observation.contentHash, ...receipts.map((entry) => entry.candidateEvidenceHash)],
+          evidence: { observationId: observation.id, observationHash: observation.contentHash, runId: run.id,
+            runAggregateHash: contentHash(run), terminalEventHash: contentHash(terminal[0]), checks: receipts },
+          status: 'PROPOSED_NOT_APPLIED', authorityRequired: true, businessTruthStatus: 'UNVERIFIED', verificationStatus: 'NOT_EXECUTED',
+          causality: 'HYPOTHESIS', createdAt: observation.observedAt, createdBy: principal };
+      const proposal = { ...proposalCore, contentHash: contentHash(proposalCore) };
+      proposals.push(proposal);
+      current.artifacts.repositoryCheckObservations ??= [];
+      current.artifacts.repositoryCheckObservations.push(observation);
+      current.artifacts.repositoryCheckProposals = proposals;
+      current.version += 1; current.updatedAt = observation.observedAt;
+      current.idempotency ??= {};
+      current.idempotency[commandId] = { action: 'observe-repository-check', requestHash, observationId: observation.id, version: current.version, at: observation.observedAt };
+      const eventData = { observationId: observation.id, observationHash: observation.contentHash, proposalId: proposal.id, proposalHash: proposal.contentHash,
+        linkId, linkHash, runId: run.id, runAggregateHash: contentHash(run), verificationStatus: 'NOT_EXECUTED', businessTruthStatus: 'UNVERIFIED' };
+      const event = { id: `event-${randomUUID()}`, type: 'RepositoryCheckObserved', schemaVersion: 1, tenantId,
+        actor: principal, correlationId: current.correlationId, causationId: commandId, timestamp: observation.observedAt,
+        data: eventData, contentHash: contentHash({ type: 'RepositoryCheckObserved', tenantId, data: eventData }) };
+      current.events.push(event);
+      await this.saveInTransaction(client, current, { expectedVersion, principal, requiredPrincipalRoles: ['workspace-write'], authzGeneration });
+      return { changeCase: current, observation, proposal, replayed: false };
+    });
+  }
+  async reviewPersistedProcessRunEvidence({ id: caseId, tenantId, principal, authzGeneration, requirementId, linkId, criteria, scenarioCases = null, conflictResolution = null, expectedVersion, expectedDraftRevision, commandId }) {
+    if (!principal || !/^REQ-PROC-[a-f0-9]{12}$/.test(requirementId ?? '')
+      || !/^process-run-link-[0-9a-f-]{36}$/i.test(linkId ?? '')
+      || !Array.isArray(criteria) || criteria.length < 1 || criteria.length > 32
+      || !Number.isSafeInteger(expectedVersion) || !Number.isSafeInteger(expectedDraftRevision)
+      || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{7,119}$/.test(commandId ?? '')) throw projectAccessDenied();
+    const operation = 'sdlc.process-run-evidence-review';
+    const requestHash = contentHash({ caseId, requirementId, linkId, criteria, ...(scenarioCases ? { scenarioCases } : {}),
+      ...(conflictResolution ? { conflictResolution } : {}), expectedVersion, expectedDraftRevision, principal });
+    return this.persistence.transaction(async (client) => {
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [`${tenantId}:${operation}:${commandId}`]);
+      await lockIdentityRows(client, tenantId, [principal]);
+      await requirePrincipalAuthority(client, { tenantId, principal, roles: ['workspace-write'], authzGeneration, actorType: 'human' });
+      const hintRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2`, [tenantId, caseId]);
+      if (!hintRow.rowCount) return null;
+      const hint = verifyAggregateRow(hintRow.rows[0]);
+      if (!hint.projectId) throw projectAccessDenied();
+      await lockProjectAccess(client, { tenantId, projectId: hint.projectId, principal, minimum: 'editor' });
+      const caseRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 for update`, [tenantId, caseId]);
+      if (!caseRow.rowCount) return null;
+      const current = verifyAggregateRow(caseRow.rows[0]);
+      if (current.projectId !== hint.projectId) throw conflict('The case project scope changed during the review.', current.version, 'PROJECT_SCOPE_CONFLICT');
+      const prior = current.idempotency?.[commandId];
+      if (prior) {
+        if (prior.action !== 'review-process-run-evidence' || prior.requestHash !== requestHash) throw conflict('This command ID was already used with different review input.', current.version, 'IDEMPOTENCY_CONFLICT');
+        const review = current.artifacts?.requirements?.requirements?.flatMap((entry) => entry.processRunEvidenceReviews ?? [])
+          .find((entry) => entry.id === prior.reviewId);
+        if (!review) throw persistenceIntegrity('A process evidence review replay has no retained review record.');
+        const requirement = current.artifacts?.requirements?.requirements?.find((entry) => entry.id === review.requirementId);
+        const verified = processEvidenceReviewState(current, requirement, review);
+        const audit = verified ? await client.query(`select event_hash,command_id,actor,aggregate_version,event
+          from orgward.audit_log where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 and event_hash=$3`,
+        [tenantId, current.id, contentHash(verified.event)]) : { rowCount: 0, rows: [] };
+        const auditRow = audit.rows[0];
+        if (!verified || audit.rowCount !== 1 || auditRow.event_hash !== contentHash(verified.event)
+          || contentHash(auditRow.event) !== contentHash(verified.event) || auditRow.actor !== verified.event.actor
+          || auditRow.command_id !== verified.event.causationId
+          || Number(auditRow.aggregate_version) !== Number(verified.event.aggregateVersion ?? verified.idempotency.version)) {
+          throw persistenceIntegrity('A process evidence review replay does not match its retained event, audit, or evidence pins.');
+        }
+        review.integrityStatus = 'VALID';
+        return { changeCase: current, review, replayed: true };
+      }
+      if (current.version !== expectedVersion) throw conflict('The case changed before the evidence review could be recorded.', current.version);
+      if (current.tenantId !== tenantId || !current.sourceBinding || !current.projectId) throw projectAccessDenied();
+      if (verifySourceBinding(current.sourceBinding).valid !== true) throw persistenceIntegrity('The saved source binding is invalid; process evidence cannot be reviewed.');
+      const contextIntegrity = verifyContextManifest(current);
+      if (!current.artifacts?.context || contextIntegrity.valid !== true) throw persistenceIntegrity('The saved context manifest is invalid; process evidence cannot be reviewed.');
+      const artifact = current.artifacts?.requirements;
+      if (!artifact || artifact.acceptedBaseline || current.currentStage !== 'S4'
+        || artifact.draftRevision !== expectedDraftRevision) throw conflict('The requirement draft changed or is no longer open.', current.version, 'REQUIREMENT_DRAFT_STALE');
+      const requirement = artifact.requirements.find((entry) => entry.id === requirementId && entry.processTrace && entry.verificationContract);
+      if (!requirement) throw conflict('The selected process requirement is unavailable.', current.version, 'PROCESS_REQUIREMENT_NOT_FOUND');
+      const requirementCore = Object.fromEntries(Object.entries(requirement)
+        .filter(([key]) => !['processRunEvidenceLinks', 'processRunEvidenceReviews'].includes(key)));
+      const requirementHash = contentHash(requirementCore);
+      const link = (requirement.processRunEvidenceLinks ?? []).find((entry) => entry.id === linkId);
+      if (!link) throw conflict('The selected persisted runtime evidence link is unavailable.', current.version, 'PROCESS_EVIDENCE_LINK_NOT_FOUND');
+      if (link.draftRevision !== expectedDraftRevision || link.requirementHash !== requirementHash) {
+        throw conflict('The linked process evidence is stale for this requirement draft; link current evidence before reviewing.', current.version, 'PROCESS_EVIDENCE_LINK_STALE');
+      }
+      await this.verifyProcessBehaviorTestPlans(current, client);
+      await this.verifyProcessBehaviorEvaluations(current, client);
+      const behaviorPlan = link.behaviorEvaluation
+        ? (current.artifacts?.processBehaviorTestPlans ?? []).find((entry) => entry.id === link.behaviorEvaluation.planId) : null;
+      let reviewedScenarioCases = null;
+      let scenarioExecutionDecisions = false;
+      if (behaviorPlan) {
+        const definitions = behaviorPlan.caseDefinitions?.cases ?? [];
+        if (!verifyProcessBehaviorTestPlan(behaviorPlan) || behaviorPlan.planHash !== link.behaviorEvaluation.planHash
+          || behaviorPlan.requirementId !== requirement.id || behaviorPlan.requirementHash !== requirementHash
+          || behaviorPlan.draftRevision !== expectedDraftRevision || behaviorPlan.traceHash !== link.traceHash
+          || behaviorPlan.criterionContractVersion !== requirement.criterionContract?.version
+          || behaviorPlan.criterionContractHash !== requirement.criterionContract?.contentHash
+          || definitions.length !== 3 || !Array.isArray(scenarioCases) || scenarioCases.length !== definitions.length) {
+          throw conflict('Review requires the exact current behavior plan and all three captured scenario definitions.', current.version, 'BEHAVIOR_PLAN_REVIEW_STALE');
+        }
+        const decisionCount = scenarioCases.filter((entry) => Object.hasOwn(entry, 'executionDecision')).length;
+        if (decisionCount !== 0 && decisionCount !== definitions.length) {
+          throw conflict('Provide an execution-review decision for every scenario, or omit them all for a review-only record.', current.version, 'INVALID_SCENARIO_EXECUTION_DECISIONS');
+        }
+        scenarioExecutionDecisions = decisionCount === definitions.length;
+        reviewedScenarioCases = definitions.map((definition) => {
+          const supplied = scenarioCases.find((entry) => entry?.type === definition.type);
+          const definitionHash = digest(definition);
+          if (!supplied || contentHash(supplied.definition) !== contentHash(definition)) {
+            throw conflict('Scenario review must submit the exact immutable case definition.', current.version, 'SCENARIO_DEFINITION_MISMATCH');
+          }
+          if (!['SUPPORTED', 'CONTRADICTED', 'INCONCLUSIVE'].includes(supplied.disposition)
+            || typeof supplied.note !== 'string' || !supplied.note.trim() || supplied.note.length > 1000) {
+            throw conflict('Provide a bounded decision and note for each exact positive, negative, and recovery definition.', current.version, 'INVALID_SCENARIO_CASE_REVIEW');
+          }
+          if (scenarioExecutionDecisions && !['APPROVE_FOR_TEST_EXECUTION', 'REQUEST_CHANGES'].includes(supplied.executionDecision)) {
+            throw conflict('Choose APPROVE_FOR_TEST_EXECUTION or REQUEST_CHANGES for each exact scenario.', current.version, 'INVALID_SCENARIO_EXECUTION_DECISION');
+          }
+          if (supplied.executionDecision === 'APPROVE_FOR_TEST_EXECUTION'
+            && (definition.executionMapping?.status !== 'OWNER_PROPOSED_UNVERIFIED'
+              || !definition.dataset || !definition.expectedOutput)) {
+            throw conflict('A scenario with an incomplete dataset, oracle, assertion or test-file mapping cannot be approved for test execution.', current.version, 'SCENARIO_MAPPING_INCOMPLETE');
+          }
+          const executionReviewStatus = supplied.executionDecision === 'APPROVE_FOR_TEST_EXECUTION'
+            ? 'REVIEWED_FOR_TEST_EXECUTION'
+            : supplied.executionDecision === 'REQUEST_CHANGES' ? 'CHANGES_REQUESTED' : undefined;
+          return { type: definition.type, definitionHash, definition: structuredClone(definition),
+            disposition: supplied.disposition, note: supplied.note.trim(),
+            ...(executionReviewStatus ? { executionDecision: supplied.executionDecision, executionReviewStatus } : {}) };
+        });
+      } else if (scenarioCases !== null) {
+        throw conflict('Scenario review is only valid for a linked immutable behavior plan.', current.version, 'BEHAVIOR_PLAN_REVIEW_STALE');
+      }
+      const { linkHash, ...linkCore } = link;
+      const trace = requirement.processTrace;
+      const { traceHash, ...traceCore } = trace;
+      const { contractHash, ...contractCore } = requirement.verificationContract;
+      const expectedSource = { projectId: trace.source.projectId, projectVersion: trace.source.projectVersion,
+        blueprintId: trace.source.blueprintId, blueprintVersion: trace.source.blueprintVersion,
+        blueprintSnapshotHash: trace.source.blueprintSnapshotHash, processId: trace.process.id,
+        processSnapshotHash: trace.source.processSnapshotHash, bindingHash: trace.source.bindingHash };
+      if (contentHash(linkCore) !== linkHash || link.status !== 'UNVERIFIED' || link.verificationStatus !== 'NOT_EXECUTED'
+        || link.tenantId !== tenantId || link.projectId !== current.projectId || link.caseId !== current.id
+        || link.requirementId !== requirement.id || link.draftRevision !== expectedDraftRevision || link.requirementHash !== requirementHash
+        || link.traceHash !== traceHash || traceHash !== current.processRequirementTrace?.traceHash
+        || contentHash(traceCore) !== traceHash || !link.contractHash || link.contractHash !== contractHash
+        || contentHash(contractCore) !== contractHash || contentHash(link.source) !== contentHash(expectedSource)
+        || contentHash(link.outputs) !== contentHash(trace.outcome.outputRefs.map(({ id, type, snapshotHash }) => ({ id, type, snapshotHash })))) {
+        throw persistenceIntegrity('The linked process evidence does not match the exact current requirement, trace, or source pins.');
+      }
+      const linkEvent = (current.events ?? []).filter((event) => event.type === 'ProcessRunEvidenceLinked' && event.data?.linkId === link.id);
+      if (linkEvent.length !== 1 || linkEvent[0].data.linkHash !== link.linkHash) throw persistenceIntegrity('The process evidence link has no unique matching append-only event.');
+      const linkAudit = await client.query(`select count(*)::int as count from orgward.audit_log
+        where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 and event_hash=$3`,
+      [tenantId, current.id, contentHash(linkEvent[0])]);
+      if (Number(linkAudit.rows[0]?.count) !== 1) throw persistenceIntegrity('The process evidence link has no unique durable audit record.');
+      const projectRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='project' and aggregate_id=$2 for share`, [tenantId, current.projectId]);
+      if (!projectRow.rowCount) throw projectAccessDenied();
+      const project = verifyAggregateRow(projectRow.rows[0]);
+      const blueprint = latestBlueprint(project);
+      if (!blueprint || blueprint.id !== trace.source.blueprintId || blueprint.version !== trace.source.blueprintVersion
+        || contentHash(blueprint) !== trace.source.blueprintSnapshotHash) throw conflict('The linked evidence source is stale; reload the current saved design.', current.version, 'PROCESS_SOURCE_STALE');
+      const process = Object.values(blueprint.areas ?? {}).flatMap((area) => area.items ?? []).find((entry) => entry.id === trace.process.id && entry.type === 'process');
+      if (!process || contentHash(process) !== trace.source.processSnapshotHash) throw conflict('The linked process no longer matches its exact saved source.', current.version, 'PROCESS_SOURCE_STALE');
+      const principalActors = new Set([link.actor, current.createdBy,
+        [...(current.events ?? [])].reverse().find((event) => ['GatePassed', 'GateBlocked'].includes(event.type) && event.data?.stage === 'S4'
+          && Date.parse(event.timestamp ?? '') <= Date.parse(link.linkedAt ?? ''))?.actor,
+        ...(link.outputEvidence ?? []).flatMap((entry) => [entry.reporterPrincipal, entry.assignedPrincipal]),
+        ...(artifact.draftHistory ?? []).filter((entry) => entry.requirementId === requirement.id
+          && entry.revision <= expectedDraftRevision).map((entry) => entry.actor)]
+        .filter((value) => typeof value === 'string' && value.startsWith('oidc:')));
+      if (behaviorPlan?.createdBy) principalActors.add(behaviorPlan.createdBy);
+      if (link.run?.id) {
+        const runRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='execution_run' and aggregate_id=$2 for share`,
+          [tenantId, link.run.id]);
+        if (!runRow.rowCount) throw persistenceIntegrity('The linked workload requester record is unavailable.');
+        const run = verifyAggregateRow(runRow.rows[0]);
+        if (run.id !== link.run.id || run.projectId !== current.projectId || run.requestedBy !== link.run.requestedBy
+          || run.version !== link.run.version) throw persistenceIntegrity('The linked workload requester does not match the canonical run.');
+        principalActors.add(run.requestedBy);
+        for (const event of run.events ?? []) if (typeof event.actor === 'string') principalActors.add(event.actor);
+      }
+      if (link.instance?.id) {
+        const control = await client.query(`select project_id,process_plan_id,plan_revision,initiated_by,events from orgward.process_task_instance_controls
+          where tenant_id=$1 and plan_instance_id=$2 for share`, [tenantId, link.instance.id]);
+        if (control.rowCount !== 1 || control.rows[0].project_id !== current.projectId
+          || control.rows[0].process_plan_id !== link.plan?.id || Number(control.rows[0].plan_revision) !== Number(link.plan?.revision)) {
+          throw persistenceIntegrity('The linked process instance has no matching durable requester identity.');
+        }
+        principalActors.add(control.rows[0].initiated_by);
+        for (const event of control.rows[0].events ?? []) if (typeof event.actor === 'string') principalActors.add(event.actor);
+      }
+      if (principalActors.has(principal)) throw conflict('The reviewer must be distinct from the evidence linker, performer, and recorded requirement author.', current.version, 'REVIEWER_NOT_INDEPENDENT');
+      const typedDeclarations = requirement.criterionContract?.criteria;
+      const declarations = Array.isArray(typedDeclarations)
+        ? typedDeclarations.map((entry, index) => ({ index, criterion: entry.text, criterionHash: digest(entry),
+          criterionId: entry.id, criterionType: entry.type, mandatory: entry.mandatory,
+          source: entry.source, scope: entry.scope }))
+        : (requirement.acceptanceCriteria ?? []).map((criterion, index) => ({
+          index, criterion, criterionHash: digest({ index, criterion }),
+        }));
+      if (!Array.isArray(declarations) || declarations.length < 1 || declarations.length > 32 || criteria.length !== declarations.length) {
+        throw conflict('The declared acceptance criteria changed or are not reviewable.', current.version, 'REQUIREMENT_CRITERIA_CHANGED');
+      }
+      const reviewedCriteria = declarations.map((declaration, index) => {
+        const supplied = criteria[index];
+        if (!supplied || supplied.criterionHash !== declaration.criterionHash
+          || !['SUPPORTED', 'CONTRADICTED', 'INCONCLUSIVE'].includes(supplied.disposition)
+          || typeof supplied.note !== 'string' || !supplied.note.trim() || supplied.note.length > 1000) {
+          throw conflict('Provide a bounded decision and note for every exact declared criterion.', current.version, 'INVALID_REVIEW_CRITERIA');
+        }
+        return { ...declaration, disposition: supplied.disposition, note: supplied.note.trim() };
+      });
+      const conflictSummary = processEvidenceReviewConflict(reviewedCriteria);
+      if (conflictResolution !== null && (!conflictResolution || typeof conflictResolution !== 'object'
+        || Array.isArray(conflictResolution) || Object.keys(conflictResolution).some((key) => !['decision', 'rationale'].includes(key)))) {
+        throw conflict('Provide only an explicit reviewer decision and rationale for a cross-type conflict.', current.version, 'INVALID_REVIEW_RESOLUTION');
+      }
+      if (conflictSummary.requiresResolution && !conflictResolution) {
+        throw conflict('A business/technical disagreement or failed mandatory criterion requires explicit reviewer resolution before the review can be recorded.', current.version, 'REVIEW_CONFLICT_RESOLUTION_REQUIRED');
+      }
+      if (!conflictSummary.requiresResolution && conflictResolution) {
+        throw conflict('A reviewer resolution is not applicable because no cross-type conflict or failed mandatory criterion was found.', current.version, 'REVIEW_RESOLUTION_NOT_APPLICABLE');
+      }
+      if (conflictResolution && (conflictResolution.decision !== 'PRESERVE_CRITERION_OUTCOMES'
+        || typeof conflictResolution.rationale !== 'string' || !conflictResolution.rationale.trim()
+        || conflictResolution.rationale.length > 1000)) {
+        throw conflict('Resolution must preserve each exact criterion outcome and include a bounded rationale.', current.version, 'INVALID_REVIEW_RESOLUTION');
+      }
+      const disposition = reviewedCriteria.some((entry) => entry.disposition === 'CONTRADICTED') ? 'CONTRADICTED'
+        : reviewedCriteria.some((entry) => entry.disposition === 'INCONCLUSIVE') ? 'INCONCLUSIVE' : 'SUPPORTED';
+      const reviewedAt = new Date().toISOString();
+      const acceptanceStatus = conflictSummary.failedMandatoryCriterionIds.length
+        ? 'BLOCKED_MANDATORY_FAILURE' : 'REVIEW_ONLY_NOT_ACCEPTED';
+      const persistedResolution = conflictResolution ? { schemaVersion: 1, decision: conflictResolution.decision,
+        rationale: conflictResolution.rationale.trim(), businessCriterionIds: conflictSummary.conflictBusinessCriterionIds,
+        technicalCriterionIds: conflictSummary.conflictTechnicalCriterionIds,
+        failedMandatoryCriterionIds: conflictSummary.failedMandatoryCriterionIds, recordedBy: principal, recordedAt: reviewedAt } : null;
+      const reviewCore = { schemaVersion: reviewedScenarioCases ? (scenarioExecutionDecisions ? 4 : 3) : 2, id: `process-evidence-review-${randomUUID()}`, tenantId,
+        projectId: current.projectId, caseId: current.id, requirementId, draftRevision: expectedDraftRevision,
+        criterionContractVersion: requirement.criterionContract?.version ?? null,
+        criterionContractHash: requirement.criterionContract?.contentHash ?? null,
+        requirementHash, traceHash, contractHash, linkId: link.id, linkHash: link.linkHash,
+        source: structuredClone(link.source), plan: structuredClone(link.plan), instance: structuredClone(link.instance),
+        ...(link.run ? { run: structuredClone(link.run) } : { runtimeSource: structuredClone(link.runtimeSource) }),
+        outputPins: structuredClone(link.outputs), outputEvidenceHashes: (link.outputEvidence ?? []).map((entry) => entry.recordHash ?? null),
+        criteria: reviewedCriteria, disposition, conflictResolution: persistedResolution,
+        ...(reviewedScenarioCases ? { behaviorPlanId: behaviorPlan.id, behaviorPlanHash: behaviorPlan.planHash,
+          evaluationContextHash: contentHash(behaviorPlan.evaluationContext), caseDefinitionsHash: contentHash(behaviorPlan.caseDefinitions),
+          scenarioCases: reviewedScenarioCases } : {}),
+        failedMandatoryCriterionIds: conflictSummary.failedMandatoryCriterionIds, acceptanceStatus,
+        status: 'HUMAN_REVIEWED', verificationStatus: 'NOT_EXECUTED',
+        truthStatus: 'UNVERIFIED', reviewerPrincipal: principal, reviewedAt, requestHash, recordedVersion: current.version + 1,
+        statement: 'Human attestation against the pinned evidence and declared criteria; this does not establish external truth or execute behavior.' };
+      const review = { ...reviewCore, reviewHash: contentHash(reviewCore) };
+      requirement.processRunEvidenceReviews ??= [];
+      requirement.processRunEvidenceReviews.push(review);
+      artifact.processRunEvidenceReviews ??= [];
+      artifact.processRunEvidenceReviews.push(review);
+      current.version += 1; current.updatedAt = reviewedAt;
+      current.idempotency ??= {};
+      current.idempotency[commandId] = { action: 'review-process-run-evidence', requestHash, reviewId: review.id, version: current.version, at: reviewedAt };
+      const eventData = { reviewId: review.id, reviewHash: review.reviewHash, linkId: link.id, linkHash: link.linkHash,
+        requirementId, requirementHash, traceHash, contractHash, sourceHash: contentHash(review.source),
+        planHash: contentHash(review.plan), instanceHash: contentHash(review.instance),
+        outputPinsHash: contentHash(review.outputPins), criteriaHash: contentHash(review.criteria),
+        disposition, reviewerPrincipal: principal, requestHash, recordedVersion: review.recordedVersion, status: 'HUMAN_REVIEWED',
+        verificationStatus: 'NOT_EXECUTED', truthStatus: 'UNVERIFIED', reviewSchemaVersion: 2,
+        conflictResolutionHash: contentHash(review.conflictResolution), failedMandatoryCriterionIds: review.failedMandatoryCriterionIds,
+        acceptanceStatus: review.acceptanceStatus, criterionContractVersion: review.criterionContractVersion,
+        criterionContractHash: review.criterionContractHash };
+      if (reviewedScenarioCases) Object.assign(eventData, { reviewSchemaVersion: scenarioExecutionDecisions ? 4 : 3,
+        behaviorPlanId: behaviorPlan.id, behaviorPlanHash: behaviorPlan.planHash,
+        evaluationContextHash: review.evaluationContextHash, caseDefinitionsHash: review.caseDefinitionsHash,
+        scenarioCasesHash: contentHash(reviewedScenarioCases) });
+      current.events.push({ id: `event-${randomUUID()}`, type: 'ProcessRunEvidenceReviewed', schemaVersion: 2, tenantId,
+        actor: principal, correlationId: current.correlationId, causationId: commandId, timestamp: reviewedAt, data: eventData,
+        contentHash: contentHash({ type: 'ProcessRunEvidenceReviewed', tenantId, data: eventData }) });
+      await this.saveInTransaction(client, current, { expectedVersion, principal, requiredPrincipalRoles: ['workspace-write'], authzGeneration });
+      review.integrityStatus = 'VALID';
+      return { changeCase: current, review, replayed: false };
     });
   }
   async saveForPrincipal(changeCase, {
@@ -3354,8 +5967,8 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         if (row.runtime_snapshot_hash !== null) {
           const runtime = await resolveRuntimeProcessPlan(client, { tenantId, projectId, planId: row.plan_id, revision: Number(row.runtime_revision) });
           if (!runtime || runtime.snapshotHash !== row.runtime_snapshot_hash
-            || Number(row.runtime_review_revision) !== assignmentReview?.revision
-            || row.runtime_review_hash !== assignmentReview?.reviewHash) throw persistenceIntegrity('A stored software runtime promotion failed its review binding.');
+            || Number(row.runtime_review_revision) !== runtime.binding?.reviewRevision
+            || row.runtime_review_hash !== runtime.binding?.reviewHash) throw persistenceIntegrity('A stored software runtime promotion failed its review binding.');
           promotion = { runtimeRevision: Number(row.runtime_revision), snapshotHash: row.runtime_snapshot_hash,
             reviewRevision: Number(row.runtime_review_revision), reviewHash: row.runtime_review_hash };
         }
@@ -3485,6 +6098,37 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
       const resolved = await resolveRuntimeProcessPlan(client, { tenantId, projectId, project, planId, revision });
       if (!resolved || resolved.kind !== 'software_delivery_runtime_plan' || resolved.binding.caseId !== caseId) {
         throw conflict('An owner-promoted immutable software delivery snapshot is required.', null, 'SOFTWARE_RUNTIME_PROMOTION_REQUIRED');
+      }
+      const sourceBinding = changeCase.sourceBinding;
+      const blueprint = latestBlueprint(project);
+      if (!verifySourceBinding(sourceBinding).valid || sourceBinding.projectId !== projectId
+        || sourceBinding.projectVersion !== project.version
+        || sourceBinding.blueprintId !== blueprint?.id || sourceBinding.blueprintVersion !== blueprint?.version
+        || resolved.source?.projectId !== projectId || resolved.source?.blueprintId !== sourceBinding.blueprintId
+        || resolved.source?.blueprintVersion !== sourceBinding.blueprintVersion
+        || resolved.source?.processId !== sourceBinding.objectId
+        || resolved.binding?.projectVersion !== sourceBinding.projectVersion
+        || resolved.binding?.blueprintId !== sourceBinding.blueprintId
+        || resolved.binding?.blueprintVersion !== sourceBinding.blueprintVersion
+        || resolved.binding?.sourceHash !== sourceBinding.sourceHash
+        || resolved.binding?.sourceBindingHash !== sourceBinding.bindingHash) {
+        throw conflict('The promoted software snapshot is pinned to an older or unverifiable saved design. Create a new governed case and review before starting work.',
+          project.version, 'SOURCE_BINDING_STALE');
+      }
+      let currentBinding;
+      try {
+        currentBinding = pinProjectSourceObject(project, {
+          projectId, expectedProjectVersion: project.version, expectedBlueprintId: blueprint.id,
+          expectedBlueprintVersion: blueprint.version, sourceObjectId: sourceBinding.objectId,
+          ...sourceBindingSelection(sourceBinding),
+        });
+      } catch {
+        throw conflict('The promoted software snapshot source is unavailable in the current saved design. Create a new governed case and review before starting work.',
+          project.version, 'SOURCE_BINDING_STALE');
+      }
+      if (currentBinding.sourceHash !== sourceBinding.sourceHash) {
+        throw conflict('The promoted software snapshot no longer matches the current saved-design object. Create a new governed case and review before starting work.',
+          project.version, 'SOURCE_BINDING_STALE');
       }
       await verifyCurrentHumanSoftwareAssignments(client, { tenantId, projectId, project, plan: resolved });
       const plan = resolved;
@@ -3725,7 +6369,8 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
 
   async createForProcessTask({
     tenantId, projectId, principal, authzGeneration, planId, revision, planInstanceId = null,
-    taskId, profileId, parentRunId = null, commandId, requestHash, repositoryRef = null, buildRun,
+    taskId, profileId, parentRunId = null, commandId, requestHash, repositoryRef = null,
+    behaviorTestCaseId = null, behaviorTestPlanId = null, behaviorCheckPlan = null, buildRun,
   }) {
     if (!tenantId || !projectId || !principal || typeof buildRun !== 'function') throw projectAccessDenied();
     const operation = 'execution.process-task.request';
@@ -3750,6 +6395,8 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
             || recorded.processTaskRef?.revision !== revision
             || (planInstanceId && recorded.processTaskRef?.planInstanceId !== planInstanceId)
             || recorded.processTaskRef?.taskId !== taskId
+            || (recorded.processTaskRef?.behaviorTestPlan?.caseId ?? null) !== behaviorTestCaseId
+            || (recorded.processTaskRef?.behaviorTestPlan?.planId ?? null) !== behaviorTestPlanId
             || (recorded.processTaskRef?.delegation?.parentRunId ?? null) !== parentRunId) {
             throw persistenceIntegrity('A process task command result does not match its execution run reference.');
           }
@@ -3766,6 +6413,19 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
           const run = verifyAggregateRow(selected.rows[0]);
           if (run.projectId !== projectId || contentHash(run.processTaskRef) !== contentHash(recorded.processTaskRef)) {
             throw persistenceIntegrity('A process task command result no longer matches its linked run.');
+          }
+          if (behaviorTestCaseId || behaviorTestPlanId) {
+            const caseRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 for share`,
+              [tenantId, behaviorTestCaseId]);
+            if (!caseRow.rowCount) throw persistenceIntegrity('A behavior-plan replay has no retained case.');
+            const changeCase = verifyAggregateRow(caseRow.rows[0]);
+            await PostgresChangeCaseStore.prototype.verifyProcessBehaviorTestPlans.call(this, changeCase, client);
+            const behaviorPlan = (changeCase.artifacts?.processBehaviorTestPlans ?? []).find((candidate) => candidate.id === behaviorTestPlanId);
+            if (!verifyProcessBehaviorTestPlan(behaviorPlan) || behaviorPlan.caseId !== changeCase.id
+              || behaviorPlan.projectId !== projectId || behaviorPlan.tenantId !== tenantId
+              || run.processTaskRef?.behaviorTestPlan?.planHash !== behaviorPlan.planHash) {
+              throw persistenceIntegrity('A behavior-plan replay no longer matches its retained authorization evidence.');
+            }
           }
           return { run, replayed: true };
         }
@@ -3787,6 +6447,41 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         }
         const task = plan.tasks.find((candidate) => candidate.id === taskId);
         if (!task) throw conflict('The task was not found in this saved graph revision.', null, 'PROCESS_PLAN_TASK_NOT_FOUND');
+        let behaviorTestPlanRef = null;
+        if (behaviorTestCaseId || behaviorTestPlanId) {
+          if (!behaviorTestCaseId || !behaviorTestPlanId || !behaviorCheckPlan?.planHash) {
+            throw conflict('Choose a complete authorized behavior test plan and configured check plan.', null, 'BEHAVIOR_TEST_PLAN_REQUIRED');
+          }
+          const caseRow = await client.query(`select * from orgward.aggregates where tenant_id=$1 and aggregate_kind='change_case' and aggregate_id=$2 for share`,
+            [tenantId, behaviorTestCaseId]);
+          if (!caseRow.rowCount) throw conflict('The authorized behavior test plan is unavailable in this tenant.', null, 'BEHAVIOR_TEST_PLAN_NOT_FOUND');
+          const changeCase = verifyAggregateRow(caseRow.rows[0]);
+          await PostgresChangeCaseStore.prototype.verifyProcessBehaviorTestPlans.call(this, changeCase, client);
+          const behaviorPlan = (changeCase.artifacts?.processBehaviorTestPlans ?? []).find((candidate) => candidate.id === behaviorTestPlanId);
+          const requirement = changeCase.artifacts?.requirements?.requirements?.find((candidate) => candidate.id === behaviorPlan?.requirementId);
+          const requirementHash = requirement ? contentHash(Object.fromEntries(Object.entries(requirement)
+            .filter(([key]) => !['processRunEvidenceLinks', 'processRunEvidenceReviews', 'processIntentEvaluationAcceptances', 'behaviorTestPlans'].includes(key)))) : null;
+          if (changeCase.projectId !== projectId || changeCase.tenantId !== tenantId || !verifyProcessBehaviorTestPlan(behaviorPlan)
+            || !requirement || changeCase.artifacts?.requirements?.draftRevision !== behaviorPlan.draftRevision
+            || requirementHash !== behaviorPlan.requirementHash || requirement.processTrace?.traceHash !== behaviorPlan.traceHash
+            || behaviorPlan.processPlan?.id !== planId || Number(behaviorPlan.processPlan?.revision) !== Number(revision)
+            || behaviorPlan.processPlan?.taskId !== taskId || behaviorPlan.source?.processSnapshotHash !== requirement.processTrace?.source?.processSnapshotHash
+            || behaviorPlan.processPlan?.hash !== (plan.snapshotHash ?? contentHash(plan))
+            || behaviorPlan.checkPlan?.hash !== behaviorCheckPlan.planHash
+            || behaviorPlan.repositoryHash !== contentHash(repositoryRef)
+            || contentHash(behaviorPlan.repository) !== contentHash(repositoryRef)
+            || behaviorPlan.assertions.some((assertion) => !behaviorCheckPlan.requiredChecks.some((check) => check.id === assertion.check.id
+              && check.version === assertion.check.version && check.commandHash === assertion.check.commandHash))) {
+            throw conflict('The authorized behavior plan is stale or does not match this exact process task and check plan.', null, 'BEHAVIOR_TEST_PLAN_STALE');
+          }
+          if (Date.parse(behaviorPlan.createdAt) >= Date.now()) throw conflict('The behavior plan must be authorized before the execution request.', null, 'BEHAVIOR_TEST_PLAN_NOT_PREAUTHORIZED');
+          behaviorTestPlanRef = { caseId: changeCase.id, planId: behaviorPlan.id, planHash: behaviorPlan.planHash,
+            requirementId: behaviorPlan.requirementId, requirementHash: behaviorPlan.requirementHash,
+            draftRevision: behaviorPlan.draftRevision, traceHash: behaviorPlan.traceHash, createdAt: behaviorPlan.createdAt,
+            checkPlanHash: behaviorPlan.checkPlan.hash, criterionContractVersion: behaviorPlan.criterionContractVersion,
+            criterionContractHash: behaviorPlan.criterionContractHash, fileMappings: structuredClone(behaviorPlan.fileMappings),
+            fileMappingsHash: contentHash(behaviorPlan.fileMappings) };
+        }
         const instanceId = planInstanceId ?? randomUUID();
         await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
           `${tenantId}:process-plan-instance:${instanceId}`,
@@ -3819,7 +6514,7 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
           if (latest?.revision !== revision) {
             throw conflict('A new plan instance must start from the latest saved graph revision.', null, 'PROCESS_PLAN_REVISION_STALE');
           }
-          if (project.id !== plan.source.projectId || project.blueprintVersions?.at(-1)?.version !== plan.source.blueprintVersion) {
+          if (!processPlanUsesCurrentOrViewOnlyBlueprint(project, plan)) {
             throw conflict('A new plan instance must use the current saved blueprint version.', null, 'PROCESS_PLAN_BLUEPRINT_STALE');
           }
           await client.query(`insert into orgward.process_task_instance_controls
@@ -3965,9 +6660,11 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
           actorId: actor.id, roleId: role.id,
           ...(flowActivation ? { flowBinding: { snapshotHash: plan.snapshotHash, definitionHash: plan.flow.definitionHash, activationIdentity: flowActivation.identity } } : {}),
           ...(delegation ? { delegation } : {}),
+          ...(behaviorTestPlanRef ? { behaviorTestPlan: behaviorTestPlanRef } : {}),
           ...(repositoryRef ? { repository: structuredClone(repositoryRef) } : {}),
         };
-        const run = await buildRun({ project, plan, task, processTaskRef, client, delegatedContext });
+        const run = await buildRun({ project, plan, task, processTaskRef, client, delegatedContext,
+          behaviorTestPlan: behaviorTestPlanRef });
         if (!run || run.tenantId !== tenantId || run.projectId !== projectId
           || run.processTaskRef && contentHash(run.processTaskRef) !== contentHash(processTaskRef)) {
           throw persistenceIntegrity('A process task run builder returned mismatched immutable references.');
@@ -5052,7 +7749,7 @@ export class PostgresExecutionRunStore extends PostgresDocumentStore {
         const latestRevision = (project.processPlans ?? []).filter((candidate) => candidate.id === planId)
           .sort((left, right) => (left.revision ?? 1) - (right.revision ?? 1)).at(-1);
         if (latestRevision?.revision !== revision) throw conflict('A new process instance must start from the latest saved graph revision.', null, 'PROCESS_PLAN_REVISION_STALE');
-        if (project.blueprintVersions?.at(-1)?.version !== plan.source.blueprintVersion) {
+        if (!processPlanUsesCurrentOrViewOnlyBlueprint(project, plan)) {
           throw conflict('A new process instance must use the current saved blueprint version.', null, 'PROCESS_PLAN_BLUEPRINT_STALE');
         }
         instanceId = randomUUID();

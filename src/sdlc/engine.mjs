@@ -1,7 +1,8 @@
 import { MUTATIONS, STAGES, digest, evaluation, eventEnvelope, evidence, finding, id, now, safeText, stageAt } from './contracts.mjs';
 import { EXPECTED_IMPACTS, referenceOrganization } from './fixture.mjs';
 import { isValidEnterpriseIntegrityAssessment } from '../enterprise/integrity.mjs';
-import { isKnownEnterpriseSentinelProfile, isValidEnterpriseSentinelAssessment } from '../enterprise/sentinel.mjs';
+import { ENTERPRISE_SENTINEL_PROFILE, isKnownEnterpriseSentinelProfile, isValidEnterpriseSentinelAssessment } from '../enterprise/sentinel.mjs';
+import { createRequirementCriterionContract } from './criterion-contract.mjs';
 
 const REQUIRED_CONTEXT_DOMAINS = ['strategy', 'business', 'process', 'ownership', 'information', 'application', 'integration', 'security', 'regulation', 'control', 'operations', 'code/runtime'];
 const ASSURANCE_DIMENSIONS = ['FUNCTIONAL', 'REQUIREMENTS', 'SECURITY', 'PRIVACY', 'DATA', 'ARCHITECTURE', 'REGULATORY_CONTROL', 'OPERATIONAL', 'PERFORMANCE', 'RESILIENCE', 'MAINTAINABILITY', 'AI_BEHAVIOR'];
@@ -488,9 +489,11 @@ export function normalizeChangeCase(changeCase) {
 }
 
 function requirementDraftHash(requirements) {
-  return digest(requirements.map(({ id: requirementId, kind, statement, rationale, actor, precondition, observableResult, independentVerification, derivedFrom, affectedObjects, priority, acceptanceCriteria, verificationMethod, owner, risk, sourceLinks, processTrace, verificationContract }) => ({
+  return digest(requirements.map(({ id: requirementId, kind, statement, rationale, actor, precondition, observableResult, independentVerification, derivedFrom, affectedObjects, priority, acceptanceCriteria, criterionContract, criterionContractHistory, verificationMethod, owner, risk, sourceLinks, processTrace, verificationContract }) => ({
     id: requirementId, kind, statement, rationale, actor, precondition, observableResult, independentVerification,
-    derivedFrom, affectedObjects, priority, acceptanceCriteria, verificationMethod, owner, risk, sourceLinks,
+    derivedFrom, affectedObjects, priority, acceptanceCriteria,
+    ...(criterionContract ? { criterionContract, criterionContractHistory } : {}),
+    verificationMethod, owner, risk, sourceLinks,
     ...(processTrace ? { processTrace, verificationContract } : {}),
   })));
 }
@@ -611,6 +614,162 @@ function savedProjectCoverageFor(changeCase) {
   };
 }
 
+// Manifest v4 adds a project-scoped classification layer. Keep the v3 helper
+// above unchanged: persisted v3 manifests must continue to verify byte-for-byte.
+function savedProjectCoverageV4For(changeCase, plan = null) {
+  const v3 = savedProjectCoverageFor(changeCase);
+  if (!v3) return null;
+  const binding = changeCase.sourceBinding;
+  const trace = changeCase.processRequirementTrace;
+  const pin = savedProjectPinFor(binding);
+  const sentinel = binding.sentinelContext ?? legacySentinelContext(binding);
+  const sourcePins = {
+    projectPin: structuredClone(pin),
+    projectPinHash: digest(pin),
+    blueprintSnapshotHash: pin.blueprintSnapshotHash,
+    enterpriseContext: {
+      version: changeCase.enterpriseSnapshot.version ?? null,
+      sourceKind: changeCase.enterpriseSnapshot.sourceKind ?? 'synthetic-reference-model',
+      sourceLabel: changeCase.enterpriseSnapshot.sourceLabel ?? 'Synthetic reference organization',
+      contentHash: digest(changeCase.enterpriseSnapshot),
+      authorityStatus: (changeCase.enterpriseSnapshot.sourceKind ?? 'synthetic-reference-model') === 'synthetic-reference-model'
+        ? 'SYNTHETIC_REFERENCE_ONLY' : 'SOURCE_PROVENANCE_RECORDED',
+    },
+    contextPlanHash: plan?.contentHash ?? null,
+    contextRequirementsHash: digest(plan?.requirements ?? []),
+    sentinel: {
+      assessmentId: sentinel.state === 'ASSESSED' ? sentinel.assessment?.id ?? null : null,
+      reportHash: sentinel.state === 'ASSESSED' ? sentinel.assessment?.reportHash ?? null : null,
+      profileId: sentinel.state === 'ASSESSED' ? sentinel.assessment?.profileId ?? null : null,
+      profileVersion: sentinel.state === 'ASSESSED' ? sentinel.assessment?.profileVersion ?? null : null,
+      profileHash: sentinel.state === 'ASSESSED' ? sentinel.assessment?.profileHash ?? null : null,
+      evaluatorRevision: sentinel.state === 'ASSESSED' ? sentinel.assessment?.evaluatorRevision ?? null : null,
+      state: sentinel.state ?? 'UNAVAILABLE',
+      contextHash: digest(sentinel),
+      blueprintSnapshotHash: sentinel.blueprintSnapshotHash ?? null,
+      availableProfile: { id: ENTERPRISE_SENTINEL_PROFILE.id, version: ENTERPRISE_SENTINEL_PROFILE.version,
+        hash: ENTERPRISE_SENTINEL_PROFILE.hash, evaluatorRevision: ENTERPRISE_SENTINEL_PROFILE.evaluatorRevision },
+    },
+  };
+  const candidates = [];
+  const add = (candidate) => candidates.push(candidate);
+  const sourceHash = (domain, objectRef, contentHash, provenance) => ({
+    candidateId: `project:${binding.projectId}:${domain}:${objectRef}`,
+    domain, objectRef, status: 'REPRESENTED', contentHash: contentHash ?? null,
+    reason: `Present in the exact selected saved-process trace (${trace?.traceHash ?? 'no-trace'}).`,
+    provenance: { kind: 'PINNED_SAVED_PROJECT_TRACE', ...provenance },
+  });
+  add(sourceHash('selected-source', binding.objectId, binding.sourceHash, {
+    projectId: binding.projectId, blueprintId: binding.blueprintId, blueprintVersion: binding.blueprintVersion,
+    blueprintSnapshotHash: pin.blueprintSnapshotHash, bindingHash: binding.bindingHash,
+  }));
+  if (trace) {
+    const append = (domain, refs) => (refs ?? []).forEach((entry) => add(sourceHash(domain, entry.id, entry.snapshotHash, {
+      objectType: entry.type ?? null, processId: trace.process.id, processSnapshotHash: trace.source.processSnapshotHash,
+      processTraceHash: trace.traceHash,
+    })));
+    append('process-input', trace.process.inputs);
+    append('process-output', trace.process.outputs);
+    append('capability-scope', trace.scope.capabilityRefs);
+    append('system-scope', trace.scope.systemRefs);
+    append('resource-scope', trace.scope.resourceRefs);
+    append('process-risk', trace.risk.refs);
+    append('outcome-measure', trace.outcome.metricRefs);
+    if (trace.process.flow) add(sourceHash('process-flow', binding.objectId, trace.process.flow.hash, {
+      processId: trace.process.id, processTraceHash: trace.traceHash,
+    }));
+  }
+  for (const [index, requirement] of (plan?.requirements ?? []).entries()) {
+    add({ candidateId: `project:${binding.projectId}:context-requirement:${requirement.domain}`,
+      domain: 'context-requirement', objectRef: `context-plan:${requirement.domain}`, status: 'REPRESENTED',
+      contentHash: digest(requirement),
+      reason: 'Declared as a required context domain by this exact context plan; this records the requirement, not evidence that the domain is satisfied.',
+      provenance: { kind: 'CONTEXT_PLAN_REQUIREMENT', contextPlanHash: plan.contentHash, index },
+    });
+  }
+  if (sentinel.state === 'ASSESSED' && sentinel.assessment) {
+    add({ candidateId: `project:${binding.projectId}:sentinel-assessment:${sentinel.assessment.id}`,
+      domain: 'sentinel-assessment', objectRef: sentinel.assessment.id, status: 'REPRESENTED',
+      contentHash: sentinel.assessment.reportHash,
+      reason: `Exact in-repository Sentinel report ${sentinel.assessment.status} for the pinned blueprint; this is limited to its declared profile scope.`,
+      provenance: { kind: 'SAVED_PROJECT_SENTINEL_REPORT', ...structuredClone(sourcePins.sentinel) },
+    });
+  } else {
+    add({ candidateId: `project:${binding.projectId}:sentinel-assessment:unselected`, domain: 'sentinel-assessment',
+      objectRef: null, status: 'UNKNOWN', contentHash: null,
+      reason: 'No exact Sentinel assessment is selected for this saved design.',
+      provenance: { kind: 'SENTINEL_NOT_SELECTED', ...structuredClone(sourcePins.sentinel) } });
+  }
+  add({ candidateId: `project:${binding.projectId}:sentinel-profile:${ENTERPRISE_SENTINEL_PROFILE.hash}`,
+    domain: 'sentinel-profile', objectRef: ENTERPRISE_SENTINEL_PROFILE.id, status: 'REPRESENTED',
+    contentHash: ENTERPRISE_SENTINEL_PROFILE.hash,
+    reason: `In-repository Sentinel profile ${ENTERPRISE_SENTINEL_PROFILE.version} is executable and versioned; this profile pin is not an assessment of the selected project.`,
+    provenance: { kind: 'IN_REPOSITORY_EXECUTABLE_PROFILE', profileId: ENTERPRISE_SENTINEL_PROFILE.id,
+      profileVersion: ENTERPRISE_SENTINEL_PROFILE.version, evaluatorRevision: ENTERPRISE_SENTINEL_PROFILE.evaluatorRevision },
+  });
+  for (const [index, text] of (changeCase.intent.nonGoals ?? []).entries()) {
+    const trimmed = String(text).trim();
+    if (!trimmed) continue;
+    add({ candidateId: `intent:${changeCase.intent.id}:non-goal:${index}`, domain: 'case-intent-non-goal',
+      objectRef: `intent:${changeCase.intent.id}:non-goal:${index}`, status: 'EXCLUDED',
+      contentHash: digest({ intentId: changeCase.intent.id, index, text: trimmed }),
+      reason: 'Explicitly outside this change case’s scope; this does not exclude the item from the saved project or enterprise.',
+      provenance: { kind: 'CASE_INTENT', intentId: changeCase.intent.id, intentHash: intentHash(changeCase.intent), index },
+    });
+  }
+  for (const [index, text] of (changeCase.intent.constraints ?? []).entries()) {
+    const trimmed = String(text).trim();
+    if (!trimmed) continue;
+    add({ candidateId: `intent:${changeCase.intent.id}:constraint:${index}`, domain: 'case-intent-guardrail',
+      objectRef: `intent:${changeCase.intent.id}:constraint:${index}`, status: 'REPRESENTED',
+      contentHash: digest({ intentId: changeCase.intent.id, index, text: trimmed }),
+      reason: 'Recorded as a change-case guardrail, not as independently verified policy or control evidence.',
+      provenance: { kind: 'CASE_INTENT', intentId: changeCase.intent.id, intentHash: intentHash(changeCase.intent), index },
+    });
+  }
+  const unknowns = [
+    ...v3.unknownDependencies.map((entry) => ({ domain: entry.domain, objectRef: null,
+      reason: entry.description, provenance: { kind: 'UNRETRIEVED_DOMAIN', sourcePinHash: digest(pin) } })),
+    { domain: 'unselected-project-dependencies', objectRef: null,
+      reason: 'The candidate universe is limited to the selected process trace and this case’s guardrails; other project records were not enumerated.',
+      provenance: { kind: 'NOT_ENUMERATED', sourcePinHash: digest(pin) } },
+    { domain: 'external-and-uninspected-sources', objectRef: null,
+      reason: 'External, connected-system, and uninspected source domains were not retrieved or classified.',
+      provenance: { kind: 'NOT_ENUMERATED', sourcePinHash: digest(pin) } },
+    { domain: 'enterprise-context-authority', objectRef: null,
+      reason: sourcePins.enterpriseContext.authorityStatus === 'SYNTHETIC_REFERENCE_ONLY'
+        ? 'The enterprise context is a synthetic reference snapshot, not evidence about this saved project or its business.'
+        : 'Enterprise context provenance is recorded, but this saved-project coverage does not establish enterprise-wide completeness.',
+      provenance: { kind: sourcePins.enterpriseContext.authorityStatus, version: sourcePins.enterpriseContext.version,
+        contentHash: sourcePins.enterpriseContext.contentHash } },
+  ];
+  unknowns.forEach((entry, index) => add({ candidateId: `project:${binding.projectId}:unknown:${entry.domain}:${index}`,
+    domain: entry.domain, objectRef: entry.objectRef, status: 'UNKNOWN', contentHash: null,
+    reason: entry.reason, provenance: entry.provenance }));
+  candidates.sort((left, right) => left.candidateId.localeCompare(right.candidateId));
+  const candidateUniverse = {
+    kind: 'DECLARED_SELECTED_PROCESS_AND_CASE_GUARDRAILS',
+    exhaustive: true,
+    sourcePinHash: digest(pin),
+    processTraceHash: trace?.traceHash ?? null,
+    description: 'Exhaustive only for the selected process trace and recorded change-case guardrails; it is not a project-wide or enterprise-wide inventory.',
+  };
+  return {
+    schemaVersion: 2,
+    status: 'PARTIAL',
+    sourcePinHash: digest(pin),
+    processTraceHash: trace?.traceHash ?? null,
+    sourcePins,
+    contextRequirements: structuredClone(plan?.requirements ?? []),
+    candidateUniverse,
+    classifications: candidates,
+    classificationHash: digest(candidates),
+    represented: v3.represented,
+    unknownDependencies: unknowns,
+    excludedDependencies: { status: 'SCOPED_ONLY', reason: 'EXCLUDED entries apply only to explicit case non-goals. Other project dependencies remain UNKNOWN/NOT_ENUMERATED.' },
+  };
+}
+
 function sealContextManifest(context) {
   const { provenanceManifestHash: _priorHash, ...manifest } = context;
   context.provenanceManifestHash = digest(manifest);
@@ -619,7 +778,7 @@ function sealContextManifest(context) {
 
 function bindAcceptedRequirementsContext(changeCase, baseline) {
   const context = changeCase.artifacts.context;
-  if (!context || ![1, 2, 3].includes(context.manifestVersion)) return null;
+  if (!context || ![1, 2, 3, 4].includes(context.manifestVersion)) return null;
   const priorManifestHash = context.provenanceManifestHash;
   const relevantRequirements = {
     baselineVersion: baseline.version, contentHash: baseline.contentHash, intentHash: baseline.intentHash,
@@ -660,8 +819,15 @@ export function editRequirementDraft(changeCase, command = {}) {
   if (!requirement) throw commandError('Requirement not found.', 404);
   const changes = command.changes;
   if (!changes || typeof changes !== 'object' || Array.isArray(changes)) throw commandError('Requirement changes must be an object.');
-  const allowed = ['statement', 'rationale', 'actor', 'precondition', 'observableResult', 'independentVerification', 'owner', 'priority', 'verificationMethod', 'acceptanceCriteria'];
+  const allowed = ['statement', 'rationale', 'actor', 'precondition', 'observableResult', 'independentVerification', 'owner', 'priority', 'verificationMethod', 'acceptanceCriteria', 'criterionContract'];
   if (Object.keys(changes).some((keyName) => !allowed.includes(keyName)) || !Object.keys(changes).length) throw commandError('Only requirement content and verification fields can be edited.');
+  const criterionRevision = Object.hasOwn(changes, 'criterionContract');
+  if (criterionRevision && Object.keys(changes).some((keyName) => !['criterionContract', 'acceptanceCriteria', 'priority'].includes(keyName))) {
+    throw commandError('A criterion obligation revision must be a separate requirement draft command.');
+  }
+  if (requirement.criterionContract && Object.hasOwn(changes, 'priority') && !criterionRevision) {
+    throw commandError('A versioned requirement priority change must revise its criterion contract in the same authorized command.');
+  }
   for (const field of ['statement', 'rationale', 'actor', 'precondition', 'observableResult', 'independentVerification', 'owner', 'priority', 'verificationMethod']) {
     if (Object.hasOwn(changes, field) && typeof changes[field] !== 'string') throw commandError(`Requirement ${field} must be text.`);
   }
@@ -672,11 +838,104 @@ export function editRequirementDraft(changeCase, command = {}) {
     if (!Array.isArray(changes.acceptanceCriteria) || changes.acceptanceCriteria.length > 8 || changes.acceptanceCriteria.some((value) => typeof value !== 'string')) throw commandError('Provide up to eight text acceptance criteria.');
     requirement.acceptanceCriteria = changes.acceptanceCriteria.map((value) => safeText(value, 500));
   }
+  let revisedCriterionContract = null;
+  if (criterionRevision) {
+    const previousContract = requirement.criterionContract ?? null;
+    const candidateRequirement = { ...requirement,
+      acceptanceCriteria: requirement.acceptanceCriteria, draftRevision: artifact.draftRevision };
+    try { revisedCriterionContract = createRequirementCriterionContract({ requirement: candidateRequirement, request: changes.criterionContract }); }
+    catch (error) { throw commandError(error.message); }
+    requirement.criterionContractHistory ??= [];
+    if (previousContract && requirement.criterionContractHistory.at(-1)?.contentHash !== previousContract.contentHash) {
+      throw commandError('The previous criterion contract history is incomplete.', 409);
+    }
+    requirement.criterionContractHistory.push(revisedCriterionContract);
+    requirement.criterionContract = revisedCriterionContract;
+  } else if (requirement.criterionContract && Object.hasOwn(changes, 'acceptanceCriteria')) {
+    throw commandError('Acceptance criteria with a versioned contract must be revised together with their typed obligation baseline.');
+  }
   artifact.draftRevision += 1;
   artifact.validationFindings = validateRequirementDraft(artifact.requirements, changeCase);
   const actor = safeText(command.actor, 120) || changeCase.accountableOwner;
   artifact.draftHistory.push({ revision: artifact.draftRevision, requirementId: requirement.id, changes: structuredClone(changes), actor, at: now() });
-  return finishCommand(changeCase, key, requestHash, 'edit-requirements', actor, 'RequirementDraftEdited', { draftRevision: artifact.draftRevision, requirementId: requirement.id, changedFields: Object.keys(changes).sort() });
+  return finishCommand(changeCase, key, requestHash, 'edit-requirements', actor,
+    criterionRevision ? 'RequirementCriterionBaselineRevised' : 'RequirementDraftEdited', {
+      draftRevision: artifact.draftRevision, requirementId: requirement.id, changedFields: Object.keys(changes).sort(),
+      ...(revisedCriterionContract ? { criterionContractVersion: revisedCriterionContract.version,
+        criterionContractHash: revisedCriterionContract.contentHash,
+        previousCriterionContractHash: revisedCriterionContract.version > 1 ? requirement.criterionContractHistory.at(-2)?.contentHash ?? null : null,
+        commandId: key, commandRequestHash: requestHash } : {}),
+    });
+}
+
+export function addRequirementFromSavedProcess(changeCase, command = {}) {
+  normalizeChangeCase(changeCase);
+  const { key, requestHash, replayed } = commandKey(changeCase, command, 'add-requirement-from-saved-process');
+  if (replayed) return { changeCase, replayed: true };
+  const artifact = changeCase.artifacts.requirements;
+  if (!changeCase.sourceBinding || changeCase.currentStage !== 'S4' || !artifact || artifact.acceptedBaseline) {
+    throw commandError('Requirements are not open for adding a saved-process requirement.', 409);
+  }
+  if (command.expectedDraftRevision !== artifact.draftRevision) {
+    throw commandError(`Requirement draft revision conflict: current revision is ${artifact.draftRevision}.`, 409);
+  }
+  const trace = changeCase.processRequirementTrace;
+  if (!trace || !processTraceIsValid(trace, changeCase.sourceBinding)) {
+    throw commandError('The case has no valid saved process trace to attach.', 409);
+  }
+  const validTraceRefs = new Set([trace.process.id, ...trace.process.inputs.map((entry) => entry.id),
+    ...trace.process.outputs.map((entry) => entry.id), ...trace.scope.capabilityRefs.map((entry) => entry.id),
+    ...trace.scope.systemRefs.map((entry) => entry.id), ...trace.scope.resourceRefs.map((entry) => entry.id),
+    ...trace.risk.refs.map((entry) => entry.id), ...trace.outcome.metricRefs.map((entry) => entry.id)]);
+  const traceRefIds = command.traceRefIds;
+  if (!Array.isArray(traceRefIds) || traceRefIds.length < 1 || traceRefIds.length > 32
+    || new Set(traceRefIds).size !== traceRefIds.length
+    || traceRefIds.some((ref) => typeof ref !== 'string' || !validTraceRefs.has(ref))) {
+    throw commandError('Select one or more references from the exact saved process trace.', 400);
+  }
+  const statement = safeText(command.statement, 500);
+  const rationale = safeText(command.rationale, 500);
+  const normalizedStatement = (value) => safeText(value, 500).replace(/\s+/g, ' ').toLocaleLowerCase();
+  if (statement && artifact.requirements.some((entry) => normalizedStatement(entry.statement) === normalizedStatement(statement))) {
+    throw commandError('Use a distinct requirement statement; this wording already exists in the shared draft.', 409);
+  }
+  if (!statement || !rationale || !Array.isArray(command.acceptanceCriteria)
+    || command.acceptanceCriteria.length < 1 || command.acceptanceCriteria.length > 8
+    || command.acceptanceCriteria.some((value) => typeof value !== 'string' || !safeText(value, 500))) {
+    throw commandError('Provide a distinct statement, rationale, and one to eight nonempty acceptance criteria.');
+  }
+  const requirementId = id('REQ-PROC');
+  const sourceLinks = [
+    { type: 'INTENT', ref: changeCase.intent.id },
+    { type: 'SAVED_DESIGN_OBJECT', ref: changeCase.sourceBinding.objectId, hash: changeCase.sourceBinding.sourceHash },
+  ];
+  const requirement = {
+    id: requirementId, kind: 'BUSINESS', statement, rationale,
+    actor: trace.process.ownerRef || 'Process owner assignment is UNKNOWN; assign an accountable owner before approval.',
+    precondition: trace.process.trigger || 'The saved process trigger is UNKNOWN and must be specified before approval.',
+    observableResult: trace.outcome.outputRefs.length
+      ? `Declared outputs: ${trace.outcome.outputRefs.map((entry) => `${entry.name} (${entry.id})`).join(', ')}.`
+      : 'No process outputs are declared; outcome is UNKNOWN.',
+    derivedFrom: [...traceRefIds],
+    sourceLinks, affectedObjects: [...traceRefIds],
+    priority: 'MUST', acceptanceCriteria: command.acceptanceCriteria.map((value) => safeText(value, 500)),
+    verificationMethod: 'AUTOMATED_TEST',
+    independentVerification: 'This requirement remains DRAFT until an independent review and persisted runtime evidence are recorded.',
+    owner: trace.process.ownerRef || changeCase.accountableOwner || 'Unassigned',
+    risk: trace.risk.status === 'LINKED' ? 'HIGH' : 'UNKNOWN', status: 'DRAFT',
+    processTrace: structuredClone(trace), verificationContract: processVerificationContractFor(trace),
+  };
+  artifact.requirements.push(requirement);
+  artifact.draftRevision += 1;
+  artifact.validationFindings = validateRequirementDraft(artifact.requirements, changeCase);
+  const actor = safeText(command.actor, 120) || changeCase.accountableOwner;
+  artifact.draftHistory.push({ revision: artifact.draftRevision, requirementId, changes: {
+    action: 'ADD_FROM_SAVED_PROCESS', statement, rationale, acceptanceCriteria: [...requirement.acceptanceCriteria],
+  }, actor, at: now() });
+  return finishCommand(changeCase, key, requestHash, 'add-requirement-from-saved-process', actor,
+    'RequirementAddedFromSavedProcess', { draftRevision: artifact.draftRevision, requirementId,
+      requirementHash: digest(requirement), processTraceHash: trace.traceHash,
+      sourceBindingHash: changeCase.sourceBinding.bindingHash, commandId: key, commandRequestHash: requestHash });
 }
 
 export function acceptRequirementDraft(changeCase, command = {}) {
@@ -1240,15 +1499,21 @@ function contextDiscovery(changeCase) {
   const excludedDependencies = untrusted.map((object) => ({ objectRef: object.id, sourceId: object.source,
     status: 'EXCLUDED', reason: 'UNTRUSTED_SOURCE_NOT_USED_FOR_AUTHORITATIVE_COVERAGE' }));
   const savedProjectPin = savedProjectPinFor(changeCase.sourceBinding);
-  const savedProjectCoverage = savedProjectCoverageFor(changeCase);
+  const savedProjectCoverage = savedProjectCoverageV4For(changeCase, plan);
   const contextCreationEvidence = evidence(changeCase, {
-    sourceId: `sdlc:case:${changeCase.id}:context-manifest-created:v3`,
+    sourceId: `sdlc:case:${changeCase.id}:context-manifest-created:v4`,
     sourceType: 'sdlc-context-manifest-created', objectRef: plan.id,
     authority: 'ORGWARD_CONTEXT_ENGINE', freshness: 'PINNED', classification: 'INTERNAL', relevance: 1,
-    content: { manifestVersion: 3, sourceBindingHash: changeCase.sourceBinding?.bindingHash ?? null,
-      savedProjectPinHash: digest(savedProjectPin), savedProjectCoverageHash: digest(savedProjectCoverage) },
-    provenanceChain: [`case:${changeCase.id}`, 'context-manifest-version:3', `saved-project-pin:sha256:${digest(savedProjectPin)}`,
-      `saved-project-coverage:sha256:${digest(savedProjectCoverage)}`],
+    content: { manifestVersion: 4, sourceBindingHash: changeCase.sourceBinding?.bindingHash ?? null,
+      savedProjectPinHash: digest(savedProjectPin), savedProjectCoverageHash: digest(savedProjectCoverage),
+      classificationHash: savedProjectCoverage?.classificationHash ?? null,
+      candidateUniverseHash: savedProjectCoverage ? digest(savedProjectCoverage.candidateUniverse) : null,
+      sourcePinsHash: savedProjectCoverage ? digest(savedProjectCoverage.sourcePins) : null },
+    provenanceChain: [`case:${changeCase.id}`, 'context-manifest-version:4', `saved-project-pin:sha256:${digest(savedProjectPin)}`,
+      `saved-project-coverage:sha256:${digest(savedProjectCoverage)}`,
+      ...(savedProjectCoverage ? [`saved-project-classifications:sha256:${savedProjectCoverage.classificationHash}`,
+        `candidate-universe:sha256:${digest(savedProjectCoverage.candidateUniverse)}`,
+        `source-pins:sha256:${digest(savedProjectCoverage.sourcePins)}`] : [])],
   });
   changeCase.evidenceLedger.push(contextCreationEvidence);
   evidenceRefs.push(contextCreationEvidence.id);
@@ -1257,7 +1522,7 @@ function contextDiscovery(changeCase) {
     return contextEvidenceManifestEntry(record);
   });
   const manifest = {
-    manifestVersion: 3, manifestRevision: 1, plan, coverage, evidenceRefs, evidenceManifest,
+    manifestVersion: 4, manifestRevision: 1, plan, coverage, evidenceRefs, evidenceManifest,
     guardrails: { intentRef: changeCase.intent.id, constraints: [...changeCase.intent.constraints], nonGoals: [...changeCase.intent.nonGoals] },
     enterpriseContext: { version: changeCase.enterpriseSnapshot.version ?? null,
       sourceKind: changeCase.enterpriseSnapshot.sourceKind ?? 'synthetic-reference-model',
@@ -1287,7 +1552,7 @@ export function verifyContextManifest(changeCase) {
     return { valid: null, legacy: true, reason: 'This saved context predates manifest versioning and integrity sealing.' };
   }
   if (context.manifestVersion === undefined) return { valid: false, reason: 'The saved context manifest version is malformed.' };
-  if (![1, 2, 3].includes(context.manifestVersion)) return { valid: false, reason: 'The saved context manifest declares an unsupported version.' };
+  if (![1, 2, 3, 4].includes(context.manifestVersion)) return { valid: false, reason: 'The saved context manifest declares an unsupported version.' };
   if (!/^[a-f0-9]{64}$/.test(context.provenanceManifestHash ?? '')) return { valid: false, reason: 'The saved context manifest is missing its integrity hash.' };
   if (!Array.isArray(context.evidenceRefs) || !Array.isArray(context.evidenceManifest)
     || context.evidenceRefs.some((ref) => typeof ref !== 'string')
@@ -1301,7 +1566,7 @@ export function verifyContextManifest(changeCase) {
   });
   const evidenceManifestValid = expectedEvidenceManifest.every(Boolean)
     && digest(expectedEvidenceManifest) === digest(context.evidenceManifest ?? []);
-  const savedProjectPinValid = [2, 3].includes(context.manifestVersion)
+  const savedProjectPinValid = [2, 3, 4].includes(context.manifestVersion)
     ? Object.hasOwn(context, 'savedProjectPin') && digest(context.savedProjectPin) === digest(savedProjectPinFor(changeCase.sourceBinding))
       && (!changeCase.sourceBinding || verifySourceBinding(changeCase.sourceBinding).valid)
     : !Object.hasOwn(context, 'savedProjectPin')
@@ -1309,7 +1574,10 @@ export function verifyContextManifest(changeCase) {
   const savedProjectCoverageValid = context.manifestVersion === 3
     ? Object.hasOwn(context, 'savedProjectCoverage')
       && digest(context.savedProjectCoverage) === digest(savedProjectCoverageFor(changeCase))
-    : !Object.hasOwn(context, 'savedProjectCoverage');
+    : context.manifestVersion === 4
+      ? Object.hasOwn(context, 'savedProjectCoverage')
+          && digest(context.savedProjectCoverage) === digest(savedProjectCoverageV4For(changeCase, context.plan))
+      : !Object.hasOwn(context, 'savedProjectCoverage');
   const contextCreationEvidenceValid = context.manifestVersion === 1
     ? creationEvidence.length === 0
     : context.manifestVersion === 2
@@ -1321,7 +1589,7 @@ export function verifyContextManifest(changeCase) {
         && digest(creationEvidence[0].content) === digest({ manifestVersion: 2,
           sourceBindingHash: changeCase.sourceBinding?.bindingHash ?? null,
           savedProjectPinHash: digest(savedProjectPinFor(changeCase.sourceBinding)) })
-      : creationEvidence.length === 1
+      : context.manifestVersion === 3 ? creationEvidence.length === 1
       && context.contextCreationEvidenceRef === creationEvidence[0].id
       && context.evidenceRefs.includes(creationEvidence[0].id)
       && creationEvidence[0].content && typeof creationEvidence[0].content === 'object' && !Array.isArray(creationEvidence[0].content)
@@ -1329,7 +1597,19 @@ export function verifyContextManifest(changeCase) {
       && digest(creationEvidence[0].content) === digest({ manifestVersion: 3,
         sourceBindingHash: changeCase.sourceBinding?.bindingHash ?? null,
         savedProjectPinHash: digest(savedProjectPinFor(changeCase.sourceBinding)),
-        savedProjectCoverageHash: digest(savedProjectCoverageFor(changeCase)) });
+        savedProjectCoverageHash: digest(savedProjectCoverageFor(changeCase)) })
+      : creationEvidence.length === 1
+        && context.contextCreationEvidenceRef === creationEvidence[0].id
+        && context.evidenceRefs.includes(creationEvidence[0].id)
+        && creationEvidence[0].content && typeof creationEvidence[0].content === 'object' && !Array.isArray(creationEvidence[0].content)
+        && creationEvidence[0].contentHash === digest(creationEvidence[0].content)
+        && digest(creationEvidence[0].content) === digest({ manifestVersion: 4,
+          sourceBindingHash: changeCase.sourceBinding?.bindingHash ?? null,
+          savedProjectPinHash: digest(savedProjectPinFor(changeCase.sourceBinding)),
+          savedProjectCoverageHash: digest(savedProjectCoverageV4For(changeCase, context.plan)),
+          classificationHash: savedProjectCoverageV4For(changeCase, context.plan)?.classificationHash ?? null,
+          candidateUniverseHash: savedProjectCoverageV4For(changeCase, context.plan) ? digest(savedProjectCoverageV4For(changeCase, context.plan).candidateUniverse) : null,
+          sourcePinsHash: savedProjectCoverageV4For(changeCase, context.plan) ? digest(savedProjectCoverageV4For(changeCase, context.plan).sourcePins) : null });
   let sentinelBindingValid = true;
   if (changeCase.sourceBinding && (changeCase.sourceBinding.bindingSchemaVersion ?? 1) === 2) {
     const expectedSentinel = changeCase.sourceBinding.sentinelContext
